@@ -1,0 +1,51 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "math/decimal" take Decimal;
+import "db/value" take DbValueKind, DbBoolean, DbInteger, DbFloating, DbDecimal, DbText;
+
+// The position of a kind in DbValueKind.
+hidden object Code {
+    Code();
+    of(kind is DbValueKind) is int {
+        match kind {
+            case DbValueKind.null_value { 0; }
+            case DbValueKind.boolean { 1; }
+            case DbValueKind.integer { 2; }
+            case DbValueKind.floating { 3; }
+            case DbValueKind.decimal { 4; }
+            case DbValueKind.text { 5; }
+            case DbValueKind.bytes { 6; }
+        }
+    }
+}
+
+// Values made present or NULL (every third iteration) and asked their kind.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let absent = i % 3 == 0;
+        let c = Code();
+        let total = c.of(DbBoolean(if absent { Maybe<bool>.none; } else { Maybe.some(true); }).kind())
+            + c.of(DbInteger(v).kind()) + c.of(DbBoolean(v > 4).kind())
+            + c.of(DbFloating(if absent { Maybe<float>.none; } else { Maybe.some(0.5); }).kind())
+            + c.of(DbDecimal(if absent { Maybe<Decimal>.none; } else { Maybe.some(Decimal(x)); }).kind())
+            + c.of(DbDecimal(Decimal("0." + x)).kind()) + c.of(DbFloating(1.25).kind()) + c.of(DbText(x).kind()) + v;
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

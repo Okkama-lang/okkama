@@ -1,0 +1,20 @@
+module bible/constants v1.0.0;
+
+// Computed by the compiler, in any order, with the program's own arithmetic.
+import "io/stdout" take Stdout;
+
+const MB = 1024 * KB;
+const KB = 1024;
+const LIMITS = ["upload": 10 * MB, "header": 64 * KB];
+const SIZES is @int = [KB, MB, 1024 * MB];
+const HALF = 1 / 2;
+const HUGE = 4294967296 * 4294967296 * 4294967296;
+const NAME = "okkama-" + LANG;
+const LANG = "en";
+hidden const SALT = "x";
+
+main() is int {
+    Stdout().writeln(NAME + " " + LIMITS["upload"].string() + " " + SIZES.size().string());
+    Stdout().writeln(HALF.string() + " " + HUGE.string());
+    0;
+}

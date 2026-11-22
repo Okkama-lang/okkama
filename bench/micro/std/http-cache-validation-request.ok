@@ -1,0 +1,51 @@
+// #244: Условный запрос из ETag cached entry.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/cache_validation" take CacheValidation;
+import "http/cache_memory" take CachedHttpEntry;
+import "http/cache_freshness" take CacheResponseTiming;
+import "http/message" take Request, Response;
+import "http/exchange" take ClientResponse, ExchangeDetails;
+import "http/header" take Header, Headers;
+import "time/clock" take Instant, MonotonicInstant, Timing;
+import "time/duration" take Duration;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "net/stream" take ConnectionEndpoints;
+import "http/status" take Status;
+import "http/version" take HttpVersion;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let endpoint = IpEndpoint(IpAddress("127.0.0.1"),80);
+        let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(endpoint,endpoint);
+        let details = ExchangeDetails(ends,HttpVersion.http_1_1);
+        let request = Request(url:"https://example.test/"+x);
+        let response = Response(status:Status.ok,headers:Headers(Header("ETag","\"tag"+x+"\""),Header("Cache-Control","max-age=60")));
+        let reply = ClientResponse(request,response,details);
+        let timing = CacheResponseTiming(Instant(Duration(seconds:100)),MonotonicInstant(Duration(seconds:1)),MonotonicInstant(Duration(seconds:2)));
+        let entry = CachedHttpEntry(request,reply,timing,[],Headers());
+        let value = CacheValidation(request,entry).request();
+        let contribution = value::Head::headers.text("If-None-Match").length();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

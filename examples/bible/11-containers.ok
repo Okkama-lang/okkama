@@ -1,0 +1,39 @@
+module bible/containers v1.0.0;
+
+// Resources inside a map, and inside a closure: the container carries their
+// identities, so whoever owns the container owns them.
+import "io/stdout" take Stdout;
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    label() is string { name; }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Pool {
+    Pool();
+    named(names is @string) is %string:Handle {
+        let first is %string:Handle = [names[0]: Handle(name: names[0])];
+        (1..names.size()).reduce(first) -> found, i { found + [names[i]: Handle(name: names[i])]; };
+    }
+    greeter(name is string) is () is string {
+        let handle = Handle(name: name);
+        () is string { "hello from " + handle.label(); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    {
+        let handles = Pool().named(["db", "cache"]);
+        out.writeln("using " + handles["cache"].label());
+    }
+    out.writeln("map released");
+    {
+        let greet = Pool().greeter("socket");
+        out.writeln(greet());
+    }
+    out.writeln("closure released");
+    0;
+}

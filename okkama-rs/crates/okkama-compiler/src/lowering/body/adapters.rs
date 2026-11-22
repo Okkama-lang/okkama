@@ -58,7 +58,8 @@ pub(super) fn lower_method(
         }
         (AdapterKind::Sequence, "item") => {
             let items = a.field(ctx, 0);
-            let item = a.get(ctx, items, values[1]);
+            let error = Thrown::OutOfRange("index outside the sequence");
+            let item = a.lookup(ctx, items, values[1], error)?;
             let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
@@ -78,8 +79,7 @@ pub(super) fn lower_method(
                     Type::Int,
                 )
             };
-            let message = format!("Cannot read {name} item of an empty sequence");
-            let item = a.lookup(ctx, items, index, message);
+            let item = a.lookup(ctx, items, index, Thrown::EmptySequence)?;
             let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
@@ -102,7 +102,7 @@ pub(super) fn lower_method(
         (AdapterKind::Cursor, "item") => {
             let items = a.field(ctx, 0);
             let at = a.field(ctx, 1);
-            let item = a.lookup(ctx, items, at, "Array cursor is exhausted".to_string());
+            let item = a.lookup(ctx, items, at, Thrown::IterationEnded)?;
             let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
@@ -110,7 +110,7 @@ pub(super) fn lower_method(
             let items = a.field(ctx, 0);
             let at = a.field(ctx, 1);
             // Исчерпанный курсор не имеет преемника: сначала та же проверка, что у item().
-            a.lookup(ctx, items, at, "Array cursor is exhausted".to_string());
+            a.lookup(ctx, items, at, Thrown::IterationEnded)?;
             let one = a.int(1);
             let next = a.emit(
                 InstKind::IntBinary {
@@ -220,6 +220,17 @@ pub(super) fn lower_new(
     })
 }
 
+/// The typed errors of the builtin adapters' role contracts (#769).
+#[derive(Copy, Clone)]
+enum Thrown {
+    /// `Cursor.item()`/`successor()` at the end.
+    IterationEnded,
+    /// `Sequencing.first()`/`last()` of an empty sequence.
+    EmptySequence,
+    /// `Sequencing.item(index)` outside `0..size()`, with its reason.
+    OutOfRange(&'static str),
+}
+
 #[derive(Copy, Clone)]
 enum AdapterKind {
     Sequence,
@@ -300,26 +311,8 @@ impl Adapter {
         }
     }
 
-    /// `items[index]`; вне границ — ошибка `Array index out of bounds`.
-    fn get(&mut self, ctx: &Ctx<'_, '_>, items: ValueId, index: ValueId) -> ValueId {
-        let element = Self::element(ctx, self.object);
-        self.emit(
-            InstKind::ArrayGet {
-                array: items,
-                index,
-            },
-            element,
-        )
-    }
-
-    /// `items[index]` или программная ошибка `message` (пустой/исчерпанный).
-    fn lookup(
-        &mut self,
-        ctx: &Ctx<'_, '_>,
-        items: ValueId,
-        index: ValueId,
-        message: String,
-    ) -> ValueId {
+    /// `items[index]`, or the role's typed error (#769) when there is no such item.
+    fn lookup(&mut self, ctx: &mut Ctx<'_, '_>, items: ValueId, index: ValueId, error: Thrown) -> Result<ValueId> {
         let element = Self::element(ctx, self.object);
         let found = self.b.new_block();
         let item = self.b.add_param(found, element);
@@ -334,15 +327,25 @@ impl Adapter {
             self.span,
         );
         self.b.switch_to(missing);
-        self.b.terminate(
-            TermKind::Trap {
-                code: TrapCode::Empty,
-                message,
-            },
-            self.span,
-        );
+        self.throw(ctx, error)?;
         self.b.switch_to(found);
-        item
+        Ok(item)
+    }
+
+    /// Throw `error` (an error enum of the std role contract) as source code's `throw` would.
+    fn throw(&mut self, ctx: &mut Ctx<'_, '_>, error: Thrown) -> Result<()> {
+        let standard = ctx.reg.standard;
+        let (id, reason) = match error {
+            Thrown::IterationEnded => (standard.iteration_ended, None),
+            Thrown::EmptySequence => (standard.empty_sequence, None),
+            Thrown::OutOfRange(reason) => (standard.out_of_range, Some(reason)),
+        };
+        let id = id.ok_or_else(|| internal(self.span, "the error of a builtin adapter is not loaded"))?;
+        let ty = ctx.ir_type(&Ty::Variant(id, Vec::new()), self.span)?;
+        let fields = reason.map(|reason| text_const(&mut self.b, reason, self.span)).into_iter().collect();
+        let value = self.emit(InstKind::VariantNew { case: 0, fields }, ty);
+        self.b.terminate(TermKind::Throw(value), self.span);
+        Ok(())
     }
 
     /// Элемент массива на границе элемента роли.

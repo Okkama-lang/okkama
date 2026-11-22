@@ -1,5 +1,5 @@
 {
-  "schema": "ocs-case/1",
+  "schema": "ocs-case/2",
   "id": "L02.rat.constructor",
   "title": "rat(n, d) normalises and exposes exact parts",
   "purpose": "Observe the values produced by the operation.",
@@ -32,7 +32,7 @@
     "outcome": "success",
     "exit_status": 0,
     "stdout": {
-      "text": "1/2\n1/2\n-1/2\n0\n3/2\nequal\n"
+      "text": "1/2\n1/2\n-1/2\n0\n3/2\n4\nequal\n"
     }
   },
   "spec_refs": [
@@ -44,7 +44,7 @@
   },
   "provenance": {
     "origin": "authored for OCS 0.1.0 from the cited contract text",
-    "expected_basis": "spec 8.3: rat normalises by gcd with positive denominator; numerator()/denominator() return exact decimal strings."
+    "expected_basis": "spec 8.3: rat normalises by gcd with positive denominator; numerator()/denominator() return the exact parts as ints (#743)."
   },
   "status": "mandatory"
 }

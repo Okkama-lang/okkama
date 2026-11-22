@@ -1,0 +1,28 @@
+module app v1.0.0;
+
+import "async/channel" take Channel, SelectedReceiving, DuplicateChannelReceiver, ChannelClosed;
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let a is Channel<int> = Channel(capacity: 32);
+    let b is Channel<int> = Channel(capacity: 32);
+    for 0..32 -> i {
+        await a.sending().send(i);
+        await b.sending().send(100 + i);
+    }
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    for 0..64 -> i {
+        let message = await selected.item();
+        confirm message.source() == i % 2;
+        confirm message.value() == (i % 2) * 100 + (i / 2).int();
+    }
+    a.sending().close();
+    b.sending().close();
+    confirm try { await selected.item(); false; } catch error is ChannelClosed { true; };
+    confirm try {
+        let refused is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), a.receiving()]);
+        false;
+    } catch error is DuplicateChannelReceiver { true; };
+    Stdout().writeln("atomic selection ok");
+    0;
+}

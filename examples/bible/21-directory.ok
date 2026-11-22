@@ -1,0 +1,26 @@
+module bible/directory v1.0.0;
+
+import "io/stdout" take Stdout;
+import "fs/directory" take DirectoryLocating, Directory;
+import "fs/path" take Path;
+
+// A report writer is given the directory it may write into; it has no way
+// to name any other.
+object Reports {
+    has home is DirectoryLocating;
+
+    Reports(:home);
+
+    location(name is string) is string {
+        home.path().string() + "/" + name + ".txt";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let nightly = Reports(home: Directory(path: Path("/srv/app/reports")));
+    let scratch = Reports(home: Directory(path: Path("/tmp/run-42")));
+    out.writeln(nightly.location("sales"));
+    out.writeln(scratch.location("sales"));
+    0;
+}

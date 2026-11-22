@@ -1,5 +1,6 @@
 module mail/smtp v1.0.0;
 
+import "strings/parse" take Number;
 // SMTP server capabilities: what an EHLO reply advertises (RFC 5321 §4.1.1.1).
 //
 //     let capabilities = SmtpCapabilities(ehlo_reply);
@@ -18,10 +19,20 @@ import "collections/sequence" take Sequencing;
 import "collections/set" take Set, OrderedSet;
 import "mime/media_type" take MimeItems;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
-import "numbers/bigint" take BigInt;
 
 // The extensions std knows by name.
-enum SmtpFeature = (size, eight_bit_mime, smtp_utf8, pipelining, start_tls, authentication, dsn, enhanced_status_codes, chunking, binary_mime);
+enum SmtpFeature = (
+    size,
+    eight_bit_mime,
+    smtp_utf8,
+    pipelining,
+    start_tls,
+    authentication,
+    dsn,
+    enhanced_status_codes,
+    chunking,
+    binary_mime
+);
 
 // One EHLO line: a keyword and its parameters.
 object SmtpExtension {
@@ -91,7 +102,7 @@ object SmtpCapabilities {
     has features is Set<SmtpFeature>;
     has mechanisms is @string;
     has size_available is bool;
-    has size_value is BigInt;
+    has size_value is int;
 
     // Reads reply; InvalidSmtpCapabilities when it is not a 250 or repeats a
     // keyword.
@@ -134,9 +145,7 @@ object SmtpCapabilities {
                             else throw InvalidSmtpCapabilities.because("AUTH requires mechanisms");
                         for (0..parameters.size()) -> position {
                             let mechanism = SmtpMechanismName(parameters.item(position)).string();
-                            let present = names.entries().reduce(false) -> found, name {
-                                found || name == mechanism;
-                            };
+                            let present = names.entries().contains(mechanism);
                             if !present {
                                 names = names.following(mechanism);
                             }
@@ -156,12 +165,12 @@ object SmtpCapabilities {
         features = OrderedSet(known.entries());
         mechanisms = names.entries();
         size_available = maximum.size() > 0;
-        size_value = BigInt(if maximum.size() > 0 {
+        size_value = Number((if maximum.size() > 0 {
             maximum.entries()[0];
         }
         else {
             "0";
-        });
+        })).int();
     }
 
     // Every extension, in order.
@@ -185,7 +194,7 @@ object SmtpCapabilities {
     }
 
     // The SIZE value (0 means no limit); MissingSmtpSize when SIZE gives none.
-    maximum_size() is BigInt {
+    maximum_size() is int {
         confirm size_available else throw MissingSmtpSize.missing;
         size_value;
     }

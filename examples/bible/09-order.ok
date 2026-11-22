@@ -1,0 +1,42 @@
+module bible/order v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Every call says that it was evaluated.
+object Trace {
+    has out is Stdout;
+    Trace(:out);
+    flag(name is string, value is bool) is bool {
+        out.writeln("  " + name);
+        value;
+    }
+    number(name is string, value is int) is int {
+        out.writeln("  " + name);
+        value;
+    }
+    sum(a is int, b is int, c is int) is int { a + b + c; }
+}
+
+main() is int {
+    let out = Stdout();
+    let t = Trace(out: out);
+
+    out.writeln("arguments, left to right:");
+    let total = t.sum(t.number("a", 1), t.number("b", 2), t.number("c", 3));
+
+    out.writeln("operands, left to right:");
+    let product = t.number("x", 6) * t.number("y", 7);
+
+    out.writeln("&& stops at false:");
+    let both = t.flag("left", false) && t.flag("right", true);
+
+    out.writeln("|| stops at true:");
+    let either = t.flag("left", true) || t.flag("right", false);
+
+    out.writeln("if evaluates one branch:");
+    let chosen = if t.flag("condition", true) { t.number("then", 1); } else { t.number("otherwise", 2); };
+
+    out.writeln(total.string() + " " + product.string() + " "
+        + (if both { "true"; } else { "false"; }) + " " + (if either { "true"; } else { "false"; }) + " " + chosen.string());
+    0;
+}

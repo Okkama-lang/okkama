@@ -1,0 +1,12 @@
+module bible/closure_loop v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Each anonymous action is created in its own pass of the block and
+    // keeps the value `n` had in that pass.
+    let makers = [1, 2, 3].map() -> n { () is int { n * 10; }; };
+    out.writeln(makers.map() -> make { make().string(); }.join(" "));
+    0;
+}

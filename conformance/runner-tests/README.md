@@ -10,5 +10,7 @@
   corruption, partial-order violations, plus discovery and gate rules. Every
   failure mode has a positive control.
 * `test_schema_sync.py` — the JSON Schemas agree with the executable validator.
+* `test_rust_adapter.py` — the Rust adapter's engine (`sparrow`; removed
+  engines rejected), its target directory and probe cache. Builds nothing.
 * `mutations.json` — source/expectation mutants of real cases for `ocs mutate`;
   all must be reported as non-PASS.

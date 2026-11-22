@@ -116,13 +116,11 @@ impl Heap {
     /// Offset and limit of a rooted read, checked.
     fn rooted_coordinates(&self, n: Native, a: &[Slot]) -> Result<(u64, usize), ProviderError> {
         let offset = self
-            .integer(a[1])?
-            .to_i64()
+            .int64(a[1])?
             .filter(|v| (0..=9_007_199_254_740_991).contains(v))
             .ok_or_else(|| fail(n, "invalid_input", "Invalid rooted offset"))?;
         let limit = self
-            .integer(a[2])?
-            .to_i64()
+            .int64(a[2])?
             .filter(|v| (1..=1_048_576).contains(v))
             .ok_or_else(|| fail(n, "invalid_input", "Invalid rooted limit"))?;
         if !self.rooted_state(a[0])?.regular {
@@ -177,12 +175,12 @@ impl Heap {
         let regular = opened.as_ref().is_some_and(|meta| meta.is_file());
         Ok(Slot {
             tag: HANDLE,
-            bits: self.handles.allocate(Handle::Rooted(Rooted {
+            bits: self.handles.allocate(Handle::Rooted(Box::new(Rooted {
                 file: Some(Arc::new(file)),
                 regular,
                 opened,
                 cached: Default::default(),
-            }))?,
+            })))?,
         })
     }
     fn rooted_state(&self, v: Slot) -> Result<&Rooted, ProviderError> {
@@ -329,8 +327,7 @@ impl Heap {
             }
             FsRootRootedEntryNames => {
                 let max = self
-                    .integer(a[1])?
-                    .to_i64()
+                    .int64(a[1])?
                     .filter(|v| (0..=4096).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid directory entry budget"))?
                     as usize;
@@ -383,8 +380,7 @@ impl Heap {
                 };
                 if n == SnapshotSnapshotRead {
                     let limit = self
-                        .integer(a[2])?
-                        .to_i64()
+                        .int64(a[2])?
                         .filter(|v| (1..=1_048_576).contains(v))
                         .ok_or_else(|| fail(n, "invalid_input", "Invalid snapshot read limit"))?
                         as u64;

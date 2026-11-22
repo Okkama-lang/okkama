@@ -546,3 +546,17 @@ test "parameters read like json values" {
         "q=a%20b%26c&flag"
     );
 }
+
+test "query construction enforces its parameter limit" {
+    let entries is @QueryParameter = (0..10001).map() -> index {
+        QueryParameter(name: "");
+    };
+    test.is(QueryParameters(entries: entries.slice(0, 10000)).entries().size(), 10000);
+    test.throws(QueryLimitExceeded) {
+        QueryParameters(entries: entries);
+    };
+    test.is(QueryParameters(entries: entries, maximum_parameters: 10001).entries().size(), 10001);
+    test.throws(QueryLimitExceeded) {
+        QueryParameters(entries: entries, maximum_parameters: 10000);
+    };
+}

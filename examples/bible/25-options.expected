@@ -1,0 +1,4 @@
+/status: 30 s, 0 retries, follows redirects
+/report: 30 s, 3 retries, follows redirects
+/login: 5 s, 0 retries, stays put
+refused: BadFetch.timeout(0)

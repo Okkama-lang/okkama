@@ -185,6 +185,9 @@ pub enum ConstValue {
 pub enum Coercion {
     /// `^C` → `C`: погашение обязательства successor.
     Take,
+    /// #790: `Future<^C>` → `Future<C>` at an argument, field or result: the successor obligation is handed on
+    /// with the Future (flow treats it as a transfer). Never at a typed `let`.
+    Handoff,
     /// Объект или builtin → роль, которую он делает.
     RoleWrap,
     /// Роль → роль: подмножество действий, проверка во время исполнения.
@@ -491,9 +494,6 @@ pub enum Callee {
     /// `test.ok(...)`, `test.is(...)`, `test.isnt(...)`, `test.fail(...)`,
     /// `test.skip(...)`.
     Test(String),
-    /// `fake.storage.set/get/has/remove/clear/size(...)` в action fake (§14):
-    /// хранилище экземпляра `self`.
-    FakeStorage(String),
 }
 
 /// Builtin-действия значений (§6.6).
@@ -642,7 +642,7 @@ pub struct Functional {
 }
 
 /// Does `body` read the receiver of the action it is written in — `self`, a
-/// field, `fake.storage`, or a nested anonymous action that does? An
+/// field or a nested anonymous action that does? An
 /// anonymous action captures `self` only then (#53): unreferenced values are
 /// not retained. The walk names every form, so a new one must decide here.
 pub fn uses_receiver(body: &Body) -> bool {
@@ -726,8 +726,6 @@ fn expr_uses_receiver(expr: &Expr) -> bool {
                     Callee::Method { receiver, .. } | Callee::Role { receiver, .. } | Callee::Builtin { receiver, .. } => {
                         expr_uses_receiver(receiver)
                     }
-                    // The storage of the receiver's fake.
-                    Callee::FakeStorage(_) => true,
                     Callee::Ctor { .. } | Callee::Native(_) | Callee::Test(_) => false,
                 }
         }
@@ -755,6 +753,69 @@ fn expr_uses_receiver(expr: &Expr) -> bool {
         ExprKind::CallValue { callee, args } => expr_uses_receiver(callee) || any(args),
         ExprKind::CapSelect { owner, .. } => expr_uses_receiver(owner),
         ExprKind::CapRead { cap, .. } => expr_uses_receiver(cap),
+    }
+}
+
+/// Is `acc`, a `reduce` accumulator, used in `body` only as the value the
+/// block returns — alone, or as the left end of `acc + ...` (#243)? Then
+/// lowering keeps it in a builder (OIR-1) or appends what the block adds to
+/// one (OIR-2, #831): growing it by one element is amortized O(1), and
+/// nothing else can hold an intermediate accumulator. A map accumulator
+/// grows by literal entries only.
+pub fn linear_accumulator(body: &Block, acc: LocalId, map: bool) -> bool {
+    let mut allowed = 0;
+    linear_block(body, acc, map, &mut allowed) && local_mentions(body, acc) == allowed
+}
+
+/// The parts of `left op right op ...` for an associative `op`, left to right.
+pub fn flatten_concat<'e>(op: BinaryOp, expr: &'e Expr, parts: &mut Vec<&'e Expr>) {
+    match &expr.kind {
+        ExprKind::Binary { op: inner, left, right } if *inner == op => {
+            flatten_concat(op, left, parts);
+            flatten_concat(op, right, parts);
+        }
+        _ => parts.push(expr),
+    }
+}
+
+/// The block's value is the accumulator (see `linear_accumulator`); counts
+/// the mentions of `acc` it accounts for.
+fn linear_block(block: &Block, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
+    match block.stmts.last().map(|stmt| &stmt.kind) {
+        Some(StmtKind::Expr(value)) => linear_value(value, acc, map, allowed),
+        // `throw`, `return`, `panic`: the block does not produce a value.
+        Some(StmtKind::Throw(_) | StmtKind::Return(_) | StmtKind::Rethrow) => true,
+        _ => false,
+    }
+}
+
+fn linear_value(expr: &Expr, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
+    match &expr.kind {
+        ExprKind::Local(local) if *local == acc => {
+            *allowed += 1;
+            true
+        }
+        ExprKind::Binary { op, .. } if *op == if map { BinaryOp::MapMerge } else { BinaryOp::ArrayConcat } => {
+            let mut parts = Vec::new();
+            flatten_concat(*op, expr, &mut parts);
+            let starts_with_acc = matches!(&parts[0].kind, ExprKind::Local(local) if *local == acc);
+            // A map grows by literal entries: a builder has no merge.
+            let literals = !map || parts[1..].iter().all(|part| matches!(part.kind, ExprKind::Map(_)));
+            if starts_with_acc && literals {
+                *allowed += 1;
+            }
+            starts_with_acc && literals
+        }
+        ExprKind::If { then_block, else_block: Some(else_block), .. } => {
+            linear_block(then_block, acc, map, allowed) && linear_block(else_block, acc, map, allowed)
+        }
+        ExprKind::Match(found) if found.else_block.is_some() || found.exhaustive => {
+            found.cases.iter().all(|(_, block)| linear_block(block, acc, map, allowed))
+                && found.else_block.as_ref().is_none_or(|block| linear_block(block, acc, map, allowed))
+        }
+        ExprKind::Block(block) => linear_block(block, acc, map, allowed),
+        ExprKind::Panic(_) | ExprKind::Unreachable => true,
+        _ => false,
     }
 }
 
@@ -844,7 +905,7 @@ pub fn expr_mentions(expr: &Expr, local: LocalId) -> usize {
                     Callee::Method { receiver, .. } | Callee::Role { receiver, .. } | Callee::Builtin { receiver, .. } => {
                         one(receiver)
                     }
-                    Callee::FakeStorage(_) | Callee::Ctor { .. } | Callee::Native(_) | Callee::Test(_) => 0,
+                    Callee::Ctor { .. } | Callee::Native(_) | Callee::Test(_) => 0,
                 }
         }
         ExprKind::Array(parts) => parts
@@ -1023,7 +1084,7 @@ pub(crate) fn each_child<'e>(expr: &'e Expr, visit: &mut dyn FnMut(&'e Expr)) {
                 Callee::Method { receiver, .. } | Callee::Role { receiver, .. } | Callee::Builtin { receiver, .. } => {
                     visit(receiver)
                 }
-                Callee::FakeStorage(_) | Callee::Ctor { .. } | Callee::Native(_) | Callee::Test(_) => {}
+                Callee::Ctor { .. } | Callee::Native(_) | Callee::Test(_) => {}
             }
             args.iter().for_each(&mut *visit);
         }
@@ -1082,4 +1143,13 @@ pub(crate) fn each_child<'e>(expr: &'e Expr, visit: &mut dyn FnMut(&'e Expr)) {
         ExprKind::CapSelect { owner, .. } => visit(owner),
         ExprKind::CapRead { cap, .. } => visit(cap),
     }
+}
+
+/// Whether any constructor publishes `self` before construction finishes (§11.4).
+/// Both OIR producers use this rule to select the hidden pending field.
+pub(crate) fn escapes_self(bodies: &[Body], object: ObjectId) -> bool {
+    bodies.iter().any(|body| {
+        matches!(body.owner, BodyOwner::Ctor { object: owner, .. } if owner == object)
+            && first_expr(&body.block, &|expr| matches!(expr.kind, ExprKind::SelfValue)).is_some()
+    })
 }

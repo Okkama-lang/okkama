@@ -23,7 +23,6 @@ import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
 import "runtime/utf" take utf8_valid_prefix;
 import "time/duration" take Duration;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -181,18 +180,18 @@ hidden object EventRetry {
 
     EventRetry(origin is Duration) {
         let value = origin::Span::seconds * 1000.rat();
-        confirm value.denominator() == "1"
+        confirm value.denominator() == 1
             else throw InvalidServerEvent.because("retry requires integral milliseconds");
-        let amount = BigInt(value.numerator());
+        let amount = (value.numerator());
         milliseconds = if amount.sign() < 0 {
             0;
         }
         else {
-            if amount.order(BigInt(2147483647)) == Order.greater {
+            if amount.order((2147483647)) == Order.greater {
                 2147483647;
             }
             else {
-                amount.int();
+                amount;
             }
         };
     }
@@ -437,14 +436,14 @@ object ServerEvents {
                 }
                 next;
             }
-            if line.slice(0, 1) == ":" {
+            if line.starts_with(":") {
                 next;
             }
             let parts = line.split(":");
             let name = parts[0];
             let value = if parts.size() > 1 {
                 let text = line.slice(name.length() + 1, line.length());
-                if text != "" && text.slice(0, 1) == " " {
+                if text != "" && text.starts_with(" ") {
                     text.slice(1, text.length());
                 }
                 else {
@@ -478,12 +477,12 @@ object ServerEvents {
                     valid && character.code() >= 48 && character.code() <= 57;
                 };
                 if digits {
-                    let amount = BigInt(value);
-                    let bounded = if amount.order(BigInt(2147483647)) == Order.greater {
+                    let amount = Number(value).int();
+                    let bounded = if amount.order((2147483647)) == Order.greater {
                         2147483647;
                     }
                     else {
-                        amount.int();
+                        amount;
                     };
                     retry.replace([bounded]);
                 }
@@ -497,13 +496,13 @@ object ServerEvents {
             let text = tail.value();
             if skip_lf.value() && text != "" {
                 skip_lf.replace(false);
-                if text.slice(0, 1) == "\n" {
+                if text.starts_with("\n") {
                     tail.replace(text.slice(1, text.length()));
                     next;
                 }
             }
-            let cr = text.split("\r")[0].length();
-            let lf = text.split("\n")[0].length();
+            let cr = text.find("\r") else text.length();
+            let lf = text.find("\n") else text.length();
             let at = if cr < lf {
                 cr;
             }
@@ -518,7 +517,7 @@ object ServerEvents {
                 let decoded = EventUtf8(Latin1Encoded(raw).bytes()).string();
                 if !started.ready() {
                     started.set();
-                    if decoded != "" && decoded.slice(0, 1) == "﻿" {
+                    if decoded != "" && decoded.starts_with("﻿") {
                         return decoded.slice(1, decoded.length());
                     }
                 }
@@ -658,7 +657,7 @@ object EventBody does BodyOpening {
     }
 
     // UnknownBodyLength.
-    length() is BigInt {
+    length() is int {
         throw UnknownBodyLength.unknown;
     }
 
@@ -804,4 +803,11 @@ async test "an event stream reads retry digits and replaces ill-formed UTF-8" {
     test.is(EventRetry(first.retry()).milliseconds(), 2500);
     let second = await events.event();
     test.is(second::Event::data, "h�i�");
+}
+
+async test "an event stream ends lines at CR, LF or CRLF, whichever comes first (#260)" {
+    let wire = Utf8Encoded("data: one\rdata: two\r\ndata: three\n\r").bytes();
+    let events = ServerEvents(ByteBody(wire).reading());
+    let first = await events.event();
+    test.is(first::Event::data, "one\ntwo\nthree");
 }

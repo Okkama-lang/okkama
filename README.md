@@ -5,16 +5,18 @@
 **A statically typed object language where the Elegant Objects discipline
 is enforced by the runtime — not by code review.**
 
-[![CI](https://github.com/shootnix/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/ci.yml)
-[![Packages](https://github.com/shootnix/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/packages.yml)
-[![Release](https://img.shields.io/github/v/release/shootnix/okkama?include_prereleases&label=release)](https://github.com/shootnix/okkama/releases)
-[![Conformance](https://img.shields.io/badge/conformance-1025%2F1025%20×%203%20engines-brightgreen)](conformance/)
-[![License](https://img.shields.io/github/license/shootnix/okkama)](LICENSE)
+[![CI](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml)
+[![Packages](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml)
+[![Release](https://img.shields.io/github/v/release/Okkama-lang/okkama?include_prereleases&label=release)](https://github.com/Okkama-lang/okkama/releases)
+[![Conformance](https://img.shields.io/badge/conformance-1051%2F1051-brightgreen)](conformance/)
+[![License](https://img.shields.io/github/license/Okkama-lang/okkama)](LICENSE)
 
+[Website](https://okkama-lang.github.io/) ·
 [Install](#install) ·
 [Quick start](#quick-start) ·
 [The Book](docs/OkkamaBook.md) ·
 [Книга](docs/OkkamaBook-RU.md) ·
+[Std reference](https://okkama-lang.github.io/man/) ·
 [Guide for LLM agents](docs/LLM-GUIDE.md)
 
 </div>
@@ -68,7 +70,7 @@ main() is int {
 |---|---|
 | **Enums with payloads** | `enum Shape = (circle(radius is float), point);` and an exhaustive `match` |
 | **`Maybe<T>` / `Presence<T>`** | explicit absence instead of `null`; `value else fallback`; *missing* ≠ *null* ≠ *value* |
-| **Ternary and compact choice** | `ok ?? "yes" !! "no"` and `maybe ?? .some(v): v !! .none: 0` |
+| **Compact match cases** | `match maybe { case Maybe.some(v): v; case Maybe.none: 0; }`, mixed freely with block cases |
 | **Errors are enums** | `enum DbError is Error = (...)`, generated `text()`, causes as payloads |
 | **`try?` / `try!`** | Swift-style: an error becomes `Maybe.none`, or a panic when it "cannot happen" |
 | **Catch by case** | `catch DbError.query(sql, code)`, `catch DbError.closed, NetError.reset`, `catch e is A, B` |
@@ -78,7 +80,7 @@ main() is int {
 ## Install
 
 Prebuilt packages for **macOS (Apple Silicon and Intel)** and **Linux x86_64**
-are on the [Releases](https://github.com/shootnix/okkama/releases) page:
+are on the [Releases](https://github.com/Okkama-lang/okkama/releases) page:
 tagged versions and a rolling `nightly` built from `develop`. Each package
 contains `okkama`, `sparrow`, `blade`, the standard library and the host
 crypto library.
@@ -108,14 +110,12 @@ browser run `xattr -dr com.apple.quarantine okkama-*` once.
 **From source** (Rust 1.97+):
 
 ```sh
-git clone https://github.com/shootnix/okkama.git && cd okkama
+git clone https://github.com/Okkama-lang/okkama.git && cd okkama
 make install                      # into ~/.local; PREFIX=/opt/okkama make install
 ```
 
-`okkama` finds the standard library and native libraries next to itself, so no
-environment variables are needed — `okkama env` shows what it found. The JVM
-engine additionally needs a JDK (22+ for the FFM natives: cryptography,
-SQLite, terminal, accounts, collation); the IR and Sparrow engines need nothing.
+`okkama` finds the standard library and ICU next to itself; host cryptography
+is built into Sparrow. `okkama env` shows the installed locations.
 
 ## Quick start
 
@@ -138,11 +138,11 @@ main() is int {
 ```
 
 ```sh
-okkama hello.ok                   # run (IR interpreter)
+okkama hello.ok                   # run (Sparrow JIT)
 okkama -t hello.ok                # run the file's `test` blocks
 okkama fmt -w hello.ok            # format in place
 okkama lint hello.ok              # errors, warnings, lint findings
-okkama build hello.ok --target jvm -o hello.jar && java -jar hello.jar
+okkama build hello.ok -o hello.spb && sparrow hello.spb
 ```
 
 ## Why Okkama
@@ -240,21 +240,25 @@ let email = patch.email().fold() else "default";  // merge missing + none explic
 implicitly: an empty string, `0` and `false` are present values, and
 `Presence else …` is a compile error until you `fold()` it.
 
-### Ternaries and compact choices
+### Compact match cases
 
 ```okkama
-let label = stock > 0 ?? "in stock" !! "sold out";          // bool → typed ternary
+let label = if stock > 0 { "in stock"; } else { "sold out"; };   // a typed if expression
 
-let text = cache.lookup(key)                                // enum → compact match
-    ?? .some(hit): hit
-    !! .none: "miss";
+let text = match cache.lookup(key) { case Maybe.some(hit): hit; case Maybe.none: "miss"; };
 
-let shown = order.status()
-    ?? .paid(amount): "paid " + amount.string()
-    !! _: "not paid";                                        // `_` covers the rest
+let shown = match order.status() {
+    case Status.paid(amount): "paid " + amount.string();
+    case Status.refunded(amount) {
+        audit.note(amount);
+        "refunded";
+    }
+    case _: "not paid";                                          // `_` covers the rest
+};
 ```
 
-Both branches are lazy, the subject is evaluated once, and the branch types
+`match` has one meaning and two case forms: a block, or `case pattern: value;`.
+Only the chosen case runs, the subject is evaluated once, and the case types
 must agree — no implicit common type, no truthiness.
 
 ### Errors are enums — catch by case, recover with `try?`
@@ -487,33 +491,32 @@ and `any`, and the class behind them cannot be named outside its module. What it
 deliberately does not do: an old immutable state stays valid, so "authorize
 twice" is a job for durable state and idempotency.
 
-## Three engines, one language
+## Sparrow
 
-The compiler lowers Okkama to one intermediate representation
-(OIR-1) and runs it on any of three engines with
-identical results — output, errors and exit status. The
-[conformance suite](conformance/) and an engine parity check over the tests of
-`std/` hold them to that.
+Sparrow is the only Okkama engine for source programs and inline tests
+(`okkama run -t`), so there is nothing to select: `okkama run` has no
+`--engine`. The IR interpreter and its REPL were removed (#584), and the JVM
+backend in 0.6.0 (#585); its last frozen version is tag `v0.5.8`.
+
+The compiler lowers Okkama to OIR, then generates Sparrow bytecode (SPB). The [conformance suite](conformance/) checks output, errors and
+exit status against the same expectations.
 
 ```sh
-okkama hello.ok                              # IR interpreter (default), in-process
-okkama run --engine sparrow hello.ok         # Sparrow: whole-function Cranelift JIT
-okkama run --engine jvm hello.ok             # JVM class files, run with `java`
-okkama build hello.ok --target sparrow -o hello.spb && sparrow hello.spb
+okkama hello.ok                              # Sparrow JIT (default), in-process
+okkama build hello.ok -o hello.spb && sparrow hello.spb
 ```
 
-| | IR interpreter | Sparrow (JIT) | JVM |
-|---|---|---|---|
-| Start-up (`hello`) | 11 ms | **11 ms** | 52 ms |
-| `fib(32)`, 7 M calls | 1.25 s | **29 ms** | 186 ms |
-| Mandelbrot (float) | 0.54 s | **28 ms** | 146 ms |
-| 1 M successor steps | 0.92 s | **24 ms** | 133 ms |
-| 6-module application | 1.58 s | **95 ms** | 367 ms |
-| Peak memory, application | 10 MB | 12 MB | 258 MB |
-| Needs | nothing | nothing | JDK |
+| | Sparrow (JIT) |
+|---|---|
+| Start-up (`hello`) | **11 ms** |
+| `fib(32)`, 7 M calls | **30 ms** |
+| Mandelbrot (float) | **28 ms** |
+| 1 M successor steps | **25 ms** |
+| 6-module application | **96 ms** |
+| Peak memory, application | 13 MB |
 
-Median of ten cold runs on an Apple M2 Max (0.5.5, release build, start-up
-included). Sparrow (its current version is called Tomato) compiles every function to
+Median of ten cold runs on an Apple M2 Max (0.5.6, release build, start-up
+included). Sparrow (its current version, since 0.6.0, is called Tweed) compiles every function to
 machine code (Cranelift) before it runs; calls are direct, async frames are
 stackless and the collector is precise.
 
@@ -541,7 +544,7 @@ Sparrow runs them in 8–25 MB, Go in 4–13 MB, Java in 44–209 MB and Kotlin 
 | 🐦 [Книга Sparrow (RU)](docs/SparrowBook/SparrowBook-RU.md) | The Sparrow book in Russian |
 | 🛡️ [Trust model](docs/security-model.md) | Which input is safe to compile, verify and run today, per boundary, with the open issues |
 | 🤖 [Guide for LLM agents](docs/LLM-GUIDE.md) | Working on this repository: layout, build, tests, benchmarks, architecture |
-| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1021 cases with expected observations |
+| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1051 cases with expected observations |
 
 Where documents disagree, the source of truth is the conformance suite
 (`conformance/`) and the specification — in that order.
@@ -550,16 +553,15 @@ Where documents disagree, the source of truth is the conformance suite
 
 Okkama is **experimental**: the language and the standard library still
 evolve, and nothing is stable yet. The implementation runs the whole language
-and standard library: the conformance suite passes 1021/1021 cases on each
-engine, and every deterministic program in `std/` (in test mode)
-behaves identically on all three. See
+and standard library: the conformance suite passes 1051/1051 cases on
+Sparrow (0.6.2). See
 [Appendix B of the Book](docs/OkkamaBook.md#appendix-b-implementation-status)
 for the feature table.
 
 ## Development
 
 ```sh
-make build                        # okkama, sparrow, blade, okkama-native (release)
+make build                        # okkama, sparrow, blade, host cryptography built in (release)
 make test                         # cargo test --workspace
 make dist                         # packages for this machine into dist/
 cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-release -j 8
@@ -569,15 +571,15 @@ cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-
 for `locale/collation`; without it those natives report `unsupported`.
 
 GitHub Actions run the tests on Linux and macOS and the conformance suite on
-every engine for each push and pull request ([CI](.github/workflows/ci.yml)).
+Sparrow for each push and pull request ([CI](.github/workflows/ci.yml)).
 [Packages](.github/workflows/packages.yml) are built for every platform on
 each push to `develop` (the `nightly` pre-release) and published as a release
 for each `vX.Y.Z` tag, which must match the version in `okkama-rs/Cargo.toml`.
 
 ```text
 okkama/
-├── okkama-rs/        Rust implementation: compiler, JVM backend, Sparrow (Tomato),
-│                     IR interpreter, runtime and natives, LSP, fmt, lint, blade
+├── okkama-rs/        Rust implementation: compiler, Sparrow (Tweed),
+│                     Sparrow runtime and natives, LSP, fmt, lint, blade
 ├── std/              standard library
 ├── docs/             the Book (EN/RU) and the guide for LLM agents
 ├── conformance/      conformance suite (OCS) and its runner
@@ -599,7 +601,7 @@ TextMate-compatible editor can use
 - 💡 Design questions are welcome — Okkama says "no" a lot, and every "no" has a
   written rationale in the [Book](docs/OkkamaBook.md).
 - 🤝 Pull requests: small and focused, with a test (a Rust test or a
-  conformance case). CI must stay green on every engine.
+  conformance case). CI must stay green.
 - 🤖 Using an AI assistant? Give it the
   [guide for LLM agents](docs/LLM-GUIDE.md) first.
 

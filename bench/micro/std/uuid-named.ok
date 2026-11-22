@@ -1,0 +1,42 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "compare" take Order;
+import "uuid/value" take UuidText;
+import "uuid/generation" take Uuid3, Uuid5;
+
+hidden object Rank {
+    Rank();
+    of(order is Order) is int {
+        if order == Order.less { 1; } else if order == Order.equal { 2; } else { 3; }
+    }
+}
+
+// Name-based UUIDs (MD5 and SHA-1) of "n<v>" in the DNS namespace: bytes, text and order.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let dns = UuidText("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+        let rank = Rank();
+        let v3 = Uuid3(namespace: dns, name: "n" + x);
+        let v5 = Uuid5(namespace: dns, name: "n" + x);
+        let total = v3.bytes()[0].int() + v3.string().slice(9, 10).length() + ("0123456789abcdef".find(v5.string().slice(0, 1)) else 99)
+            + rank.of(v3.order(v5)) + rank.of(v5.order(v3));
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

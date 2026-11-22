@@ -51,6 +51,8 @@ pub enum Intrinsic {
     EndpointNew,
     Send,
     Receive,
+    SelectionNew,
+    SelectionItem,
     EndpointClose,
     GroupNew,
     GroupStart,
@@ -65,17 +67,15 @@ pub enum Intrinsic {
     TimeoutWithin,
     StreamRemaining,
     StreamCompletion,
-    FakeSet,
-    FakeGet,
-    FakeHas,
-    FakeRemove,
-    FakeClear,
-    FakeSize,
     TestOk,
     TestIs,
     TestIsnt,
     TestFail,
     TestSkip,
+    /// `test.case(name)` opens a sub-case and says whether it runs (#809).
+    TestCase,
+    /// The end of the block `test.case` opened.
+    TestCaseEnd,
     TestClose,
     TestText,
     TestBytes,
@@ -136,6 +136,8 @@ impl Intrinsic {
             "okkama.channel.Sending.new" | "okkama.channel.Receiving.new" => EndpointNew,
             "okkama.channel.Sending.send" => Send,
             "okkama.channel.Receiving.item" => Receive,
+            "okkama.channel.SelectedReceiving.new_receivers" => SelectionNew,
+            "okkama.channel.SelectedReceiving.item" => SelectionItem,
             "okkama.channel.Sending.close" | "okkama.channel.Receiving.close" => EndpointClose,
             "okkama.scope.FutureGroup.new" => GroupNew,
             "okkama.scope.FutureGroup.start" => GroupStart,
@@ -150,17 +152,13 @@ impl Intrinsic {
             "okkama.timeout.Within.outcome" => TimeoutWithin,
             "okkama.collect.FutureCompletions.remaining_count" => StreamRemaining,
             "okkama.collect.FutureCompletions.completion" => StreamCompletion,
-            "okkama.fake.storage.set" => FakeSet,
-            "okkama.fake.storage.get" => FakeGet,
-            "okkama.fake.storage.has" => FakeHas,
-            "okkama.fake.storage.remove" => FakeRemove,
-            "okkama.fake.storage.clear" => FakeClear,
-            "okkama.fake.storage.size" => FakeSize,
             "okkama.test.ok" => TestOk,
             "okkama.test.is" => TestIs,
             "okkama.test.isnt" => TestIsnt,
             "okkama.test.fail" => TestFail,
             "okkama.test.skip" => TestSkip,
+            "okkama.test.case" => TestCase,
+            "okkama.test.case_end" => TestCaseEnd,
             "okkama.test.close" => TestClose,
             "okkama.test.text" => TestText,
             "okkama.test.bytes" => TestBytes,
@@ -250,6 +248,7 @@ pub extern "C" fn rt_intrinsic(ctx: *mut Ctx, function: u64, arguments: *const W
     }
 }
 
+
 /// The object descriptors an intrinsic names (results and thrown errors).
 fn related(runtime: &Runtime, function: usize, index: usize) -> u32 {
     runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[index].0
@@ -265,6 +264,7 @@ pub(crate) fn thrown(runtime: &mut Runtime, function: usize, index: usize, field
 /// enum lowers to `[$tag, $<case>_<name>: array…]`; the runtime raises its
 /// first case, whose payload values go into one-element arrays.
 fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
+    // A Champ Error enum is the object of its first case: its case number, then its payload (#601 Q1).
     let program = &runtime.loaded.program;
     let fields = &program.objects[descriptor as usize].fields;
     if fields.first().is_none_or(|(name, _)| name != "$tag") {
@@ -484,8 +484,12 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
                 messages: Default::default(),
                 senders: Default::default(),
                 receivers: Default::default(),
+                packet: UNBOUND,
+                holders: 0,
             };
-            runtime.state_new(object, State::Channel(Rc::new(RefCell::new(channel))));
+            let channel = Rc::new(RefCell::new(channel));
+            runtime.state_new(object, State::Channel(channel.clone()));
+            runtime.channel_holder(&channel, related(runtime, function, 0) as usize, object);
             Value(object, Repr::Ref)
         }
         ChannelEndpoint => {
@@ -493,10 +497,34 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
                 return program_failure("Invalid channel endpoint");
             };
             let object = new(runtime, &[]);
-            runtime.state_new(object, State::Channel(channel));
+            runtime.state_new(object, State::Channel(channel.clone()));
+            runtime.channel_holder(&channel, related(runtime, function, 0) as usize, object);
             Value(object, Repr::Ref)
         }
         EndpointNew => Value(new(runtime, &[]), Repr::Ref),
+        SelectionNew => {
+            let endpoints = runtime.heap.elements(args[0]).into_owned();
+            if endpoints.is_empty() {
+                return Fail(thrown(runtime, function, 1, &[]));
+            }
+            let mut seen = crate::word::FastSet::default();
+            let mut channels = Vec::with_capacity(endpoints.len());
+            for endpoint in endpoints {
+                let Some(channel) = runtime.channel_of(endpoint) else {
+                    return program_failure("Invalid channel endpoint");
+                };
+                if !seen.insert(Rc::as_ptr(&channel) as usize) {
+                    return Fail(thrown(runtime, function, 2, &[]));
+                }
+                channels.push(channel);
+            }
+            let object = new(runtime, &[args[0]]);
+            runtime.created(related(runtime, function, 0) as usize, object);
+            runtime.state_new(object, State::Selection(primitives::Selection {
+                channels: channels.into(), ..Default::default()
+            }));
+            Value(object, Repr::Ref)
+        }
         EndpointClose => {
             let Some(channel) = runtime.channel_of(args[0]) else {
                 return program_failure("Invalid channel endpoint");
@@ -506,11 +534,13 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
         }
         GroupNew => {
             let object = new(runtime, &[]);
+            runtime.created(related(runtime, function, 0) as usize, object);
             runtime.state_new(object, State::Group(primitives::Group::default()));
             Value(object, Repr::Ref)
         }
         GroupStart => {
             let (receiver, future) = (args[0], args[1]);
+            let dead = runtime.owner_is_dead(receiver);
             let Some(group) = runtime.group_mut(receiver) else {
                 return program_failure("Invalid future group");
             };
@@ -518,11 +548,24 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             if group.sealed && !known {
                 return Fail(thrown(runtime, function, 0, &[]));
             }
+            // #817: after the group's owner closed, a new member has no group duty to join. It settles on its own:
+            // a finished one releases its outcome at the call, a running one detaches to the root.
+            let orphan = !known && dead;
             if !known {
                 group.entries.push(future);
                 group.owned.push(false);
+                if !orphan {
+                    runtime.group_own(receiver, future);
+                }
             }
             runtime.spawn(ctx, future);
+            if orphan && unsafe { (*ctx).status } == crate::runtime::OK {
+                if crate::tasks::get(future, crate::tasks::STATE) == crate::tasks::RUNNING {
+                    runtime.detach_to_root(future);
+                } else if let Some(failure) = runtime.close_future(ctx, future) {
+                    return Raise(failure);
+                }
+            }
             VOID
         }
         GroupActive => {
@@ -556,7 +599,6 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             let remaining = (stream.entries.len() - stream.delivered) as i64;
             Value(runtime.heap.int(remaining), Repr::Int)
         }
-        FakeSet | FakeGet | FakeHas | FakeRemove | FakeClear | FakeSize => fake_storage(runtime, function, intrinsic, args),
         FloatFunction(name) => float_result(okkama_runtime_core::float::function(name, f64::from_bits(args[0]))),
         FloatAtan2 => float_result(okkama_runtime_core::float::atan2(f64::from_bits(args[0]), f64::from_bits(args[1]))),
         FloatMin => Value(okkama_runtime_core::float::min(f64::from_bits(args[0]), f64::from_bits(args[1])).to_bits(), Repr::Raw),
@@ -629,6 +671,37 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             }
             VOID
         }
+        TestCase => {
+            if runtime.host.as_ref().is_none_or(|h| h.test_failures.is_none()) {
+                return program_failure("The test capability is available only inside a running test");
+            }
+            let name = runtime.heap.text(args[0]).to_owned();
+            let host = runtime.host.as_mut().expect("a running test");
+            match host.test_cases.open(&name) {
+                crate::test_report::SubCaseStart::Run => {
+                    let parent = host.test_failures.replace(Vec::new()).unwrap_or_default();
+                    host.test_cases.started(name, parent);
+                    Value(1, Repr::Raw)
+                }
+                crate::test_report::SubCaseStart::Leave => Value(0, Repr::Raw),
+                crate::test_report::SubCaseStart::Duplicate => {
+                    if let Some(failures) = host.test_failures.as_mut() {
+                        failures.push(format!("duplicate sub-case \"{name}\": a name runs once"));
+                    }
+                    Value(0, Repr::Raw)
+                }
+                crate::test_report::SubCaseStart::Nested(outer) => {
+                    program_failure(&format!("test.case \"{name}\" inside test.case \"{outer}\": sub-cases do not nest"))
+                }
+            }
+        }
+        TestCaseEnd => {
+            if let Some(host) = runtime.host.as_mut() {
+                let failures = host.test_failures.take().unwrap_or_default();
+                host.test_failures = Some(host.test_cases.finished(failures, None));
+            }
+            VOID
+        }
         TestSkip => {
             if runtime.host.as_ref().is_none_or(|h| h.test_failures.is_none()) {
                 return program_failure("The test capability is available only inside a running test");
@@ -644,107 +717,22 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
     }
 }
 
-/// Per-fake storage of test fakes (`fake.storage.*`): typed values by key,
-/// owned by the fake object.
-type FakeMap = std::collections::BTreeMap<crate::ops::Key, (Word, Repr, Word, okkama_sparrow::TypeRef, Repr)>;
-
-fn fake_map(runtime: &mut Runtime, receiver: Word) -> Option<&mut FakeMap> {
-    match runtime.states.get_mut(&receiver) {
-        Some(State::FakeStorage(storage)) => Some(storage),
-        _ => None,
-    }
-}
-
-fn fake_storage(runtime: &mut Runtime, function: usize, intrinsic: Intrinsic, args: &[Word]) -> Outcome {
-    use Intrinsic::*;
-    let receiver = args[0];
-    let header = runtime.heap.header_of(receiver);
-    if crate::heap::kind(header) != crate::heap::OBJECT
-        || !runtime.loaded.program.objects[crate::heap::payload(header) as usize].name.ends_with("$fake")
-    {
-        return program_failure("fake storage requires a role fake");
-    }
-    match intrinsic {
-        FakeClear => {
-            if let Some(storage) = fake_map(runtime, receiver) {
-                storage.clear();
-            }
-            return VOID;
-        }
-        FakeSize => {
-            let size = fake_map(runtime, receiver).map_or(0, |s| s.len());
-            return Value(runtime.heap.int(size as i64), Repr::Int);
-        }
-        _ => {}
-    }
-    let (params, result) = {
-        let f = &runtime.loaded.program.functions[function];
-        (f.params.iter().map(|r| r.0 as usize).collect::<Vec<_>>(), f.result)
-    };
-    let registers = &runtime.loaded.program.functions[function].registers;
-    let key_type = registers[params[1]];
-    let key_kind = runtime.loaded.functions[function].kinds[params[1]];
-    let key_ty = runtime.loaded.program.ty(key_type);
-    let indexed = runtime.key(args[1], key_kind, key_ty);
-    if intrinsic == FakeSet {
-        let value_type = runtime.loaded.program.functions[function].registers[params[2]];
-        let repr = runtime.loaded.functions[function].kinds[params[2]].repr();
-        if fake_map(runtime, receiver).is_none() {
-            runtime.state_new(receiver, State::FakeStorage(Default::default()));
-        }
-        let entry = (args[1], key_kind.repr(), args[2], value_type, repr);
-        fake_map(runtime, receiver).expect("storage").insert(indexed, entry);
-        return VOID;
-    }
-    let found = fake_map(runtime, receiver).and_then(|s| s.get(&indexed)).copied();
-    if intrinsic == FakeHas {
-        return boolean(found.is_some());
-    }
-    let Some((_, _, value, stored, repr)) = found else {
-        let shown = show(runtime, args[1], key_type);
-        return program_failure(&format!("Fake storage has no key {shown}"));
-    };
-    if intrinsic == FakeRemove {
-        if let Some(storage) = fake_map(runtime, receiver) {
-            storage.remove(&indexed);
-        }
-        return VOID;
-    }
-    // get: the stored value under the requested type.
-    let expected = result.expect("fake get result");
-    let result_repr = runtime.loaded.functions[function].result.map_or(Repr::Raw, Kind::repr);
-    let program = &runtime.loaded.program;
-    if program.same_type(expected, stored) {
-        return Value(value, result_repr);
-    }
-    match program.ty(expected).cloned() {
-        Some(Type::Any) => {
-            let boxed = crate::ops::AnyBox { value, ty: stored, repr };
-            Value(runtime.heap.allocate_payload(Box::new(boxed)), Repr::Ref)
-        }
-        Some(Type::Role(role)) => {
-            let header = runtime.heap.header_of(value);
-            let does = repr == Repr::Ref
-                && crate::heap::kind(header) == crate::heap::OBJECT
-                && program.objects[crate::heap::payload(header) as usize].does.iter().any(|w| w.role == role);
-            if does {
-                Value(value, Repr::Ref)
-            } else {
-                program_failure("Fake storage value does not match the requested type")
-            }
-        }
-        _ => program_failure("Fake storage value does not match the requested type"),
-    }
-}
-
-/// A value as test reports show it (strings quoted at the top level).
+/// A value as test reports show it (strings quoted at the top level). An object shows its type and
+/// fields, a variant its case and payload (`Down.unavailable(3)`), as the source writes them (#756).
 fn show(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef) -> String {
     let mut out = String::new();
-    show_into(runtime, word, ty, true, &mut out);
+    show_into(runtime, word, ty, true, 0, &mut out);
     out
 }
 
-fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted: bool, out: &mut String) {
+fn show_into(
+    runtime: &Runtime,
+    word: Word,
+    ty: okkama_sparrow::TypeRef,
+    quoted: bool,
+    depth: usize,
+    out: &mut String,
+) {
     let program = &runtime.loaded.program;
     match program.ty(ty) {
         Some(Type::Str) if quoted => {
@@ -763,6 +751,11 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
             let name = program.enums.get(e.0 as usize).and_then(|en| en.cases.get(word as u32 as usize));
             out.push_str(name.map_or("?", |n| n.as_str()));
         }
+        Some(Type::Array(_)) if word != UNBOUND && runtime.heap.is_bytes(word) => {
+            let bytes = runtime.heap.bytes(word);
+            let items = bytes.iter().map(|&byte| (byte as i8).to_string()).collect::<Vec<_>>();
+            out.push_str(&format!("[{}]", items.join(", ")));
+        }
         Some(Type::Array(element)) => {
             let element = *element;
             out.push('[');
@@ -770,7 +763,7 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
                 if i > 0 {
                     out.push_str(", ");
                 }
-                show_into(runtime, item, element, false, out);
+                show_into(runtime, item, element, false, depth, out);
             }
             out.push(']');
         }
@@ -782,28 +775,76 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    show_into(runtime, k, key, false, out);
+                    show_into(runtime, k, key, false, depth, out);
                     out.push('=');
-                    show_into(runtime, v, value, false, out);
+                    show_into(runtime, v, value, false, depth, out);
                 }
             }
             out.push('}');
         }
         Some(Type::Any) => match runtime.heap.payload::<crate::ops::AnyBox>(word) {
-            Some(boxed) => show_into(runtime, boxed.value, boxed.ty, quoted, out),
+            Some(boxed) => show_into(runtime, boxed.value, boxed.ty, quoted, depth, out),
             None => out.push_str("null"),
         },
         _ if word == UNBOUND => out.push_str("null"),
-        _ => {
-            let header = runtime.heap.header_of(word);
-            let name = if crate::heap::kind(header) == crate::heap::OBJECT {
-                program.objects[crate::heap::payload(header) as usize].name.as_str()
-            } else {
-                "value"
-            };
-            out.push_str(&format!("{name}@{word:x}"));
+        _ if crate::heap::kind(runtime.heap.header_of(word)) == crate::heap::OBJECT => {
+            show_object(runtime, word, depth, out);
+        }
+        // Closures, futures, handles: no value to show beyond their identity.
+        _ => out.push_str(&format!("value@{word:x}")),
+    }
+}
+
+/// An object as its source writes it (#756): a variant case as `Enum.case(payload, …)` or `Enum.case`,
+/// any other object as `Type(field: value, …)`. `once let` slots are caches and stay out, as in `==`.
+fn show_object(runtime: &Runtime, word: Word, depth: usize, out: &mut String) {
+    use okkama_runtime_core::testing::{display_name, variant_name, SHOWN_DEPTH};
+    let program = &runtime.loaded.program;
+    let object = crate::heap::payload(runtime.heap.header_of(word)) as usize;
+    let declaration = &program.objects[object];
+    let case = program.variants.iter().find_map(|variant| {
+        let case = variant.cases.iter().find(|(_, case)| case.0 as usize == object)?;
+        Some(variant_name(&variant.name, &case.0))
+    });
+    let fields = declaration.fields.iter().enumerate().filter(|(_, (name, _))| !crate::ops::is_once_slot(name));
+    let fields = fields.collect::<Vec<_>>();
+    match &case {
+        Some(case) if fields.is_empty() => {
+            out.push_str(case);
+            return;
+        }
+        Some(case) => out.push_str(case),
+        None => out.push_str(&display_name(&declaration.name)),
+    }
+    out.push('(');
+    if depth + 1 >= SHOWN_DEPTH && !fields.is_empty() {
+        out.push_str("…)");
+        return;
+    }
+    for (position, (index, (name, ty))) in fields.into_iter().enumerate() {
+        if position > 0 {
+            out.push_str(", ");
+        }
+        if case.is_none() {
+            out.push_str(name);
+            out.push_str(": ");
+        }
+        let field = runtime.heap.field(word, index);
+        let unbound = match Kind::of(program, *ty) {
+            Kind::Float | Kind::Raw | Kind::Byte => {
+                field == crate::word::UNBOUND_RAW
+            }
+            _ => field == UNBOUND,
+        };
+        if unbound {
+            out.push_str("null");
+        } else if let Some(Type::Str) = program.ty(*ty) {
+            out.push_str(&okkama_runtime_core::testing::literal(runtime.heap.text(field)));
+        } else {
+            show_into(runtime, field, *ty, false, depth + 1, out);
         }
     }
+    out.push(')');
 }
 
 /// `stream_init` for drivers: Err(Some(failure)), or Err(None) when stopped.
@@ -868,6 +909,7 @@ fn stream_init(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, receiver: 
     stream.cancelled = vec![false; stream.entries.len()];
     Ok(())
 }
+
 
 /// Call method `slot` of `role` on `receiver` through its witness; None
 /// when it failed or stopped (the context says which).
@@ -954,6 +996,76 @@ fn sort_or_stop<T, E>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Result
     }
 }
 
+/// The natural order `ordering` sorts scalars and text by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NaturalOrder {
+    Int,
+    Float,
+    Rat,
+    Str,
+    /// Bytes and chars: their raw words.
+    Raw,
+}
+
+/// A stable sort of scalars or text in their natural order. A long sort stops for the interrupt flag or
+/// the memory budget (#238): every few thousand comparisons look at them, and a stop leaves the sort at
+/// once (#283). Champ runs the same sort (#678).
+pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: NaturalOrder)
+    -> Result<(), crate::budget::Exhausted>
+{
+    let mut compared = 0u32;
+    sort_or_stop(items, |&a, &b| {
+        compared = compared.wrapping_add(1);
+        if compared.is_multiple_of(SORT_POLL)
+            && runtime.limits.polled()
+            && let Some(what) = runtime.over_budget()
+        {
+            return Err(what);
+        }
+        Ok(match order {
+            NaturalOrder::Int => runtime.big_value(a).cmp(&runtime.big_value(b)),
+            NaturalOrder::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
+            NaturalOrder::Rat => runtime.rational(a).compare(runtime.rational(b)),
+            NaturalOrder::Str => runtime.heap.text(a).cmp(runtime.heap.text(b)),
+            NaturalOrder::Raw => a.cmp(&b),
+        })
+    })
+}
+
+/// A stable bottom-up merge sort whose comparison says whether the left element is greater than the right
+/// one (only then is the right one taken first), or None when it failed. The first failure stops the sort:
+/// no later comparison runs. Champ runs the same merge, so the sequence of comparisons is the same (#678).
+pub(crate) fn merge_order(mut items: Vec<Word>, mut greater: impl FnMut(Word, Word) -> Option<bool>)
+    -> Option<Vec<Word>>
+{
+    let mut width = 1;
+    while width < items.len() {
+        let mut merged = Vec::with_capacity(items.len());
+        let mut left = 0;
+        while left < items.len() {
+            let mid = (left + width).min(items.len());
+            let end = (mid + width).min(items.len());
+            let (mut i, mut j) = (left, mid);
+            while i < mid && j < end {
+                // Take the right element only when the left one is greater.
+                if greater(items[i], items[j])? {
+                    merged.push(items[j]);
+                    j += 1;
+                } else {
+                    merged.push(items[i]);
+                    i += 1;
+                }
+            }
+            merged.extend_from_slice(&items[i..mid]);
+            merged.extend_from_slice(&items[j..end]);
+            left = end;
+        }
+        items = merged;
+        width *= 2;
+    }
+    Some(items)
+}
+
 /// Stable ordering of an array: natural order for scalars and text, otherwise
 /// a bottom-up merge sort over `compare::Comparing<T>.order`.
 fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word) -> Word {
@@ -964,34 +1076,17 @@ fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word)
     };
     let kind = Kind::of(program, element);
     let mut items = runtime.heap.elements(source).to_vec();
-    let element_type = program.ty(element).cloned();
-    let builtin = matches!(
-        element_type,
-        Some(Type::Int | Type::Float | Type::Rat | Type::Byte | Type::Char | Type::Str)
-    );
+    let natural = match program.ty(element) {
+        Some(Type::Int) => Some(NaturalOrder::Int),
+        Some(Type::Float) => Some(NaturalOrder::Float),
+        Some(Type::Rat) => Some(NaturalOrder::Rat),
+        Some(Type::Str) => Some(NaturalOrder::Str),
+        Some(Type::Byte | Type::Char) => Some(NaturalOrder::Raw),
+        _ => None,
+    };
     let repr = kind.repr();
-    if builtin {
-        // A long sort stops for the interrupt flag or the memory budget
-        // (#238): every few thousand comparisons look at them, and a stop
-        // leaves the sort at once (#283).
-        let mut compared = 0u32;
-        let sorted = sort_or_stop(&mut items, |&a, &b| {
-            compared = compared.wrapping_add(1);
-            if compared.is_multiple_of(SORT_POLL)
-                && runtime.limits.polled()
-                && let Some(what) = runtime.over_budget()
-            {
-                return Err(what);
-            }
-            Ok(match element_type {
-                Some(Type::Int) => runtime.big_value(a).cmp(&runtime.big_value(b)),
-                Some(Type::Float) => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
-                Some(Type::Rat) => runtime.rational(a).compare(runtime.rational(b)),
-                Some(Type::Str) => runtime.heap.text(a).cmp(runtime.heap.text(b)),
-                _ => a.cmp(&b),
-            })
-        });
-        if let Err(what) = sorted {
+    if let Some(natural) = natural {
+        if let Err(what) = sort_natural(runtime, &mut items, natural) {
             return runtime.exhaust(unsafe { &mut *ctx }, what);
         }
         if kind == Kind::Byte {
@@ -1006,49 +1101,14 @@ fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word)
     };
     // The source keeps every element alive while comparisons run.
     runtime.roots.push((source, Repr::Ref));
-    let mut width = 1;
-    let mut failed = false;
-    while width < items.len() && !failed {
-        let mut merged = Vec::with_capacity(items.len());
-        let mut left = 0;
-        while left < items.len() {
-            let mid = (left + width).min(items.len());
-            let end = (mid + width).min(items.len());
-            let (mut i, mut j) = (left, mid);
-            while i < mid && j < end {
-                // Take the right element only when the left one is greater.
-                match order(ctx, runtime, role, slot, items[i], items[j]) {
-                    Some(result) if result == greater => {
-                        merged.push(items[j]);
-                        j += 1;
-                    }
-                    Some(_) => {
-                        merged.push(items[i]);
-                        i += 1;
-                    }
-                    None => {
-                        failed = true;
-                        break;
-                    }
-                }
-            }
-            if failed {
-                break;
-            }
-            merged.extend_from_slice(&items[i..mid]);
-            merged.extend_from_slice(&items[j..end]);
-            left = end;
-        }
-        if !failed {
-            items = merged;
-        }
-        width *= 2;
-    }
+    let sorted = merge_order(items, |left, right| {
+        order(ctx, runtime, role, slot, left, right).map(|result| result == greater)
+    });
     runtime.roots.pop();
-    if failed {
-        return 0;
+    match sorted {
+        Some(items) => runtime.heap.allocate_array(repr, &items),
+        None => 0,
     }
-    runtime.heap.allocate_array(repr, &items)
 }
 
 /// The `order` method of `compare::Comparing<T>` for element type `element`,

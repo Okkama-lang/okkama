@@ -1,0 +1,39 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/process" take Process, ExitKind, Signal;
+import "os/command" take InheritedCommand;
+import "fs/path" take Path;
+import "encoding/utf" take Utf8Encoded;
+
+// /bin/cat fed bytes by hand: written, flushed, closed; its output read; its exit awaited.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let child = Process(InheritedCommand(program: Path("/bin/cat"), arguments: []));
+        let pid = if child.id() > 0 { 1; } else { 0; };
+        child.input_write(Utf8Encoded("cat " + v.string() + "\n").bytes());
+        child.input_flush();
+        let open = if child.input_closed() { 0; } else { 2; };
+        child.input_close();
+        let shut = if child.input_closed() { 4; } else { 0; };
+        let out = child.output_bytes(100);
+        let exit = await child.exit();
+        let total = pid + open + shut + 10 * out.size() + 1000 * exit.code() + (if exit.success() { 100; } else { 0; });
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

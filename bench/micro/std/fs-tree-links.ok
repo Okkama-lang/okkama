@@ -1,0 +1,76 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/environment" take Environment;
+import "fs/temp" take TemporaryDirectory;
+import "async/atomic" take Atomic;
+import "collections/iteration" take Cursor;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take Directory, DirectoryEntry, Descendants, DirectoryTree;
+import "fs/link" take HardLink, SymbolicLink;
+import "fs/lock" take FileLockMode;
+import "fs/stat" take FileKind;
+
+hidden object Walk<T> {
+    has cursor is Cursor<T>;
+    Walk(cursor is Cursor<T>) { self.cursor = cursor; }
+    count() is int {
+        let at = Atomic(cursor);
+        let n = Atomic(0);
+        loop {
+            last if !at.value().available();
+            n.replace(n.value() + 1);
+            at.replace(at.value().successor());
+        }
+        n.value();
+    }
+}
+
+// A small tree with a hard and a symbolic link: descendants walked, entries kinded and stat-ed, a lock taken and closed, the link and the tree removed.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-fs-");
+        let root = scratch.path();
+        let top = root.child("t");
+        Directory(path: top.child("u")).create(parents: true);
+        let f = top.child("u").child("f.txt");
+        File(path: f, mode: FileMode.writing).text().write("abc" + x);
+        HardLink(source: FileEntry(path: f), destination: top.child("h.txt")).create();
+        SymbolicLink(path: top.child("s")).create(target: f);
+        let target = SymbolicLink(path: top.child("s")).target().name().length();
+        let count = Walk(Descendants(Directory(path: top)).cursor()).count();
+        let entry = DirectoryEntry(path: top.child("h.txt"));
+        let regular = if entry.kind() == FileKind.file { 1; } else { 0; };
+        let size = entry.stat()::Shape::size;
+        let file = File(path: f, mode: FileMode.reading);
+        let closed = match file.lock(FileLockMode.shared) {
+            case Maybe.some(lock) { let before = if lock.closed() { 1; } else { 0; }; lock.close(); before + (if lock.closed() { 2; } else { 0; }); }
+            else { 100; }
+        };
+        file.close();
+        SymbolicLink(path: top.child("s")).remove();
+        DirectoryTree(Directory(path: top)).remove();
+        let total = target + 10 * count + 100 * regular + 1000 * size + 100000 * closed + (if Directory(path: top).existence() { 1000000; } else { 0; });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

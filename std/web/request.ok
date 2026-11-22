@@ -32,7 +32,6 @@ import "url/form" take ParsedForm, InvalidFormEncoding;
 import "json" take Json, JsonKind, JsonKindName, JsonLocation, JsonMaybeReader, ParsedJson,
     JsonError;
 import "math/decimal" take Decimal;
-import "numbers/bigint" take BigInt;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded, InvalidUtf8;
 import "web/exception" take Exception;
 import "async/atomic" take Atomic;
@@ -666,7 +665,7 @@ object RequestJson {
     }
 
     // This integer of any size.
-    integer() is BigInt {
+    integer() is int {
         try {
             origin.integer();
         }
@@ -771,7 +770,7 @@ object RequestJson {
     }
 
     // The member as an integer of any size.
-    integer(name is string) is BigInt {
+    integer(name is string) is int {
         self.get(name).integer();
     }
 

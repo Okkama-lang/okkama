@@ -17,6 +17,7 @@
 mod body;
 mod builder;
 mod ctx;
+mod futures;
 mod intrinsics;
 mod modules;
 pub mod std_paths;
@@ -143,6 +144,65 @@ fn settle_where_needed(ctx: &mut ctx::Ctx<'_, '_>, functions: &mut [ir::Function
                 _ => {}
             }
         }
+    }
+}
+
+/// The `once let` slots left for the whole program (#520): their value type
+/// may reach a resource only through a function value or a role, and that is
+/// decided now, from every closure's captures and every specialization.
+fn check_once_lets(ctx: &ctx::Ctx<'_, '_>, functions: &[ir::Function]) -> std::result::Result<(), (usize, LoweringError)> {
+    if ctx.once_checks.is_empty() {
+        return Ok(());
+    }
+    let mut closures: Vec<(ir::FnSig, Vec<ir::Type>)> = Vec::new();
+    for function in functions {
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            if let (ir::InstKind::FnClosure { captures, .. }, Some(result)) = (&inst.kind, inst.result)
+                && let ir::Type::Fn(sig) = &function.values[result.0]
+            {
+                let captured = captures.iter().map(|value| function.values[value.0].clone()).collect();
+                closures.push(((**sig).clone(), captured));
+            }
+        }
+    }
+    let settled = ctx.settled_plain_types(&closures);
+    for (ty, site, span, module) in &ctx.once_checks {
+        if !settled.is_plain(ty) {
+            return Err((
+                *module,
+                LoweringError::invalid(
+                    *span,
+                    format!(
+                        "once let cannot keep a resource: its value would outlive the scope that releases it ({site} keeps {}, which reaches one through a function value or a role)",
+                        source_type(ctx, ty)
+                    ),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A lowered type in source notation for a diagnostic: `@Named`, not
+/// `array<role#0>`.
+fn source_type(ctx: &ctx::Ctx<'_, '_>, ty: &ir::Type) -> String {
+    match ty {
+        ir::Type::Object(object) | ir::Type::Successor(object) => ctx.objects[object.0].name.clone(),
+        ir::Type::Role(role) => ctx.roles[role.0].name.clone(),
+        ir::Type::Array(element) => format!("@{}", source_type(ctx, element)),
+        ir::Type::Map(key, value) => format!("%{}:{}", source_type(ctx, key), source_type(ctx, value)),
+        ir::Type::Fn(sig) => {
+            let params: Vec<String> = sig.params.iter().map(|param| source_type(ctx, param)).collect();
+            let result = match &sig.result {
+                ir::ResultType::Value(value) => source_type(ctx, value),
+                ir::ResultType::Void => "void".to_string(),
+            };
+            format!("({}) is {}", params.join(", "), result)
+        }
+        ir::Type::Int => "int".to_string(),
+        ir::Type::Str => "string".to_string(),
+        ir::Type::Bool => "bool".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -430,6 +490,9 @@ fn lower_analyzed(
         next += 1;
     }
     ctx.current = None;
+    check_once_lets(&ctx, &functions)?;
+    futures::take_unique(&mut ctx, &mut functions);
+    futures::own_awaited_temporaries(&mut functions);
     settle_where_needed(&mut ctx, &mut functions);
     let owners: Vec<usize> = (0..functions.len()).map(|index| ctx.task_module(index)).collect();
     let mut module = ctx.module(program, imports, functions);
@@ -453,15 +516,25 @@ fn lower_analyzed(
         };
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
-    let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false } };
+    let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
+    dev_ir("ir lowered", &module);
+    let param_adopts_removed = passes.elide_param_adopts(&mut module);
+    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); their emptied
+    // regions go with the next pass.
+    if passes.on("statics") {
+        let _span = okkama_devtrace::span!("lower", "pass statics");
+        ir::statics::make_static(&mut module);
+    }
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
     // после вызова иначе оставляет его вызовом (#285).
     if passes.on("regions") {
+        let _span = okkama_devtrace::span!("lower", "pass regions");
         ir::regions::elide_unused_regions(&mut module);
     }
     // Хвостовая рекурсия исполняется циклом на всех движках.
     if passes.on("tail-calls") {
+        let _span = okkama_devtrace::span!("lower", "pass tail-calls");
         ir::recursion::eliminate_tail_calls(&mut module);
     }
     // Constant arithmetic is computed once, exactly, at build time.
@@ -491,6 +564,7 @@ fn lower_analyzed(
     if passes.sabotage {
         sabotage_int_add(&mut module);
     }
+    dev_ir("ir after passes", &module);
     // Lowering обязан выдавать только корректный IR: нарушение — ошибка компилятора.
     if let Err(error) = ir::verify(&module) {
         // Отладка компилятора: печать отвергнутого IR.
@@ -505,6 +579,21 @@ fn lower_analyzed(
             ),
         ));
     }
+    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
+    if verify_ownership() {
+        let _span = okkama_devtrace::span!("lower", "linearity check");
+        if let Err(error) = ir::linearity::check(&module) {
+            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+                let _ = std::fs::write(path, module.to_string());
+            }
+            return Err((root, LoweringError::invalid(program.span, format!("internal compiler error: {error}"))));
+        }
+    }
+    if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
+        let mut report = ir::ownership::analyze(&module);
+        report.record_param_adopts(&param_adopts_removed);
+        let _ = std::fs::write(path, report.to_json());
+    }
     Ok((module, analysis.warnings.clone()))
 }
 
@@ -514,6 +603,44 @@ fn lower_analyzed(
 /// корень с тестами: тела тестов тоже проверяются (§14).
 pub fn inspect(
     source: &SourceFile,
+    loader: &mut dyn ModuleLoader,
+    test_mode: bool,
+) -> crate::ide::Inspection {
+    inspect_parsed(source, None, loader, test_mode)
+}
+
+/// Documentation uses the import graph and declaration registry, without
+/// checking bodies or generating code (#513).
+pub(crate) fn document(
+    source: &SourceFile,
+    loader: &mut dyn ModuleLoader,
+) -> std::result::Result<crate::doc::Documentation, String> {
+    let options = crate::syntax::ParseOptions {
+        mode: crate::syntax::ParseMode::Production,
+        ..crate::syntax::ParseOptions::default()
+    };
+    let mut program = crate::syntax::parse(source, &options).map_err(|errors| {
+        format!("{}: does not parse: {}", source.name(), errors.first().map(|error| error.message.as_str()).unwrap_or_default())
+    })?;
+    std_paths::desugar(&mut program).map_err(|error| error.message().to_string())?;
+    let roots = [(&program, source.name(), Some(source))];
+    let graph = modules::load_graph(&roots, loader).map_err(|error| match error {
+        LinkError::Load(message) => message,
+        LinkError::Lowering { error, .. } => error.message().to_string(),
+    })?;
+    let files: Vec<_> = graph.loaded.iter().map(|loaded| loaded.source.clone())
+        .chain(std::iter::once(source.clone())).collect();
+    let registry = crate::analysis::registry::Registry::build(modules::source_modules(&graph, &roots));
+    Ok(crate::doc::Documentation::new(&registry, &files, loader))
+}
+
+/// [`inspect`] of a file the caller has already parsed (#472): `parsed` must
+/// be the parse `test_mode` asks for -- the full grammar when testing, the
+/// production one otherwise. A full parse of a file without `test` or `fake`
+/// items is also its production parse, since only their bodies differ.
+pub fn inspect_parsed(
+    source: &SourceFile,
+    parsed: Option<crate::syntax::ast::Program>,
     loader: &mut dyn ModuleLoader,
     test_mode: bool,
 ) -> crate::ide::Inspection {
@@ -529,9 +656,9 @@ pub fn inspect(
         },
         ..ParseOptions::default()
     };
-    let parsed = match syntax::parse(source, &options) {
-        Ok(program) => program,
-        Err(_) => {
+    let parsed = match parsed.map_or_else(|| syntax::parse(source, &options).ok(), Some) {
+        Some(program) => program,
+        None => {
             // Every syntax error at once, and the outline of the declarations
             // that parsed (#47); nothing damaged goes on to analysis.
             let recovered = syntax::parse_recovering(source, &options);
@@ -659,7 +786,8 @@ pub fn inspect(
     inspection
         .diagnostics
         .extend(crate::ide::lint(&registry, &bodies, source, root));
-    let index = crate::ide::build(&registry, &bodies, &files, root);
+    let index = crate::ide::build(&registry, &bodies, &files, root, loader);
+    inspection.diagnostics.extend(index.diagnostics);
     inspection.symbols = index.symbols;
     inspection.members = index.members;
     inspection.scopes = index.scopes;
@@ -667,8 +795,16 @@ pub fn inspect(
     inspection
 }
 
+/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`.
+fn verify_ownership() -> bool {
+    if cfg!(okkama_release) {
+        return false;
+    }
+    cfg!(debug_assertions) || std::env::var("OKKAMA_VERIFY_OWNERSHIP").is_ok_and(|value| value == "1")
+}
+
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
-/// default), `none` or a comma list of `regions`, `tail-calls`, `fold`, `hoist`,
+/// default), `none` or a comma list of `statics`, `regions`, `tail-calls`, `fold`, `hoist`,
 /// `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
 /// passes off shows whether a pass changed meaning; the release gate runs the
 /// IR conformance suite both ways. `sabotage-int-add` turns the first
@@ -677,12 +813,27 @@ pub fn inspect(
 struct Passes {
     enabled: Option<Vec<String>>,
     sabotage: bool,
+    param_adopts: bool,
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 6] = ["regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
+pub const PASSES: [&str; 7] = ["statics", "regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+thread_local! {
+    /// The passes of lowerings on this thread only (`with_passes`), ahead of `select_passes` and the environment.
+    static THREAD_PASSES: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with the IR passes `spec` (as `OKKAMA_IR_PASSES`) for lowerings on this thread only: a test that looks
+/// at one stage's output without changing the passes of tests running beside it.
+pub fn with_passes<T>(spec: &str, f: impl FnOnce() -> T) -> T {
+    let previous = THREAD_PASSES.with(|passes| passes.replace(Some(spec.to_string())));
+    let result = f();
+    THREAD_PASSES.with(|passes| *passes.borrow_mut() = previous);
+    result
+}
 
 /// Select the IR passes of later lowerings in this process, as
 /// `OKKAMA_IR_PASSES` does (`okkama ir --passes`, `--after`).
@@ -692,18 +843,84 @@ pub fn select_passes(spec: &str) {
 
 impl Passes {
     fn from_env() -> Self {
-        let selected = SELECTED.read().expect("pass selection").clone();
+        let selected = THREAD_PASSES.with(|passes| passes.borrow().clone())
+            .or_else(|| SELECTED.read().expect("pass selection").clone());
         let spec = selected.unwrap_or_else(|| std::env::var("OKKAMA_IR_PASSES").unwrap_or_default());
+        Self::from_spec(&spec, std::env::var("OKKAMA_OWNERSHIP_PROTOTYPE").ok().as_deref())
+    }
+
+    fn from_spec(spec: &str, prototype: Option<&str>) -> Self {
         let mut names: Vec<String> = spec.split(',').map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).collect();
         let sabotage = names.iter().any(|name| name == "sabotage-int-add");
         names.retain(|name| name != "sabotage-int-add");
         // `none` names no pass, so every pass is off.
         let enabled = (!names.is_empty() && !names.iter().any(|name| name == "all")).then_some(names);
-        Self { enabled, sabotage }
+        // Separate from the default pass list; only an explicit opt-in enables it (#555).
+        let param_adopts = prototype == Some("1");
+        Self { enabled, sabotage, param_adopts }
+    }
+
+    fn elide_param_adopts(&self, module: &mut ir::Module) -> Vec<usize> {
+        let mut removed = Vec::new();
+        if self.param_adopts {
+            ir::param_adopts::elide_param_adopts(module, &mut removed);
+        }
+        removed
     }
 
     fn on(&self, pass: &str) -> bool {
         self.enabled.as_ref().is_none_or(|names| names.iter().any(|name| name == pass))
+    }
+}
+
+/// Development instrumentation of Tomato's pipeline (OKKAMA_DEV=lower[:function][,dump]): the module's size and
+/// its region operations by kind after a stage, and each function's text.
+fn dev_ir(stage: &'static str, module: &ir::Module) {
+    static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("lower");
+    if !GATE.on() {
+        return;
+    }
+    let mut instructions = 0u64;
+    let mut regions: std::collections::BTreeMap<&'static str, u64> = Default::default();
+    for function in &module.functions {
+        let mut ops = 0u64;
+        for block in &function.blocks {
+            instructions += block.insts.len() as u64;
+            for inst in &block.insts {
+                if matches!(inst.kind, ir::InstKind::ResourcePin { .. } | ir::InstKind::ResourceLeave { .. }
+                    | ir::InstKind::ResourceUnwind { .. } | ir::InstKind::ResourceSettle { .. }
+                    | ir::InstKind::ResourceSettleUnwind { .. })
+                {
+                    *regions.entry("resource (static)").or_default() += 1;
+                    ops += 1;
+                    continue;
+                }
+                let kind = match &inst.kind {
+                    ir::InstKind::RegionEnter => "region.enter",
+                    ir::InstKind::RegionAdopt { .. } => "region.adopt",
+                    ir::InstKind::RegionTrack { .. } => "region.track",
+                    ir::InstKind::RegionTransfer { .. } => "region.transfer",
+                    ir::InstKind::RegionLeave { .. } => "region.leave",
+                    ir::InstKind::RegionUnwind { .. } => "region.unwind",
+                    ir::InstKind::RegionSettle { .. } => "region.settle",
+                    _ => continue,
+                };
+                *regions.entry(kind).or_default() += 1;
+                ops += 1;
+            }
+        }
+        // #912: region and static-resource operations per function.
+        if ops > 0 && GATE.on_for(&function.symbol) {
+            okkama_devtrace::count("lower", &format!("{stage}: ownership ops in {}", function.symbol), ops);
+        }
+        if GATE.dumps_for(&function.symbol) {
+            okkama_devtrace::dump(stage, &function.symbol, &ir::print::function_text(module, function));
+        }
+    }
+    okkama_devtrace::count("lower", &format!("{stage}: functions"), module.functions.len() as u64);
+    okkama_devtrace::count("lower", &format!("{stage}: instructions"), instructions);
+    for (kind, count) in regions {
+        okkama_devtrace::count("lower", &format!("{stage}: {kind}"), count);
     }
 }
 
@@ -718,5 +935,33 @@ fn sabotage_int_add(module: &mut ir::Module) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod param_adopts_tests {
+    use super::*;
+
+    #[test]
+    fn prototype_off_keeps_printed_oir_byte_identical() {
+        // Without the static pass (#909 2b), which would take the local resource's adopt for itself.
+        let source = SourceFile::new("test.ok", "module app v1.0.0; \
+            object Res { Res(); read() is int { 1; } destroy {} } \
+            main() is int { let r = Res(); r.read(); }").expect("source");
+        let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).expect("parse");
+        let module = with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&program)).expect("lower");
+        let before = module.to_string();
+        for switch in [None, Some("0"), Some("true"), Some(""), Some(" 1")] {
+            for spec in ["", "all", "none", "param-adopts"] {
+                let passes = Passes::from_spec(spec, switch);
+                let mut after = module.clone();
+                assert!(passes.elide_param_adopts(&mut after).is_empty());
+                assert_eq!(after.to_string().as_bytes(), before.as_bytes());
+            }
+        }
+        assert!(!PASSES.contains(&"param-adopts"));
+        let mut enabled = module.clone();
+        assert!(Passes::from_spec("all", Some("1")).elide_param_adopts(&mut enabled).iter().sum::<usize>() > 0);
+        ir::verify(&enabled).expect("prototype verifies");
     }
 }

@@ -1,0 +1,7 @@
+docs-13.txt: documents 6000, well formed 2440, differences 0
+docs-14.txt: documents 6000, well formed 2441, differences 0
+docs-15.txt: documents 6000, well formed 2340, differences 0
+clean-21.txt: documents 6000, well formed 3487, differences 0
+clean-22.txt: documents 6000, well formed 3555, differences 0
+bench-docs.txt: documents 3, well formed 3, differences 0
+tests.txt: documents 75, well formed 28, differences 0

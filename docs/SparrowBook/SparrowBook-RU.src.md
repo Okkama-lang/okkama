@@ -1,6 +1,6 @@
 # Книга об ассемблере Sparrow
 
-Sparrow — байткод Okkama: его пишет `okkama build --target sparrow`, а рантайм
+Sparrow — байткод Okkama: его пишет `okkama build`, а рантайм
 Sparrow (`sparrow`, `okkama exec`; его текущая версия — Tomato) проверяет его и исполняет
 как машинный код. Книга учит текстовой форме байткода — ассемблеру Sparrow
 (`.spa`) — настолько, чтобы читать то, что выдаёт компилятор, и писать
@@ -39,7 +39,7 @@ sparrow --disassemble prog.spb             # байткод -> текст
 sparrow check prog.spb                     # проверка и контракты intrinsic
 sparrow run prog.spb [ARGS...]             # проверка и запуск
 sparrow test prog.spb                      # тесты тестового профиля
-okkama build prog.ok --target sparrow -o prog.spb   # Okkama -> SPB
+okkama build prog.ok -o prog.spb   # Okkama -> SPB
 okkama exec prog.spb                       # запуск SPB внутри okkama
 ```
 
@@ -68,7 +68,7 @@ Hello, Sparrow!
 ## 3. Устройство файла
 
 ```text
-sparrow 15                      ; версия формата
+sparrow 16                      ; версия формата
 module "name" "version"         ; имя и версия модуля (можно "")
 type t0 …                       ; таблица типов по порядку
 enum enum0 "Name" ["a", "b"]    ; enum и его варианты

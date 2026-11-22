@@ -1,0 +1,34 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "regex/pattern" take Regex;
+import "regex/search" take PrefixRegexMatch;
+
+// A match anchored at the start: every reader.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let text = "k" + x + "=" + x + x + " name=n" + x;
+        let pair = Regex("(?<key>[a-z]+)(?<id>\\d)?=(?<num>\\d+)");
+        let prefix = PrefixRegexMatch(origin: text, regex: pair);
+        let total = prefix.capture(3).range()::Bounds::start + prefix.captures().size() + prefix.group("key").range()::Bounds::end
+            + prefix.int("num") + (prefix.maybe("id").int() else 0) + prefix.range()::Bounds::end + prefix.text().length()
+            + prefix.text("num").length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -497,7 +497,7 @@ hidden object MaildirName {
     MaildirName(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 255
             else throw InvalidMailbox.located(0, "maildir filename length outside 1..255");
-        confirm origin.slice(0, 1) != "."
+        confirm !origin.starts_with(".")
             else throw InvalidMailbox.located(0, "dot maildir filename is reserved");
         let characters = origin.characters();
         for (0..characters.size()) -> index {
@@ -511,7 +511,7 @@ hidden object MaildirName {
         let flags is MimeItems<MailFlag> = MimeItems();
         if parts.size() == 2 {
             let suffix = parts[1];
-            confirm suffix.length() >= 2 && suffix.slice(0, 2) == "2,"
+            confirm suffix.starts_with("2,")
                 else throw InvalidMailbox.located(
                     parts[0].length() + 1,
                     "unsupported maildir info version"
@@ -980,7 +980,7 @@ hidden object MaildirEntries {
                 else {
                     path.string().split("/").last();
                 };
-                if text.slice(0, 1) != "." {
+                if !text.starts_with(".") {
                     confirm entries.size() < maximum
                         else throw MailboxLimitExceeded.kind("messages");
                     let name = MaildirName(text);

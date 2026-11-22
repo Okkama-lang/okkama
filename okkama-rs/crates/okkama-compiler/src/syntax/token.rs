@@ -65,6 +65,7 @@ pub enum TokenKind {
     DoubleColon,
     /// `?` — removed optional-type marker (reserved).
     Question,
+    /// `??` — removed `?? … !!` selection (#893), reserved: a compact `match` does it.
     Choice,
     /// `?.` — removed optional chaining (reserved).
     QuestionDot,
@@ -213,6 +214,7 @@ impl TokenKind {
                 | With
                 | Finally
                 | Question
+                | Choice
                 | QuestionDot
                 | StarStar
         )
@@ -436,7 +438,8 @@ pub struct StrLiteral {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TokenValue {
     Int(IntLiteral),
-    Float(FloatLiteral),
+    /// Boxed: three strings would size every token's payload (#471).
+    Float(Box<FloatLiteral>),
     Str(StrLiteral),
     Char(char),
 }

@@ -1,0 +1,161 @@
+module differential13 v1.0.0;
+
+// The time/format of b6b10bdb7..89320c60c (its runtime/time_format natives,
+// called as that module called them) against the Okkama time/format (#13):
+// the same text, the same date-time, or the same failure and offset.
+import "io/stdout" take Stdout;
+import "fs/file" take File;
+import "fs/path" take Path;
+import "async/atomic" take Atomic;
+import "strings/parse" take Number;
+import "cli/arguments" take ProcessArguments;
+import "runtime/time_format" take time_pattern_invalid_offset, time_format_date, time_format_local,
+    time_parse_invalid_offset, time_parse_parts;
+import "time/format" take FormattedDate, FormattedLocalDateTime, InvalidTimePattern, InvalidFormattedDate,
+    InvalidFormattedLocalDateTime;
+import "time/date" take Date;
+import "time/day" take TimeOfDay;
+import "time/local_datetime" take LocalDateTime;
+
+hidden object Input {
+    has fields is @string;
+
+    Input(record is string) {
+        fields = record.split(2.char().string());
+    }
+
+    hidden local() is bool {
+        fields[1] == "1";
+    }
+
+    hidden value(index is int) is int {
+        Number(fields[4 + index]).int();
+    }
+
+    hidden moment() is LocalDateTime {
+        LocalDateTime(
+            date: Date(year: self.value(0), month: self.value(1), day: self.value(2)),
+            time: TimeOfDay(hour: self.value(3), minute: self.value(4), second: self.value(5), nanosecond: self.value(6))
+        );
+    }
+
+    hidden shown(moment is LocalDateTime) is string {
+        let date = moment.date();
+        let time = moment.time();
+        [date::Calendar::year, date::Calendar::month, date::Calendar::day, time::Clock::hour, time::Clock::minute,
+            time::Clock::second, time::Clock::nanosecond].map() -> part { part.string(); }.join(" ");
+    }
+
+    // As the previous time/format did, through the natives.
+    reference() is string {
+        let pattern = fields[2];
+        let local = self.local();
+        if fields[0] == "format" {
+            let invalid = time_pattern_invalid_offset(pattern, local, false);
+            if invalid != -1 {
+                return "pattern " + invalid.string();
+            }
+            let m = self.moment();
+            let date = m.date();
+            let time = m.time();
+            return "text " + if local {
+                time_format_local(date::Calendar::year, date::Calendar::month, date::Calendar::day, time::Clock::hour,
+                    time::Clock::minute, time::Clock::second, time::Clock::nanosecond, pattern);
+            }
+            else {
+                time_format_date(date::Calendar::year, date::Calendar::month, date::Calendar::day, pattern);
+            };
+        }
+        let invalid = time_pattern_invalid_offset(pattern, local, true);
+        if invalid != -1 {
+            return "pattern " + invalid.string();
+        }
+        let source = fields[3];
+        let offset = time_parse_invalid_offset(source, pattern, local);
+        if offset != -1 {
+            return "text " + offset.string();
+        }
+        let parts = time_parse_parts(source, pattern, local);
+        try {
+            if local {
+                "read " + self.shown(LocalDateTime(
+                    date: Date(year: parts[0], month: parts[1], day: parts[2]),
+                    time: TimeOfDay(hour: parts[3], minute: parts[4], second: parts[5], nanosecond: parts[6])
+                ));
+            }
+            else {
+                let date = Date(year: parts[0], month: parts[1], day: parts[2]);
+                "read " + date::Calendar::year.string() + " " + date::Calendar::month.string() + " " +
+                    date::Calendar::day.string();
+            }
+        }
+        catch error is Error {
+            "refused " + error.text();
+        }
+    }
+
+    // Through the public API of the Okkama time/format.
+    okkama() is string {
+        let pattern = fields[2];
+        let local = self.local();
+        try {
+            if fields[0] == "format" {
+                let m = self.moment();
+                "text " + if local {
+                    FormattedLocalDateTime(origin: m, pattern: pattern).string();
+                }
+                else {
+                    FormattedDate(origin: m.date(), pattern: pattern).string();
+                };
+            }
+            else if local {
+                "read " + self.shown(FormattedLocalDateTime(text: fields[3], pattern: pattern).local_date_time());
+            }
+            else {
+                let date = FormattedDate(text: fields[3], pattern: pattern).date();
+                "read " + date::Calendar::year.string() + " " + date::Calendar::month.string() + " " +
+                    date::Calendar::day.string();
+            }
+        }
+        catch InvalidTimePattern.located(_pattern, offset) {
+            "pattern " + offset.string();
+        }
+        catch InvalidFormattedDate.located(_origin, offset) {
+            "text " + offset.string();
+        }
+        catch InvalidFormattedLocalDateTime.located(_origin, offset) {
+            "text " + offset.string();
+        }
+        catch error is Error {
+            "refused " + error.text();
+        }
+    }
+}
+
+main() is int {
+    let records = File(path: Path(ProcessArguments().strings()[0])).text().content().split(3.char().string());
+    let differences = Atomic(0);
+    let blank is %string:int = [:];
+    let outcomes = Atomic(blank);
+    for 0..records.size() -> index {
+        let input = Input(records[index]);
+        let expected = input.reference();
+        let actual = input.okkama();
+        let kind = records[index].split(2.char().string())[0] + " " + expected.split(" ")[0];
+        let counted = outcomes.value();
+        outcomes.replace(counted + [kind: if counted.has(kind) { counted[kind] + 1; } else { 1; }]);
+        if expected != actual {
+            differences.replace(differences.value() + 1);
+            if differences.value() <= 20 {
+                Stdout().writeln("input ", index, ": ", records[index].replace(2.char().string(), " | "));
+                Stdout().writeln("  native: ", expected);
+                Stdout().writeln("  okkama: ", actual);
+            }
+        }
+    }
+    for outcomes.value().keys() -> kind {
+        Stdout().writeln("  ", outcomes.value()[kind], " ", kind);
+    }
+    Stdout().writeln("inputs ", records.size(), ", differences ", differences.value());
+    0;
+}

@@ -86,9 +86,7 @@ object WebSocketProtocols {
 
     // Whether value is one of them.
     contains(value is string) is bool {
-        origin.reduce(false) -> found, item {
-            found || item == value;
-        };
+        origin.contains(value);
     }
 }
 
@@ -205,9 +203,7 @@ object WebSocketClientHandshake {
         ];
         for (0..headers.entries().size()) -> index {
             let name = headers.entries().item(index).name().lowercase();
-            confirm !(reserved.reduce(false) -> found, value {
-                found || name == value;
-            })
+            confirm !(reserved.contains(name))
                 else throw WebSocketFailure.because("reserved handshake caller field");
         }
         confirm nonce.size() == 16 else throw WebSocketFailure.because("nonce width");

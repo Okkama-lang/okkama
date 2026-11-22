@@ -10,6 +10,12 @@ module template/compile v1.0.0;
 // template/html for HTML). The whole source is checked before any value is
 // looked up; a missing value is MissingTemplateValue. Sections and partials are
 // template/sections.
+//
+// New code uses template/engine's Template (#178), the one engine over Json,
+// with sections, partials and HTML escaping. This module holds the scanner
+// that engine parses with; TextTemplate stays here, under the engine, as the
+// flat loop over that scanner's literals and values for TemplateStrings data
+// (TemplateBindings now keeps its values in one Json document).
 
 import "template/model" take TemplateStrings, TemplateBindings;
 import "template/path" take TemplatePathFromString;
@@ -289,7 +295,7 @@ hidden object TemplateScanner {
         let end = self.closing(position + 2);
         confirm end >= 0 else throw self.failure(position, "unclosed template tag");
         let body = source.slice(position + 2, end);
-        if body.length() > 0 && body.slice(0, 1) == "!" {
+        if body.starts_with("!") {
             let indentation = self.indentation(position);
             let after = self.horizontal_end(end + 2);
             let ending = if self.at(after, 2) == "\r\n" {
@@ -369,7 +375,7 @@ hidden object TemplateScanner {
             && first != "{"
             else throw self.failure(position, "unsupported or empty template tag");
         for ["{", "}", "\r", "\n"] -> invalid {
-            confirm name.split(invalid).size() == 1
+            confirm !name.contains(invalid)
                 else throw self.failure(position, "unsupported or empty template tag");
         }
         confirm name.length() <= 4096
@@ -398,12 +404,12 @@ hidden object TemplateScanner {
         confirm name.length() <= 4096
             else throw self.failure(position, "template path length exceeded");
         for ["{", "}", "\r", "\n"] -> invalid {
-            confirm name.split(invalid).size() == 1
+            confirm !name.contains(invalid)
                 else throw self.failure(position, "invalid structural template name");
         }
         if partial {
             for [" ", "\t", "(", ")"] -> invalid {
-                confirm name.split(invalid).size() == 1
+                confirm !name.contains(invalid)
                     else throw self.failure(position, "partial name must be static");
             }
             let first = name.slice(0, 1);

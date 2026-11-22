@@ -1,0 +1,11 @@
+module trade/customers v1.0.0;
+
+import "parties" take Buyer, Purchase;
+
+object Customer does Buyer {
+    has label is string;
+    has purchases is @Purchase;
+    Customer(:label, :purchases);
+    name() is string { label; }
+    spent() is int { purchases.reduce(0) -> sum, purchase { sum + purchase.total(); }; }
+}

@@ -28,7 +28,7 @@ def winsize(fd, rows, columns):
 
 pid, master = pty.fork()
 if pid == 0:
-    os.execv(okkama, [okkama, "run", "--engine", engine, program])
+    os.execv(okkama, [okkama, "run", program])
 winsize(master, 24, 80)
 transcript = b""
 deadline = time.monotonic() + 20

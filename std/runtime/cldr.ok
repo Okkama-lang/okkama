@@ -13,3 +13,9 @@ module runtime/cldr v1.0.0;
 
 // The fields of a record; empty when the table has no such key.
 native cldr_fields(table is string, key is string) is @string;
+
+// One field of a record, counted from 0; a failure when there is none (#943).
+native cldr_field(table is string, key is string, index is int) is string;
+
+// How many fields a record has; 0 when the table has no such key.
+native cldr_size(table is string, key is string) is int;

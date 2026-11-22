@@ -32,6 +32,13 @@ pub(super) struct CallArgs {
     pub diverges: bool,
 }
 
+impl CallArgs {
+    /// The checked argument values, the spread last.
+    pub(super) fn into_values(self) -> Vec<Expr> {
+        self.values.into_iter().map(|arg| arg.value).chain(self.spread.map(|(value, _)| value)).collect()
+    }
+}
+
 /// Сигнатура для выбора перегрузки (типы уже подставлены).
 #[derive(Clone, Debug)]
 pub(super) struct Shape {
@@ -689,8 +696,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// `Role.fake()` — объект fake роли (тестовый режим) и
-    /// `fake.storage.op(...)` в action fake.
+    /// `Role.fake()` — объект fake роли (тестовый режим).
     fn fake_call(
         &mut self,
         object: &ast::Expr,
@@ -725,115 +731,7 @@ impl Checker<'_, '_> {
                     }
                 }
             }
-            ast::ExprKind::Get {
-                object: inner,
-                name: view,
-            } if view.text == "storage"
-                && matches!(&strip_grouping(inner).kind, ast::ExprKind::Name(fake) if fake.text == "fake")
-                && self.local("fake").is_none() =>
-            {
-                Some(self.fake_storage(name, args, span, expected))
-            }
             _ => None,
-        }
-    }
-
-    /// Операция хранилища fake: ключ — скаляр, строка или enum; значение
-    /// `get` — тип из контекста (проверяется при чтении).
-    fn fake_storage(
-        &mut self,
-        op: &ast::Name,
-        args: &[ast::Argument],
-        span: Span,
-        expected: Option<&Ty>,
-    ) -> Expr {
-        let in_fake = self
-            .object
-            .is_some_and(|object| self.reg.objects[object.0].name.ends_with("$fake"))
-            && matches!(self.kind, Kind::Method | Kind::Closure);
-        if !in_fake {
-            self.error(span, "fake.storage is available only inside a role fake");
-            return Self::poisoned(span);
-        }
-        let arity = match op.text.as_str() {
-            "set" => 2,
-            "get" | "has" | "remove" => 1,
-            "clear" | "size" => 0,
-            other => {
-                self.error(
-                    op.span,
-                    format!("Fake storage operation \"{other}\" does not exist"),
-                );
-                return Self::poisoned(span);
-            }
-        };
-        if args.len() != arity || args.iter().any(|arg| arg.name.is_some()) {
-            self.error(
-                span,
-                format!(
-                    "Fake storage operation \"{}\" expects {arity} positional argument(s)",
-                    op.text
-                ),
-            );
-            return Self::poisoned(span);
-        }
-        let mut values = Vec::new();
-        if let Some(key) = args.first() {
-            let value = self.value(&key.value, None);
-            let key_ty = Self::ty_of(&value).taken();
-            let valid = matches!(
-                key_ty,
-                Ty::Int | Ty::Bool | Ty::Str | Ty::Char | Ty::Enum(_) | Ty::Error
-            );
-            if !valid {
-                let message = if key_ty == Ty::Byte {
-                    "Fake storage key cannot be byte".to_string()
-                } else {
-                    format!(
-                        "Fake storage key must be int, bool, string, char or enum, got {}",
-                        self.type_name(&key_ty)
-                    )
-                };
-                self.error(key.value.span, message);
-            }
-            values.push(Self::consume(value));
-        }
-        if let Some(stored) = args.get(1) {
-            let value = self.value(&stored.value, None);
-            values.push(Self::consume(value));
-        }
-        let result = match op.text.as_str() {
-            "has" => Some(Ty::Bool),
-            "size" => Some(Ty::Int),
-            "get" => match expected {
-                Some(ty) if !matches!(ty, Ty::Error) => Some(ty.clone()),
-                _ => {
-                    self.error(
-                        span,
-                        "fake.storage.get() needs an expected type from its context",
-                    );
-                    return Self::poisoned(span);
-                }
-            },
-            _ => None,
-        };
-        let callee = Callee::FakeStorage(op.text.clone());
-        match result {
-            Some(ty) => Self::typed(
-                ExprKind::Call {
-                    callee,
-                    args: values,
-                },
-                ty,
-                span,
-            ),
-            None => Self::unit(
-                ExprKind::Call {
-                    callee,
-                    args: values,
-                },
-                span,
-            ),
         }
     }
 
@@ -1203,11 +1101,11 @@ impl Checker<'_, '_> {
             (None, true) => Vec::new(),
             (None, false) => match self.infer_specialization(object, &call, expected, span) {
                 Some(args_inferred) => args_inferred,
-                None => return Self::poisoned(span),
+                None => return Self::poisoned_call(span, call.into_values()),
             },
         };
         if !self.check_specialization(object, &resolved, span) {
-            return Self::poisoned(span);
+            return Self::poisoned_call(span, call.into_values());
         }
         self.construct_values(object, resolved, call, span)
     }
@@ -1315,13 +1213,13 @@ impl Checker<'_, '_> {
                     self.available(declared, &candidates)
                 );
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
             Err(true) => {
                 let tied: Vec<&Shape> = Self::tied(&typed).into_iter().map(|index| &shapes[index].0).collect();
                 let message = self.ambiguity(format!("Ambiguous construction of \"{name}\""), &call, &name, tied);
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let diverges = call.diverges;
@@ -1616,7 +1514,7 @@ impl Checker<'_, '_> {
                     )
                 };
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let (method, shape) = shapes[chosen].clone();
@@ -1697,7 +1595,7 @@ impl Checker<'_, '_> {
                     )
                 };
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let (slot, shape) = shapes[chosen].clone();
@@ -1744,7 +1642,10 @@ impl Checker<'_, '_> {
             "close" => vec![Some(Ty::Float), Some(Ty::Float), Some(Ty::Float)],
             "text" => vec![Some(Ty::Str), Some(Ty::Str)],
             "bytes" => vec![Some(Ty::array(Ty::Byte)), Some(Ty::array(Ty::Byte))],
-            "fail" | "skip" => vec![Some(Ty::Str)],
+            "fail" | "skip" | "case" => vec![Some(Ty::Str)],
+            // Closes the sub-case `test.case { … }` opened (#809); only the
+            // parser's reading of that form writes it.
+            "case#end" => Vec::new(),
             other => {
                 self.error(
                     name.span,
@@ -1778,13 +1679,18 @@ impl Checker<'_, '_> {
             };
             values.push(value);
         }
-        Self::unit(
-            ExprKind::Call {
-                callee: Callee::Test(name.text.clone()),
-                args: values,
-            },
-            span,
-        )
+        let call = ExprKind::Call {
+            callee: Callee::Test(name.text.clone()),
+            args: values,
+        };
+        // `test.case` answers whether its block runs (#809).
+        if name.text == "case" {
+            return Self::call_result(Callee::Test(name.text.clone()), match call {
+                ExprKind::Call { args, .. } => args,
+                _ => unreachable!(),
+            }, Some(Ty::Bool), false, span, false);
+        }
+        Self::unit(call, span)
     }
 
     // ----- доступ к членам -----

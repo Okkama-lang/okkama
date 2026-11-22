@@ -1,0 +1,69 @@
+module bible/postage v1.0.0;
+
+// Pattern: a table of cases. Each row is a value; one loop checks them all,
+// and the row's input travels with its answer, so a failure names the row.
+import "io/stdout" take Stdout;
+
+enum Postage = (
+    letter(cents is int),
+    parcel(cents is int),
+    refused(reason is string)
+);
+
+object Tariff {
+    Tariff();
+
+    priced(grams is int) is Postage {
+        if grams <= 0 { Postage.refused("no weight"); }
+        else if grams <= 20 { Postage.letter(85); }
+        else if grams <= 100 { Postage.letter(150); }
+        else if grams <= 500 { Postage.parcel(450); }
+        else if grams <= 2000 { Postage.parcel(900); }
+        else { Postage.refused("over 2 kg"); }
+    }
+}
+
+// What a test compares: the weight and the postage, together.
+object Priced {
+    has grams is int;
+    has postage is Postage;
+    Priced(:grams, :postage);
+}
+
+// One row of the table.
+object Case {
+    has grams is int;
+    has expected is Postage;
+    Case(:grams, :expected);
+
+    wanted() is Priced { Priced(grams: grams, postage: expected); }
+    got(tariff is Tariff) is Priced { Priced(grams: grams, postage: tariff.priced(grams)); }
+}
+
+test "postage at every boundary" {
+    let cases = [
+        Case(grams: 0, expected: Postage.refused("no weight")),
+        Case(grams: 1, expected: Postage.letter(85)),
+        Case(grams: 20, expected: Postage.letter(85)),
+        Case(grams: 21, expected: Postage.letter(150)),
+        Case(grams: 100, expected: Postage.letter(150)),
+        Case(grams: 101, expected: Postage.parcel(450)),
+        Case(grams: 500, expected: Postage.parcel(450)),
+        Case(grams: 501, expected: Postage.parcel(900)),
+        Case(grams: 2000, expected: Postage.parcel(900)),
+        Case(grams: 2001, expected: Postage.refused("over 2 kg"))
+    ];
+    let tariff = Tariff();
+    for cases -> row {
+        test.is(row.got(tariff), row.wanted());
+    }
+}
+
+main() is int {
+    match Tariff().priced(250) {
+        case Postage.letter(cents) { Stdout().writeln("letter, " + cents.string() + " cents"); }
+        case Postage.parcel(cents) { Stdout().writeln("parcel, " + cents.string() + " cents"); }
+        case Postage.refused(reason) { Stdout().writeln("refused: " + reason); }
+    }
+    0;
+}

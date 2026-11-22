@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run every example and compare its output with NAME.expected.
 
-    examples/check.py [--engine ir|sparrow|jvm ...] [PATH ...]
+    examples/check.py [PATH ...]
 
 Each example runs in a fresh temporary directory, with the std of this
-checkout, on every engine given (default: ir and sparrow). Only the Python
+checkout, on every engine given (default: sparrow). Only the Python
 standard library is used.
 """
 import os
@@ -17,17 +17,14 @@ ROOT = os.path.dirname(HERE)
 OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "release", "okkama"))
 
 args = sys.argv[1:]
-engines = []
-while "--engine" in args:
-    at = args.index("--engine")
-    engines.append(args[at + 1])
-    del args[at:at + 2]
-engines = engines or ["ir", "sparrow"]
+engines = ["sparrow"]
 roots = [os.path.abspath(path) for path in args] or [HERE]
 examples = sorted(
     os.path.join(folder, name)
     for root in roots
     for folder, _, names in os.walk(root)
+    # The Bible's examples have their own format and runner (bible/check.py).
+    if os.path.relpath(folder, HERE).split(os.sep)[0] != "bible"
     for name in names
     if name.endswith(".ok") and os.path.exists(os.path.join(folder, name[:-3] + ".expected"))
 )
@@ -37,7 +34,7 @@ for example in examples:
     expected = open(example[:-3] + ".expected", encoding="utf-8").read()
     for engine in engines:
         with tempfile.TemporaryDirectory() as scratch:
-            run = subprocess.run([OKKAMA, "run", "--engine", engine, example], cwd=scratch, env=env,
+            run = subprocess.run([OKKAMA, "run", example], cwd=scratch, env=env,
                                  capture_output=True, text=True, timeout=60)
         ok = run.returncode == 0 and run.stdout == expected
         failed += not ok

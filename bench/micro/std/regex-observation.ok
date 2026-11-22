@@ -1,0 +1,38 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "regex/pattern" take Regex, RegexMatchObservation, RegexQuery;
+import "regex/match" take RegexMatch;
+import "regex/range" take RegexRange;
+
+// Observations of a pattern over a range: first and prefix queries; an optional group read as int.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let text = "k" + x + "=" + x + x + " name=n" + x;
+        let pair = Regex("(?<key>[a-z]+)(?<id>\\d)?=(?<num>\\d+)");
+        let range = RegexRange(start: 0, end: text.length());
+        let query = pair.observation(text, range, RegexQuery.first);
+        let observed = RegexMatchObservation(text, pair, range, RegexQuery.prefix);
+        let first is RegexMatch = pair.all(text)[0];
+        let total = (if query.found() { 1; } else { 0; }) + query.match().text().length()
+            + (if observed.found() { 1; } else { 0; }) + observed.match().range()::Bounds::end
+            + (first.maybe("id").int() else 0);
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

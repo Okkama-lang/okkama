@@ -6,7 +6,7 @@
 Generates one `main` per shape and size — many `let`s, one long array
 literal, many `if` statements, many sequential loops — and times the
 compiler's commands on it: `check` (parse and analysis), `ir --passes none`
-(+ lowering), `ir` (+ IR passes) and `build --target sparrow` (+ codegen and
+(+ lowering), `ir` (+ IR passes) and `build` (+ codegen and
 SPB verification). A phase's cost is the difference of consecutive commands.
 For every tenfold step of the size it prints the growth of each phase; a
 growth above `--limit` (n log n gives about 12, n² 100) is reported and makes
@@ -53,7 +53,7 @@ COMMANDS = [
     ("parse+analysis", ["check"]),
     ("lowering", ["ir", "--passes", "none"]),
     ("passes", ["ir"]),
-    ("codegen", ["build", "--target", "sparrow", "-o", "{out}"]),
+    ("codegen", ["build", "-o", "{out}"]),
 ]
 
 

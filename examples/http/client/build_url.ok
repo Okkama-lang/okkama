@@ -1,0 +1,18 @@
+module examples/http/client/build_url v1.0.0;
+
+import "io/stdout" take Stdout;
+import "url/value" take UrlParts;
+import "url/query" take QueryParameters, QueryParameter;
+
+// Construct the destination for client.get(destination.string()) without I/O.
+// The slash in an item name stays data; repeated query names keep their order.
+main() is int {
+    let base = UrlParts(scheme: "https", host: Maybe.some("api.example.org"));
+    let destination = base.joined("items", "tea/coffee").query_replaced(parameters: QueryParameters(
+        QueryParameter(name: "tag", value: "a&b"),
+        QueryParameter(name: "tag", value: "c+d"),
+    ));
+    Stdout().writeln(destination.string());
+    Stdout().writeln(base.string());
+    0;
+}

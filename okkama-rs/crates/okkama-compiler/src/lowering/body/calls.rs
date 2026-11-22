@@ -49,6 +49,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let span = expr.span;
         Ok(match coercion {
             thir::Coercion::Take => self.take(typed, span),
+            thir::Coercion::Handoff => self.handoff(typed, target, span),
             thir::Coercion::Retag => match &target {
                 Type::Map(..) => self.emit(InstKind::MapRetag(typed.value), target, span),
                 _ => self.emit(InstKind::Retag(typed.value), target, span),
@@ -315,44 +316,25 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     .iter()
                     .map(|value| self.b.value_type(*value).clone())
                     .collect();
+                // `test.case` answers whether its block runs (#809);
+                // `test.case#end` is `okkama.test.case_end`.
+                if name == "case" {
+                    let func = self.ctx.runtime_intrinsic(
+                        "okkama.test.case",
+                        types,
+                        ir::ResultType::Value(Type::Bool),
+                    );
+                    return self.finish_call(InstKind::Call { func, args: values }, expr, span);
+                }
+                let symbol = if name == "case#end" { "case_end" } else { name.as_str() };
                 let func = self.ctx.runtime_intrinsic(
-                    &format!("okkama.test.{name}"),
+                    &format!("okkama.test.{symbol}"),
                     types,
                     ir::ResultType::Void,
                 );
                 self.b
                     .emit_void(InstKind::Call { func, args: values }, span);
                 Ok(Out::Unit)
-            }
-            Callee::FakeStorage(op) => {
-                let (Some(receiver), Some(object)) = (self.self_value, self.object) else {
-                    return Err(LoweringError::invalid(
-                        span,
-                        "internal compiler error: fake.storage outside a fake action",
-                    ));
-                };
-                let Some(values) = self.arguments(args, span)? else {
-                    return Ok(Out::Diverged);
-                };
-                let mut types = vec![Type::Object(object)];
-                types.extend(values.iter().map(|value| self.b.value_type(*value).clone()));
-                let result = match &expr.ty {
-                    Some(_) => ir::ResultType::Value(self.expr_type(expr)?),
-                    None => ir::ResultType::Void,
-                };
-                let func =
-                    self.ctx
-                        .runtime_intrinsic(&format!("okkama.fake.storage.{op}"), types, result);
-                let mut call_args = vec![receiver];
-                call_args.extend(values);
-                self.finish_call(
-                    InstKind::Call {
-                        func,
-                        args: call_args,
-                    },
-                    expr,
-                    span,
-                )
             }
         }
     }
@@ -713,7 +695,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     value: receiver_id,
                     denominator: *op == Builtin::Denominator,
                 },
-                Type::Str,
+                Type::Int,
             ),
             Builtin::FutureCancel => {
                 self.b.emit_void(

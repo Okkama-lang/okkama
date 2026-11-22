@@ -80,13 +80,52 @@ impl Payload for Failure {
     }
 }
 
+/// One stable invocation record per function, shared with generated static,
+/// role and async calls. Only `code` changes, after code/maps publication.
+/// Captures are a per-closure prefix, not a per-function count: the same
+/// function may be closed over different prefixes with different fn types.
+/// #588: the capacities of a session runtime: functions (the invocation table) and object descriptors (the role
+/// dispatch tables).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capacities {
+    pub functions: usize,
+    pub objects: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Invocation {
+    pub code: u64,
+    pub params: u32,
+    pub is_async: bool,
+}
+
+impl Invocation {
+    fn capture_count(self, count: u64) -> Result<usize, &'static str> {
+        if self.params > 8 {
+            return Err("closure with more than 8 parameters");
+        }
+        if count > u64::from(self.params) {
+            return Err("closure argument count exceeds parameter count");
+        }
+        // Both operands are now in 0..=8, before conversion/subtraction.
+        Ok(self.params as usize - count as usize)
+    }
+}
+
 #[derive(Debug)]
 pub struct Runtime {
     pub heap: Heap,
     pub loaded: Loaded,
     pub jit: crate::jit::Jit,
-    /// Code address per function; 0 until compiled on its first call.
-    pub code: Box<[u64]>,
+    /// Stable allocation embedded in machine code; code is 0 until compiled.
+    pub invocations: Box<[Invocation]>,
+    /// #588: the capacities of a session runtime (`Runtime::session`), which `extend` grows within.
+    capacities: Option<Capacities>,
+    /// #588: the session region (what the REPL's variables own) and the values the last cell kept; GC roots.
+    session: (Option<Word>, Option<Word>),
+    /// Same-binary diagnostic control, read once at runtime construction.
+    pub(crate) closure_bridge_reference: bool,
     /// Constants embedded in machine code; always roots.
     pub constants: Vec<(Word, Repr)>,
     /// Values held by Rust while machine code runs (entry arguments, results).
@@ -103,8 +142,6 @@ pub struct Runtime {
     pub ready: std::collections::VecDeque<Word>,
     pub spawned: Vec<Word>,
     pub running: Vec<Word>,
-    /// Settled Futures so far (their completion order).
-    pub completions: u64,
     /// Sleeping drivers by deadline; roots.
     pub timers: Vec<(std::time::Instant, Word)>,
     /// Async primitive state by owning object (see `primitives`).
@@ -143,7 +180,7 @@ pub(crate) struct Budget {
     /// Steps left in the current slice; machine code polls below zero.
     pub fuel: crate::budget::Fuel,
     /// The memory budget caps the machine stack: overflowing it is running
-    /// out of memory, as on the IR engine and the JVM (#241).
+    /// out of memory (#241).
     pub stack_capped: bool,
 }
 
@@ -167,13 +204,175 @@ macro_rules! frame_pointer {
 impl Runtime {
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        Self::assemble(loaded)
+    }
+
+    /// #588: a runtime that later programs may extend (`extend`), within `capacities`. Machine code embeds the
+    /// invocation table's base and each role dispatch table's base, so both are allocated at their capacity now
+    /// and never relocated.
+    pub fn session(loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
+        crate::contracts::check(&loaded)?;
+        let functions = loaded.program.functions.len();
+        if functions > capacities.functions || loaded.program.objects.len() > capacities.objects {
+            return Err(Error("the program exceeds the session's capacities".into()));
+        }
+        let mut runtime = Self::assemble(loaded)?;
+        let empty = Invocation { code: 0, params: 0, is_async: false };
+        let mut invocations = vec![empty; capacities.functions];
+        invocations[..functions].copy_from_slice(&runtime.invocations);
+        runtime.invocations = invocations.into_boxed_slice();
+        runtime.jit.object_capacity = capacities.objects;
+        runtime.capacities = Some(capacities);
+        Ok(runtime)
+    }
+
+    /// The root Future of an async entry leaves the GC roots once its run is over.
+    fn drop_root(&mut self, root: Word) {
+        if let Some(index) = self.roots.iter().rposition(|&(word, _)| word == root) {
+            self.roots.remove(index);
+        }
+    }
+
+    /// #588: a cell's kept values become the session's: what the previous kept values own and `kept` still
+    /// reaches moves to a new session region, what the cell made and `kept` reaches is adopted, and the old
+    /// region closes with what no variable keeps any more (dropped and rebound variables), destroys in their
+    /// usual order. `kept` stays rooted until the next call. A destroy's failure is returned after all of them ran.
+    pub fn session_keep(self: &mut Box<Self>, kept: Word) -> Result<(), Error> {
+        self.roots.push((kept, Repr::Ref));
+        let region = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + crate::failures::REGION_SLOTS]);
+        self.roots.pop();
+        let old = self.session.0.replace(region);
+        self.session.1 = Some(kept);
+        if let Some(old) = old {
+            self.region_transfer(old, region, kept);
+        }
+        self.region_add(region, kept, true);
+        match old {
+            Some(old) => self.close_session_region(old),
+            None => Ok(()),
+        }
+    }
+
+    /// #588: `:reset` and exit: the session region closes; every value it owns is destroyed once.
+    pub fn session_close(self: &mut Box<Self>) -> Result<(), Error> {
+        self.session.1 = None;
+        match self.session.0.take() {
+            Some(region) => self.close_session_region(region),
+            None => Ok(()),
+        }
+    }
+
+    fn close_session_region(self: &mut Box<Self>, region: Word) -> Result<(), Error> {
+        let marker = 0u8;
+        let mut ctx = Ctx {
+            status: OK,
+            stack_limit: (&marker as *const u8 as u64).saturating_sub(crate::STACK_BYTES.saturating_sub(STACK_HEADROOM)),
+            failure: UNBOUND,
+            runtime: &mut **self,
+            entry_frame: frame_pointer!(),
+            scratch: UNBOUND,
+        };
+        self.roots.push((region, Repr::Ref));
+        let failure = self.region_close(&mut ctx, region, &[], None);
+        self.roots.pop();
+        match failure {
+            Some(failure) => Err(Error(self.describe(&mut ctx, failure))),
+            None if ctx.status == OK => Ok(()),
+            None => Err(Error(self.fatal.clone().unwrap_or_else(|| "engine failure".into()))),
+        }
+    }
+
+    /// #588: extend a session runtime with `program`, which must begin with the loaded program: every published
+    /// function, object, type, role, variant, cap and global, its function metadata, its trace layouts and its
+    /// ownership metadata unchanged; only new entries after them. Prepared on copies, then committed by steps that
+    /// cannot fail, so a rejected extension leaves the runtime exactly as it was. Compiled code keeps working:
+    /// it refers only to published indices, through tables that are never relocated.
+    pub fn extend(&mut self, program: okkama_sparrow::Program) -> Result<(), Error> {
+        let Some(capacities) = self.capacities else {
+            return Err(Error("only a session runtime can be extended".into()));
+        };
+        if self.poisoned {
+            return Err(Error("internal error: the runtime is unusable after a panic in a native".into()));
+        }
+        // ---- prepare: nothing live changes ----
+        program.verify().map_err(|error| Error(error.to_string()))?;
+        let loaded = Loaded::new(program);
+        crate::contracts::check(&loaded)?;
+        let (old, new) = (&self.loaded.program, &loaded.program);
+        let prefix = |what: &str, same: bool| if same { Ok(()) } else {
+            Err(Error(format!("the extension changes published {what}")))
+        };
+        prefix("types", new.types.starts_with(&old.types))?;
+        prefix("enums", new.enums.starts_with(&old.enums))?;
+        prefix("roles", new.roles.starts_with(&old.roles))?;
+        prefix("objects", new.objects.starts_with(&old.objects))?;
+        prefix("variants", new.variants.starts_with(&old.variants))?;
+        prefix("handles", new.handles.starts_with(&old.handles))?;
+        prefix("caps", new.caps.starts_with(&old.caps))?;
+        prefix("globals", new.globals.starts_with(&old.globals))?;
+        prefix("functions", new.functions.starts_with(&old.functions))?;
+        // Ownership first: turning resources on also changes every frame's layout, and this is the reason to say.
+        let resources = crate::failures::Resources::new(new);
+        prefix("ownership metadata", self.resources.metadata_prefix_of(&resources))?;
+        prefix("function metadata", loaded.functions.starts_with(&self.loaded.functions))?;
+        let layouts = loaded.layouts();
+        let published = self.heap.layouts();
+        prefix("object layouts", layouts.objects.starts_with(&published.objects))?;
+        prefix("closure layouts", layouts.closures.starts_with(&published.closures))?;
+        prefix("frame layouts", layouts.frames.starts_with(&published.frames))?;
+        let (functions, objects) = (new.functions.len(), new.objects.len());
+        if functions > capacities.functions {
+            return Err(Error(format!("the session holds at most {} functions", capacities.functions)));
+        }
+        if objects > capacities.objects {
+            return Err(Error(format!("the session holds at most {} object types", capacities.objects)));
+        }
+        let from = old.functions.len();
+        let records = new.functions[from..].iter().map(|f| {
+            Ok(Invocation {
+                code: 0,
+                params: u32::try_from(f.params.len()).map_err(|_| Error("too many function parameters".into()))?,
+                is_async: f.is_async,
+            })
+        }).collect::<Result<Vec<_>, Error>>()?;
+        let natives: Vec<_> = new.functions[from..].iter()
+            .map(|f| f.native.as_deref().and_then(okkama_runtime_abi::Native::resolve)).collect();
+        let intrinsics: Vec<_> = new.functions[from..].iter()
+            .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name))).collect();
+        let objects_before = old.objects.len();
+        let globals = new.globals.len();
+        // ---- commit: infallible steps; new functions are callable only once their records are written ----
+        self.heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
+        self.heap.extend_layouts(layouts);
+        self.resources.extend_metadata(resources);
+        self.invocations[from..functions].copy_from_slice(&records);
+        self.natives.extend(natives);
+        self.intrinsics.extend(intrinsics);
+        self.globals.resize(globals, None);
+        self.jit.extend_dispatch(&loaded.program, objects_before);
+        if let Some(host) = &mut self.host {
+            host.extend(&loaded.program);
+        }
+        self.loaded = loaded;
+        Ok(())
+    }
+
+
+    fn assemble(loaded: Loaded) -> Result<Self, Error> {
         let mut heap = Heap::new(loaded.layouts());
         heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
         if std::env::var_os("SPARROW_CORE_STATS").is_some() {
             heap.allocations = Some(Box::default());
         }
-        let functions = loaded.program.functions.len();
+        let invocations = loaded.program.functions.iter().map(|f| {
+            Ok(Invocation {
+                code: 0,
+                params: u32::try_from(f.params.len()).map_err(|_| Error("too many function parameters".into()))?,
+                is_async: f.is_async,
+            })
+        }).collect::<Result<Box<[_]>, Error>>()?;
         let resources = crate::failures::Resources::new(&loaded.program);
+        heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
         let intrinsics = loaded
             .program
             .functions
@@ -185,7 +384,6 @@ impl Runtime {
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),
             running: Vec::new(),
-            completions: 0,
             timers: Vec::new(),
             states: crate::word::FastMap::default(),
             natives: loaded
@@ -205,7 +403,10 @@ impl Runtime {
             budget: Budget::default(),
             heap,
             jit: crate::jit::Jit::new()?,
-            code: vec![0; functions].into_boxed_slice(),
+            invocations,
+            capacities: None,
+            session: (None, None),
+            closure_bridge_reference: std::env::var_os("SPARROW_CORE_CLOSURE_BRIDGE").is_some_and(|value| value == "reference"),
             globals: vec![None; loaded.program.globals.len()],
             loaded,
             constants: Vec::new(),
@@ -228,16 +429,19 @@ impl Runtime {
         let jit = &self.jit;
         let constants = &self.constants;
         let roots = &self.roots;
-        let tasks: Vec<Word> = self
-            .ready
-            .iter()
-            .chain(&self.spawned)
-            .chain(&self.running)
-            .chain(self.timers.iter().map(|(_, frame)| frame))
-            .chain(self.io.requests.keys())
-            .copied()
-            .collect();
+        // The scheduler's roots are visited where they live, without a
+        // vector of them per collection (#434).
+        let (ready, spawned, running) = (&self.ready, &self.spawned, &self.running);
+        let (timers, requests) = (&self.timers, &self.io.requests);
         let states = &self.states;
+        // #817: the root region of detached Futures, until the root closer closes it.
+        let mut kept: Vec<Word> = self.resources.root.into_iter().collect();
+        // #588: the session region and the values the REPL keeps.
+        kept.extend(self.session.0.into_iter().chain(self.session.1));
+        // #915: the pinned identities, their holders and pins waiting for a taker.
+        kept.extend(self.pin_roots());
+        // #882: the detached Futures registered as borrowers of open owners, until those owners close.
+        let borrowers: Vec<Word> = Vec::new();
         self.heap.collect_with(|visit| {
             // A group's tasks are kept only while the group is reachable some
             // other way (#503); running and parked tasks are roots of their own.
@@ -253,7 +457,11 @@ impl Runtime {
                 visit(word, repr);
             }
             visit(ctx.failure, Repr::Ref);
-            for &task in &tasks {
+            for &record in kept.iter().chain(&borrowers) {
+                visit(record, Repr::Ref);
+            }
+            let tasks = ready.iter().chain(spawned).chain(running);
+            for &task in tasks.chain(timers.iter().map(|(_, frame)| frame)).chain(requests.keys()) {
                 visit(task, Repr::Ref);
             }
         }, |marked, visit| {
@@ -292,6 +500,7 @@ impl Runtime {
         let stats = self.stats.as_ref()?;
         let heap = self.heap.stats();
         let extra = [
+            ("invocation metadata, bytes".to_string(), std::mem::size_of_val(&*self.invocations) as u64),
             ("heap bytes allocated".to_string(), heap.allocated_bytes as u64),
             ("heap live bytes, mean after collection".to_string(), (heap.live_sum / heap.collections.max(1)) as u64),
             ("collections".to_string(), heap.collections as u64),
@@ -444,13 +653,6 @@ impl Runtime {
         0
     }
 
-    /// Mark the memory budget exhausted from code without a context (a
-    /// native): the run stops at its next poll.
-    pub(crate) fn refuse_memory(&mut self) {
-        self.budget.exhausted.get_or_insert(Exhausted::Memory);
-        self.budget.fuel.set(0);
-    }
-
     /// What the memory budget measures now (#269): the process allocator's
     /// bytes beyond the start of the run, or this runtime's heap.
     pub(crate) fn memory_used(&self) -> Option<isize> {
@@ -523,9 +725,9 @@ impl Runtime {
     }
 
     /// The report of an exhausted run.
-    fn exhausted_report(&mut self) -> Error {
+    pub(crate) fn exhausted_report(&mut self) -> Error {
         let message = self.budget.exhausted.unwrap_or(Exhausted::Interrupted).message();
-        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new() });
+        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new(), trace_offset: 0, cause_traces: Vec::new() });
         Error(message.into())
     }
 }
@@ -712,7 +914,8 @@ impl Runtime {
             .loaded
             .program
             .entry
-            .ok_or_else(|| Error("Sparrow program has no entry function".into()))?
+            // A program without `main` fails when execution starts, with an ordinary runtime report.
+            .ok_or_else(|| Error("RuntimeError: Program requires main() declaration".into()))?
             .0 as usize;
         let result = self.run_function(entry, stack)?;
         match self.heap.integer(result) {
@@ -756,6 +959,7 @@ impl Runtime {
             entry_frame: frame_pointer!(),
             scratch: UNBOUND,
         };
+        // A Champ async entry runs its own root Future through the same scheduler (draft 3 §3).
         let result = if asynchronous {
             // The root Future, its task tree, then shutdown of spawned tasks.
             let root = self.future_new(entry, arguments);
@@ -768,6 +972,14 @@ impl Runtime {
             if ctx.status == OK
                 && let Some(failure) = self.shutdown(&mut ctx) {
                     let message = self.describe(&mut ctx, failure);
+                    self.drop_root(root);
+                    return Err(Error(message));
+                }
+            // #817: the root closer, after the spawned tasks settled: outcomes of Futures that outlived their owners.
+            if ctx.status == OK
+                && let Some(failure) = self.close_root(&mut ctx) {
+                    let message = self.describe(&mut ctx, failure);
+                    self.drop_root(root);
                     return Err(Error(message));
                 }
             if ctx.status == OK {
@@ -777,7 +989,16 @@ impl Runtime {
                     ctx.status = FAILED;
                 }
             }
-            unsafe { *((root + crate::tasks::RESULT) as *const u64) }
+            let result = unsafe { *((root + crate::tasks::RESULT) as *const u64) };
+            // #588: a session's cell hands its result on, as `await.take` does: the root Future's cache gives up
+            // what it owns, so the session adopts the result exactly as after a synchronous cell.
+            if self.capacities.is_some() && ctx.status == OK {
+                self.take_outcome(root);
+            }
+            // #588: a session runs many entries; the root Future is not kept past its run. The caller roots the
+            // result before it allocates.
+            self.drop_root(root);
+            result
         } else {
             let code = rt_compile(&mut ctx, entry as u64);
             if ctx.status != OK {
@@ -822,6 +1043,14 @@ pub extern "C" fn rt_float(ctx: *mut Ctx, op: u64, left: u64, right: u64) -> u64
 pub extern "C" fn rt_closure(ctx: *mut Ctx, function: u64, captures: *const Word, count: u64) -> Word {
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
+    let Some(entry) = usize::try_from(function).ok().and_then(|index| runtime.invocations.get(index)) else {
+        return fatal(ctx, runtime, "invalid closure function".into());
+    };
+    if count > u64::from(entry.params) {
+        return fatal(ctx, runtime, "closure capture count exceeds parameter count".into());
+    }
+    // The verified caller supplies `count` initialized words (a non-null
+    // spill address even for zero captures); count fits the function layout.
     let captures = unsafe { std::slice::from_raw_parts(captures, count as usize) };
     let closure = runtime.heap.closure_new(function as u32, captures);
     runtime.safepoint(frame, ctx, &[(closure, Repr::Ref)]);
@@ -835,21 +1064,44 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
     let (ctx_ref, runtime) = unsafe { runtime(ctx) };
     runtime.count(|_| "closure call".into());
     let function = heap::payload(runtime.heap.header_of(closure)) as usize;
-    let params = runtime.loaded.program.functions[function].params.len();
-    let captured = params - count as usize;
-    let mut words = [UNBOUND; 8];
-    if params > words.len() {
-        return fatal(ctx_ref, runtime, "closure with more than 8 parameters".into());
+    let Some(mut entry) = runtime.invocations.get(function).copied() else {
+        return fatal(ctx_ref, runtime, "invalid closure function".into());
+    };
+    if runtime.closure_bridge_reference {
+        let source = &runtime.loaded.program.functions[function];
+        entry.params = source.params.len() as u32;
+        entry.is_async = source.is_async;
     }
+    let captured = match entry.capture_count(count) {
+        Ok(captured) => captured,
+        Err(message) => return fatal(ctx_ref, runtime, message.into()),
+    };
+    let params = entry.params as usize;
+    // Keep initialized storage until removing it has a measured benefit.
+    // No uninitialized Word or partially initialized slice reaches any path.
+    let mut words = [UNBOUND; 8];
     for (i, word) in words.iter_mut().enumerate().take(captured) {
         *word = runtime.heap.field(closure, i);
     }
-    words[captured..params].copy_from_slice(unsafe { std::slice::from_raw_parts(arguments, count as usize) });
-    if runtime.loaded.program.functions[function].is_async {
+    if runtime.closure_bridge_reference {
+        words[captured..params].copy_from_slice(unsafe { std::slice::from_raw_parts(arguments, count as usize) });
+    } else {
+        // Bound the short copy explicitly. Inspect optimized target code:
+        // a Rust loop alone does not promise absence of memcpy/memmove.
+        for i in 0..8 {
+            if i >= count as usize {
+                break;
+            }
+            // SAFETY: i < count <= params <= 8; captured + count = params.
+            // The verified caller's spill contains count initialized words.
+            words[captured + i] = unsafe { *arguments.add(i) };
+        }
+    }
+    if entry.is_async {
         // Calling an async action makes its cold Future.
         return runtime.future_new(function, &words[..params]);
     }
-    let code = match runtime.code[function] {
+    let code = match entry.code {
         0 => match crate::jit::compile(runtime, function) {
             Ok(code) => code,
             Err(error) => return fatal(ctx_ref, runtime, error.0),
@@ -887,6 +1139,97 @@ mod embedding_tests {
     use super::*;
     use crate::budget::{Limits, NativeGroup};
     use okkama_sparrow::{Dst, FuncRef, Function, Instruction as I, Program, Register, Type, TypeRef};
+
+    #[test]
+    fn closure_bridge_counts_are_checked_before_access() {
+        for params in [0, 1, 2, 8] {
+            let entry = Invocation { code: 0, params, is_async: false };
+            for count in 0..=u64::from(params) {
+                assert_eq!(entry.capture_count(count), Ok(params as usize - count as usize));
+            }
+            assert_eq!(entry.capture_count(u64::from(params) + 1), Err("closure argument count exceeds parameter count"));
+            assert_eq!(entry.capture_count(u64::MAX), Err("closure argument count exceeds parameter count"));
+        }
+        let entry = Invocation { code: 0, params: 9, is_async: true };
+        assert_eq!(entry.capture_count(0), Err("closure with more than 8 parameters"));
+        assert_eq!(entry.capture_count(u64::MAX), Err("closure with more than 8 parameters"));
+    }
+
+    fn bridge_runtime() -> Box<Runtime> {
+        let source = "sparrow 16\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\n\
+            function f0 \"sync\" {\n registers [t0, t0]\n params [r0, r1]\n result t0\n 0: ret r0\n}\n\
+            function f1 \"async\" async {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n";
+        Box::new(Runtime::new(Loaded::new(okkama_sparrow::assemble(source).unwrap())).unwrap())
+    }
+
+    fn bridge_context(runtime: &mut Runtime) -> Ctx {
+        Ctx { status: OK, stack_limit: 0, failure: UNBOUND, runtime, entry_frame: 0, scratch: UNBOUND }
+    }
+
+    #[test]
+    fn closure_bridge_invalid_helpers_fail_before_touching_input() {
+        for reference in [false, true] {
+            for count in [3, u64::MAX] {
+                let mut runtime = bridge_runtime();
+                runtime.closure_bridge_reference = reference;
+                let closure = runtime.heap.closure_new(0, &[]);
+                let mut ctx = bridge_context(&mut runtime);
+                // No readable arguments: invalid counts must fail before a read.
+                assert_eq!(rt_call_closure(&mut ctx, closure, std::ptr::null(), count), 0);
+                assert_eq!(ctx.status, FATAL);
+                assert_eq!(runtime.fatal.as_deref(), Some("closure argument count exceeds parameter count"));
+            }
+        }
+        for (function, count, expected) in [
+            (0, 3, "closure capture count exceeds parameter count"),
+            (0, u64::MAX, "closure capture count exceeds parameter count"),
+            (u64::MAX, 0, "invalid closure function"),
+        ] {
+            let mut runtime = bridge_runtime();
+            let mut ctx = bridge_context(&mut runtime);
+            assert_eq!(rt_closure(&mut ctx, function, std::ptr::null(), count), 0);
+            assert_eq!(ctx.status, FATAL);
+            assert_eq!(runtime.fatal.as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn closure_bridge_invocation_publication_is_stable() {
+        let mut runtime = bridge_runtime();
+        let base = runtime.invocations.as_ptr();
+        assert_eq!(std::mem::size_of::<Invocation>(), 16);
+        assert_eq!(std::mem::offset_of!(Invocation, code), 0);
+        assert!(runtime.invocations.iter().all(|entry| entry.code == 0));
+        for function in [0, 1] {
+            let entry = runtime.invocations[function];
+            let address = crate::jit::compile(&mut runtime, function).unwrap();
+            assert_ne!(address, 0);
+            assert_eq!(runtime.invocations.as_ptr(), base);
+            assert_eq!(runtime.invocations[function].code, address);
+            assert_eq!(runtime.invocations[function].params, entry.params);
+            assert_eq!(runtime.invocations[function].is_async, entry.is_async);
+            assert_eq!(crate::jit::compile(&mut runtime, function).unwrap(), address);
+        }
+    }
+
+    #[test]
+    fn closure_bridge_compilation_failure_does_not_publish_code() {
+        let mut runtime = bridge_runtime();
+        // A tiny compile-cost budget refuses even this one-instruction body.
+        // No large fixture or machine-code invocation is needed.
+        runtime.limits.memory = Some(1);
+        let closure = runtime.heap.closure_new(0, &[crate::word::small(1).unwrap(), crate::word::small(2).unwrap()]);
+        let mut ctx = bridge_context(&mut runtime);
+        assert_eq!(rt_call_closure(&mut ctx, closure, [].as_ptr(), 0), 0);
+        assert_eq!(ctx.status, FATAL);
+        assert!(runtime.fatal.as_deref().unwrap().contains("compiling it would take more than"));
+        assert_eq!(runtime.invocations[0].code, 0);
+        assert_eq!(runtime.invocations[0].params, 2);
+        // A failed compilation left no callable address; the compiler can
+        // still finalize the same declaration after its budget is restored.
+        runtime.limits = Limits::default();
+        assert_ne!(crate::jit::compile(&mut runtime, 0).unwrap(), 0);
+    }
 
     /// `main` returns the wall clock: one native of the Clock group.
     fn clock() -> Box<Runtime> {

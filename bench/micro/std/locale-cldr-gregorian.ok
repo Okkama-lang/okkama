@@ -1,0 +1,44 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "strings/parse" take Number;
+import "locale/internal/gregorian" take CldrGregorian;
+import "locale/internal/lists" take CldrLists;
+import "locale/internal/plurals" take CldrPlurals;
+import "locale/internal/iana" take IanaLanguages;
+import "i18n/plural" take PluralNumber;
+
+// Pinned CLDR tables read directly: a Gregorian profile (179 fields, one compiled date program), list fragments, plural categories (ru cardinal, en ordinal), IANA whole-tag aliases.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let table = CldrGregorian();
+        let tags is @string = ["en", "de", "fr", "ru", "ja", "zz-Unknown"];
+        let tag = tags[i % 6];
+        let id = table.profile(tag);
+        let known = id >= 0;
+        let fields is @string = if known { table.fields(id); } else { []; };
+        let k = i % 179;
+        let gregorian = (if known { (if table.size(id) == 179 && fields.size() == 179 { 1; } else { 0; }) + (if table.field(id, k) == fields[k] { 2; } else { 0; })
+            + (if table.program(Number(table.field(id, 167)).int()).length() > 0 { 4; } else { 0; }); } else { 100; }) + (if table.program(-1) == "" { 8; } else { 0; });
+        let num = i % 30 + 1;
+        let plurals = CldrPlurals();
+        let total = gregorian + (if CldrLists().lookup(tag, i % 3).size() == 12 { 16; } else { 0; })
+            + 32 * plurals.category(PluralNumber(num.string()), "ru", false) + 1000 * plurals.category(PluralNumber(num.string()), "en", true)
+            + IanaLanguages().preferred_tag(["i-klingon", "zh-min-nan", "en-US", "art-lojban"][i % 4]).length() * 10000;
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

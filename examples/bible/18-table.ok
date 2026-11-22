@@ -1,0 +1,26 @@
+module bible/closure_table v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Rule {
+    has accepts is (int) is bool;
+    has name is string;
+    Rule(:accepts, :name);
+    check(value is int) is string { name + " " + accepts(value).string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let operations is %string:(int, int) is int = [
+        "+": (left is int, right is int) is int { left + right; },
+        "*": (left is int, right is int) is int { left * right; }
+    ];
+    let times = operations["*"];
+    out.writeln(times(6, 7).string() + " " + operations.keys().join(","));
+    let minus = operations["-"] else (left is int, right is int) is int { left - right; };
+    out.writeln(minus(10, 3).string());
+    let limit = 10;
+    let small = Rule(accepts: (value is int) is bool { value < limit; }, name: "small");
+    out.writeln(small.check(3) + ", " + small.check(30));
+    0;
+}

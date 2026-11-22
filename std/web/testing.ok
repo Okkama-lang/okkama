@@ -13,6 +13,17 @@ module web/testing v1.0.0;
 // A target is a path with an optional query, "/notes?limit=5". The request
 // comes from 127.0.0.1 over HTTP/1.1. A HEAD response has no body, as on the
 // wire, and an accepted WebSocket upgrade is 101 Switching Protocols.
+//
+// Every method takes `headers`. A client made with a cookie jar keeps the
+// cookies the replies set and sends them back, as a browser does, so a login
+// and the requests after it can be tested end to end:
+//
+//     let client = WebTestClient(routes: routes, cookies: MemoryCookieJar());
+//     await client.post("/login", FormBody(...));
+//     test.is((await client.get("/me"))::Head::code, 200);
+//
+// The site of those cookies is http://127.0.0.1; a Cookie field the caller
+// sets is sent as it is, instead of the jar's.
 
 import "http/handler" take Handling, HandlingKind;
 import "http/request_context" take HttpRequestContext;
@@ -28,23 +39,56 @@ import "async/cancellation" take Cancellation;
 import "net/stream" take ConnectionEndpoints;
 import "net/endpoint" take IpEndpoint;
 import "net/ip" take IpAddress;
-import "web/routing" take WebRoutes, Get, Post, Resource, Around;
+import "web/routing" take WebRoutes, Get, Post, Delete, Resource, Around;
 import "web/around" take BearerAuth;
 import "web/request" take WebRequest;
 import "web/reply" take TextReply, JsonReply, CreatedReply;
 import "json" take Json, JsonField;
+import "http/cookie_jar" take CookieStoring, MemoryCookieJar;
+import "http/cookie_policy" take CookieContext;
+import "http/cookie" take Cookie;
+import "http/target" take RequestTargetKind;
+import "url/value" take ParsedUrl, UrlParts;
+import "collections/sequence" take Sequencing;
 
 // Calls a route table like an HTTP client, without a network, for tests.
 object WebTestClient {
     has routes is Handling;
+    has cookies is CookieStoring;
 
-    // A client of routes.
+    // A client of routes; it keeps no cookies.
     WebTestClient(routes is Handling) {
         self.routes = routes;
+        cookies = NoTestCookies();
+    }
+
+    // A client of routes that keeps the cookies replies set in cookies and
+    // sends them with later requests.
+    WebTestClient(routes is Handling, cookies is CookieStoring) {
+        self.routes = routes;
+        self.cookies = cookies;
     }
 
     // The table's response to request.
     async response(request is Request) is ClientResponse {
+        // Cookies follow requests for paths (origin-form targets) on the site http://127.0.0.1.
+        let pathed = request::Head::target.kind() == RequestTargetKind.origin;
+        let site = ParsedUrl("http://127.0.0.1" + (if pathed: request::Head::target.string() else: "/")).parts();
+        let cookie_context = CookieContext(site: site, top_level: true, method: request::Head::method);
+        let caller_cookie = request::Head::headers.membership(HeaderName("Cookie"));
+        let pairs = if pathed && !caller_cookie: TestCookiePairs(cookies.cookies(site, cookie_context)).string() else: "";
+        let sent = if pairs == "" {
+            request;
+        }
+        else {
+            Request(
+                target: request::Head::target,
+                method: request::Head::method,
+                headers: request::Head::headers.addition(Header(name: "Cookie", value: pairs)),
+                body: request.body(),
+                version: request::Head::version
+            );
+        };
         let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(
             local: IpEndpoint(address: IpAddress("127.0.0.1"), port: 80),
             remote: IpEndpoint(address: IpAddress("127.0.0.1"), port: 50000)
@@ -54,13 +98,16 @@ object WebTestClient {
             details: details,
             cancellation: Cancellation().cancelling()
         );
-        let result = await routes.handling(request, context);
+        let result = await routes.handling(sent, context);
         let answered = if result.kind() == HandlingKind.websocket {
             Response(status: Status.switching_protocols);
         }
         else {
             result.response();
         };
+        if pathed {
+            cookies.store(site, answered::Head::headers, cookie_context);
+        }
         let response = if request::Head::method == Method.head {
             Response(
                 status: answered::Head::status,
@@ -74,24 +121,24 @@ object WebTestClient {
         ClientResponse(request: request, response: response, details: details);
     }
 
-    // GET target.
-    async get(target is string) is ClientResponse {
-        await self.response(TestRequest(target: target, method: Method.get).request());
+    // GET target, with headers.
+    async get(target is string, headers is Headers = Headers()) is ClientResponse {
+        await self.response(TestRequest(target: target, method: Method.get).request(headers));
     }
 
-    // HEAD target.
-    async head(target is string) is ClientResponse {
-        await self.response(TestRequest(target: target, method: Method.head).request());
+    // HEAD target, with headers.
+    async head(target is string, headers is Headers = Headers()) is ClientResponse {
+        await self.response(TestRequest(target: target, method: Method.head).request(headers));
     }
 
-    // OPTIONS target.
-    async options(target is string) is ClientResponse {
-        await self.response(TestRequest(target: target, method: Method.options).request());
+    // OPTIONS target, with headers.
+    async options(target is string, headers is Headers = Headers()) is ClientResponse {
+        await self.response(TestRequest(target: target, method: Method.options).request(headers));
     }
 
-    // DELETE target.
-    async delete(target is string) is ClientResponse {
-        await self.response(TestRequest(target: target, method: Method.delete).request());
+    // DELETE target, with headers.
+    async delete(target is string, headers is Headers = Headers()) is ClientResponse {
+        await self.response(TestRequest(target: target, method: Method.delete).request(headers));
     }
 
     // POST body to target.
@@ -124,10 +171,11 @@ hidden object TestRequest {
         self.method = method;
     }
 
-    request() is Request {
+    request(headers is Headers) is Request {
         Request(
             target: ParsedRequestTarget(origin: target, method: method).target(),
-            method: method
+            method: method,
+            headers: headers
         );
     }
 
@@ -155,8 +203,61 @@ hidden object TestRequest {
     }
 }
 
+// The jar of a client made without one: nothing is kept or sent.
+hidden object NoTestCookies does CookieStoring {
+    NoTestCookies() {}
+
+    cookies(origin is UrlParts, context is CookieContext) is Sequencing<Cookie> {
+        let empty is @Cookie = [];
+        empty;
+    }
+
+    store(origin is UrlParts, headers is Headers, context is CookieContext) is void {}
+
+    clear() is void {}
+}
+
+// The jar's cookies as one Cookie field value: "a=1; b=2".
+hidden object TestCookiePairs {
+    has text is string;
+
+    TestCookiePairs(cookies is Sequencing<Cookie>) {
+        let pairs is @string = (0..cookies.size()).map() -> index {
+            cookies.item(index).pair();
+        };
+        text = pairs.join("; ");
+    }
+
+    string() is string {
+        text;
+    }
+}
+
 hidden object TestNotes {
     TestNotes() {}
+
+    async accepted(request is WebRequest) is Responding {
+        TextReply("accept " + (request.header().maybe("Accept").text() else "none"));
+    }
+
+    async login(request is WebRequest) is Responding {
+        TextReply(text: "in", headers: Headers(Header(name: "Set-Cookie", value: "sid=abc123; Path=/; HttpOnly")));
+    }
+
+    async me(request is WebRequest) is Responding {
+        match request.cookies().maybe("sid").text() {
+            case Maybe.some(sid) {
+                TextReply("session " + sid);
+            }
+            else {
+                TextReply(text: "anonymous", status: Status.unauthorized);
+            }
+        }
+    }
+
+    async logout(request is WebRequest) is Responding {
+        TextReply(text: "out", headers: Headers(Header(name: "Set-Cookie", value: "sid=; Path=/; Max-Age=0")));
+    }
 
     async show(request is WebRequest) is Responding {
         let id = request.path().int("id");
@@ -263,4 +364,57 @@ async test "a test client passes the arounds of the routes" {
     );
     let page = await client.response(request);
     test.is(await page.text(), "page 2");
+}
+
+async test "every method sends headers (#650)" {
+    let notes = TestNotes();
+    let client = WebTestClient(
+        WebRoutes(
+            Get(path: "/accept", endpoint: notes.accepted),
+            Resource("/guarded", Get(notes.search), Post(notes.add)),
+        )
+    );
+    let accept = Headers(Header(name: "Accept", value: "text/plain"));
+    test.is(await (await client.get(target: "/accept", headers: accept)).text(), "accept text/plain");
+    test.is(await (await client.get("/accept")).text(), "accept none");
+    let guarded = WebTestClient(
+        WebRoutes(
+            Around(BearerAuth(token: "s3cret")),
+            Get(path: "/notes", endpoint: notes.search),
+            Delete(path: "/notes", endpoint: notes.search),
+        )
+    );
+    let bearer = Headers(Header(name: "Authorization", value: "Bearer s3cret"));
+    test.is((await guarded.get("/notes"))::Head::code, 401);
+    test.is(await (await guarded.get(target: "/notes?page=4", headers: bearer)).text(), "page 4");
+    test.is((await guarded.head(target: "/notes", headers: bearer))::Head::code, 200);
+    test.is((await guarded.delete("/notes"))::Head::code, 401);
+    test.is(await (await guarded.delete(target: "/notes?page=5", headers: bearer)).text(), "page 5");
+    // No route serves OPTIONS: the table answers 405, headers or not.
+    test.is((await guarded.options(target: "/notes", headers: bearer))::Head::code, 405);
+}
+
+async test "a client with a jar carries the cookies replies set (#650)" {
+    let notes = TestNotes();
+    let routes = WebRoutes(
+        Post(path: "/login", endpoint: notes.login),
+        Get(path: "/me", endpoint: notes.me),
+        Post(path: "/logout", endpoint: notes.logout),
+    );
+    let browser = WebTestClient(routes: routes, cookies: MemoryCookieJar());
+    test.is((await browser.get("/me"))::Head::code, 401);
+    test.is(await (await browser.post("/login", TextBody("u"))).text(), "in");
+    test.is(await (await browser.get("/me")).text(), "session abc123");
+    // A Cookie field the caller sets goes instead of the jar's.
+    test.is(
+        await (await browser.get(target: "/me", headers: Headers(Header(name: "Cookie", value: "sid=mine")))).text(),
+        "session mine"
+    );
+    test.is(await (await browser.post("/logout", TextBody(""))).text(), "out");
+    // Logout expired the cookie.
+    test.is((await browser.get("/me"))::Head::code, 401);
+    // A client without a jar keeps nothing.
+    let plain = WebTestClient(routes);
+    await plain.post("/login", TextBody("u"));
+    test.is((await plain.get("/me"))::Head::code, 401);
 }

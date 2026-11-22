@@ -10,6 +10,21 @@ fn wrap(body: &str) -> String {
 }
 
 #[test]
+fn confirm_else_after_an_index_belongs_to_confirm() {
+    // #521: the index does not take the `else` of `confirm` as its fallback,
+    // with or without a line break; parentheses keep an inner fallback.
+    let expected = "(ConfirmStatement condition=(>= size (index pair 1)) fallback=(ConfirmPanic value=\"short\"))";
+    assert_eq!(body_sexpr("confirm size >= pair[1] else panic \"short\";"), expected);
+    assert_eq!(body_sexpr("confirm size >= pair[1]\n    else panic \"short\";"), expected);
+    assert_eq!(
+        body_sexpr("confirm size >= (pair[5] else 0) else throw Short();"),
+        "(ConfirmStatement condition=(>= size (group (index pair 5 else 0))) fallback=(ConfirmThrow value=(call Short)))"
+    );
+    // Outside `confirm` an index fallback is unchanged.
+    assert_eq!(body_sexpr("let x = pair[9] else 42;"), "(LetStatement name=x type=_ value=(index pair 9 else 42))");
+}
+
+#[test]
 fn let_defer_confirm_and_bindings() {
     assert_eq!(
         body_sexpr(
@@ -80,7 +95,8 @@ fn if_statements_chain_else_if() {
         "(IfStatement condition=a then={1} else=_)"
     );
     for (body, expected) in [
-        ("if a 1;", "Expect \"{\" before block."),
+        // #921: after the condition comes a block or, in the compact form, a colon
+        ("if a 1;", "Expect \"{\" or \":\" after the if condition."),
         ("else { 1; }", "Expect \";\" after expression."),
         ("if a { 1; } else 2;", "Expect \"{\" before block."),
     ] {
@@ -258,7 +274,7 @@ fn try_throw_and_return() {
         "try { x; } catch e is DbError, NetError {} catch DbError.failed(code, _) {} \
          catch DbError.closed, net.NetError.reset, Denied {}",
     ));
-    parse_ok(&wrap("let a = try? f() else 0; try! g(); let b = try? h() ?? .some(v): v !! .none: 0;"));
+    parse_ok(&wrap("let a = try? f() else 0; try! g(); let b = match try? h() { case Maybe.some(v): v; case Maybe.none: 0; };"));
     for (body, expected) in [
         ("try {}", "Expect \"catch\" after try block."),
         (

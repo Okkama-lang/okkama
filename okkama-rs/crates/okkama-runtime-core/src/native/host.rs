@@ -1,5 +1,5 @@
 //! Natives часов, ожидания, случайности и сведений хоста — перенос
-//! `HostNatives` JVM: `runtime/time` (часы, сон), `runtime/system`
+//! `runtime/time` (часы, сон), `runtime/system`
 //! (secure_random, secure_integer, secure_float, платформа, хост, хранилище)
 //! и выборки `runtime/random`.
 use super::support::{byte_array, bytes, failure, int, int_value, string, string_map, text};
@@ -105,15 +105,34 @@ fn architecture() -> &'static str {
     }
 }
 
+/// gethostname(2): the host's name as the system knows it (#950; it ran `hostname` before).
+#[allow(unsafe_code)]
+fn system_host_name() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is writable for its whole length; gethostname writes at most that many bytes.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    Some(String::from_utf8_lossy(&buffer[..end]).trim().to_string())
+}
+
 fn host_name(native: Native) -> Result<String, Error> {
-    let from_command = std::process::Command::new("hostname")
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|name| !name.is_empty());
-    from_command.ok_or_else(|| failure("core.system", "unexpected", native, "Host name is unavailable"))
+    system_host_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| failure("core.system", "unexpected", native, "Host name is unavailable"))
+}
+
+/// statvfs(3) of `path`.
+#[allow(unsafe_code)]
+fn file_system_stats(path: &std::ffi::CStr) -> std::io::Result<libc::statvfs> {
+    // SAFETY: an all-zero statvfs is a valid value of this plain C struct.
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `path` is NUL-terminated and `stats` is a writable statvfs.
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(stats)
 }
 
 fn storage_usage(native: Native, path: &str) -> Result<Value, Error> {
@@ -133,39 +152,20 @@ fn storage_usage(native: Native, path: &str) -> Result<Value, Error> {
             "Cannot resolve storage path",
         )
     })?;
-    let df = ["/bin/df", "/usr/bin/df"]
-        .into_iter()
-        .find(|candidate| std::path::Path::new(candidate).is_file())
-        .ok_or_else(|| failure("core.system", "unsupported", native, "Storage usage is unavailable"))?;
+    // statvfs(3), as df reports it: capacity is every block, available what an
+    // unprivileged writer may still use (#944; it ran `df -Pk` before).
     let unexpected = || failure("core.system", "unexpected", native, "Cannot inspect storage usage");
-    let output = std::process::Command::new(df)
-        .arg("-Pk")
-        .arg(&absolute)
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .output()
-        .map_err(|_| unexpected())?;
-    if !output.status.success() {
-        return Err(unexpected());
+    let text = std::ffi::CString::new(absolute.as_os_str().as_encoded_bytes()).map_err(|_| unexpected())?;
+    let stats = file_system_stats(&text)
+        .map_err(|error| failure("core.system", crate::host::code(&error), native, "Cannot inspect storage usage"))?;
+    // The field widths differ between platforms (32-bit block counts on macOS).
+    fn wide(value: impl Into<u128>) -> u128 {
+        value.into()
     }
-    let listing = String::from_utf8_lossy(&output.stdout);
-    let last = listing.lines().last().unwrap_or("");
-    // ^\S+\s+([0-9]+)\s+[0-9]+\s+([0-9]+)\s+
-    let fields: Vec<&str> = last.split_whitespace().collect();
-    let invalid = || failure("core.system", "invalid_data", native, "Invalid storage usage result");
-    let number = |text: &str| -> Option<IntValue> {
-        (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| IntValue::from_decimal_digits(text).expect("digits"))
-    };
-    if fields.len() < 5 {
-        return Err(invalid());
-    }
-    let (Some(capacity), Some(_), Some(available)) = (number(fields[1]), number(fields[2]), number(fields[3])) else {
-        return Err(invalid());
-    };
-    let kilo = IntValue::from_i64(1024);
-    let capacity = crate::integer::multiply(&capacity, &kilo);
-    let available = crate::integer::multiply(&available, &kilo);
+    let fragment = wide(stats.f_frsize);
+    let bytes = |blocks: u128| IntValue::from_decimal_digits(&(blocks * fragment).to_string()).expect("digits");
+    let capacity = bytes(wide(stats.f_blocks));
+    let available = bytes(wide(stats.f_bavail));
     if crate::integer::compare(&available, &capacity).is_gt() {
         return Err(failure(
             "core.system",
@@ -354,5 +354,54 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(path: &str) -> std::collections::HashMap<String, u128> {
+        let Ok(value) = storage_usage(Native::SystemStorageUsage, path) else { panic!("usage of {path}") };
+        let Ok(entries) = super::super::support::entries(&value) else { panic!("a map") };
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                let Ok(text) = value.as_string() else { panic!("text") };
+                (key, text.parse().expect("number"))
+            })
+            .collect()
+    }
+
+    /// #950: the host name comes from gethostname and agrees with the `hostname` tool where it exists.
+    #[test]
+    fn host_name_reads_gethostname_like_the_hostname_tool() {
+        let Ok(name) = host_name(Native::SystemSystemHostName) else { panic!("a host name") };
+        assert!(!name.is_empty());
+        if let Ok(output) = std::process::Command::new("hostname").output()
+            && output.status.success()
+        {
+            assert_eq!(name, String::from_utf8_lossy(&output.stdout).trim());
+        }
+    }
+
+    /// #944: usage comes from statvfs, consistent with itself and with `df -Pk`
+    /// (kilobyte blocks) where the tool exists, and fails for a missing path.
+    #[test]
+    fn storage_usage_reads_statvfs_like_df() {
+        let root = usage("/");
+        assert!(root["capacity"] > 0);
+        assert!(root["available"] <= root["capacity"]);
+        assert_eq!(root["used"], root["capacity"] - root["available"]);
+        if let Ok(output) = std::process::Command::new("df").args(["-Pk", "/"]).env("LC_ALL", "C").output() {
+            let listing = String::from_utf8_lossy(&output.stdout);
+            let fields: Vec<&str> = listing.lines().last().unwrap_or("").split_whitespace().collect();
+            if let Some(blocks) = fields.get(1).and_then(|text| text.parse::<u128>().ok()) {
+                let difference = (root["capacity"] / 1024).abs_diff(blocks);
+                assert!(difference <= 1, "statvfs {} KiB, df {blocks} KiB", root["capacity"] / 1024);
+            }
+        }
+        assert!(storage_usage(Native::SystemStorageUsage, "/definitely/missing/okkama-944").is_err());
+        assert!(storage_usage(Native::SystemStorageUsage, "a\0b").is_err());
     }
 }

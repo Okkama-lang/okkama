@@ -1,0 +1,35 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteMemory;
+import "db/value" take DbInteger;
+
+// 11..19 generated rows read in pages (first page, then fetched batches); a second query of the same shape.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let db = await SqliteMemory().connection();
+        await db.execution("CREATE TABLE t(x INTEGER, name TEXT)");
+        await db.execution("WITH RECURSIVE c(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM c WHERE k < ?) INSERT INTO t SELECT k, 'n' || k FROM c",
+            DbInteger(10 + v));
+        let rows = await db.query("SELECT x, name FROM t WHERE x > ? ORDER BY x DESC", DbInteger(v % 3)).all(100);
+        let again = await db.query("SELECT x, name FROM t WHERE x <= ?", DbInteger(v)).all(100);
+        db.close();
+        let total = rows.size() + rows[0].int("x") + rows[rows.size() - 1].text("name").length() + again.size();
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

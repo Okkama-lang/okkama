@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    Completion, CompletionKind, LineIndex, Location, Scope, Symbol, builtin_members, doc_comment,
+    Completion, CompletionKind, LineIndex, Location, Scope, Symbol, builtin_members,
     hover_text,
 };
 use crate::analysis::registry::{CtorShape, Registry, TypeRef};
@@ -19,6 +19,7 @@ use crate::syntax::{ast, lexer, token::TokenKind};
 /// Индекс корня: символы, члены типов, области видимости, имена модуля.
 #[derive(Debug, Default)]
 pub struct Index {
+    pub diagnostics: Vec<super::Diagnostic>,
     pub symbols: Vec<Symbol>,
     pub members: HashMap<String, Vec<Completion>>,
     pub scopes: Vec<Scope>,
@@ -26,10 +27,21 @@ pub struct Index {
 }
 
 /// Индекс модуля `root` (индекс в `registry.modules` и `files`).
-pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], root: usize) -> Index {
+pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], root: usize, loader: &mut dyn crate::lowering::ModuleLoader) -> Index {
+    let docs = crate::doc::Documentation::new(registry, files, loader);
+    let mut diagnostics: Vec<_> = docs.modules[root].link_warnings.iter().map(|warning| super::Diagnostic {
+        path: files[root].name().to_string(),
+        range: LineIndex::new(files[root].text()).range(warning.span),
+        severity: super::Severity::Warning,
+        message: format!("unresolved documentation link [{}]", warning.name),
+        code: Some("unresolved-doc-link".to_string()),
+        unnecessary: false,
+    }).collect();
+    diagnostics.extend(super::lint::missing_docs(&files[root], &docs.modules[root], loader));
     let mut builder = Builder {
         registry,
         files,
+        docs,
         root,
         lines: HashMap::new(),
         symbols: Vec::new(),
@@ -43,6 +55,7 @@ pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], roo
     builder.tokens();
     let globals = builder.globals();
     Index {
+        diagnostics,
         symbols: builder.symbols,
         members: builder.members,
         scopes: builder.scopes,
@@ -87,6 +100,7 @@ fn completion_call(
 struct Builder<'r, 'a> {
     registry: &'r Registry<'a>,
     files: &'r [SourceFile],
+    docs: crate::doc::Documentation,
     root: usize,
     lines: HashMap<usize, LineIndex<'r>>,
     symbols: Vec<Symbol>,
@@ -112,10 +126,11 @@ impl<'r, 'a> Builder<'r, 'a> {
     }
 
     fn doc(&self, module: usize, span: Span) -> String {
-        self.files
-            .get(module)
-            .map(|file| doc_comment(file, span.start))
-            .unwrap_or_default()
+        self.docs.hover(module, span).unwrap_or_default()
+    }
+
+    fn hover(&self, module: usize, span: Span, fallback: &str) -> String {
+        self.docs.hover(module, span).unwrap_or_else(|| hover_text(fallback, ""))
     }
 
     fn push(&mut self, span: Span, hover: String, definition: Option<Location>) {
@@ -261,19 +276,16 @@ impl<'r, 'a> Builder<'r, 'a> {
         let info = &self.registry.roles[role.0];
         info.methods
             .iter()
-            .map(|method| {
+            .enumerate()
+            .map(|(slot, method)| {
                 let params = self.params(&method.params, method.variadic);
                 let doc = info
                     .decl
                     .and_then(|decl| {
-                        decl.members.iter().find_map(|member| match member {
-                            ast::RoleMember::Signature(signature)
-                                if signature.name.text == method.name =>
-                            {
-                                Some(self.doc(info.module, signature.span))
-                            }
+                        decl.members.iter().filter_map(|member| match member {
+                            ast::RoleMember::Signature(signature) => Some(signature),
                             _ => None,
-                        })
+                        }).nth(slot).map(|signature| self.doc(info.module, signature.span))
                     })
                     .unwrap_or_default();
                 let names: Vec<String> =
@@ -382,6 +394,7 @@ impl<'r, 'a> Builder<'r, 'a> {
             .scope
             .types
             .iter()
+            .filter(|(name, _)| !module.hidden.contains(*name))
             .map(|(name, found)| self.type_completion(name, *found))
             .collect();
         out.extend(
@@ -392,6 +405,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                 .map(|native| self.native_completion(*native)),
         );
         for (name, found) in &module.scope.types {
+            if module.hidden.contains(name) { continue; }
             if let TypeRef::Object(id) = found {
                 let info = &self.registry.objects[id.0];
                 let ctors = (0..info.ctors.len())
@@ -406,7 +420,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                             label: name.clone(),
                             kind: CompletionKind::Object,
                             detail: signature,
-                            documentation: String::new(),
+                            documentation: hover,
                             insert: name.clone(),
                             snippet: false,
                         }
@@ -441,7 +455,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                     "import \"{}\"",
                     self.registry.modules[namespace.module].name
                 ),
-                documentation: String::new(),
+                documentation: self.docs.modules[namespace.module].overview.as_ref().map(|overview| overview.markdown()).unwrap_or_default(),
                 insert: alias.clone(),
                 snippet: false,
             });
@@ -835,12 +849,12 @@ impl<'r, 'a> Builder<'r, 'a> {
                         name,
                         super::outline::signature_text(&decl.params, &decl.result)
                     );
-                    let hover = hover_text(&signature, &self.doc(module, decl.span));
+                    let hover = self.hover(module, decl.span, &signature);
                     let definition = self.location(module, decl.name.span);
                     self.push_typed(at, hover, definition, result.as_ref());
                 }
             }
-            Callee::Test(_) | Callee::FakeStorage(_) => {}
+            Callee::Test(_) => {}
         }
     }
 
@@ -901,11 +915,10 @@ impl<'r, 'a> Builder<'r, 'a> {
         );
         let module = info.module;
         let decl = found.decl;
-        let doc = decl
-            .map(|decl| self.doc(module, decl.span))
-            .unwrap_or_default();
+        let hover = decl.map(|decl| self.hover(module, decl.span, &signature))
+            .unwrap_or_else(|| hover_text(&signature, ""));
         let definition = decl.and_then(|decl| self.location(module, decl.name.span));
-        (hover_text(&signature, &doc), definition)
+        (hover, definition)
     }
 
     fn role_member(&mut self, from: u32, to: u32, role: RoleId, slot: usize) {
@@ -936,18 +949,15 @@ impl<'r, 'a> Builder<'r, 'a> {
         );
         let module = info.module;
         let decl = info.decl.and_then(|decl| {
-            decl.members.iter().find_map(|member| match member {
-                ast::RoleMember::Signature(signature) if signature.name.text == found.name => {
-                    Some(signature)
-                }
+            decl.members.iter().filter_map(|member| match member {
+                ast::RoleMember::Signature(signature) => Some(signature),
                 _ => None,
-            })
+            }).nth(slot)
         });
-        let doc = decl
-            .map(|decl| self.doc(module, decl.span))
-            .unwrap_or_default();
+        let hover = decl.map(|decl| self.hover(module, decl.span, &signature))
+            .unwrap_or_else(|| hover_text(&signature, ""));
         let definition = decl.and_then(|decl| self.location(module, decl.name.span));
-        (hover_text(&signature, &doc), definition)
+        (hover, definition)
     }
 
     fn ctor_hover(&self, object: ObjectId, ctor: usize) -> String {
@@ -964,11 +974,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                 })
                 .collect(),
         };
-        let doc = info
-            .decl
-            .map(|decl| self.doc(info.module, decl.span))
-            .unwrap_or_default();
-        hover_text(&format!("{}({})", info.name, params.join(", ")), &doc)
+        self.hover(info.module, info.ctors[ctor].span, &format!("{}({})", info.name, params.join(", ")))
     }
 
     fn field(&mut self, span: Span, object: ObjectId, field: usize) {
@@ -1061,13 +1067,11 @@ impl<'r, 'a> Builder<'r, 'a> {
             let Some(decl) = info.decl else {
                 continue;
             };
-            for (slot, method) in info.methods.iter().enumerate() {
-                let span = decl.members.iter().find_map(|member| match member {
-                    ast::RoleMember::Signature(signature) if signature.name.text == method.name => {
-                        Some(signature.name.span)
-                    }
+            for slot in 0..info.methods.len() {
+                let span = decl.members.iter().filter_map(|member| match member {
+                    ast::RoleMember::Signature(signature) => Some(signature.name.span),
                     _ => None,
-                });
+                }).nth(slot);
                 if let Some(span) = span {
                     let (hover, definition) = self.role_method_info(RoleId(id), slot);
                     self.push(span, hover, definition);
@@ -1127,7 +1131,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                         info.name,
                         super::outline::signature_text(&decl.params, &decl.result)
                     );
-                    let hover = hover_text(&signature, &self.doc(module, decl.span));
+                    let hover = self.hover(module, decl.span, &signature);
                     let definition = self.location(module, decl.name.span);
                     self.push(span, hover, definition);
                 }
@@ -1159,119 +1163,30 @@ impl<'r, 'a> Builder<'r, 'a> {
     }
 
     fn type_info(&mut self, found: TypeRef) -> Option<(String, Option<Location>)> {
-        match found {
+        let (module, span, name) = match found {
             TypeRef::Object(id) => {
                 let info = &self.registry.objects[id.0];
                 let decl = info.decl?;
-                let module = info.module;
-                let mut lines = vec![self.object_header(id)];
-                for (index, ctor) in info.ctors.iter().enumerate() {
-                    if !ctor.span.is_empty() {
-                        let text = self.ctor_hover(id, index);
-                        let signature = text
-                            .strip_prefix("```okkama\n")
-                            .and_then(|rest| rest.split("\n```").next())
-                            .unwrap_or("")
-                            .to_string();
-                        lines.push(format!("    {signature}"));
-                    }
-                }
-                for method in info
-                    .methods
-                    .iter()
-                    .filter(|method| !method.hidden && method.decl.is_some())
-                {
-                    let params = self.params(&method.params, method.variadic);
-                    let result = if method.successor {
-                        format!("^{}", self.registry.plain_result_name(&method.result))
-                    } else {
-                        self.registry.plain_result_name(&method.result)
-                    };
-                    lines.push(format!(
-                        "    {}{}({}) is {result}",
-                        if method.is_async { "async " } else { "" },
-                        method.name,
-                        params.join(", ")
-                    ));
-                }
-                truncate(&mut lines);
-                let doc = self.doc(module, decl.span);
-                let definition = self.location(module, decl.name.span);
-                Some((hover_text(&lines.join("\n"), &doc), definition))
+                (info.module, decl.span, decl.name.span)
             }
             TypeRef::Role(id) => {
                 let info = &self.registry.roles[id.0];
                 let decl = info.decl?;
-                let module = info.module;
-                let mut lines = vec![format!(
-                    "role {}",
-                    self.ty(&Ty::Role(
-                        id,
-                        info.params.iter().map(|param| Ty::Param(*param)).collect()
-                    ))
-                )];
-                for method in &info.methods {
-                    let params = self.params(&method.params, method.variadic);
-                    lines.push(format!(
-                        "    {}{}({}) is {}",
-                        if method.is_async { "async " } else { "" },
-                        method.name,
-                        params.join(", "),
-                        self.registry.plain_result_name(&method.result)
-                    ));
-                }
-                truncate(&mut lines);
-                let doc = self.doc(module, decl.span);
-                let definition = self.location(module, decl.name.span);
-                Some((hover_text(&lines.join("\n"), &doc), definition))
+                (info.module, decl.span, decl.name.span)
             }
             TypeRef::Enum(id) => {
                 let info = &self.registry.enums[id.0];
-                let module = info.module;
-                let signature = format!("enum {} = ({})", info.name, info.cases.join(", "));
-                let decl = self.enum_decl(id.0);
-                let doc = decl
-                    .map(|decl| self.doc(module, decl.span))
-                    .unwrap_or_default();
-                let definition = decl.and_then(|decl| self.location(module, decl.name.span));
-                Some((hover_text(&signature, &doc), definition))
+                let decl = self.enum_decl(id.0)?;
+                (info.module, decl.span, decl.name.span)
             }
             TypeRef::Handle(id) => {
                 let info = &self.registry.handles[id.0];
-                let (module, span) = (info.module, info.span);
-                let signature = format!("native object {}", info.name);
-                let doc = self.doc(module, span);
-                let definition = self.location(module, span);
-                Some((hover_text(&signature, &doc), definition))
+                (info.module, info.span, info.span)
             }
-        }
+        };
+        let hover = self.docs.hover(module, span)?;
+        let definition = self.location(module, name);
+        Some((hover, definition))
     }
 
-    fn object_header(&self, id: ObjectId) -> String {
-        let info = &self.registry.objects[id.0];
-        let name = self.ty(&Ty::Object(
-            id,
-            info.params.iter().map(|param| Ty::Param(*param)).collect(),
-        ));
-        if info.does.is_empty() {
-            format!("object {name}")
-        } else {
-            let roles: Vec<String> = info
-                .does
-                .iter()
-                .map(|(role, args)| self.ty(&Ty::Role(*role, args.clone())))
-                .collect();
-            format!("object {name} does {}", roles.join(", "))
-        }
-    }
-}
-
-/// Длинные списки действий в наведении обрезаются.
-fn truncate(lines: &mut Vec<String>) {
-    const LIMIT: usize = 40;
-    if lines.len() > LIMIT {
-        let more = lines.len() - LIMIT;
-        lines.truncate(LIMIT);
-        lines.push(format!("    // … ещё {more}"));
-    }
 }

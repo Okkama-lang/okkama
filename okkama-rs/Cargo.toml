@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-runtime", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent"]
+members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace"]
 
 [workspace.package]
-version = "0.5.5"
+version = "0.6.2"
 edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-only"
@@ -12,6 +12,8 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
+# `--cfg okkama_release` (release packaging) compiles the development instrumentation out (okkama-devtrace).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(okkama_release)"] }
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
@@ -33,3 +35,28 @@ codegen-units = 1
 inherits = "release"
 lto = "off"
 codegen-units = 16
+
+# Отладочные сборки (тесты, адаптер conformance) запускают JIT Sparrow, и
+# неоптимизированный Cranelift занимает в них большую часть прогона кейса
+# (#761). Оптимизируем только Cranelift и regalloc2; крейты Okkama остаются
+# отладочными, с их проверками.
+[profile.dev.package.cranelift-codegen]
+opt-level = 2
+[profile.dev.package.cranelift-frontend]
+opt-level = 2
+[profile.dev.package.cranelift-entity]
+opt-level = 2
+[profile.dev.package.cranelift-bforest]
+opt-level = 2
+[profile.dev.package.cranelift-bitset]
+opt-level = 2
+[profile.dev.package.cranelift-control]
+opt-level = 2
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 2
+[profile.dev.package.cranelift-jit]
+opt-level = 2
+[profile.dev.package.cranelift-module]
+opt-level = 2
+[profile.dev.package.regalloc2]
+opt-level = 2

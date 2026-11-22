@@ -19,7 +19,7 @@ fn a_join_past_the_memory_budget_is_stopped_before_it_is_built() {
         Command::new(env!("CARGO_BIN_EXE_okkama"))
     };
     let output = command
-        .args(["run", "--engine", "sparrow", "--max-memory", "64M", "--timeout", "60"])
+        .args(["run", "--max-memory", "64M", "--timeout", "60"])
         .arg(&path)
         .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .env("OKKAMA_TRACE", "off")

@@ -23,9 +23,7 @@ import "xml/node" take XmlNode, XmlElement, XmlText, XmlComment, XmlProcessingIn
     XmlAttribute, XmlDocument, MissingXmlAttribute, MissingXmlElement;
 import "collections/list" take List, EmptyList;
 import "async/atomic" take Atomic;
-import "runtime/xml" take XmlEventsState, xml_events, xml_events_error, xml_events_offset,
-    xml_event_count, xml_event_kind, xml_event_name, xml_event_text, xml_attribute_count,
-    xml_attribute_name, xml_attribute_value;
+import "xml/internal/events" take XmlTokens, XmlEvent;
 
 // XML text read into a tree when document() is asked.
 object ParsedXml {
@@ -50,9 +48,12 @@ object ParsedXml {
 
     // The tree; InvalidXml says where the text is wrong.
     document() is XmlDocument {
-        let state = xml_events(origin, maximum_depth, maximum_events);
-        let error = xml_events_error(state);
-        confirm error == "" else throw InvalidXml.located(xml_events_offset(state), error);
+        let events = XmlTokens(
+            origin: origin,
+            maximum_depth: maximum_depth,
+            maximum_events: maximum_events
+        ).events();
+        confirm events.error() == "" else throw InvalidXml.located(events.offset(), events.error());
         let start = XmlParseFrame(
             name: "",
             scope: ["xml": "http://www.w3.org/XML/1998/namespace", "": ""],
@@ -61,35 +62,27 @@ object ParsedXml {
         );
         let empty is List<XmlParseFrame> = EmptyList();
         let frames = Atomic(empty.prefix(start));
-        for (0..xml_event_count(state)) -> index {
-            let kind = xml_event_kind(state, index);
+        for events.items() -> event {
             let top = frames.value().first();
-            if kind == 0 {
-                frames.replace(frames.value().prefix(top.opened(state, index)));
-            }
-            else if kind == 1 {
-                let closed = top.element();
-                let rest = frames.value().tail();
-                frames.replace(rest.tail().prefix(rest.first().adding(closed)));
-            }
-            else if kind == 2 {
-                frames.replace(
-                    frames.value().tail().prefix(top.adding(XmlText(xml_event_text(state, index))))
-                );
-            }
-            else if kind == 3 {
-                frames.replace(
-                    frames.value().tail().prefix(
-                        top.adding(XmlComment(xml_event_text(state, index)))
-                    )
-                );
-            }
-            else {
-                let instruction = XmlProcessingInstruction(
-                    target: xml_event_name(state, index),
-                    data: xml_event_text(state, index),
-                );
-                frames.replace(frames.value().tail().prefix(top.adding(instruction)));
+            match event {
+                case XmlEvent.start(name, names, values, offset) {
+                    frames.replace(frames.value().prefix(top.opened(name, names, values)));
+                }
+                case XmlEvent.end(name, offset) {
+                    let closed = top.element();
+                    let rest = frames.value().tail();
+                    frames.replace(rest.tail().prefix(rest.first().adding(closed)));
+                }
+                case XmlEvent.text(value, offset) {
+                    frames.replace(frames.value().tail().prefix(top.adding(XmlText(value))));
+                }
+                case XmlEvent.comment(value, offset) {
+                    frames.replace(frames.value().tail().prefix(top.adding(XmlComment(value))));
+                }
+                case XmlEvent.instruction(target, data, offset) {
+                    let instruction = XmlProcessingInstruction(target: target, data: data);
+                    frames.replace(frames.value().tail().prefix(top.adding(instruction)));
+                }
             }
         }
         XmlDocument(frames.value().first().root());
@@ -118,15 +111,15 @@ hidden object XmlParseFrame {
 
     // The frame of a start tag: xmlns attributes bind prefixes, the others
     // are attributes with resolved names.
-    opened(state is XmlEventsState, index is int) is XmlParseFrame {
-        let count = xml_attribute_count(state, index);
+    opened(name is string, names is @string, values is @string) is XmlParseFrame {
+        let count = names.size();
         let bound = (0..count).reduce(scope) -> bindings, at {
-            let attribute = xml_attribute_name(state, index, at);
+            let attribute = names[at];
             if attribute == "xmlns" {
-                bindings + ["": xml_attribute_value(state, index, at)];
+                bindings + ["": values[at]];
             }
             else if attribute.starts_with("xmlns:") {
-                let value = xml_attribute_value(state, index, at);
+                let value = values[at];
                 confirm value != ""
                     else throw InvalidXml.located(0, "a prefix bound to no namespace");
                 bindings + [attribute.slice(6, attribute.length()): value];
@@ -137,20 +130,22 @@ hidden object XmlParseFrame {
         };
         let none_yet is @XmlAttribute = [];
         let resolved = (0..count).reduce(none_yet) -> kept, at {
-            let attribute = xml_attribute_name(state, index, at);
+            let attribute = names[at];
             if attribute == "xmlns" || attribute.starts_with("xmlns:") {
                 kept;
             }
             else {
-                kept + [XmlAttribute(
-                    name: XmlNamespaces(bound).name(attribute, false),
-                    value: xml_attribute_value(state, index, at),
-                )];
+                kept + [
+                    XmlAttribute(
+                        name: XmlNamespaces(bound).name(attribute, false),
+                        value: values[at]
+                    )
+                ];
             }
         };
         let children is @XmlNode = [];
         XmlParseFrame(
-            name: xml_event_name(state, index),
+            name: name,
             scope: bound,
             attributes: resolved,
             children: children

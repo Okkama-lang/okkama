@@ -5,7 +5,9 @@ module template/html_library v1.0.0;
 //     let library = HtmlTemplateLibrary(["header": HtmlTemplate("<h1>{{title}}</h1>")]);
 //     library.template("header");
 //
-// Names are exact: no trimming or case folding.
+// Names are exact: no trimming or case folding. template/engine's
+// TemplatePartials is the one library of the engine (#178); SectionTemplate
+// turns a TemplateLibrary into it.
 
 import "collections/sequence" take Sequencing;
 import "template/html" take HtmlTemplate;
@@ -41,7 +43,7 @@ object NamedHtmlTemplate {
 // Queries never revisit the source. Missing names throw MissingHtmlTemplate, while
 // membership returns false, including for "". Returned values/names outlive us.
 // Retains HtmlTemplate owners; no resource acquisition, compilation or destroy.
-// O(n) references, O(n²) duplicate checks, O(n) lookups within the count bound.
+// O(n) references; duplicates and lookups go through a map of names (#178).
 // The count does not limit source bytes; flat HtmlTemplate owns its limits.
 // Composition will apply explicit aggregate limits to these typed source values.
 // Only HtmlTemplate is accepted; no plain TextTemplate or arbitrary source role.
@@ -85,22 +87,22 @@ object HtmlTemplateLibrary {
 
     // Whether a template has the name.
     membership(name is string) is bool {
-        for origin -> item {
-            if item.name() == name {
-                return true;
-            }
-        }
-        false;
+        self.positions().has(name);
     }
 
     // The template of the name; MissingHtmlTemplate when none.
     template(name is string) is HtmlTemplate {
-        for origin -> item {
-            if item.name() == name {
-                return item.template();
-            }
-        }
-        throw MissingHtmlTemplate.name(name);
+        let position = self.positions()[name] else -1;
+        confirm position >= 0 else throw MissingHtmlTemplate.name(name);
+        origin[position].template();
+    }
+
+    // Where each name is, for lookups by name (#178).
+    hidden positions() is %string:int {
+        once let positions = HtmlTemplateLibraryIndex(origin.map() -> item {
+            item.name();
+        }).positions();
+        positions;
     }
 
     // Every name, in order.
@@ -125,17 +127,32 @@ hidden object HtmlTemplateLibrarySnapshot {
         let snapshot is @NamedHtmlTemplate = (0..size).map() -> index {
             source.item(index);
         };
-        for (0..size) -> index {
-            for (0..index) -> previous {
-                confirm snapshot[index].name() != snapshot[previous].name()
-                    else throw DuplicateHtmlTemplate.name(snapshot[index].name());
-            }
-        }
+        let seen is %string:bool = [:];
+        snapshot.reduce(seen) -> names, item {
+            confirm !names.has(item.name()) else throw DuplicateHtmlTemplate.name(item.name());
+            names + [item.name(): true];
+        };
         origin = snapshot;
     }
 
     items() is @NamedHtmlTemplate {
         origin;
+    }
+}
+
+// Where each name is in a library.
+hidden object HtmlTemplateLibraryIndex {
+    has names is @string;
+
+    HtmlTemplateLibraryIndex(names is @string) {
+        self.names = names;
+    }
+
+    positions() is %string:int {
+        let none_here is %string:int = [:];
+        (0..names.size()).reduce(none_here) -> index, position {
+            index + [names[position]: position];
+        };
     }
 }
 
@@ -190,4 +207,23 @@ test "an HTML library reads a map of templates by name" {
     let library = HtmlTemplateLibrary(["card": HtmlTemplate("<p>{{.}}</p>")]);
     test.ok(library.membership("card"));
     test.ok(!library.membership("page"));
+}
+
+test "a repeated HTML name is refused, and names are found by a map (#178)" {
+    test.is(
+        try {
+            HtmlTemplateLibrary(
+                NamedHtmlTemplate(name: "a", value: HtmlTemplate("1")),
+                NamedHtmlTemplate(name: "a", value: HtmlTemplate("2"))
+            );
+            "";
+        }
+        catch DuplicateHtmlTemplate.name(name) {
+            name;
+        },
+        "a"
+    );
+    let library = HtmlTemplateLibrary(["x": HtmlTemplate("<b>{{.}}</b>"), "y": HtmlTemplate("y")]);
+    test.is(library.template("x").source(), "<b>{{.}}</b>");
+    test.ok(library.membership("y") && !library.membership("z"));
 }

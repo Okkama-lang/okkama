@@ -1,0 +1,53 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/read" take DbPage, DbColumnReader;
+import "db/row" take Row, Column, DbRowData, DbRowSchema;
+import "db/statement" take DbLimits;
+import "db/value" take DbValueKind;
+
+// The position of a kind in DbValueKind.
+hidden object Code {
+    Code();
+    of(kind is DbValueKind) is int {
+        match kind {
+            case DbValueKind.null_value { 0; }
+            case DbValueKind.boolean { 1; }
+            case DbValueKind.integer { 2; }
+            case DbValueKind.floating { 3; }
+            case DbValueKind.decimal { 4; }
+            case DbValueKind.text { 5; }
+            case DbValueKind.bytes { 6; }
+        }
+    }
+}
+
+// A native result page of two rows (int, text | int, NULL) read by column readers and as a row.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let floats is @float = [];
+        let blobs is @@byte = [];
+        let page = DbPage(width: 2, kinds: [2, 5, 2, 0], values: [v, 0, 7 + v, 0], floats: floats, texts: ["t" + x], blobs: blobs);
+        let columns is @Column = [Column(index: 0, name: "id", declaration: "INTEGER"), Column(index: 1, name: "name", declaration: "TEXT")];
+        let row = Row(data: DbRowData(schema: DbRowSchema(columns: columns, limits: DbLimits()), page: page, row: 1));
+        let total = DbColumnReader(name: "id", page: page, at: 0).integer() + DbColumnReader(name: "name", state: page.cell(1)).checked_text().length()
+            + row.integer("id") + Code().of(row.item(1).kind()) + row.size();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

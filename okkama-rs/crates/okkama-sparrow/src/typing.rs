@@ -292,10 +292,14 @@ impl<'a> Typing<'a> {
             }
             I::Move { dst, source } => {
                 // `move` также переименовывает: succ.take (^C → C), retag
-                // (@never → @T), map.retag (%never:never → %K:V), cap.make (C → cap of C).
+                // (@never → @T), map.retag (%never:never → %K:V), cap.make (C → cap of C),
+                // future.handoff (future<^C> → future<C>, #790: the same Future, its `C` result).
                 let (from, to) = (self.ty(*source), self.ty(dst.0));
                 let renamed = match (from, to) {
                     (Type::Successor(a), Type::Object(b)) => a == b,
+                    (Type::Future(Some(a)), Type::Future(Some(b))) => {
+                        matches!((self.resolve(*a), self.resolve(*b)), (Type::Successor(x), Type::Object(y)) if x == y)
+                    }
                     // Only `never` parts of an untagged literal change, at any depth (#297).
                     (Type::Array(_), Type::Array(_)) | (Type::Map(..), Type::Map(..)) => self.fits_untagged(from, to),
                     (Type::Object(o), Type::Cap(c)) => self.program.caps.get(c.0 as usize).is_some_and(|cap| cap.owner == *o),
@@ -451,7 +455,7 @@ impl<'a> Typing<'a> {
             }
             I::RatPart { dst, value, .. } => {
                 self.expect(*value, &rat)?;
-                self.define(dst.0, &str_, "rat.part")
+                self.define(dst.0, &int, "rat.part")
             }
             I::StrConcat { dst, left, right } => {
                 self.expect(*left, &str_)?;
@@ -894,7 +898,7 @@ impl<'a> Typing<'a> {
                     None => Err("call.cap of a void field".into()),
                 }
             }
-            I::Await { dst, future } => {
+            I::Await { dst, future } | I::AwaitTake { dst, future } => {
                 if !self.function.is_async {
                     return Err("await is allowed only in async functions".into());
                 }
@@ -967,6 +971,17 @@ impl<'a> Typing<'a> {
                 self.expect(*region, &Type::Region)?;
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "region.settle_unwind")
+            }
+            I::ResourcePin { value } | I::ResourceLeave { value } | I::ResourceSettle { value } => self.ownable(*value),
+            I::ResourceUnwind { dst, value, failure } => {
+                self.ownable(*value)?;
+                self.expect(*failure, &Type::Failure)?;
+                self.define(dst.0, &Type::Failure, "resource.unwind")
+            }
+            I::ResourceSettleUnwind { dst, value, failure } => {
+                self.ownable(*value)?;
+                self.expect(*failure, &Type::Failure)?;
+                self.define(dst.0, &Type::Failure, "resource.settle_unwind")
             }
             I::FailSecondary { dst, primary, cleanup } => {
                 self.expect(*primary, &Type::Failure)?;

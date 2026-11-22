@@ -1,0 +1,47 @@
+module bible/race v1.0.0;
+
+// Raced takes the first outcome to settle and cancels the rest;
+// FirstSuccessful passes over failures to the first success, and throws the
+// first failure when every origin fails.
+import "async/collect" take Raced, FirstSuccessful, NoFutures;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+enum Broken is Error = (broken, again);
+
+object Waiter {
+    has event is Event;
+    Waiter(:event);
+    async value(v is int) is int {
+        defer Stdout().writeln("waiter " + v.string() + " ends");
+        await event.wait();
+        v;
+    }
+}
+
+object Source {
+    Source();
+    async value(label is string, v is int) is int {
+        Stdout().writeln(label);
+        v;
+    }
+    async broken(which is int) is int {
+        Stdout().writeln("broken " + which.string());
+        if which == 1 { throw Broken.broken; } else { throw Broken.again; }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let never = Event();
+    let race is @Future<int> = [Waiter(event: never).value(1), Source().value("fast", 2)];
+    out.writeln("winner " + (await Raced(origins: race).winner()).string());
+    let mixed is @Future<int> = [Source().broken(1), Source().value("ok", 3)];
+    out.writeln("first success " + (await FirstSuccessful(origins: mixed).outcome()).string());
+    let failing is @Future<int> = [Source().broken(1), Source().broken(2)];
+    out.writeln(try { (await FirstSuccessful(origins: failing).outcome()).string(); }
+        catch Broken.broken { "first failure: broken"; } catch Broken.again { "first failure: again"; });
+    let nothing is @Future<int> = [];
+    out.writeln(try { (await Raced(origins: nothing).winner()).string(); } catch e is NoFutures { "no futures"; });
+    0;
+}

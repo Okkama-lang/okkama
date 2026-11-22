@@ -1,3 +1,3 @@
 module app v1.0.0;
 
-enum Color = (red, blue); main() is int { Color.blue ?? .red: 1 !! .blue: 0; }
+enum Color = (red, blue); main() is int { match Color.blue { case Color.red: 1; case Color.blue: 0; }; }

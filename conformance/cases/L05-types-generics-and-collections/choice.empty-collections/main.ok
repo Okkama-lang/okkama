@@ -8,7 +8,7 @@ object Probe {
     // Never evaluated: a literal condition runs only the selected branch.
     unused() is @int { panic "the other branch ran"; }
 
-    pick(c is bool) is @int { c ?? [1] !! []; }
+    pick(c is bool) is @int { if c { [1]; } else { []; }; }
 }
 
 main() is int {
@@ -16,15 +16,15 @@ main() is int {
     let p = Probe();
     let c = false;
     // A literal condition, an empty collection on the selected side.
-    out.writeln(((false ?? [1] !! []) == []).string() + " " + ((true ?? [] !! [1]) == []).string()
-        + " " + ((false ?? ["k": 1] !! [:]) == [:]).string() + " " + ((false ?? [[1]] !! []) == []).string());
+    out.writeln(((if false { [1]; } else { []; }) == []).string() + " " + ((if true { []; } else { [1]; }) == []).string()
+        + " " + ((if false { ["k": 1]; } else { [:]; }) == [:]).string() + " " + ((if false { [[1]]; } else { []; }) == []).string());
     // The same with a variable condition.
-    out.writeln(((c ?? [1] !! []) == []).string() + " " + ((!c ?? [] !! [1]) == []).string());
+    out.writeln(((if c { [1]; } else { []; }) == []).string() + " " + ((if !c { []; } else { [1]; }) == []).string());
     // Typed bindings, action results, method calls and a later concatenation.
-    let typed is @int = false ?? [1] !! [];
-    out.writeln(typed.size().string() + " " + p.pick(false).size().string() + " " + ((true ?? [] !! [1]) + [5]).size().string());
+    let typed is @int = if false { [1]; } else { []; };
+    out.writeln(typed.size().string() + " " + p.pick(false).size().string() + " " + ((if true { []; } else { [1]; }) + [5]).size().string());
     // Only the selected branch runs.
-    out.writeln(((true ?? [] !! p.unused()) == []).string() + " " + (false ?? p.unused() !! [7])[0].string());
+    out.writeln(((if true { []; } else { p.unused(); }) == []).string() + " " + (if false { p.unused(); } else { [7]; })[0].string());
     // An ordinary if keeps working.
     out.writeln(((if false { [1]; } else { []; }) == []).string());
     0;

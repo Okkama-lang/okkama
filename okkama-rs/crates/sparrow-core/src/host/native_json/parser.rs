@@ -11,8 +11,12 @@ pub(super) struct ParseError {
     pub duplicate: Option<String>,
 }
 type Parsed<T> = Result<T, ParseError>;
+/// A cursor over UTF-8 source (#468): positions are byte offsets. JSON's structure is ASCII, so every structural
+/// step moves one byte; only string contents decode whole characters. Errors report byte offsets, which the
+/// caller turns into character offsets.
 struct Parser<'a> {
-    source: &'a [char],
+    source: &'a [u8],
+    text: &'a str,
     position: usize,
     scratch: String,
 }
@@ -25,8 +29,13 @@ impl Parser<'_> {
         }
     }
 
+    /// The character starting at byte `position` (structural characters are single bytes).
     fn at(&self, position: usize) -> Option<char> {
-        self.source.get(position).copied()
+        let byte = *self.source.get(position)?;
+        if byte < 0x80 {
+            return Some(byte as char);
+        }
+        self.text.get(position..).and_then(|rest| rest.chars().next())
     }
 
     fn skip_whitespace(&mut self) {
@@ -40,8 +49,8 @@ impl Parser<'_> {
             return None;
         }
         let mut value = 0;
-        for c in &self.source[position..position + 4] {
-            value = value * 16 + c.to_digit(16).filter(|_| *c <= 'f')?;
+        for &byte in &self.source[position..position + 4] {
+            value = value * 16 + (byte as char).to_digit(16)?;
         }
         Some(value)
     }
@@ -66,8 +75,8 @@ impl Parser<'_> {
         };
         while self.position < self.source.len() {
             let offset = self.position;
-            let character = self.source[self.position];
-            self.position += 1;
+            let character = self.at(self.position).expect("inside the source");
+            self.position += character.len_utf8();
             if character == '"' {
                 return Ok(());
             }
@@ -175,12 +184,9 @@ impl Parser<'_> {
             while self.digit() {
                 self.position += 1;
             }
-            written = self.source[exponent_start..self.position].iter().collect();
+            written = self.text[exponent_start..self.position].to_string();
         }
-        let digits: String = self.source[whole_start..whole_end]
-            .iter()
-            .chain(&self.source[fraction_start..fraction_end])
-            .collect();
+        let digits: String = [&self.text[whole_start..whole_end], &self.text[fraction_start..fraction_end]].concat();
         let written = written.strip_prefix('+').unwrap_or(&written);
         let written = BigInt::parse_bytes(written.as_bytes(), 10).expect("exponent digits");
         let mut exponent = written - BigInt::from(fraction_end - fraction_start);
@@ -196,17 +202,12 @@ impl Parser<'_> {
                 duplicate: None,
             });
         }
-        Ok(self.source[start..self.position].iter().collect())
+        Ok(self.text[start..self.position].to_string())
     }
 
     fn literal(&mut self, word: &str) -> bool {
         let end = self.position + word.len();
-        if end > self.source.len()
-            || !self.source[self.position..end]
-                .iter()
-                .copied()
-                .eq(word.chars())
-        {
+        if end > self.source.len() || &self.source[self.position..end] != word.as_bytes() {
             return false;
         }
         self.position = end;
@@ -239,9 +240,11 @@ enum Frame {
         seen: HashSet<Rc<str>>,
     },
 }
-pub(super) fn parse(source: &[char], maximum_depth: &BigInt) -> Parsed<(Vec<Node>, u64)> {
+pub(super) fn parse(text: &str, maximum_depth: &BigInt) -> Parsed<(Vec<Node>, u64)> {
+    let source = text.as_bytes();
     let mut p = Parser {
         source,
+        text,
         position: 0,
         scratch: String::new(),
     };

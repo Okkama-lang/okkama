@@ -1,0 +1,36 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "mime/media_type" take MimeParameters, MimeParameter, MimeScanning, MimeToken;
+import "mime/word" take DecodedWords, ParsedEncodedWord;
+
+// Media types and dispositions scanned into parts; repeated parameter values; a token; RFC 2047 encoded words decoded.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scan = MimeScanning(origin: "Text/HTML; Charset=\"utf-8\"; level=" + x, maximum_parameters: 8, maximum_bytes: 1000);
+        let parsed = scan.media_type();
+        let disposition = MimeScanning(origin: "attachment; filename=\"r" + x + ".pdf\"", maximum_parameters: 8, maximum_bytes: 1000).disposition();
+        let params = MimeParameters(MimeParameter(name: "k", value: "1"), MimeParameter(name: "k", value: x), MimeParameter(name: "j", value: "2"));
+        let words = DecodedWords("=?utf-8?B?" + ["0J/RgNC40LLQtdGC", "aGVsbG8="][i % 2] + "?= =?utf-8?Q?_w" + x + "?=");
+        let total = parsed.type().length() + 10 * parsed.subtype().length() + 100 * parsed.parameters().entries().size()
+            + 1000 * disposition.type().length() + 10000 * params.values("k").size() + 100000 * MimeToken("tok" + x).string().length()
+            + 1000000 * words.string().length() + 10000000 * ParsedEncodedWord("=?utf-8?Q?a=3Db" + x + "?=", 0).string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

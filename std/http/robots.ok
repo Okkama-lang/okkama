@@ -150,7 +150,7 @@ object RobotsPolicy {
     RobotsPolicy(origin is string) {
         confirm Utf8Encoded(origin).bytes().size() <= 524288
             else throw RobotsLimitExceeded.kind("bytes");
-        let text = if origin != "" && origin.slice(0, 1) == "﻿" {
+        let text = if origin != "" && origin.starts_with("﻿") {
             origin.slice(1, origin.length());
         }
         else {
@@ -504,9 +504,9 @@ hidden object RobotsPattern {
     has weight is int;
 
     RobotsPattern(origin is string) {
-        confirm origin != "" && origin.length() <= 8192 && origin.slice(0, 1) == "/"
+        confirm origin != "" && origin.length() <= 8192 && origin.starts_with("/")
             else throw InvalidRobots.because("path pattern");
-        let terminal = origin.slice(origin.length() - 1, origin.length()) == "$";
+        let terminal = origin.ends_with("$");
         let body = if terminal {
             origin.slice(0, origin.length() - 1);
         }
@@ -521,7 +521,7 @@ hidden object RobotsPattern {
         };
         value = compiled;
         anchored = terminal;
-        wildcard = compiled.split("*").size() > 1;
+        wildcard = compiled.contains("*");
         weight = compiled.replace("*", "").length();
     }
 

@@ -1,0 +1,29 @@
+module bible/closures v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Apply {
+    has input is int;
+    Apply(:input);
+    value(operation is (int) is int) is int { operation(input); }
+}
+
+object Pipeline {
+    has steps is @(int) is int;
+    Pipeline(:steps);
+    run(value is int) is int { steps.reduce(value) -> current, step { step(current); }; }
+}
+
+main() is int {
+    let out = Stdout();
+    let make_adder = (amount is int) is (int) is int {
+        (value is int) is int { value + amount; };
+    };
+    let add_ten = make_adder(10);
+    let double = (value is int) is int { value * 2; };
+    out.writeln(add_ten(5).string() + " " + Apply(input: 21).value(double).string());
+    out.writeln(Apply(input: 4).value(operation: (value is int) is int { value * value; }).string());
+    let pipeline = Pipeline(steps: [add_ten, double, make_adder(-1)]);
+    out.writeln(pipeline.run(1).string());
+    0;
+}

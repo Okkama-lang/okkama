@@ -11,6 +11,8 @@
 //! | `hidden-error` | публичное действие бросает `hidden` error enum: снаружи его не поймать по типу |
 //! | `non-exhaustive-match` | `match` по enum без payload без `else` пропускает варианты (для payload-enum это ошибка анализа) |
 //!
+//! | `missing-docs` | отсутствует документация публичного объявления; ошибка только в завершённых волнах std |
+//!
 //! Правила намеренно консервативны: ложное предупреждение хуже пропущенного.
 
 use std::collections::HashSet;
@@ -609,8 +611,7 @@ fn walk_expr(expr: &thir::Expr, visit: &mut dyn FnMut(&thir::Expr)) {
                 | Callee::Builtin { receiver, .. } => walk_expr(receiver, visit),
                 Callee::Ctor { .. }
                 | Callee::Native(_)
-                | Callee::Test(_)
-                | Callee::FakeStorage(_) => {}
+                | Callee::Test(_) => {}
             }
             for arg in args {
                 walk_expr(arg, visit);
@@ -978,4 +979,17 @@ fn nested_in_expr(expr: &thir::Expr, visit: &mut dyn FnMut(&thir::Block)) {
     for child in children {
         nested_in_expr(child, visit);
     }
+}
+
+
+/// Documentation coverage uses the canonical public model, not token or
+/// comment counts. Only completed std waves escalate warnings to errors.
+pub fn missing_docs(source: &SourceFile, doc: &crate::doc::ModuleDoc, loader: &mut dyn crate::lowering::ModuleLoader) -> Vec<Diagnostic> {
+    let severity = if crate::doc::coverage::enforced(doc, loader) { Severity::Error } else { Severity::Warning };
+    let lines = LineIndex::new(source.text());
+    doc.coverage().missing.into_iter().map(|missing| Diagnostic {
+        path: source.name().to_string(), range: lines.range(missing.span), severity,
+        message: format!("public declaration `{}` has no documentation", missing.name),
+        code: Some("missing-docs".into()), unnecessary: false,
+    }).collect()
 }

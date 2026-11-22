@@ -1,0 +1,41 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/tag" take LocaleSubtag;
+
+// The BCP 47 roles a subtag can play, as bits; its title-case length.
+hidden object Shape {
+    Shape();
+    bits(origin is string) is int {
+        let t = LocaleSubtag(origin);
+        (if t.language() { 1; } else { 0; }) + (if t.script() { 2; } else { 0; }) + (if t.region() { 4; } else { 0; })
+            + (if t.variant() { 8; } else { 0; }) + (if t.extlang() { 16; } else { 0; }) + (if t.extension() { 32; } else { 0; })
+            + t.title().characters()[0].code();
+    }
+}
+
+// Three subtags of sixteen tested for every BCP 47 role (language, script, region, variant, extlang, extension) and title-cased.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let pool is @string = ["en", "Latn", "DE", "1996", "yue", "abc12", "x", "u1", "t0", "419", "rozaj", "a1b2c3d4e", "ca", "ZH", "9", "h0"];
+        let p = pool.size();
+        let picks is @string = [pool[i % p], pool[(i + 5) % p], pool[(i * 7 + 3) % p]];
+        let s = Shape();
+        let total = s.bits(picks[0]) + s.bits(picks[1]) + s.bits(picks[2]);
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,40 @@
+module bible/enums v1.0.0;
+
+// A payload-free enum names a closed set; a variant carries data in some of
+// its cases. match takes either apart, and the compiler checks the cases.
+import "io/stdout" take Stdout;
+
+enum Priority = (low, normal, urgent);
+
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+
+object Order {
+    has number is int;
+    has priority is Priority;
+    has stage is Stage;
+    Order(:number, :priority, :stage);
+
+    line() is string {
+        let flag = match priority { case Priority.urgent: "!"; case _: " "; };
+        let state = match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+            case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+            case Stage.cancelled(reason) { "cancelled: " + reason; }
+        };
+        flag + " #" + number.string() + " " + state;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let orders is @Order = [
+        Order(number: 1, priority: Priority.normal, stage: Stage.draft),
+        Order(number: 2, priority: Priority.urgent, stage: Stage.paid(4250)),
+        Order(number: 3, priority: Priority.low, stage: Stage.shipped("DHL", "JD0142")),
+        Order(number: 4, priority: Priority.normal, stage: Stage.cancelled("out of stock"))
+    ];
+    for orders -> order { out.writeln(order.line()); }
+    0;
+}

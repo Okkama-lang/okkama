@@ -21,8 +21,8 @@ import "io/stream" take Closing;
 // precondition.
 //
 // Each successful acquisition creates one `Permit`. A permit has no public
-// constructor, returns its capacity exactly once, and supports lexical cleanup
-// with `defer permit.close()`. Cancelling a waiting acquisition removes it from
+// constructor and returns its capacity exactly once: when its owner goes, or
+// earlier with `close()` (#846). Cancelling a waiting acquisition removes it from
 // the queue without consuming capacity.
 //
 // The initial count must be positive. Use an unbuffered `Channel` for a
@@ -51,6 +51,11 @@ object Semaphore {
 
 // One taken permit.
 object Permit does Closing {
+    // A permit nobody closed is closed when its owner goes (#846).
+    destroy {
+        self.close();
+    }
+
     // Whether the permit is closed.
     closed() is bool {
         panic "Permit.closed is a VM intrinsic";
@@ -85,4 +90,16 @@ async test "permits are counted and given back" {
         },
         -1
     );
+}
+
+async test "a permit nobody closed is given back once when its owner goes" {
+    let semaphore = Semaphore(permits: 2);
+    {
+        let first = await semaphore.permit();
+        let second = await semaphore.permit();
+        test.is(semaphore.permits(), 0);
+        first.close();
+        test.is(semaphore.permits(), 1);
+    }
+    test.is(semaphore.permits(), 2);
 }

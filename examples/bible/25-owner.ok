@@ -1,0 +1,87 @@
+module bible/owner v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving;
+import "async/collect" take AllFutures;
+import "collections/sequence" take Sequencing;
+
+// State that several tasks update lives in one task, its owner. The others
+// hold only the sending end of the owner's inbox.
+enum Visit = (page(path is string), summary(reply is Sending<string>), stop);
+
+object Tally {
+    has total is int;
+    has home is int;
+
+    Tally(:total, :home);
+
+    counted(path is string) is ^Tally {
+        ^total = total + 1;
+        ^home = if path == "/" { home + 1; } else { home; };
+    }
+
+    summary() is string {
+        total.string() + " pages, " + home.string() + " home";
+    }
+
+    total() is int {
+        total;
+    }
+}
+
+object Visits {
+    has inbox is Receiving<Visit>;
+
+    Visits(:inbox);
+
+    async run() is int {
+        let tally = Tally(total: 0, home: 0);
+        loop {
+            let visit = await inbox.item();
+            match visit {
+                case Visit.page(path) {
+                    tally = tally.counted(path);
+                }
+                case Visit.summary(reply) {
+                    await reply.send(tally.summary());
+                }
+                case Visit.stop {
+                    last;
+                }
+            }
+        }
+        tally.total();
+    }
+}
+
+object Reader {
+    has paths is @string;
+    has out is Sending<Visit>;
+
+    Reader(:paths, :out);
+
+    async read() is int {
+        for paths -> path {
+            await out.send(Visit.page(path));
+        }
+        paths.size();
+    }
+}
+
+async main() is int {
+    let inbox is Channel<Visit> = Channel(capacity: 4);
+    let owner = spawn Visits(inbox: inbox.receiving()).run();
+    let readers is @Future<int> = [
+        spawn Reader(paths: ["/", "/news", "/"], out: inbox.sending()).read(),
+        spawn Reader(paths: ["/about", "/"], out: inbox.sending()).read(),
+    ];
+    let all is AllFutures<int> = AllFutures(origins: readers);
+    let sent is Sequencing<int> = await all.results();
+    let replies is Channel<string> = Channel(capacity: 1);
+    let desk = inbox.sending();
+    await desk.send(Visit.summary(replies.sending()));
+    Stdout().writeln("summary: " + (await replies.receiving().item()));
+    await desk.send(Visit.stop);
+    Stdout().writeln("owner: " + (await owner).string() + " pages from " + sent.size().string() + " readers");
+    0;
+}

@@ -1,0 +1,21 @@
+module bible/xml v1.0.0;
+
+// Reading a feed by element and attribute name, then writing a document
+// from nodes: the tree is a value, and xml() is its text.
+import "xml/parse" take ParsedXml;
+import "xml/node" take XmlDocument, XmlElement, XmlText, XmlAttribute;
+import "xml/name" take XmlName;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let feed = ParsedXml("<feed version=\"2\"><item><title>Tea &amp; milk</title></item>" +
+        "<item><title>Bread</title></item></feed>").document().root();
+    out.writeln("version " + feed.attribute("version"));
+    for feed.children("item") -> item {
+        out.writeln("- " + item.text("title"));
+    }
+    let note = XmlElement(XmlName("note"), [XmlAttribute(XmlName("lang"), "en")], [XmlText("1 < 2")]);
+    out.writeln(XmlDocument(note).xml());
+    0;
+}

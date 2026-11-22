@@ -2,7 +2,7 @@ module url/percent v1.0.0;
 
 // Percent-encoding of URL parts (RFC 3986).
 //
-//     PercentEncoded("a b/c", UrlComponent.path_segment).string();   // "a%20b%2Fc"
+//     PercentEncoded(origin: "a b/c", component: UrlComponent.path_segment).string();   // "a%20b%2Fc"
 //     PercentDecoded("a%20b").string();                               // "a b"
 //
 // What is kept as it is depends on the component the text goes in.
@@ -187,4 +187,16 @@ test "a broken escape names its offset" {
         found;
     };
     test.is(offset, 6);
+}
+
+test "plain path segment encoding retains data boundaries" {
+    test.is(
+        PercentEncoded(origin: "/?#%2F é", component: UrlComponent.path_segment).string(),
+        "%2F%3F%23%252F%20%C3%A9"
+    );
+    test.is(
+        PercentEncoded(origin: "AZaz09-._~!$&'()*+,;=:@", component: UrlComponent.path_segment).string(),
+        "AZaz09-._~!$&'()*+,;=:@"
+    );
+    test.is(PercentDecoded("%2F%3F%23%252F%20%C3%A9").string(), "/?#%2F é");
 }

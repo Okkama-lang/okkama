@@ -85,15 +85,15 @@ pub enum Reach {
 /// `every_native_is_classified` fails until then.
 const PURE: &[&str] = &[
     "runtime/bigint", "runtime/binary", "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation", "runtime/compression",
-    "runtime/collections", "runtime/crypto", "runtime/csv_state", "runtime/db", "runtime/debug",
+    "runtime/collections", "runtime/crypto", "runtime/db", "runtime/debug",
     "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex", "runtime/host_crypto",
-    "runtime/hpack", "runtime/html", "runtime/idna", "runtime/io_decorators", "runtime/json",
+    "runtime/hpack", "runtime/idna", "runtime/io_decorators", "runtime/json",
     "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution",
     "runtime/regex", "runtime/secret", "runtime/single_byte", "runtime/statistics",
-    "runtime/template", "runtime/testing", "runtime/time_format", "runtime/time_zone",
-    "runtime/toml", "runtime/unicode_character", "runtime/unicode_normalization",
-    "runtime/url_text", "runtime/utf", "runtime/uuid", "runtime/xml", "runtime/stdio", "runtime/base32",
+    "runtime/template", "runtime/testing", "runtime/time_zone",
+    "runtime/unicode_character", "runtime/unicode_normalization",
+    "runtime/utf", "runtime/uuid", "runtime/stdio", "runtime/base32",
     "runtime/base64", "runtime/base85", "runtime/x509",
 ];
 
@@ -378,6 +378,22 @@ mod tests {
             .map(|native| native.symbol())
             .collect();
         assert!(unclassified.is_empty(), "natives in no group and not pure: {unclassified:?}");
+    }
+
+    /// The compiler's companion catalogue (#569 C7) and the host permission groups agree on what
+    /// reaches the host: a group exactly for a host effect, pure for computation and the standard streams.
+    #[test]
+    fn the_companion_catalogue_agrees_with_the_groups() {
+        use okkama_runtime_abi::catalogue::{classify, Effect};
+        for &native in Native::ALL {
+            let effect = classify(native).expect("classified").effect;
+            let agrees = match Reach::of(native) {
+                Reach::Group(_) => effect == Effect::Host,
+                Reach::Pure => matches!(effect, Effect::Pure | Effect::Stdio),
+                Reach::Unclassified => false,
+            };
+            assert!(agrees, "{}: {:?} vs {effect:?}", native.symbol(), Reach::of(native));
+        }
     }
 
     #[test]

@@ -26,7 +26,6 @@ import "http/body" take EmptyBody;
 import "http/http1_head" take ParsedHttp1RequestHead;
 import "http/header" take Headers, HeaderName;
 import "collections/sequence" take Sequencing;
-import "numbers/bigint" take BigInt;
 import "io/stream" take AsyncReading, AsyncWriting, Closing, InvalidReadLimit, ByteSource;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
@@ -516,7 +515,6 @@ hidden object Http1SessionReading does BodyReading {
             complete: complete,
             busy: busy
         );
-        defer await cleanup.close();
         lease.reads().replace([group]);
         let pending = origin.bytes(limit);
         group.start(pending);
@@ -576,7 +574,7 @@ hidden object Http1SessionReadCleanup {
         self.busy = busy;
     }
 
-    async close() is void {
+    async destroy {
         let release = Http1SessionReadRelease(groups: lease.reads(), busy: busy);
         defer release.close();
         if !complete.ready() {
@@ -632,7 +630,7 @@ hidden object Http1SessionBody does BodyOpening {
         opened = Atomic(false);
     }
 
-    length() is BigInt {
+    length() is int {
         plan.length();
     }
 

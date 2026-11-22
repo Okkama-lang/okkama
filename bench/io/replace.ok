@@ -1,0 +1,98 @@
+module bench/io v1.0.0;
+
+// Whole-file write, write + sync and atomic replace, small and large (#122,
+// #934). Disk timing depends on the device and its cache, so this is not part
+// of the micro protocol (bench/micro measures CPU constructs): run it on the
+// machine in question and compare within one run.
+//
+//     okkama run bench/io/replace.ok DIR [COUNT]
+//
+// Prints one line per case: its name, the size, the count and microseconds per
+// operation on the monotonic clock.
+
+import "fs/file" take File, FileMode;
+import "fs/path" take Path;
+import "cli/arguments" take ProcessArguments;
+import "io/stdout" take Stdout;
+import "time/clock" take SystemClock;
+import "strings/parse" take Number;
+
+object Cases {
+    has directory is Path;
+
+    Cases(directory is Path) {
+        self.directory = directory;
+    }
+
+    write(bytes is @byte, count is int, sync is bool) is int {
+        let path = directory.child("bench-write.bin");
+        let clock = SystemClock();
+        let start = clock.monotonic_instant();
+        for 0..count -> i {
+            let file = File(path: path, mode: FileMode.writing);
+            file.binary().write(bytes);
+            if sync {
+                file.binary().sync();
+            }
+            file.close();
+        }
+        let elapsed = clock.monotonic_instant().minus(start);
+        (elapsed::Span::seconds * 1000000.rat() / count.rat()).int();
+    }
+
+    replace(bytes is @byte, count is int) is int {
+        let path = directory.child("bench-replace.bin");
+        let clock = SystemClock();
+        let start = clock.monotonic_instant();
+        for 0..count -> i {
+            File(path: path).binary().replace(bytes);
+        }
+        let elapsed = clock.monotonic_instant().minus(start);
+        (elapsed::Span::seconds * 1000000.rat() / count.rat()).int();
+    }
+}
+
+main() is int {
+    let arguments = ProcessArguments().strings();
+    let directory = Path(arguments[0]);
+    let count = if arguments.size() > 1 {
+        Number(arguments[1]).int();
+    }
+    else {
+        100;
+    };
+    let cases = Cases(directory);
+    let out = Stdout();
+    for [1024, 1048576] -> size {
+        let bytes is @byte = (0..size).map() -> i {
+            byte(i % 251);
+        };
+        let times = if size > 65536 {
+            (count / 10).int() + 1;
+        }
+        else {
+            count;
+        };
+        out.writeln(
+            "write        " + size.string() + " x" + times.string() + ": " + cases.write(
+                bytes,
+                times,
+                false
+            ).string() + " us/op"
+        );
+        out.writeln(
+            "write+sync   " + size.string() + " x" + times.string() + ": " + cases.write(
+                bytes,
+                times,
+                true
+            ).string() + " us/op"
+        );
+        out.writeln(
+            "replace      " + size.string() + " x" + times.string() + ": " + cases.replace(
+                bytes,
+                times
+            ).string() + " us/op"
+        );
+    }
+    0;
+}

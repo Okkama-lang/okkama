@@ -1,5 +1,6 @@
 module numbers/float v1.0.0;
 
+import "numbers/bigint" take BoundedPower;
 // The shortest decimal that reads back as exactly a float.
 //
 //     ShortestFloat(0.1).decimal().string();       // "1e-1": 0.1, not 0.1000000000000000055…
@@ -10,7 +11,6 @@ module numbers/float v1.0.0;
 import "encoding/binary" take FloatBytes, Binary, FloatWidth, Signedness;
 import "encoding/utf" take ByteOrder;
 import "runtime/format" take sprintf_values;
-import "numbers/bigint" take BigInt;
 import "numbers/bigrational" take BigRational;
 import "math/decimal" take Decimal;
 import "compare" take Order;
@@ -111,23 +111,26 @@ hidden object Binary64RoundingInterval {
 
     // numerator · 2^power, exactly.
     hidden ratio(numerator is int, power is int) is BigRational {
-        let whole = BigInt(numerator);
+        let whole = numerator;
         if power >= 0 {
-            BigRational(numerator: (whole * BigInt(2).power(power, 1100)), denominator: BigInt(1));
+            BigRational(
+                numerator: (whole * BoundedPower(base: 2).int(power, 1100)),
+                denominator: 1
+            );
         }
         else {
-            BigRational(numerator: whole, denominator: BigInt(2).power(-power, 1100));
+            BigRational(numerator: whole, denominator: BoundedPower(base: 2).int(-power, 1100));
         }
     }
 }
 
 hidden object FloatDecimalCandidate {
-    has numerator, denominator is BigInt;
+    has numerator, denominator is int;
 
     FloatDecimalCandidate(origin is Decimal) {
         let coefficient = origin.coefficient();
         let absolute = if coefficient.sign() < 0 {
-            (BigInt(0) - coefficient);
+            ((0) - coefficient);
         }
         else {
             coefficient;
@@ -135,13 +138,13 @@ hidden object FloatDecimalCandidate {
         let exponent = origin.exponent();
         confirm exponent >= -400 && exponent <= 400 else throw InvalidFloatRepresentation.invalid;
         if exponent >= 0 {
-            let power = BigInt(10).power(exponent, 1400);
+            let power = BoundedPower(base: 10).int(exponent, 1400);
             numerator = (absolute * power);
-            denominator = BigInt(1);
+            denominator = 1;
         }
         else {
             numerator = absolute;
-            denominator = BigInt(10).power(-exponent, 1400);
+            denominator = BoundedPower(base: 10).int(-exponent, 1400);
         }
     }
 

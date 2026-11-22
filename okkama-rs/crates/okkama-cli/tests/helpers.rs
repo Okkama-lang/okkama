@@ -6,13 +6,19 @@ use std::process::Command;
 
 /// Helper names counted while running `name`, with its stdout and status.
 fn helpers_of(name: &str, budget: &[&str]) -> (BTreeSet<String>, String, Option<i32>) {
+    helpers_with(name, budget, &[])
+}
+
+/// `helpers_of` with extra environment variables.
+fn helpers_with(name: &str, budget: &[&str], env: &[(&str, &str)]) -> (BTreeSet<String>, String, Option<i32>) {
     let program = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/helpers/{name}.ok"));
     // A step budget makes machine code poll, which reaches the poll helper.
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", "sparrow", "--max-steps", "1000000000000"])
+        .args(["run", "--max-steps", "1000000000000"])
         .args(budget)
         .arg(&program)
         .env("SPARROW_CORE_STATS", "1")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -37,6 +43,11 @@ fn every_runtime_helper_runs() {
     let (overflow, _, status) = helpers_of("overflow", &["--max-memory", "64M"]);
     assert_eq!(status, Some(1));
     seen.extend(overflow);
+    // The development counters of #912 are emitted only when OKKAMA_DEV asks for them.
+    let out = std::env::temp_dir().join(format!("okkama-helpers-dev-{}", std::process::id()));
+    let (dev, _, _) = helpers_with("main", &[], &[("OKKAMA_DEV", "runtime"), ("OKKAMA_DEV_OUT", out.to_str().unwrap())]);
+    let _ = std::fs::remove_dir_all(&out);
+    seen.extend(dev);
     let missing: Vec<&str> = sparrow_core::jit::HELPERS
         .iter()
         .map(|(name, _)| *name)

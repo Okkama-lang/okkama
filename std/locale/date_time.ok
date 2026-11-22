@@ -109,7 +109,8 @@ hidden object TimeStyleIndex {
 object GregorianLocaleData {
     has table is CldrGregorian;
     has numbers is NumberLocaleData;
-    has fields, rules, tags is @string;
+    has profile is int;
+    has rules, tags is @string;
 
     // The data of locale.
     GregorianLocaleData(locale is Locale) {
@@ -139,8 +140,8 @@ object GregorianLocaleData {
         };
         confirm profile >= 0
             else throw InvalidLocalizedDateTime.because("missing pinned Gregorian root");
-        let fields = table.fields(profile);
-        confirm fields.size() == 179
+        // #943: the 179 fields stay in the runtime; a format asks for the few it reads.
+        confirm table.size(profile) == 179
             else throw InvalidLocalizedDateTime.because("Gregorian profile shape");
         let periods = CldrDayPeriods();
         let empty_rules is @string = [];
@@ -156,7 +157,7 @@ object GregorianLocaleData {
         // calendar parent chain (zh-Hant calendar data can inherit from und).
         let language = locale.base_tag().split("-")[0];
         self.table = table;
-        self.fields = fields;
+        self.profile = profile;
         self.rules = if rules.size() > 0 {
             rules;
         }
@@ -184,7 +185,7 @@ object GregorianLocaleData {
 
     // The date pattern of style.
     date(style is DateStyle) is string {
-        table.program(Number(fields[167 + DateStyleIndex(style).index()]).int());
+        table.program(Number(table.field(profile, 167 + DateStyleIndex(style).index())).int());
     }
 
     // The time pattern of style, with a zone or not.
@@ -196,12 +197,12 @@ object GregorianLocaleData {
         else {
             width;
         };
-        table.program(Number(fields[171 + selected]).int());
+        table.program(Number(table.field(profile, 171 + selected)).int());
     }
 
     // How date and time are joined at style.
     combination(style is DateStyle) is string {
-        fields[175 + DateStyleIndex(style).index()];
+        table.field(profile, 175 + DateStyleIndex(style).index());
     }
 
     // A month's name at width, standalone or in a date.
@@ -217,12 +218,12 @@ object GregorianLocaleData {
                 2;
             }
         };
-        fields[(if standalone {
+        table.field(profile, (if standalone {
             36;
         }
         else {
             0;
-        }) + style * 12 + number - 1];
+        }) + style * 12 + number - 1);
     }
 
     // A weekday's name at width, standalone or in a date.
@@ -266,17 +267,17 @@ object GregorianLocaleData {
                 }
             }
         };
-        fields[72 + (if standalone {
+        table.field(profile, 72 + (if standalone {
             28;
         }
         else {
             0;
-        }) + style * 7 + index];
+        }) + style * 7 + index);
     }
 
     // The name of the common era at width.
     era(width is int) is string {
-        fields[128 + (if width <= 3 {
+        table.field(profile, 128 + (if width <= 3 {
             0;
         }
         else {
@@ -286,7 +287,7 @@ object GregorianLocaleData {
             else {
                 2;
             }
-        })];
+        }));
     }
 
     // The day period of time (AM, PM, noon…).
@@ -347,12 +348,12 @@ object GregorianLocaleData {
         else {
             selected;
         };
-        let name = fields[131 + style * 12 + index];
+        let name = table.field(profile, 131 + style * 12 + index);
         if name != "" {
             name;
         }
         else {
-            fields[131 + style * 12 + ordinary];
+            table.field(profile, 131 + style * 12 + ordinary);
         }
     }
 
@@ -408,7 +409,7 @@ object LocalizedZoneObservation {
         confirm name.length() > 0 && name.length() <= 255
             else throw InvalidLocalizedDateTime.because("timezone name length");
         let offset = zone.offset(instant);
-        confirm offset::Span::seconds.denominator() == "1"
+        confirm offset::Span::seconds.denominator() == 1
             && offset::Span::seconds > (-86400).rat()
             && offset::Span::seconds < 86400.rat()
             else throw InvalidLocalizedDateTime.because(
@@ -632,7 +633,7 @@ object LocalizedGmtOffset {
                 "mm",
                 data.number(minute, 2)
             ).replace("ss", data.number(second, 2)) + (if second != 0
-                && pattern.split("s").size() == 1 {
+                && !pattern.contains("s") {
                     (if separator == "" {
                         ":";
                     }

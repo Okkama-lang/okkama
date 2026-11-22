@@ -12,7 +12,6 @@ module archive/metadata v1.0.0;
 // A member may lack a mode or an owner: reading one then throws
 // MissingArchiveMode or MissingArchiveOwnership.
 
-import "numbers/bigint" take BigInt;
 import "fs/stat" take PermissionMode;
 import "time/local_datetime" take LocalDateTime;
 import "time/date" take Date;
@@ -22,14 +21,14 @@ import "time/duration" take Duration, DurationUnit;
 // Who owns a member: user and group names and ids.
 object ArchiveOwnership {
     has user_name, group_name is string;
-    has user_id, group_id is BigInt;
+    has user_id, group_id is int;
 
     // The names and ids as given; ids must not be negative.
     ArchiveOwnership(
         user is string,
         group is string,
-        user_identity is BigInt,
-        group_identity is BigInt
+        user_identity is int,
+        group_identity is int
     ) {
         confirm user_identity.sign() >= 0 && group_identity.sign() >= 0
             else throw InvalidArchiveOwnership.invalid;
@@ -50,12 +49,12 @@ object ArchiveOwnership {
     }
 
     // The user id.
-    user_identity() is BigInt {
+    user_identity() is int {
         user_id;
     }
 
     // The group id.
-    group_identity() is BigInt {
+    group_identity() is int {
         group_id;
     }
 }

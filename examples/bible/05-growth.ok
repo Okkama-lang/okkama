@@ -1,0 +1,53 @@
+module bible/growth v1.0.0;
+
+// Exact numbers grow. Harmonic numbers as rats and as floats, and a year of
+// daily interest kept exact or rounded to cents every day.
+import "io/stdout" take Stdout;
+
+object Harmonic {
+    Harmonic() {}
+
+    exact(n is int) is rat {
+        (1..=n).reduce(0.rat()) -> sum, k { sum + 1 / k; };
+    }
+
+    approximate(n is int) is float {
+        (1..=n).reduce(0.0) -> sum, k { sum + 1.0 / k.float(); };
+    }
+}
+
+object Deposit {
+    has rate is rat;
+    Deposit(:rate);
+
+    // One day of interest, kept exact.
+    grown(balance is rat) is rat {
+        balance + balance * rate / 365.rat();
+    }
+
+    // The same day, rounded half up to a cent, as a bank books it.
+    booked(balance is rat) is rat {
+        int(self.grown(balance) * 100.rat() + 1 / 2).rat() / 100.rat();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let harmonic = Harmonic();
+    out.writeln("H(10) = " + harmonic.exact(10).string());
+    for [10, 20, 40, 80, 160] -> n {
+        let exact = harmonic.exact(n);
+        let error = (exact.float() - harmonic.approximate(n)).abs();
+        out.writeln("H(" + n.string() + "): " + exact.string().length().string() + " characters, float off by "
+            + error.string());
+    }
+    let deposit = Deposit(rate: 5 / 100);
+    let exact = (1..=365).reduce(1000.rat()) -> balance, day { deposit.grown(balance); };
+    let booked = (1..=365).reduce(1000.rat()) -> balance, day { deposit.booked(balance); };
+    out.writeln("exact after a year: " + exact.string().length().string() + " characters, about "
+        + exact.float().string());
+    out.writeln("booked after a year: " + booked.string().length().string() + " characters, "
+        + booked.float().string());
+    out.writeln("difference in cents: " + ((exact - booked) * 100.rat()).float().string());
+    0;
+}

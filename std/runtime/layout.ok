@@ -10,9 +10,6 @@ module runtime/layout v1.0.0;
 // validated value objects from text/layout instead of calling these actions
 // directly.
 
-// origin with prefix before each line.
-native indent(origin is string, prefix is string) is string;
-
 // origin without the indentation its lines share.
 native dedent(origin is string) is string;
 

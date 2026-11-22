@@ -1,0 +1,43 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/date_time" take GregorianLocaleData, DateStyle, TimeStyle, DateTimeStyle;
+import "locale/tag" take Locale;
+import "time/date" take Date, Weekday;
+import "time/day" take TimeOfDay;
+
+// The sum of the code points of a text.
+hidden object Codes {
+    Codes();
+    of(text is string) is int {
+        text.characters().reduce(0) -> sum, c { sum + c.code(); };
+    }
+}
+
+// Gregorian data of en, de and fr: wide month and weekday names, the abbreviated era, AM/PM, padded numbers; date and time patterns exist.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let data = GregorianLocaleData(Locale(["en", "de", "fr"][i % 3]));
+        let days is @Weekday = [Weekday.monday, Weekday.tuesday, Weekday.wednesday, Weekday.thursday, Weekday.friday, Weekday.saturday, Weekday.sunday];
+        let c = Codes();
+        let total = c.of(data.month(i % 12 + 1, 4, false)) + c.of(data.weekday(days[i % 7], 4, false)) + c.of(data.era(3))
+            + c.of(data.period(TimeOfDay(hour: i % 24, minute: 0, second: 0, nanosecond: 0), 3, false)) + c.of(data.number(v, 2))
+            + (if data.date(DateStyle.short).length() > 0 { 1; } else { 0; }) + (if data.time(TimeStyle.short, false).length() > 0 { 1; } else { 0; });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

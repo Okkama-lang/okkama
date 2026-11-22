@@ -206,7 +206,7 @@ hidden object NoProxyCoordinates {
             else {
                 confirm parts.size() == 1 && origin != ""
                     else throw InvalidProxy.because("no_proxy syntax");
-                let text = if origin.slice(0, 1) == "." {
+                let text = if origin.starts_with(".") {
                     origin.slice(1, origin.length());
                 }
                 else {
@@ -219,7 +219,7 @@ hidden object NoProxyCoordinates {
                     let empty is @IpAddress = [];
                     empty;
                 };
-                let wire = if address.size() == 1 && text.split(":").size() > 1 {
+                let wire = if address.size() == 1 && text.contains(":") {
                     "[" + text + "]";
                 }
                 else {

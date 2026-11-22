@@ -1,0 +1,43 @@
+// Extracted from partial-construction; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+enum Stop is Error = (now);
+object Broken {
+    has item is Res;
+    has log is Atomic<string>;
+    Broken(log is Atomic<string>) {
+        self.log = log;
+        item = Res("I", log);
+        throw Stop.now;
+    }
+    destroy {
+        log.replace(log.value() + "wrong");
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    try {
+        let broken = Broken(log);
+    }
+    catch e is Stop {
+        confirm log.value() == "I";
+        Stdout().writeln(log.value());
+    }
+    0;
+}

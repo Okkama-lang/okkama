@@ -615,6 +615,123 @@ fn is_number(point: u32) -> bool {
     matches!(crate::host::native_data::category(point), "Nd" | "Nl" | "No")
 }
 
+fn single_scalar(mut chars: impl Iterator<Item = char>) -> Option<char> {
+    let first = chars.next()?;
+    chars.next().is_none().then_some(first)
+}
+
+// Sorted by fold key: members that upper1(key) cannot recover (#550).
+const SIMPLE_FOLD_EXTRAS: &[(char, char)] = &[
+    ('k', '\u{212a}'),
+    ('s', '\u{17f}'),
+    ('\u{df}', '\u{1e9e}'),
+    ('\u{e5}', '\u{212b}'),
+    ('\u{1c6}', '\u{1c5}'),
+    ('\u{1c9}', '\u{1c8}'),
+    ('\u{1cc}', '\u{1cb}'),
+    ('\u{1f3}', '\u{1f2}'),
+    ('\u{390}', '\u{1fd3}'),
+    ('\u{3b0}', '\u{1fe3}'),
+    ('\u{3b2}', '\u{3d0}'),
+    ('\u{3b5}', '\u{3f5}'),
+    ('\u{3b8}', '\u{3d1}'),
+    ('\u{3b8}', '\u{3f4}'),
+    ('\u{3b9}', '\u{345}'),
+    ('\u{3b9}', '\u{1fbe}'),
+    ('\u{3ba}', '\u{3f0}'),
+    ('\u{3bc}', '\u{b5}'),
+    ('\u{3c0}', '\u{3d6}'),
+    ('\u{3c1}', '\u{3f1}'),
+    ('\u{3c3}', '\u{3c2}'),
+    ('\u{3c6}', '\u{3d5}'),
+    ('\u{3c9}', '\u{2126}'),
+    ('\u{432}', '\u{1c80}'),
+    ('\u{434}', '\u{1c81}'),
+    ('\u{43e}', '\u{1c82}'),
+    ('\u{441}', '\u{1c83}'),
+    ('\u{442}', '\u{1c84}'),
+    ('\u{442}', '\u{1c85}'),
+    ('\u{44a}', '\u{1c86}'),
+    ('\u{463}', '\u{1c87}'),
+    ('\u{1e61}', '\u{1e9b}'),
+    ('\u{1f80}', '\u{1f88}'),
+    ('\u{1f81}', '\u{1f89}'),
+    ('\u{1f82}', '\u{1f8a}'),
+    ('\u{1f83}', '\u{1f8b}'),
+    ('\u{1f84}', '\u{1f8c}'),
+    ('\u{1f85}', '\u{1f8d}'),
+    ('\u{1f86}', '\u{1f8e}'),
+    ('\u{1f87}', '\u{1f8f}'),
+    ('\u{1f90}', '\u{1f98}'),
+    ('\u{1f91}', '\u{1f99}'),
+    ('\u{1f92}', '\u{1f9a}'),
+    ('\u{1f93}', '\u{1f9b}'),
+    ('\u{1f94}', '\u{1f9c}'),
+    ('\u{1f95}', '\u{1f9d}'),
+    ('\u{1f96}', '\u{1f9e}'),
+    ('\u{1f97}', '\u{1f9f}'),
+    ('\u{1fa0}', '\u{1fa8}'),
+    ('\u{1fa1}', '\u{1fa9}'),
+    ('\u{1fa2}', '\u{1faa}'),
+    ('\u{1fa3}', '\u{1fab}'),
+    ('\u{1fa4}', '\u{1fac}'),
+    ('\u{1fa5}', '\u{1fad}'),
+    ('\u{1fa6}', '\u{1fae}'),
+    ('\u{1fa7}', '\u{1faf}'),
+    ('\u{1fb3}', '\u{1fbc}'),
+    ('\u{1fc3}', '\u{1fcc}'),
+    ('\u{1ff3}', '\u{1ffc}'),
+    ('\u{a64b}', '\u{1c88}'),
+    ('\u{fb06}', '\u{fb05}'),
+];
+
+// Identifies C/S classes; Cherokee uses a lowercase representative (#550).
+/// Visited marks of one NFA frontier, by instruction (#463): a mark is the generation that set it, so moving to
+/// the next input position clears every mark at once.
+struct Visited {
+    marks: Vec<u32>,
+    generation: u32,
+}
+
+impl Visited {
+    fn new(instructions: usize) -> Self {
+        Visited { marks: vec![0; instructions], generation: 1 }
+    }
+
+    /// Whether `at` is reached for the first time in this generation (and mark it).
+    fn first_visit(&mut self, at: usize) -> bool {
+        if self.marks[at] == self.generation {
+            return false;
+        }
+        self.marks[at] = self.generation;
+        true
+    }
+
+    fn next_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            // After 2^32 positions the stamps wrap: start again from clean marks.
+            self.marks.fill(0);
+            self.generation = 1;
+        }
+    }
+}
+
+fn fold_key(c: char) -> char {
+    match c {
+        // Dotless i has no C/S mapping (#550).
+        '\u{131}' => c,
+        // Full uppercase expansions hide these simple aliases (#550).
+        '\u{1fd3}' => '\u{390}',
+        '\u{1fe3}' => '\u{3b0}',
+        '\u{fb05}' => '\u{fb06}',
+        _ => {
+            let upper = single_scalar(c.to_uppercase()).unwrap_or(c);
+            single_scalar(upper.to_lowercase()).unwrap_or(upper)
+        }
+    }
+}
+
 impl Program {
     fn matches_character(&self, matcher: &Matcher, point: u32) -> bool {
         match matcher {
@@ -660,44 +777,51 @@ impl Program {
                 *negate != inside
             }
             Matcher::Ranges(ranges) => {
+                if !self.ignore_case {
+                    return ranges.iter().any(|(from, to)| (*from..=*to).contains(&point));
+                }
                 let candidates = self.candidates(point);
                 ranges.iter().any(|(from, to)| {
                     candidates
-                        .iter()
-                        .any(|candidate| (*from..=*to).contains(candidate))
+                        .clone()
+                        .any(|candidate| (*from..=*to).contains(&candidate))
                 })
             }
         }
     }
 
-    fn candidates(&self, point: u32) -> Vec<u32> {
-        if !self.ignore_case {
-            return vec![point];
-        }
-        if self.ascii {
-            return match char::from_u32(point) {
-                Some(c) if c.is_ascii_uppercase() => vec![point, point + 32],
-                Some(c) if c.is_ascii_lowercase() => vec![point, point - 32],
-                _ => vec![point],
-            };
-        }
-        let mut out = vec![point];
-        let Some(c) = char::from_u32(point) else {
-            return out;
-        };
-        let upper: String = c.to_uppercase().collect();
-        let variants = [
-            c.to_lowercase().collect::<String>(),
-            upper.clone(),
-            upper.to_lowercase(),
-        ];
-        for variant in variants {
-            let mut chars = variant.chars();
-            if let (Some(single), None) = (chars.next(), chars.next()) {
-                out.push(single as u32);
+    fn candidates(&self, point: u32) -> impl Iterator<Item = u32> + Clone {
+        // Simple folding classes fit in four slots; tested exhaustively (#550).
+        let mut out = [Some(point), None, None, None];
+        if self.ignore_case {
+            if self.ascii {
+                out[1] = match char::from_u32(point) {
+                    Some(c) if c.is_ascii_uppercase() => Some(point + 32),
+                    Some(c) if c.is_ascii_lowercase() => Some(point - 32),
+                    _ => None,
+                };
+            } else if let Some(c) = char::from_u32(point) {
+                let key = fold_key(c);
+                out[0] = Some(key as u32);
+                let mut len = 1;
+                if let Some(upper) = single_scalar(key.to_uppercase())
+                    && upper != key
+                    && fold_key(upper) == key
+                {
+                    out[len] = Some(upper as u32);
+                    len += 1;
+                }
+                let start = SIMPLE_FOLD_EXTRAS.partition_point(|&(fold, _)| fold < key);
+                for &(fold, extra) in &SIMPLE_FOLD_EXTRAS[start..] {
+                    if fold != key {
+                        break;
+                    }
+                    out[len] = Some(extra as u32);
+                    len += 1;
+                }
             }
         }
-        out
+        out.into_iter().flatten()
     }
 
     /// Замыкание по ε-переходам в порядке приоритета (обход в глубину).
@@ -705,20 +829,21 @@ impl Program {
     fn add_tagged(
         &self,
         states: &mut Vec<Tagged>,
-        seen: &mut [bool],
+        seen: &mut Visited,
+        stack: &mut Vec<(i64, Vec<i64>)>,
         index: i64,
         captures: Vec<i64>,
         match_start: usize,
         position: usize,
         points: &[u32],
     ) {
-        let mut stack = vec![(index, captures)];
+        stack.clear();
+        stack.push((index, captures));
         while let Some((at, tags)) = stack.pop() {
-            if at < 0 || seen[at as usize] {
+            if at < 0 || !seen.first_visit(at as usize) {
                 continue;
             }
             let at = at as usize;
-            seen[at] = true;
             let instruction = &self.instructions[at];
             match instruction.op {
                 Op::Jump => stack.push((instruction.out, tags)),
@@ -755,7 +880,8 @@ impl Program {
     fn append_initial(
         &self,
         states: &mut Vec<Tagged>,
-        seen: &mut [bool],
+        seen: &mut Visited,
+        stack: &mut Vec<(i64, Vec<i64>)>,
         position: usize,
         points: &[u32],
     ) {
@@ -763,6 +889,7 @@ impl Program {
         self.add_tagged(
             states,
             seen,
+            stack,
             self.start as i64,
             captures,
             position,
@@ -811,9 +938,13 @@ impl Program {
         if minimum_start > length {
             return None;
         }
+        // #463: one scratch per search, reused for every input position: two state frontiers swapped in turn,
+        // visited marks stamped with a generation (cleared in O(1)), one ε-traversal stack.
         let mut states = Vec::new();
-        let mut seen = vec![false; self.instructions.len()];
-        self.append_initial(&mut states, &mut seen, minimum_start, points);
+        let mut next = Vec::new();
+        let mut seen = Visited::new(self.instructions.len());
+        let mut stack = Vec::new();
+        self.append_initial(&mut states, &mut seen, &mut stack, minimum_start, points);
         let mut best = self.best_acceptance(&states, minimum_start, None);
         if best
             .as_ref()
@@ -822,8 +953,8 @@ impl Program {
             return best;
         }
         for index in minimum_start..length {
-            let mut next = Vec::new();
-            let mut next_seen = vec![false; self.instructions.len()];
+            next.clear();
+            seen.next_generation();
             for state in &states {
                 let instruction = &self.instructions[state.index];
                 if instruction.op != Op::Consume
@@ -836,7 +967,8 @@ impl Program {
                 }
                 self.add_tagged(
                     &mut next,
-                    &mut next_seen,
+                    &mut seen,
+                    &mut stack,
                     instruction.out,
                     state.captures.clone(),
                     state.match_start,
@@ -844,8 +976,8 @@ impl Program {
                     points,
                 );
             }
-            self.append_initial(&mut next, &mut next_seen, index + 1, points);
-            states = next;
+            self.append_initial(&mut next, &mut seen, &mut stack, index + 1, points);
+            std::mem::swap(&mut states, &mut next);
             best = self.best_acceptance(&states, index + 1, best);
             if best
                 .as_ref()
@@ -999,6 +1131,11 @@ impl State {
     }
 }
 
+/// Capture spans of one search: (start, end) per group, -1 when unmatched.
+type Spans = Rc<[(i64, i64)]>;
+/// A parsed replacement template: (failed, error offset, literal/group tokens).
+type PreparedTemplate = Rc<(i64, i64, Vec<String>)>;
+
 #[derive(Debug)]
 pub(crate) struct Query {
     pattern: std::rc::Rc<State>,
@@ -1006,19 +1143,21 @@ pub(crate) struct Query {
     start: BigInt,
     end: BigInt,
     mode: i64,
-    spans: RefCell<Option<Vec<(i64, i64)>>>,
+    /// The search result, computed once and shared with the match it produces (#464).
+    spans: RefCell<Option<Spans>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Match {
-    spans: Vec<(i64, i64)>,
+    spans: Spans,
     names: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Replacement {
     template: String,
-    prepared: RefCell<Option<(i64, i64, Vec<String>)>>,
+    /// The parsed template, computed once; readers share it (#464).
+    prepared: RefCell<Option<PreparedTemplate>>,
 }
 
 #[derive(Debug, Default)]
@@ -1030,9 +1169,9 @@ fn invalid_input(native: Native, message: &str) -> ProviderError {
     failure(DOMAIN, "invalid_input", native, message)
 }
 
-fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, ProviderError> {
-    if let Some(spans) = query.spans.borrow().clone() {
-        return Ok(spans);
+fn prepare_query(native: Native, query: &Query) -> Result<Spans, ProviderError> {
+    if let Some(spans) = query.spans.borrow().as_ref() {
+        return Ok(Rc::clone(spans));
     }
     let prepared = query.pattern.prepare();
     let result = match prepared.status {
@@ -1046,7 +1185,8 @@ fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, Provi
     };
     match result {
         Ok(spans) => {
-            *query.spans.borrow_mut() = Some(spans.clone());
+            let spans: Spans = spans.into();
+            *query.spans.borrow_mut() = Some(Rc::clone(&spans));
             Ok(spans)
         }
         Err("Invalid regex pattern\n") => Err(invalid_input(native, "Invalid regex pattern")),
@@ -1067,9 +1207,9 @@ fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, Provi
     }
 }
 
-fn prepare_replacement(state: &Replacement) -> (i64, i64, Vec<String>) {
-    if let Some(prepared) = state.prepared.borrow().clone() {
-        return prepared;
+fn prepare_replacement(state: &Replacement) -> PreparedTemplate {
+    if let Some(prepared) = state.prepared.borrow().as_ref() {
+        return Rc::clone(prepared);
     }
     let source: Vec<char> = state.template.chars().collect();
     let mut tokens = Vec::new();
@@ -1129,7 +1269,8 @@ fn prepare_replacement(state: &Replacement) -> (i64, i64, Vec<String>) {
         }
         (0, -1, tokens)
     };
-    *state.prepared.borrow_mut() = Some(result.clone());
+    let result = Rc::new(result);
+    *state.prepared.borrow_mut() = Some(Rc::clone(&result));
     result
 }
 
@@ -1179,10 +1320,7 @@ impl Heap {
         })
     }
     fn regex_int(&self, value: Slot) -> Result<BigInt, Error> {
-        Ok(match self.integer(value)? {
-            Integer::Small(n) => BigInt::from(n),
-            Integer::Big(n) => (*n).clone(),
-        })
+        Ok(self.bigint(value)?.into_owned())
     }
     fn regex_map(
         &mut self,
@@ -1214,8 +1352,7 @@ impl Heap {
                 let mut flags = [false; 5];
                 for code in self.elements(args[1])? {
                     let index = self
-                        .integer(code)?
-                        .to_i64()
+                        .int64(code)?
                         .filter(|n| (0..=4).contains(n))
                         .ok_or_else(|| invalid("Unknown regex flag"))?;
                     flags[index as usize] = true;
@@ -1260,8 +1397,7 @@ impl Heap {
             }
             "regex_query_create" => {
                 let mode = self
-                    .integer(args[4])?
-                    .to_i64()
+                    .int64(args[4])?
                     .filter(|n| (0..=2).contains(n))
                     .ok_or_else(|| invalid("Unknown regex query mode"))?;
                 let RegexHandle::Pattern(pattern) = self.regex(args[0])? else {
@@ -1317,8 +1453,7 @@ impl Heap {
                     ));
                 }
                 let index = self
-                    .integer(args[1])?
-                    .to_i64()
+                    .int64(args[1])?
                     .and_then(|n| usize::try_from(n).ok())
                     .filter(|n| *n < found.spans.len())
                     .ok_or_else(|| invalid("Missing regex capture"))?;
@@ -1349,7 +1484,8 @@ impl Heap {
                 let RegexHandle::Replacement(state) = self.regex(args[0])? else {
                     return Err(kind().into());
                 };
-                let (status, offset, tokens) = prepare_replacement(&state);
+                let prepared = prepare_replacement(&state);
+                let (status, offset, tokens) = (prepared.0, prepared.1, &prepared.2);
                 if operation == "regex_replacement_prepare" {
                     return Ok(
                         self.regex_map([("status".into(), status), ("offset".into(), offset)])?
@@ -1358,9 +1494,10 @@ impl Heap {
                 if status != 0 {
                     return Err(invalid("Invalid regex replacement"));
                 }
+                // Only the strings that cross into the program are copied.
                 let values = tokens
-                    .into_iter()
-                    .map(|s| self.allocate_text(s))
+                    .iter()
+                    .map(|s| self.allocate_text(s.clone()))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate_array(values)?)
             }
@@ -1395,6 +1532,303 @@ impl Heap {
             }
             _ => Err(Error("invalid regex provider".into()).into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// #463: a visited mark lasts one generation, and the generation after the last one starts clean.
+    #[test]
+    fn visited_marks_clear_with_each_generation() {
+        let mut seen = super::Visited::new(3);
+        assert!(seen.first_visit(1));
+        assert!(!seen.first_visit(1));
+        seen.next_generation();
+        assert!(seen.first_visit(1));
+        seen.generation = u32::MAX;
+        assert!(seen.first_visit(2));
+        seen.next_generation();
+        assert!(seen.first_visit(2), "wrapping clears the marks");
+    }
+
+    use super::*;
+
+    fn regex_program(pattern: &str, ascii: bool, ignore_case: bool) -> Program {
+        compile_pattern(pattern, &[ascii, ignore_case, false, false, false])
+            .unwrap_or_else(|_| panic!("invalid test pattern: {pattern}"))
+    }
+
+    fn sorted_candidates(candidates: impl IntoIterator<Item = u32>) -> Vec<u32> {
+        let mut points: Vec<_> = candidates.into_iter().collect();
+        points.sort_unstable();
+        points.dedup();
+        points
+    }
+
+    #[test]
+    fn regex_candidates_characterisation() {
+        let cases = [
+            ('A', "Aa"),
+            ('a', "Aa"),
+            ('7', "7"),
+            ('ß', "ßẞ"),
+            ('ẞ', "ßẞ"),
+            ('İ', "İ"),
+            ('ı', "ı"),
+            ('Σ', "Σςσ"),
+            ('σ', "Σςσ"),
+            ('ς', "Σςσ"),
+            ('K', "KkK"),
+            ('Å', "ÅåÅ"),
+            ('ﬀ', "ﬀ"),
+            ('ŉ', "ŉ"),
+            ('ά', "Άά"),
+            ('ΐ', "ΐΐ"),
+            ('𐐀', "𐐀𐐨"),
+            ('𐐨', "𐐀𐐨"),
+        ];
+        for ascii in [false, true] {
+            for ignore_case in [false, true] {
+                let program = regex_program("", ascii, ignore_case);
+                for (point, unicode) in cases {
+                    let expected = if !ignore_case || (ascii && !point.is_ascii_alphabetic()) {
+                        vec![point as u32]
+                    } else if ascii {
+                        vec!['A' as u32, 'a' as u32]
+                    } else {
+                        sorted_candidates(unicode.chars().map(u32::from))
+                    };
+                    assert_eq!(
+                        sorted_candidates(program.candidates(point as u32)),
+                        expected,
+                        "{point:?}, ascii={ascii}, ignore_case={ignore_case}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn regex_fold_points() -> &'static [(char, u32)] {
+        static POINTS: std::sync::OnceLock<Vec<(char, u32)>> = std::sync::OnceLock::new();
+        POINTS.get_or_init(|| {
+            let mut points: Vec<_> = (0..=0x10ffff)
+                .filter_map(char::from_u32)
+                .map(|c| (fold_key(c), c as u32))
+                .collect();
+            points.sort_unstable();
+            points
+        })
+    }
+
+    #[test]
+    fn regex_candidates_exhaustive() {
+        let program = regex_program("", false, true);
+        for class in regex_fold_points().chunk_by(|a, b| a.0 == b.0) {
+            let expected: Vec<_> = class.iter().map(|&(_, point)| point).collect();
+            assert!(expected.len() <= 4, "class exceeds storage: {expected:x?}");
+            for &point in &expected {
+                assert_eq!(
+                    sorted_candidates(program.candidates(point)),
+                    expected,
+                    "U+{point:04X}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn regex_candidates_class_bound() {
+        let largest = regex_fold_points()
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(<[_]>::len)
+            .max();
+        assert_eq!(largest, Some(4));
+        assert!(SIMPLE_FOLD_EXTRAS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn regex_fold_key_simple_folding_reference() {
+        // fancy-regex uses CaseFolding.txt C/S classes, independently of our key (#550).
+        // Its Unicode version may lag Rust; compare characters it knows.
+        let assigned = fancy_regex::Regex::new(r"\p{Assigned}").unwrap();
+        let mut classes: BTreeMap<char, Vec<u32>> = BTreeMap::new();
+        let mut corpus = String::new();
+        for c in (0..=0x10ffff).filter_map(char::from_u32) {
+            if c.to_lowercase().eq(std::iter::once(c))
+                && c.to_uppercase().eq(std::iter::once(c))
+                && fold_key(c) == c
+            {
+                continue;
+            }
+            let mut encoded = [0; 4];
+            if assigned.is_match(c.encode_utf8(&mut encoded)).unwrap() {
+                corpus.push(c);
+                classes.entry(fold_key(c)).or_default().push(c as u32);
+            }
+        }
+        assert!(corpus.chars().count() > 2800);
+        for expected in classes.values() {
+            let reference =
+                fancy_regex::Regex::new(&format!(r"(?i:\x{{{:X}}})", expected[0])).unwrap();
+            let actual: Vec<_> = reference
+                .find_iter(&corpus)
+                .map(|found| found.unwrap().as_str().chars().next().unwrap() as u32)
+                .collect();
+            assert_eq!(actual, *expected, "reference class for U+{:04X}", expected[0]);
+        }
+    }
+
+    #[test]
+    fn regex_candidates_specific_classes() {
+        let program = regex_program("", false, true);
+        for class in [
+            "KkK",
+            "ÅåÅ",
+            "ΩωΩ",
+            "Ssſ",
+            "Σσς",
+            "Θθϑϴ",
+            "ßẞ",
+            "\u{345}Ιι\u{1fbe}",
+            "µμΜ",
+            "\u{13a0}\u{ab70}",
+            "\u{10d0}\u{1c90}",
+            "ı",
+            "İ",
+            "iI",
+            "\u{390}\u{1fd3}",
+            "\u{3b0}\u{1fe3}",
+            "\u{fb05}\u{fb06}",
+            "Ǆǅǆ",
+            "\u{1f80}\u{1f88}",
+            "\u{422}\u{442}\u{1c84}\u{1c85}",
+        ] {
+            let expected = sorted_candidates(class.chars().map(u32::from));
+            for c in class.chars() {
+                assert_eq!(
+                    sorted_candidates(program.candidates(c as u32)),
+                    expected,
+                    "U+{:04X}",
+                    c as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn regex_candidates_invalid_scalars() {
+        for ascii in [false, true] {
+            for ignore_case in [false, true] {
+                let program = regex_program("", ascii, ignore_case);
+                for point in [0xd800, 0xdfff, 0x110000, u32::MAX] {
+                    assert_eq!(sorted_candidates(program.candidates(point)), vec![point]);
+                    assert!(program.matches_character(&literal(point), point));
+                    assert!(!program.matches_character(&literal('A' as u32), point));
+                }
+            }
+        }
+    }
+
+    fn regex_spans(
+        program: &Program,
+        input: &str,
+        start: i64,
+        end: i64,
+        mode: i64,
+    ) -> Result<Vec<(i64, i64)>, &'static str> {
+        program.selected_spans(input, &BigInt::from(start), &BigInt::from(end), mode)
+    }
+
+    #[test]
+    fn regex_case_matching() {
+        let cases = [
+            ("a", "A", false, true, true),
+            ("a", "A", true, true, true),
+            ("a", "A", false, false, false),
+            ("Σ", "ς", false, true, true),
+            ("ς", "Σ", false, true, true),
+            ("Σ", "ς", true, true, false),
+            ("Σ", "ς", false, false, false),
+            ("ß", "ẞ", false, true, true),
+            ("ẞ", "ß", false, true, true),
+            ("SS", "ß", false, true, false),
+            ("i", "İ", false, true, false),
+            ("I", "ı", false, true, false),
+            ("i", "ı", false, true, false),
+            ("K", "K", false, true, true),
+            ("K", "K", true, true, false),
+            ("K", "K", false, false, false),
+            ("k", "K", false, true, true),
+            ("K", "K", false, true, true),
+            ("K", "k", false, true, true),
+            ("Å", "Å", false, true, true),
+            ("å", "Å", false, true, true),
+            ("Å", "Å", false, true, true),
+            ("ff", "ﬀ", false, true, false),
+            ("F", "ﬀ", false, true, false),
+            ("N", "ŉ", false, true, false),
+            ("ŉ", "ŉ", false, true, true),
+            ("[Σß]", "ς", false, true, true),
+            ("[Σß]", "ẞ", false, true, true),
+            ("[^Σ]", "ς", false, true, false),
+            ("[^Σ]", "ς", true, true, true),
+            ("[A-Z]", "K", false, true, true),
+            ("[a-z]", "K", false, true, true),
+            ("[a-z]", "ſ", false, true, true),
+            ("[a-z]", "ſ", true, true, false),
+            ("[a-z]", "ſ", false, false, false),
+            ("[A-Z]", "ı", false, true, false),
+            ("[A-Z]", "ı", true, true, false),
+            ("[A-Z]", "İ", false, true, false),
+            ("[Α-Ω]", "ς", false, true, true),
+            ("[Ά-Ώ]", "ά", false, true, true),
+            ("[Ι]", "ΐ", false, true, false),
+            ("[𐐀-𐐧]", "𐐨", false, true, true),
+            ("[𐐀-𐐧]", "𐐨", true, true, false),
+            ("[𐐀-𐐧]", "𐐨", false, false, false),
+        ];
+        for (pattern, input, ascii, ignore_case, found) in cases {
+            let program = regex_program(pattern, ascii, ignore_case);
+            let end = input.chars().count() as i64;
+            let expected = if found { vec![(0, end)] } else { Vec::new() };
+            assert_eq!(
+                regex_spans(&program, input, 0, end, 2),
+                Ok(expected),
+                "{pattern:?}, {input:?}, ascii={ascii}, ignore_case={ignore_case}"
+            );
+        }
+    }
+
+    #[test]
+    fn regex_case_captures_offsets_and_errors() {
+        let program = regex_program("(Σ|ΣΣ)([a-z])?(𐐀)", false, true);
+        for mode in 0..=2 {
+            assert_eq!(
+                regex_spans(&program, "🙂ςσK𐐨!", 1, 5, mode),
+                Ok(vec![(1, 5), (1, 3), (3, 4), (4, 5)])
+            );
+            assert_eq!(
+                regex_spans(&program, "🙂ςσ𐐨!", 1, 4, mode),
+                Ok(vec![(1, 4), (1, 3), (-1, -1), (3, 4)])
+            );
+        }
+        let program = regex_program("(Σ)|(σ)", false, true);
+        assert_eq!(
+            regex_spans(&program, "ς", 0, 1, 0),
+            Ok(vec![(0, 1), (0, 1), (-1, -1)])
+        );
+        let program = regex_program("(Σ|ΣΣ)", false, true);
+        assert_eq!(
+            regex_spans(&program, "🙂ςσ", 0, 3, 0),
+            Ok(vec![(1, 3), (1, 3)])
+        );
+        for mode in 1..=2 {
+            assert_eq!(regex_spans(&program, "🙂ςσ", 0, 3, mode), Ok(vec![]));
+        }
+        assert_eq!(
+            regex_spans(&program, "ς", 0, 2, 0),
+            Err("Invalid regex search range\n")
+        );
     }
 }
 

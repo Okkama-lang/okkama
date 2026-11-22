@@ -1,0 +1,51 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/number" take LocalizedInteger, LocalizedBigInteger, LocalizedFloat, LocalizedPercent, LocalizedSpecialNumber,
+    LocalizedIntegerFromString, LocalizedDecimalFromString, NumberFormat, NumberNotation, NumberGrouping, NumberSign, NumberPrecision,
+    PercentScale, NumberSpecial;
+import "locale/tag" take Locale;
+import "math/decimal" take Decimal;
+import "math/rounding" take Rounding;
+
+// The sum of the code points of a text.
+hidden object Codes {
+    Codes();
+    of(text is string) is int {
+        text.characters().reduce(0) -> sum, c { sum + c.code(); };
+    }
+}
+
+// Integers, a large negative integer, a float, a percent and the special values written for en, de and fr; two read back.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let locale = Locale(["en", "de", "fr"][i % 3]);
+        let format = NumberFormat(notation: NumberNotation.standard, grouping: NumberGrouping.automatic, sign: NumberSign.automatic,
+            precision: NumberPrecision(minimum_integer: 1, minimum_fraction: 0, maximum_fraction: 2, rounding: Rounding.half_even));
+        let c = Codes();
+        let integer = LocalizedInteger(origin: 1234567 * v, locale: locale, format: format).string();
+        let total = c.of(integer) + c.of(LocalizedBigInteger(origin: -98765432 * v, locale: locale, format: format).string())
+            + c.of(LocalizedFloat(origin: if v % 2 == 0 { 1234.5; } else { 0.25; }, locale: locale, format: format).string())
+            + c.of(LocalizedPercent(origin: Decimal("0.1" + v.string()), locale: locale, format: format, scale: PercentScale.percent).string())
+            + c.of(LocalizedSpecialNumber(origin: [NumberSpecial.not_a_number, NumberSpecial.positive_infinity, NumberSpecial.negative_infinity][i % 3],
+                locale: locale, sign: NumberSign.automatic).string())
+            + LocalizedIntegerFromString(origin: integer, locale: locale, grouping: NumberGrouping.automatic).integer() % 1000
+            + LocalizedDecimalFromString(origin: LocalizedFloat(origin: 2.75, locale: locale, format: format).string(), locale: locale, format: format).decimal().string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

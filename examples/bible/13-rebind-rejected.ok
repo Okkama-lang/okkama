@@ -1,0 +1,7 @@
+module bible/rebind v1.0.0;
+
+main() is int {
+    let n = 1;
+    n = 2;
+    n;
+}

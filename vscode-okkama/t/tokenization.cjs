@@ -37,8 +37,8 @@ let checks = 0;
     try { assert.equal(Boolean(found), !absent, `${JSON.stringify(word)}: ${scope} in ${JSON.stringify(row.line)}; got ${JSON.stringify(token?.scopes)}`); }
     catch (error) { failures.push(error.message); }
   }
-  check('let name = p ?? .some(v): v !! .none: "none";', 0, '??', 'keyword.operator.choice.okkama');
-  check('let name = p ?? .some(v): v !! .none: "none";', 0, '!!', 'keyword.operator.choice.okkama');
+  check('let name = match p { case Maybe.some(v): v; case Maybe.none: "none"; };', 0, 'some', 'constant.other.enum.okkama');
+  check('let name = p ?? 1;', 0, '??', 'invalid.illegal.removed-operator.okkama');
   check('let name = Presence<string>.none;', 0, 'none', 'invalid.illegal.reserved-word.okkama', true);
   check('let name = Presence<string>.none;', 0, 'none', 'constant.other.enum.okkama');
   check('let result = spawn Worker().run();', 0, 'spawn', 'keyword.control.async.okkama');
@@ -59,7 +59,6 @@ let checks = 0;
   check('test.close(a, b, 0.001)', 0, 'close', 'support.function.assertion.okkama');
   check('test.text(a, b)', 0, 'text', 'support.function.assertion.okkama');
   check('test.bytes(a, b)', 0, 'bytes', 'support.function.assertion.okkama');
-  check('fake.writing.remove("key")', 0, 'remove', 'support.function.fake-state.okkama');
   for (const declaration of ['cap Card {', 'cap Customer::Card {', 'cap Box::lowercase {', 'cap\nCustomer::Card\n{']) {
     const source = declaration + '\n label is string { "}"; }\n}';
     check(source, 0, 'cap', 'keyword.declaration.cap.okkama');
@@ -106,6 +105,12 @@ let checks = 0;
   check('let rows = try? db.query(sql) else 0;', 0, '?', 'invalid.illegal.removed-operator.okkama', true);
   check('try! config.parse(text);', 0, '!', 'keyword.operator.try-mark.okkama');
   check('let bad = a ? b;', 0, '?', 'invalid.illegal.removed-operator.okkama');
+  // compact if (#921): keywords, colon separators, nothing taken for a label
+  check('let x = if ready: 1 else: 0;', 0, 'if', 'keyword.control.conditional.okkama');
+  check('let x = if ready: 1 else: 0;', 0, 'else', 'keyword.control.conditional.okkama');
+  check('let x = if ready: 1 else: 0;', 0, ':', 'punctuation.separator.okkama');
+  check('let x = if ready: 1 else: 0;', 0, 'ready', 'entity.name.function.okkama', true);
+  check('let y = if a: (o else 10) else: 0;', 0, '10', 'constant.numeric.integer.okkama');
   // built-in types
   check('enum DbError is Error = (closed);', 0, 'Error', 'support.type.builtin.okkama');
   check('let m is Maybe<int> = Maybe<int>.none;', 0, 'Maybe', 'support.type.builtin.okkama');
@@ -117,8 +122,8 @@ let checks = 0;
   check('catch DbError.closed, NetError.reset {', 0, 'reset', 'constant.other.enum.okkama');
   check('case Shape.circle(radius) { radius; }', 0, 'circle', 'constant.other.enum.okkama');
   check('let r = Reading<int>.empty;', 0, 'empty', 'constant.other.enum.okkama');
-  check('let s = order.status() ?? .paid(amount): "paid" !! _: "other";', 0, 'paid', 'constant.other.enum.okkama');
-  check('let s = order.status() ?? .paid(amount): "paid" !! _: "other";', 0, 'status', 'constant.other.enum.okkama', true);
+  check('let s = match order.status() { case Status.paid(amount): "paid"; case _: "other"; };', 0, 'paid', 'constant.other.enum.okkama');
+  check('let s = match order.status() { case Status.paid(amount): "paid"; case _: "other"; };', 0, 'status', 'constant.other.enum.okkama', true);
   check('let package is Package = Package.fake();', 0, 'fake', 'constant.other.enum.okkama', true);
   check('Stdout().writeln(text);', 0, 'writeln', 'constant.other.enum.okkama', true);
   check('for 1..10 -> i { i; }', 0, '10', 'constant.numeric.integer.okkama');

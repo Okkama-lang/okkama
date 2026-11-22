@@ -21,9 +21,17 @@
 //! even a string over several lines, is never a comment, and nothing inside an
 //! action body is ever taken for documentation.
 //!
-//! Hidden declarations, fields, tests, fakes and `destroy` never appear.
+//! Hidden declarations, stored fields, tests, fakes and `destroy` never appear.
+//! Public enum cases and computed cap fields do appear. Inline enum cases
+//! may be documented by ``- `case`: Description.`` list entries in the enum's
+//! comment; a directly attached case comment takes precedence.
 
 pub mod render;
+pub mod publish;
+pub mod examples;
+pub mod coverage;
+mod links;
+pub use links::{DeclarationLink, Documentation, LinkDeclaration, LinkWarning, SearchEntry, document, document_graph, target as declaration_target};
 #[cfg(test)]
 mod tests;
 
@@ -47,6 +55,8 @@ pub struct ModuleDoc {
     pub items: Vec<ItemDoc>,
     /// Where the attachment rules met something worth saying.
     pub notes: Vec<DocNote>,
+    /// Broken symbol references; consumers report these as warnings (#513).
+    pub link_warnings: Vec<LinkWarning>,
 }
 
 /// The text of one comment block, without its `//` markers.
@@ -55,6 +65,9 @@ pub struct DocText {
     pub text: String,
     /// From the first comment line to the end of the last.
     pub span: Span,
+    pub links: Vec<DeclarationLink>,
+    /// Original byte offsets, including the removed comment prefixes.
+    offsets: Vec<u32>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -92,6 +105,8 @@ pub enum MemberKind {
     /// An action signature of a role.
     Signature,
     Cap,
+    Case,
+    Field,
 }
 
 /// A public module-scope declaration.
@@ -102,8 +117,9 @@ pub struct ItemDoc {
     /// As it would be declared, without a body: `object Stdout does Writing`.
     pub signature: String,
     pub doc: Option<DocText>,
-    /// Constructors, public actions and caps of an object; the action
-    /// signatures of a role.
+    /// Constructors, public actions, caps and their computed fields; role
+    /// signatures; enum cases; fields of module-scope caps. Nested cap fields
+    /// use `Cap.field` names within the owning object's members.
     pub members: Vec<MemberDoc>,
     pub span: Span,
 }
@@ -194,17 +210,15 @@ impl ModuleDoc {
                     .to_string(),
             });
         }
-        let overview = (!overview_blocks.is_empty()).then(|| DocText {
-            text: overview_blocks
-                .iter()
-                .map(|block| lines.text(block))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-            span: lines.span(overview_blocks[0].first, overview_blocks[overview_blocks.len() - 1].last),
-        });
+        let overview = (!overview_blocks.is_empty()).then(|| lines.doc(&overview_blocks));
         let mut items = Vec::new();
         let mut owned = Vec::new();
         for item in &program.items {
+            if let ast::Item::Cap(cap) = item
+                && cap.owner.as_ref().is_some_and(|owner| program.items.iter().any(|item| match item {
+                    ast::Item::Object(decl) => decl.hidden && decl.name.text == owner.text,
+                    _ => false,
+                })) { continue; }
             let Some(doc) = item_doc(source, &lines, item) else {
                 continue;
             };
@@ -238,6 +252,7 @@ impl ModuleDoc {
             overview,
             items,
             notes,
+            link_warnings: Vec::new(),
         }
     }
 
@@ -312,7 +327,16 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                 let roles: Vec<String> = decl.roles.iter().map(type_text).collect();
                 signature.push_str(&format!(" does {}", roles.join(", ")));
             }
-            let members = decl.members.iter().filter_map(|member| object_member(source, lines, member)).collect();
+            let mut members = Vec::new();
+            for member in &decl.members {
+                if let Some(mut doc) = object_member(source, lines, member) {
+                    doc.doc = doc.doc.filter(|text| text.span.start > decl.span.start);
+                    members.push(doc);
+                }
+                if let ast::ObjectMember::Cap(cap) = member {
+                    members.extend(cap_fields(lines, cap, &format!("{}.", cap.name.text)));
+                }
+            }
             ItemDoc { name: decl.name.text.clone(), kind: ItemKind::Object, signature, doc, members, span: decl.span }
         }
         ast::Item::Role(decl) => {
@@ -327,7 +351,7 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                         name: signature.name.text.clone(),
                         kind: MemberKind::Signature,
                         signature: action_text(source, signature.is_async, &signature.name, &signature.params, &signature.result),
-                        doc: lines.above(lines.line_of(signature.span.start)),
+                        doc: lines.above(lines.line_of(signature.span.start)).filter(|text| text.span.start > decl.span.start),
                         span: signature.span,
                     }),
                     _ => None,
@@ -361,8 +385,13 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                 name: decl.name.text.clone(),
                 kind: if error { ItemKind::Error } else { ItemKind::Enum },
                 signature: format!("enum {}{}{role} = ({})", decl.name.text, generics_text(&decl.generics), cases.join(", ")),
-                doc,
-                members: Vec::new(),
+                doc: doc.clone(),
+                members: decl.cases.iter().zip(&cases).map(|(case, signature)| MemberDoc {
+                    name: case.text.clone(), kind: MemberKind::Case, signature: signature.clone(),
+                    doc: lines.above(lines.line_of(case.span.start)).filter(|doc| doc.span.start > decl.span.start)
+                        .or_else(|| doc.as_ref().and_then(|text| named_case_doc(text, &case.text))),
+                    span: case.span,
+                }).collect(),
                 span: decl.span,
             }
         }
@@ -403,11 +432,42 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
             kind: ItemKind::Cap,
             signature: cap_text(decl),
             doc,
-            members: Vec::new(),
+            members: cap_fields(lines, decl, ""),
             span: decl.span,
         },
         ast::Item::Test(_) | ast::Item::Action(_) => return None,
     })
+}
+
+/// Inline enum declarations can keep their code unchanged: a named list
+/// entry in the enum comment documents that case. CommonMark parsing keeps
+/// list-like text inside a code block from being counted as documentation.
+fn named_case_doc(doc: &DocText, name: &str) -> Option<DocText> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let prefix = format!("- `{name}`: ");
+    for (event, range) in Parser::new(&doc.text).into_offset_iter() {
+        if let Event::Start(Tag::Item) = event {
+            let line = doc.text[range.clone()].lines().next().unwrap_or("");
+            if let Some(body) = line.strip_prefix(&prefix).filter(|body| !body.trim().is_empty()) {
+                let start = range.start + prefix.len();
+                let end = start + body.len();
+                return Some(DocText {
+                    text: body.into(), span: Span::new(doc.offsets[start], doc.offsets[end - 1] + 1),
+                    links: Vec::new(), offsets: doc.offsets[start..end].to_vec(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn cap_fields(lines: &CommentLines<'_>, cap: &ast::CapDecl, prefix: &str) -> Vec<MemberDoc> {
+    cap.fields.iter().map(|field| MemberDoc {
+        name: format!("{prefix}{}", field.name.text), kind: MemberKind::Field,
+        signature: format!("{} is {}", field.name.text, type_text(&field.ty)),
+        doc: lines.above(lines.line_of(field.span.start)).filter(|doc| doc.span.start > cap.span.start),
+        span: field.name.span,
+    }).collect()
 }
 
 fn object_member(source: &SourceFile, lines: &CommentLines<'_>, member: &ast::ObjectMember) -> Option<MemberDoc> {
@@ -615,7 +675,7 @@ impl<'a> CommentLines<'a> {
         }
         (first < line).then(|| {
             let block = Block { first, last: line - 1 };
-            DocText { text: self.text(&block), span: self.span(block.first, block.last) }
+            self.doc(&[block])
         })
     }
 
@@ -636,15 +696,33 @@ impl<'a> CommentLines<'a> {
         out
     }
 
-    fn text(&self, block: &Block) -> String {
-        (block.first..=block.last)
-            .map(|line| {
-                let text = self.source.line_text(line).trim_start();
-                let text = text.strip_prefix("//").unwrap_or(text);
-                text.strip_prefix(' ').unwrap_or(text).trim_end_matches('\r').to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    fn doc(&self, blocks: &[Block]) -> DocText {
+        let mut text = String::new();
+        let mut offsets = Vec::new();
+        for (index, block) in blocks.iter().enumerate() {
+            if index > 0 {
+                text.push_str("\n\n");
+                offsets.extend([self.offset_of_line(block.first); 2]);
+            }
+            for line in block.first..=block.last {
+                let original = self.source.line_text(line);
+                let content = original.trim_start().strip_prefix("//").unwrap_or("");
+                let content = content.strip_prefix(' ').unwrap_or(content).trim_end_matches('\r');
+                let start = self.offset_of_line(line) + (content.as_ptr() as usize - original.as_ptr() as usize) as u32;
+                if line > block.first {
+                    text.push('\n');
+                    offsets.push(start.saturating_sub(1));
+                }
+                text.push_str(content);
+                offsets.extend((0..content.len()).map(|byte| start + byte as u32));
+            }
+        }
+        DocText {
+            text,
+            span: self.span(blocks[0].first, blocks[blocks.len() - 1].last),
+            links: Vec::new(),
+            offsets,
+        }
     }
 
     fn span(&self, first: u32, last: u32) -> Span {

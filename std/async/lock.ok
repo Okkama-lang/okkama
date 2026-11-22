@@ -17,7 +17,8 @@ import "io/stream" take Closing;
 //
 // `guard()` suspends until it owns the lock and returns the ownership capability.
 // The guard has no public constructor: only a successful acquisition can produce
-// one. Keep its lifetime lexical with `defer guard.close()`.
+// one. It is a resource: its owner releases the lock when it goes (scope exit,
+// early return, unwinding), and `close()` releases it earlier (#846).
 //
 // Acquirers are granted ownership in FIFO order. Cancelling a waiting `guard()`
 // future removes that request without consuming the next ownership grant.
@@ -51,6 +52,11 @@ object Lock {
 
 // The held lock.
 object LockGuard does Closing {
+    // A guard nobody closed is closed when its owner goes (#846).
+    destroy {
+        self.close();
+    }
+
     // Whether the lock is closed.
     closed() is bool {
         panic "LockGuard.closed is a VM intrinsic";
@@ -74,5 +80,20 @@ async test "a lock admits one guard at a time" {
     let second = await queued;
     test.ok(lock.locked());
     second.close();
+    test.ok(!lock.locked());
+}
+
+async test "a guard nobody closed is released when its owner goes" {
+    let lock = Lock();
+    {
+        let guard = await lock.guard();
+        test.ok(lock.locked());
+    }
+    test.ok(!lock.locked());
+    {
+        let guard = await lock.guard();
+        guard.close();
+        test.ok(!lock.locked());
+    }
     test.ok(!lock.locked());
 }

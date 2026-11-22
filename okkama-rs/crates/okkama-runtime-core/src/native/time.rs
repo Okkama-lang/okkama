@@ -1,145 +1,11 @@
-//! `runtime/time_format` (шаблоны `%Y-%m-%d …`) и `runtime/time_zone`
-//! (встроенный tzdb 2026c, `tzdb.dat`) — перенос `TimeNatives` JVM, включая
-//! правило POSIX после последнего перехода.
-use super::support::{array, failed, int, int_value, java_long, string, text};
+//! `runtime/time_zone` (встроенный tzdb 2026c, `tzdb.dat`), включая
+//! правило POSIX после последнего перехода. Шаблоны `%Y-%m-%d …` читает и
+//! пишет std (`time/format`, #13).
+use super::support::{failed, int, int_value, java_long, string, text};
 use super::Error;
 use crate::{IntValue, Value, abi::Native};
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
-
-// ===================== runtime/time_format =====================
-
-fn width(directive: char) -> i64 {
-    match directive {
-        'Y' => 4,
-        'm' | 'd' | 'H' | 'M' | 'S' => 2,
-        'f' => 9,
-        _ => -1,
-    }
-}
-
-/// Литерал или поле, смещение начала.
-enum Token {
-    Literal(String),
-    Field(char, usize),
-}
-
-fn tokens(pattern: &str) -> Result<Vec<Token>, usize> {
-    let text: Vec<char> = pattern.chars().collect();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < text.len() {
-        if text[index] != '%' {
-            let start = index;
-            while index < text.len() && text[index] != '%' {
-                index += 1;
-            }
-            out.push(Token::Literal(text[start..index].iter().collect()));
-            continue;
-        }
-        let Some(directive) = text.get(index + 1).copied() else {
-            return Err(index);
-        };
-        if directive == '%' {
-            out.push(Token::Literal("%".into()));
-        } else if width(directive) > 0 {
-            out.push(Token::Field(directive, index));
-        } else {
-            return Err(index);
-        }
-        index += 2;
-    }
-    Ok(out)
-}
-
-fn pattern_invalid_offset(pattern: &str, local: bool, parsing: bool) -> i64 {
-    let tokens = match tokens(pattern) {
-        Ok(tokens) => tokens,
-        Err(offset) => return offset as i64,
-    };
-    let mut seen = std::collections::HashSet::new();
-    for token in &tokens {
-        if let Token::Field(field, at) = token {
-            if !local && "HMSf".contains(*field) {
-                return *at as i64;
-            }
-            seen.insert(*field);
-        }
-    }
-    if parsing {
-        let required: &[char] = if local {
-            &['Y', 'm', 'd', 'H', 'M', 'S']
-        } else {
-            &['Y', 'm', 'd']
-        };
-        if required.iter().any(|field| !seen.contains(field)) {
-            return pattern.chars().count() as i64;
-        }
-    }
-    -1
-}
-
-fn format(native: Native, pattern: &str, values: &HashMap<char, IntValue>) -> Result<String, Error> {
-    let tokens = tokens(pattern).map_err(|_| failed(native))?;
-    let mut out = String::new();
-    for token in tokens {
-        match token {
-            Token::Literal(literal) => out.push_str(&literal),
-            Token::Field(field, _) => {
-                let value = values.get(&field).ok_or_else(|| failed(native))?;
-                let negative = value.is_negative();
-                let digits = if negative { value.negated() } else { value.clone() }.to_string();
-                let size = width(field) - i64::from(negative);
-                out.push_str(if negative { "-" } else { "" });
-                for _ in digits.len() as i64..size {
-                    out.push('0');
-                }
-                out.push_str(&digits);
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn parse(origin: &str, pattern: &str) -> Result<HashMap<char, IntValue>, usize> {
-    let origin: Vec<char> = origin.chars().collect();
-    let tokens = tokens(pattern).map_err(|_| 0usize)?;
-    let mut offset = 0;
-    let mut values: HashMap<char, IntValue> = HashMap::new();
-    for token in tokens {
-        match token {
-            Token::Literal(literal) => {
-                for point in literal.chars() {
-                    if origin.get(offset) != Some(&point) {
-                        return Err(offset);
-                    }
-                    offset += 1;
-                }
-            }
-            Token::Field(field, _) => {
-                let size = width(field) as usize;
-                if offset + size > origin.len() {
-                    return Err(offset);
-                }
-                let digits: String = origin[offset..offset + size].iter().collect();
-                if !digits.chars().all(|c| c.is_ascii_digit()) {
-                    return Err(offset);
-                }
-                let value = IntValue::from_decimal_digits(&digits).expect("digits");
-                if values.get(&field).is_some_and(|known| *known != value) {
-                    return Err(offset);
-                }
-                values.insert(field, value);
-                offset += size;
-            }
-        }
-    }
-    if offset != origin.len() {
-        return Err(offset);
-    }
-    values.entry('f').or_insert_with(|| IntValue::from_i64(0));
-    Ok(values)
-}
 
 // ===================== runtime/time_zone =====================
 
@@ -575,39 +441,6 @@ fn candidates(native: Native, name: &str, args: &[Value]) -> Checked<Vec<i64>> {
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let operation = native.name();
     match operation {
-        "time_pattern_invalid_offset" => Ok(int_value(pattern_invalid_offset(
-            string(&args[0])?,
-            args[1].as_bool()?,
-            args[2].as_bool()?,
-        ))),
-        "time_format_date" | "time_format_local" => {
-            let fields: &[char] = if operation == "time_format_date" {
-                &['Y', 'm', 'd']
-            } else {
-                &['Y', 'm', 'd', 'H', 'M', 'S', 'f']
-            };
-            let mut values = HashMap::new();
-            for (index, field) in fields.iter().enumerate() {
-                values.insert(*field, int(&args[index])?.clone());
-            }
-            Ok(text(format(native, string(&args[fields.len()])?, &values)?))
-        }
-        "time_parse_invalid_offset" => Ok(int_value(
-            parse(string(&args[0])?, string(&args[1])?).err().map_or(-1, |offset| offset as i64),
-        )),
-        "time_parse_parts" => {
-            let values = parse(string(&args[0])?, string(&args[1])?).map_err(|_| failed(native))?;
-            let fields: &[char] = if args[2].as_bool()? {
-                &['Y', 'm', 'd', 'H', 'M', 'S', 'f']
-            } else {
-                &['Y', 'm', 'd']
-            };
-            let out = fields
-                .iter()
-                .map(|field| values.get(field).cloned().map(Value::Int).ok_or_else(|| failed(native)))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(array(out))
-        }
         "timezone_version" => Ok(text(VERSION)),
         "timezone_known" => Ok(Value::Bool(zone_file(string(&args[0])?).is_some())),
         "timezone_offset" | "timezone_daylight" | "timezone_abbreviation" => {

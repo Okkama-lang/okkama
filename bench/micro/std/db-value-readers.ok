@@ -1,0 +1,49 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "math/decimal" take Decimal;
+import "db/value" take DbValueKind, DbBoolean, DbInteger, DbFloating, DbDecimal, DbText, DbBytes, InvalidDbValue;
+
+// The position of a kind in DbValueKind.
+hidden object Code {
+    Code();
+    of(kind is DbValueKind) is int {
+        match kind {
+            case DbValueKind.null_value { 0; }
+            case DbValueKind.boolean { 1; }
+            case DbValueKind.integer { 2; }
+            case DbValueKind.floating { 3; }
+            case DbValueKind.decimal { 4; }
+            case DbValueKind.text { 5; }
+            case DbValueKind.bytes { 6; }
+        }
+    }
+}
+
+// Values read back as their own types; NULL refused every fourth iteration.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let bytes = DbBytes([byte(v), byte(9)]);
+        let nulled = try { DbInteger(if i % 4 == 0 { Maybe<int>.none; } else { Maybe.some(v); }).int(); } catch e is InvalidDbValue { 100; };
+        let total = (if DbBoolean(v % 2 == 0).bool() { 1; } else { 0; }) + bytes.bytes()[0].int() + Code().of(bytes.kind())
+            + DbDecimal(Decimal(x + ".75")).decimal().string().length() + DbFloating(if v > 5 { 9.5; } else { 3.5; }).float().int()
+            + DbInteger(v * 11).integer() + nulled + DbText("s" + x).string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,44 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "archive/zip" take ZipWriting, ZipArchive;
+import "io/buffer" take ByteBuffer;
+import "encoding/utf" take Utf8Encoded;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let buffer = ByteBuffer();
+            let zip = ZipWriting(destination: buffer.writing());
+            zip.add(name: "a.txt", bytes: Utf8Encoded("hello " + i.string()).bytes());
+            zip.add(name: "b.bin", bytes: [byte(i % 256), byte(1), byte(1), byte(1), byte(1), byte(1), byte(1), byte(1)]);
+            zip.close();
+            let entries = ZipArchive(buffer.content().bytes()).entries();
+            let first = await entries[0].bytes(limit: 1024);
+            let second = await entries[1].bytes(limit: 1024);
+            sum = sum.add((entries.size() + entries[0].name().length() + first.size() + second[0].int() + entries[1].size()) % 7);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

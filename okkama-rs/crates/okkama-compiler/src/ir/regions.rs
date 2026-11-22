@@ -183,7 +183,7 @@ fn elide(function: &mut Function) -> usize {
 /// Plain-ность всего модуля: объект plain, если у него нет `destroy` и все
 /// поля plain; роль — если её делают только plain объекты; функция — если ни
 /// одно замыкание не захватывает не plain значение.
-struct Plain {
+pub(crate) struct Plain {
     objects: Vec<bool>,
     roles: Vec<bool>,
     functions: bool,
@@ -192,7 +192,7 @@ struct Plain {
 }
 
 impl Plain {
-    fn of(module: &Module) -> Self {
+    pub(crate) fn of(module: &Module) -> Self {
         let captured: Vec<&Type> = module
             .functions
             .iter()
@@ -221,11 +221,21 @@ impl Plain {
                 .map(|variant| variant.cases.iter().map(|(_, object)| object.0).collect())
                 .collect(),
         };
+        // Registered Futures are hidden intrinsic state, rather than fields.
+        for function in &module.functions {
+            if let Some((name, objects)) = function.intrinsic()
+                && matches!(name, "okkama.scope.FutureGroup.new" | "okkama.scope.FutureScope.outcome")
+            {
+                plain.objects[objects[0].0] = false;
+            }
+        }
+        let carried = super::channel_carriers(module);
         loop {
             let mut changed = false;
             for (index, object) in module.objects.iter().enumerate() {
                 if plain.objects[index]
-                    && (object.destroy.is_some() || !object.fields.iter().all(|field| plain.ty(&field.ty)))
+                    && (object.destroy.is_some() || !object.fields.iter().all(|field| plain.ty(&field.ty))
+                        || carried.iter().any(|(holder, ty)| *holder == index && !plain.ty(ty)))
                 {
                     plain.objects[index] = false;
                     changed = true;
@@ -251,7 +261,7 @@ impl Plain {
 
     /// Значение типа не достигает идентичностей с `destroy` (как
     /// `Ctx::is_plain`, но по всему модулю).
-    fn ty(&self, ty: &Type) -> bool {
+    pub(crate) fn ty(&self, ty: &Type) -> bool {
         match ty {
             Type::Object(object) | Type::Successor(object) => self.objects[object.0],
             Type::Role(role) => self.roles[role.0],
@@ -259,7 +269,8 @@ impl Plain {
             Type::Array(element) | Type::Builder(element) => self.ty(element),
             Type::Map(_, value) | Type::MapBuilder(_, value) => self.ty(value),
             Type::Fn(_) => self.functions,
-            Type::Any | Type::Cap(_) => false,
+            // Even a Future of a plain result retains its receiver and arguments.
+            Type::Any | Type::Cap(_) | Type::Future(_) => false,
             _ => true,
         }
     }

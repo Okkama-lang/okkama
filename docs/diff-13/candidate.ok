@@ -1,0 +1,134 @@
+module diff_candidate v1.0.0;
+
+import "collections/list" take List, EmptyList;
+
+// Experimental pure replacement for runtime/diff. DiffLines validates inputs.
+// Hunt-Szymanski / Algorithm::Diff LCSidx, including prefix/suffix trimming
+// and tie selection. Immutable state preserves Diff's existing once cache.
+object DiffAlgorithm {
+    has left, right is @string;
+
+    DiffAlgorithm(left is @string, right is @string) {
+        self.left = left;
+        self.right = right;
+    }
+
+    script() is @int {
+        let matched = self.matches();
+        let empty is @@int = [];
+        let script = (0..left.size()).reduce(DiffEmission(x: 0, y: 0, triples: empty)) -> state, index {
+            if matched[index] >= 0 { state.through(index, matched[index]); }
+            else { state; };
+        }.finish(left.size(), right.size());
+        (0..(script.size() * 3)).map() -> i { script[(i / 3).int()][i % 3]; };
+    }
+
+    hidden matches() is @int {
+        let start = self.prefix(0);
+        let suffix = self.suffix(start, 0);
+        let a_end = left.size() - suffix;
+        let b_end = right.size() - suffix;
+        let empty_positions is List<int> = EmptyList();
+        let positions is %string:List<int> = (start..b_end).reduce([:]) -> found, j {
+            let previous = found[right[j]] else empty_positions;
+            found + [right[j]: previous.prefix(j)];
+        };
+        let thresh is @int = [];
+        let links is @List<@int> = [];
+        let frontier = (start..a_end).reduce(DiffFrontier(thresh: thresh, links: links, previous_index: 0)) -> state, i {
+            let matches = positions[left[i]] else empty_positions;
+            matches.reduce(state.reset()) -> current, j { current.addition(i, j); };
+        };
+        let middle = frontier.matches();
+        (0..left.size()).map() -> i {
+            if i < start { i; }
+            else if i >= a_end { b_end + i - a_end; }
+            else { middle[i] else -1; };
+        };
+    }
+
+    hidden prefix(index is int) is int {
+        if index == left.size() || index == right.size() || left[index] != right[index] {
+            index;
+        }
+        else { self.prefix(index + 1); };
+    }
+
+    hidden suffix(start is int, size is int) is int {
+        if left.size() - size <= start || right.size() - size <= start
+            || left[left.size() - size - 1] != right[right.size() - size - 1] {
+                size;
+            }
+        else { self.suffix(start, size + 1); };
+    }
+}
+
+hidden object DiffFrontier {
+    has thresh is @int;
+    has links is @List<@int>;
+    has previous_index is int;
+
+    DiffFrontier(thresh is @int, links is @List<@int>, previous_index is int) {
+        self.thresh = thresh;
+        self.links = links;
+        self.previous_index = previous_index;
+    }
+
+    reset() is DiffFrontier { DiffFrontier(thresh: thresh, links: links, previous_index: 0); }
+
+    addition(i is int, j is int) is DiffFrontier {
+        let k = if previous_index > 0 && thresh[previous_index] > j && thresh[previous_index - 1] < j { previous_index; }
+        else if thresh.size() == 0 || j > thresh[thresh.size() - 1] { thresh.size(); }
+        else { self.replacement(j, 0, if previous_index <= 0 { thresh.size() - 1; } else { previous_index; }); };
+        if k < 0 { return DiffFrontier(thresh: thresh, links: links, previous_index: -1); }
+        let empty is List<@int> = EmptyList();
+        let previous = if k > 0 { links[k - 1]; } else { empty; };
+        let link = previous.prefix([i, j]);
+        if k == thresh.size() {
+            DiffFrontier(thresh: thresh + [j], links: links + [link], previous_index: k);
+        }
+        else {
+            DiffFrontier(thresh: thresh.replaced(k, j), links: links.replaced(k, link), previous_index: k);
+        };
+    }
+
+    matches() is %int:int {
+        let empty is %int:int = [:];
+        if links.size() == 0 { empty; }
+        else {
+            links[links.size() - 1].reduce(empty) -> found, pair { found + [pair[0]: pair[1]]; };
+        };
+    }
+
+    hidden replacement(value is int, low is int, high is int) is int {
+        if low > high { return low; }
+        let index = ((high + low) / 2).int();
+        let found = thresh[index];
+        if value == found { -1; }
+        else if value > found { self.replacement(value, index + 1, high); }
+        else { self.replacement(value, low, index - 1); };
+    }
+}
+
+hidden object DiffEmission {
+    has x, y is int;
+    has triples is @@int;
+
+    DiffEmission(x is int, y is int, triples is @@int) {
+        self.x = x;
+        self.y = y;
+        self.triples = triples;
+    }
+
+    through(index is int, next_y is int) is DiffEmission {
+        let removed is @@int = (x..index).map() -> i { [1, i, y]; };
+        let added is @@int = (y..next_y).map() -> j { [2, index, j]; };
+        DiffEmission(x: index + 1, y: next_y + 1, triples: triples + removed + added + [[0, index, next_y]]);
+    }
+
+    finish(left_size is int, right_size is int) is @@int {
+        let removed is @@int = (x..left_size).map() -> i { [1, i, y]; };
+        let added is @@int = (y..right_size).map() -> j { [2, left_size, j]; };
+        triples + removed + added;
+    }
+}

@@ -11,7 +11,7 @@ fn build(name: &str) -> Vec<u8> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/budgets/{name}.ok"));
     let output = std::env::temp_dir().join(format!("okkama-budgets-{}-{name}.spb", std::process::id()));
     let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["build", "--target", "sparrow", "-o"])
+        .args(["build", "-o"])
         .arg(&output)
         .arg(&source)
         .status()

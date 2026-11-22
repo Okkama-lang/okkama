@@ -1,0 +1,29 @@
+// Deterministic composite iteration; see oracles.py for the independent checksum.
+// TextBody.new(origin is string, charset is string) is TextBody
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "mime/part" take TextBody;
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let body = TextBody(origin: "Привет " + i.string(), charset: "utf-8");
+        let contribution = body.bytes().size();
+        self.run(i + 1, n, acc + contribution % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

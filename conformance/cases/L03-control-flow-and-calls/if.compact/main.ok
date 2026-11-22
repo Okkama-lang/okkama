@@ -1,0 +1,37 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gauge {
+    has calls is int;
+    Gauge(:calls);
+    // A compact if as a body's result.
+    level(value is int) is string { if value > 10: "high" else: "low"; }
+    // Only the chosen branch runs: the other one would fail.
+    safe(divisor is int) is int { if divisor == 0: 0 else: 10 % divisor; }
+}
+
+main() is int {
+    let out = Stdout();
+    let gauge = Gauge(calls: 0);
+    let ready = true;
+    out.writeln(gauge.level(12) + " " + gauge.level(3));
+    out.writeln(gauge.safe(0).string() + " " + gauge.safe(4).string());
+    // Nested: each else goes to the nearest if; parentheses group.
+    let n = 4;
+    out.writeln(if n > 5: "large" else: if n > 3: "medium" else: "small");
+    out.writeln((if ready: if n == 4: 1 else: 2 else: 3).string());
+    // In arguments, arithmetic and collections.
+    let values = [1, if ready: 2 else: 3, 4];
+    out.writeln((10 + (if ready: 5 else: 0)).string() + " " + values.size().string());
+    // A branch's own fallback takes parentheses.
+    let table = ["a": 7];
+    out.writeln((if ready: (table["b"] else 10) else: 0).string());
+    // Line breaks do not matter.
+    let label = if n > 0:
+        "positive"
+    else:
+        "zero";
+    out.writeln(label);
+    0;
+}

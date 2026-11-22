@@ -1,0 +1,32 @@
+// #244: http2-frame-validation; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader, Http2Fault, Http2FaultScope;
+import "http/internal/http2_frame" take ParsedHttp2FrameHeader, Http2HeaderRules, Http2FrameRules, Http2FaultView;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let header = Http2FrameHeader(0.byte(),1.byte(),1,1);
+        let parsed = ParsedHttp2FrameHeader(header.bytes(),16384).header();
+        let frame = Http2Frame(parsed,[v.byte()]);
+        Http2HeaderRules(parsed).check();
+        Http2FrameRules(frame).check();
+        let fault = Http2FaultView(Http2Fault.detailed(Http2FaultScope.stream,v,1,x));
+        let contribution = frame.bytes().size()+fault.code()+fault.stream()+fault.reason().length()+(if fault.scope()==Http2FaultScope.stream { 1; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

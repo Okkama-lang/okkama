@@ -1,0 +1,1 @@
+14-nominal-rejected.ok:12:33: semantic error: Cannot initialize variable "shown" of type Presentation with Invoice

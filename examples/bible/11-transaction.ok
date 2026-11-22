@@ -1,0 +1,46 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+enum Rejected is Error = (amount(cents is int));
+
+// A transaction rolls back unless it was committed before its scope ended.
+object Transaction {
+    has label is string;
+    has committed is Atomic<bool>;
+    Transaction(:label) {
+        self.committed = Atomic(false);
+        Stdout().writeln(label + ": begin");
+    }
+    commit() is void {
+        committed.replace(true);
+        Stdout().writeln(label + ": commit");
+    }
+    destroy {
+        if !committed.value() {
+            Stdout().writeln(label + ": rollback");
+        }
+    }
+}
+
+object Shop {
+    Shop();
+    order(label is string, cents is int) is string {
+        let tx = Transaction(label: label);
+        confirm cents > 0 else throw Rejected.amount(cents);
+        Stdout().writeln(label + ": charge " + cents.string());
+        tx.commit();
+        label + " done";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shop = Shop();
+    out.writeln(shop.order("first", 250));
+    let second = try { shop.order("second", -5); }
+        catch Rejected.amount(cents) { "second refused: " + cents.string(); };
+    out.writeln(second);
+    0;
+}

@@ -1,0 +1,38 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "toml/parse" take ParsedToml;
+import "toml/value" take TomlTable;
+
+// Maybe readers of scalars, present and missing; an offset written as a string.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let root = ParsedToml("name = \"svc" + x + "\"\nport = " + x + "\nratio = " + x + ".5\non = true\n" +
+            "when = 2026-0" + x + "-01T07:30:00+05:30\n[server]\nhost = 1\n").root();
+        let missing = root.maybe("absent");
+        let total = (root.maybe("port").int() else 0) + (missing.text() else "").length()
+            + (if root.maybe("on").boolean() else false { 1; } else { 0; })
+            + (root.maybe("ratio").float() else 0.0).int() + (if missing.get() == Maybe<TomlTable>.none { 1; } else { 0; })
+            + (if root.maybe("server").get() == Maybe<TomlTable>.none { 0; } else { 2; })
+            + (root.maybe("name").text() else "").length()
+            + (if root.maybe("when").date_time() == Maybe.none { 0; } else { 1; })
+            + root.date_time("when").offset().string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

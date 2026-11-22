@@ -1,0 +1,62 @@
+// Extracted from call-chains; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+object Relay {
+    Relay();
+    inner(r is Res) is Res {
+        r;
+    }
+    middle(r is Res) is Res {
+        self.inner(r);
+    }
+    outer(r is Res) is Res {
+        return self.middle(r);
+    }
+    consume(r is Res) is void {
+        self.middle(r).label();
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let r = Relay().outer(Res("A", log));
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+        r.label();
+    }
+    confirm log.value() == "A";
+    Stdout().writeln(log.value());
+    log.replace("");
+    Relay().consume(Res("B", log));
+    confirm log.value() == "B";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        let r = Res("C", log);
+        {
+            let alias = Relay().outer(r);
+            alias.label();
+        }
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "C";
+    Stdout().writeln(log.value());
+    0;
+}

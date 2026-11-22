@@ -1,0 +1,47 @@
+module bible/after v1.0.0;
+
+// After: the status is an enum, urgency is a decorator, and each ticket
+// answers the one question the caller has: how it shows in the queue.
+import "io/stdout" take Stdout;
+
+enum Status = (open, closed);
+
+role Queued {
+    line() is Maybe<string>;
+}
+
+object Ticket does Queued {
+    has title is string;
+    has status is Status;
+    Ticket(:title, :status);
+    line() is Maybe<string> {
+        match status {
+            case Status.open { Maybe.some("  " + title); }
+            case Status.closed { Maybe.none; }
+        }
+    }
+}
+
+object Urgent does Queued {
+    has origin is Queued;
+    Urgent(:origin);
+    line() is Maybe<string> {
+        match origin.line() { case Maybe.some(text): Maybe.some("!" + text.slice(1, text.length())); case Maybe.none: Maybe.none; };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let queue is @Queued = [
+        Urgent(origin: Ticket(title: "printer", status: Status.open)),
+        Ticket(title: "coffee", status: Status.closed),
+        Ticket(title: "wifi", status: Status.open)
+    ];
+    for queue -> ticket {
+        match ticket.line() {
+            case Maybe.some(text) { out.writeln(text); }
+            case Maybe.none { }
+        }
+    }
+    0;
+}

@@ -163,11 +163,36 @@ object SystemClock does Timing {
     }
 }
 
+// The wall-clock time now, from the system clock or a given one (tests pass
+// their own Timing):
+//
+//     let started = Now().instant();
+object Now {
+    has clock is Timing;
+
+    // Now, on clock.
+    Now(clock is Timing = SystemClock()) {
+        self.clock = clock;
+    }
+
+    // The instant.
+    instant() is Instant {
+        clock.instant();
+    }
+}
+
 // Readings of different monotonic clocks were compared.
 enum IncompatibleClock is Error = (incompatible);
 
 // A wait that cannot be made, such as a negative duration.
 enum InvalidWait is Error = (because(message is string));
+
+test "now is the clock's instant" {
+    let before = SystemClock().instant();
+    let now = Now().instant();
+    let after = SystemClock().instant();
+    test.ok(before <= now && now <= after);
+}
 
 test "instants are durations from the epoch" {
     let second = Duration(seconds: 1);

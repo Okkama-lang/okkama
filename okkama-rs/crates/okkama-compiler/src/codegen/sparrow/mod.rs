@@ -1,4 +1,4 @@
-//! Проверенный IR → программа Sparrow (SPB 9), как IR → JVM-байткод.
+//! Проверенный IR → программа Sparrow (SPB 9).
 //!
 //! Значения SSA с непересекающейся жизнью делят регистр кадра
 //! (`registers`); блоки раскладываются
@@ -213,7 +213,9 @@ impl FunctionGen<'_> {
                 updates: updates.iter().map(|(field, value)| (*field as u32, reg(*value))).collect(),
             },
             K::Call { func, args } => I::Call { dst: opt, function: FuncRef(func.0 as u32), args: regs(args) },
-            K::SuccTake(value) | K::Retag(value) | K::MapRetag(value) | K::CapMake(value) => I::Move { dst: dst()?, source: reg(*value) },
+            K::SuccTake(value) | K::FutureHandoff(value) | K::Retag(value) | K::MapRetag(value) | K::CapMake(value) => {
+                I::Move { dst: dst()?, source: reg(*value) }
+            }
             K::Cvt(value) => I::Convert { dst: dst()?, source: reg(*value) },
             K::RoleWrap(value) => I::RoleWrap { dst: dst()?, source: reg(*value), role: result_role()? },
             K::VariantNew { case, fields } => {
@@ -241,6 +243,7 @@ impl FunctionGen<'_> {
                 };
                 I::CallCap { dst: dst()?, cap: reg(*cap), ty: CapRef(id.0 as u32), field: *field as u32 }
             }
+            K::AwaitTake(future) => I::AwaitTake { dst: opt, future: reg(*future) },
             K::Await(future) => I::Await { dst: opt, future: reg(*future) },
             K::FutSpawn(future) => I::FutSpawn { dst: dst()?, future: reg(*future) },
             K::WorkerSpawn { entry, args, direct } => I::WorkerSpawn { dst: dst()?, entry: reg(*entry), args: regs(args), direct: *direct },
@@ -353,6 +356,13 @@ impl FunctionGen<'_> {
                 I::RegionSettleUnwind { dst: dst()?, region: reg(*region), failure: reg(*failure) }
             }
             K::FailSecondary { primary, cleanup } => I::FailSecondary { dst: dst()?, primary: reg(*primary), cleanup: reg(*cleanup) },
+            K::ResourcePin { value } => I::ResourcePin { value: reg(*value) },
+            K::ResourceLeave { value } => I::ResourceLeave { value: reg(*value) },
+            K::ResourceUnwind { value, failure } => I::ResourceUnwind { dst: dst()?, value: reg(*value), failure: reg(*failure) },
+            K::ResourceSettle { value } => I::ResourceSettle { value: reg(*value) },
+            K::ResourceSettleUnwind { value, failure } => {
+                I::ResourceSettleUnwind { dst: dst()?, value: reg(*value), failure: reg(*failure) }
+            }
             K::EnumCase { ty, case } => I::EnumCase { dst: dst()?, ty: EnumRef(ty.0 as u32), case: *case as u32 },
             K::EnumCompare { op, left, right } => I::EnumCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::Float { op, args } => {

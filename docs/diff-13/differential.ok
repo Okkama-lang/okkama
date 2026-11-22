@@ -1,0 +1,59 @@
+module diff_differential v1.0.0;
+import "runtime/diff" take diff_script;
+import "candidate" take DiffAlgorithm;
+import "cell" take Cell;
+import "io/stdout" take Stdout;
+object Comparison {
+    Comparison();
+    check(left is @string, right is @string) is void {
+        let expected = diff_script(left, right);
+        let actual = DiffAlgorithm(left: left, right: right).script();
+        confirm actual == expected else panic "different script: [" + left.join("|") + "] / [" + right.join("|") + "]";
+    }
+}
+main() is int {
+    let comparison = Comparison();
+    let cases = Cell(0);
+    let sequences is @@string = [[], ["a"], ["b"], ["a", "a"], ["a", "b"], ["b", "a"], ["b", "b"], ["a", "a", "a"], ["a", "a", "b"], ["a", "b", "a"], ["a", "b", "b"], ["b", "a", "a"], ["b", "a", "b"], ["b", "b", "a"], ["b", "b", "b"], ["a", "a", "a", "a"], ["a", "a", "a", "b"], ["a", "a", "b", "a"], ["a", "a", "b", "b"], ["a", "b", "a", "a"], ["a", "b", "a", "b"], ["a", "b", "b", "a"], ["a", "b", "b", "b"], ["b", "a", "a", "a"], ["b", "a", "a", "b"], ["b", "a", "b", "a"], ["b", "a", "b", "b"], ["b", "b", "a", "a"], ["b", "b", "a", "b"], ["b", "b", "b", "a"], ["b", "b", "b", "b"], ["a", "a", "a", "a", "a"], ["a", "a", "a", "a", "b"], ["a", "a", "a", "b", "a"], ["a", "a", "a", "b", "b"], ["a", "a", "b", "a", "a"], ["a", "a", "b", "a", "b"], ["a", "a", "b", "b", "a"], ["a", "a", "b", "b", "b"], ["a", "b", "a", "a", "a"], ["a", "b", "a", "a", "b"], ["a", "b", "a", "b", "a"], ["a", "b", "a", "b", "b"], ["a", "b", "b", "a", "a"], ["a", "b", "b", "a", "b"], ["a", "b", "b", "b", "a"], ["a", "b", "b", "b", "b"], ["b", "a", "a", "a", "a"], ["b", "a", "a", "a", "b"], ["b", "a", "a", "b", "a"], ["b", "a", "a", "b", "b"], ["b", "a", "b", "a", "a"], ["b", "a", "b", "a", "b"], ["b", "a", "b", "b", "a"], ["b", "a", "b", "b", "b"], ["b", "b", "a", "a", "a"], ["b", "b", "a", "a", "b"], ["b", "b", "a", "b", "a"], ["b", "b", "a", "b", "b"], ["b", "b", "b", "a", "a"], ["b", "b", "b", "a", "b"], ["b", "b", "b", "b", "a"], ["b", "b", "b", "b", "b"]];
+    for sequences -> left {
+        for sequences -> right {
+            comparison.check(left, right);
+            cases.replace(cases.value() + 1);
+        }
+    }
+    let seed = Cell(130017);
+    let alphabet = ["", "a", "b", "ж", "🙂", "\r", "é", "é", "a\tb"];
+    for 0..1000 -> sample {
+        seed.replace((seed.value() * 48271) % 2147483647);
+        let left_size = seed.value() % 33;
+        seed.replace((seed.value() * 48271) % 2147483647);
+        let right_size = seed.value() % 33;
+        let left is @string = (0..left_size).map() -> i {
+            seed.replace((seed.value() * 48271) % 2147483647);
+            alphabet[seed.value() % alphabet.size()];
+        };
+        let right is @string = (0..right_size).map() -> i {
+            seed.replace((seed.value() * 48271) % 2147483647);
+            alphabet[seed.value() % alphabet.size()];
+        };
+        comparison.check(left, right);
+        cases.replace(cases.value() + 1);
+    }
+    let nothing is @string = [];
+    for [128, 512] -> size {
+        let left is @string = (0..size).map() -> i { "line " + i.string(); };
+        let sparse is @string = (0..size).map() -> i { if i == (size / 2).int() { "changed"; } else { left[i]; } };
+        let disjoint is @string = (0..size).map() -> i { "other " + i.string(); };
+        let repeated is @string = (0..size).map() -> i { (i % 4).string(); };
+        let shifted is @string = (0..size).map() -> i { ((i + 1) % 4).string(); };
+        comparison.check(left, left);
+        comparison.check(left, nothing);
+        comparison.check(nothing, left);
+        comparison.check(left, sparse);
+        comparison.check(left, disjoint);
+        comparison.check(repeated, shifted);
+        cases.replace(cases.value() + 6);
+    }
+    Stdout().writeln("identical scripts: ", cases.value());
+    0;
+}

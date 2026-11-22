@@ -1,0 +1,22 @@
+module bible/integers v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Division of two ints is exact: a rat, not a truncated int.
+    let half = 7 / 2;
+    out.writeln(half.string() + ": numerator " + half.numerator().string() + ", denominator " + half.denominator().string());
+    // Truncation toward zero is written, and so is the remainder.
+    out.writeln(int(7 / 2).string() + " " + int(-7 / 2).string());
+    out.writeln((7 % 3).string() + " " + (-7 % 3).string() + " " + (7 % -3).string());
+    // Powers stay exact, past any machine word.
+    out.writeln((2).pow(64).string());
+    out.writeln(((2).pow(64) - 1).string());
+    // Bit operations work on the 64-bit two's complement view of an int.
+    out.writeln((12 & 10).string() + " " + (12 | 10).string() + " " + (12 ^ 10).string() + " " + (~5).string());
+    out.writeln((1 << 62).string() + " " + (1 << 63).string());
+    out.writeln((-8 >> 1).string() + " " + (-1 >>> 60).string());
+    out.writeln(255.bit_count().string() + " " + 1.leading_zeros().string() + " " + 8.trailing_zeros().string());
+    0;
+}

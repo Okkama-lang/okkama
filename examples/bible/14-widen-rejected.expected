@@ -1,0 +1,1 @@
+14-widen-rejected.ok:16:30: semantic error: Cannot initialize variable "account" of type Account with Labelled

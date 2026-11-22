@@ -5,6 +5,12 @@
 //! сигнал кто-то ждёт: когда ожидание кончилось (сигнал пришёл или ожидание
 //! отменено), сигналу возвращается прежнее действие, и следующий завершает
 //! процесс как обычно. Sparrow берёт этот native через мост (`native_origin`).
+//!
+//! Наблюдение (`signal_watch`, #638) — ожидание без потока: оно держит
+//! обработчики своих сигналов, пока не сработает. Первый приход одного из них
+//! запоминается (`signal_arrived` отвечает его имя, `signal_arrival` будит
+//! ждущих), и наблюдение отпускает обработчики: сигналу, которого больше никто
+//! не ждёт, возвращается прежнее действие, так что второй завершает процесс.
 #![allow(unsafe_code)]
 
 use std::rc::Rc;
@@ -12,7 +18,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use super::Error;
-use super::support::{items, text};
+use super::support::{int, int_value, items, small, text};
 use crate::failure::{Failure, Kind};
 use crate::sched;
 use crate::{Value, abi::Native};
@@ -30,6 +36,12 @@ struct Registry {
     prior: [Option<libc::sigaction>; 3],
     /// Идущие ожидания: номер и места ожидаемых сигналов.
     waiters: Vec<(u64, Vec<usize>)>,
+    /// Наблюдения (#638): номер, места сигналов и сработавший сигнал. Пока не
+    /// сработало, наблюдение — ещё и ожидание в `waiters`.
+    watches: Vec<(u64, Vec<usize>, Option<usize>)>,
+    /// Идущие `signal_arrival` (#940): номер ожидания. Отмена убирает номер, и
+    /// поток ожидания выходит, не дожидаясь сигнала.
+    arrivals: Vec<u64>,
     next: u64,
     started: bool,
 }
@@ -46,6 +58,8 @@ fn hub() -> &'static Hub {
             arrived: [0; 3],
             prior: [None; 3],
             waiters: Vec::new(),
+            watches: Vec::new(),
+            arrivals: Vec::new(),
             next: 0,
             started: false,
         }),
@@ -136,7 +150,10 @@ fn dispatch(read_end: libc::c_int) {
         let count = unsafe { libc::read(read_end, &mut byte as *mut u8 as *mut libc::c_void, 1) };
         if count == 1 {
             if let Some(place) = SIGNALS.iter().position(|(_, number)| *number == libc::c_int::from(byte)) {
-                registry().arrived[place] += 1;
+                let mut registry = registry();
+                registry.arrived[place] += 1;
+                fire(&mut registry, place);
+                drop(registry);
                 hub().changed.notify_all();
             }
         } else if count == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
@@ -145,9 +162,32 @@ fn dispatch(read_end: libc::c_int) {
     }
 }
 
+/// Сигнал `place` пришёл: наблюдения, которые его ждали, срабатывают и
+/// перестают держать обработчики (второй такой сигнал — прежнее действие).
+fn fire(registry: &mut Registry, place: usize) {
+    let mut fired = Vec::new();
+    for (id, wanted, arrived) in registry.watches.iter_mut() {
+        if arrived.is_none() && wanted.contains(&place) {
+            *arrived = Some(place);
+            fired.push(*id);
+        }
+    }
+    if !fired.is_empty() {
+        registry.waiters.retain(|(waiter, _)| !fired.contains(waiter));
+        release(registry);
+    }
+}
+
 /// Записать ожидание сигналов `wanted`, поставив обработчики тем, у кого их
 /// ещё нет. Возвращает номер ожидания и счётчики приходов на этот момент.
 fn enter(wanted: &[usize]) -> Option<(u64, [u64; 3])> {
+    enter_as(wanted, false)
+}
+
+/// [`enter`]; with `watch`, the watch is recorded in the same critical
+/// section, so a signal the dispatcher handles right after the handlers go in
+/// already finds it (#940).
+fn enter_as(wanted: &[usize], watch: bool) -> Option<(u64, [u64; 3])> {
     let mut registry = registry();
     if !start(&mut registry) {
         return None;
@@ -175,6 +215,9 @@ fn enter(wanted: &[usize]) -> Option<(u64, [u64; 3])> {
     let id = registry.next;
     registry.next += 1;
     registry.waiters.push((id, wanted.to_vec()));
+    if watch {
+        registry.watches.push((id, wanted.to_vec(), None));
+    }
     Some((id, registry.arrived))
 }
 
@@ -219,23 +262,145 @@ pub fn handles(native: Native) -> bool {
     native.module() == "runtime/signal"
 }
 
-pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
-    if native != Native::SignalSignalWait {
-        return Err(Error::InvalidState("not a signal native".into()));
-    }
+fn refusal(native: Native, code: &str, message: &str) -> Error {
+    Error::Failure(crate::abi::NativeFailure {
+        domain: "core.signal".into(),
+        code: code.into(),
+        operation: native.symbol().into(),
+        message: message.into(),
+    })
+}
+
+/// Места названных сигналов, без повторов; `Err` — сообщение отказа.
+fn places(value: &Value) -> Result<Result<Vec<usize>, &'static str>, Error> {
     let mut wanted = Vec::new();
-    for item in items(&args[0])?.iter() {
+    for item in items(value)?.iter() {
         let name = item.as_string()?;
         let Some(place) = SIGNALS.iter().position(|(known, _)| *known == name) else {
-            return Ok(fail(native, "invalid_input", "Unknown signal name"));
+            return Ok(Err("Unknown signal name"));
         };
         if !wanted.contains(&place) {
             wanted.push(place);
         }
     }
     if wanted.is_empty() {
-        return Ok(fail(native, "invalid_input", "No signal to wait for"));
+        return Ok(Err("No signal to wait for"));
     }
+    Ok(Ok(wanted))
+}
+
+/// Номер наблюдения из аргумента.
+fn watch_id(value: &Value) -> Result<u64, Error> {
+    small(int(value)?, usize::MAX).map(|id| id as u64).ok_or_else(|| Error::InvalidState("signal watch".into()))
+}
+
+/// Наблюдение за сигналами `wanted` (#638): номер.
+fn watch(wanted: &[usize]) -> Option<u64> {
+    let (id, _) = enter_as(wanted, true)?;
+    Some(id)
+}
+
+/// Имя сработавшего сигнала наблюдения `id`, `""` — ещё не сработало или
+/// наблюдения нет.
+fn arrived(id: u64) -> &'static str {
+    registry()
+        .watches
+        .iter()
+        .find(|(watch, _, _)| *watch == id)
+        .and_then(|(_, _, arrived)| *arrived)
+        .map_or("", |place| SIGNALS[place].0)
+}
+
+/// Снять наблюдение `id` (повторно — ничего).
+fn unwatch(id: u64) {
+    let mut registry = registry();
+    registry.watches.retain(|(watch, _, _)| *watch != id);
+    leave(&mut registry, id);
+    drop(registry);
+    hub().changed.notify_all();
+}
+
+/// Рабочий поток `signal_arrival`: ждать, пока наблюдение `id` сработает;
+/// `None` — его сняли.
+#[cfg(test)]
+fn await_watch(id: u64) -> Option<usize> {
+    await_watch_for(id, None)
+}
+
+/// [`await_watch`] for the arrival `token`: `None` too once the arrival is
+/// cancelled (its token removed).
+fn await_watch_for(id: u64, token: Option<u64>) -> Option<usize> {
+    let mut registry = registry();
+    loop {
+        if let Some(token) = token
+            && !registry.arrivals.contains(&token)
+        {
+            return None;
+        }
+        match registry.watches.iter().find(|(watch, _, _)| *watch == id) {
+            None => return None,
+            Some((_, _, Some(place))) => return Some(*place),
+            Some(_) => {}
+        }
+        registry = hub().changed.wait(registry).unwrap_or_else(PoisonError::into_inner);
+    }
+}
+
+pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
+    match native {
+        Native::SignalSignalWatch => {
+            let wanted = match places(&args[0])? {
+                Ok(wanted) => wanted,
+                Err(message) => return Err(refusal(native, "invalid_input", message)),
+            };
+            let Some(id) = watch(&wanted) else {
+                return Err(refusal(native, "unsupported", "Signals cannot be handled here"));
+            };
+            return Ok(int_value(id as i64));
+        }
+        Native::SignalSignalArrived => return Ok(text(arrived(watch_id(&args[0])?))),
+        Native::SignalSignalUnwatch => {
+            unwatch(watch_id(&args[0])?);
+            return Ok(Value::Bool(true));
+        }
+        Native::SignalSignalArrival => {
+            let id = watch_id(&args[0])?;
+            if let Some(place) = registry().watches.iter().find(|(watch, _, _)| *watch == id).and_then(|w| w.2) {
+                return Ok(Value::Future(sched::resolved(Ok(text(SIGNALS[place].0)))));
+            }
+            let token = {
+                let mut registry = registry();
+                let token = registry.next;
+                registry.next += 1;
+                registry.arrivals.push(token);
+                token
+            };
+            let promise = sched::promise();
+            let target = promise.clone();
+            let op = sched::offload(
+                move || await_watch_for(id, Some(token)),
+                move |received: Option<usize>| {
+                    if let Some(place) = received {
+                        sched::settle(&target, Ok(text(SIGNALS[place].0)));
+                    }
+                },
+            );
+            // Исход или отмена (#940): ожидание снимается (наблюдение остаётся,
+            // его снимает unwatch), и поток будят, чтобы он вышел сразу.
+            promise.listen(move || {
+                op.detach();
+                registry().arrivals.retain(|&waiting| waiting != token);
+                hub().changed.notify_all();
+            });
+            return Ok(Value::Future(promise));
+        }
+        Native::SignalSignalWait => {}
+        _ => return Err(Error::InvalidState("not a signal native".into())),
+    }
+    let wanted = match places(&args[0])? {
+        Ok(wanted) => wanted,
+        Err(message) => return Ok(fail(native, "invalid_input", message)),
+    };
     let Some((id, seen)) = enter(&wanted) else {
         return Ok(fail(native, "unsupported", "Signals cannot be handled here"));
     };
@@ -256,4 +421,70 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         hub().changed.notify_all();
     });
     Ok(Value::Future(promise))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #638: a watch keeps its signal's handler until the signal comes; then it
+    /// remembers that signal, lets the handler go (the earlier action is back,
+    /// so a second one ends the process), and unwatching forgets it.
+    #[test]
+    fn a_watch_fires_once_and_lets_its_handler_go() {
+        let hup = 2;
+        let id = watch(&[hup]).expect("a watch");
+        assert_eq!(arrived(id), "");
+        assert!(registry().prior[hup].is_some(), "the handler is installed while watching");
+        {
+            let mut registry = registry();
+            registry.arrived[hup] += 1;
+            fire(&mut registry, hup);
+            assert!(!registry.waiters.iter().any(|(waiter, _)| *waiter == id));
+            assert!(registry.prior[hup].is_none(), "the earlier action is back");
+        }
+        assert_eq!(arrived(id), "HUP");
+        assert_eq!(await_watch(id), Some(hup));
+        unwatch(id);
+        assert_eq!(arrived(id), "");
+        assert_eq!(await_watch(id), None);
+    }
+
+    /// #940: the watch is in the registry by the time the handlers are, so a
+    /// signal the dispatcher handles at once fires it.
+    #[test]
+    fn a_watch_is_recorded_with_its_handlers() {
+        let term = 0;
+        let id = watch(&[term]).expect("a watch");
+        {
+            let mut registry = registry();
+            assert!(registry.watches.iter().any(|(watch, _, _)| *watch == id));
+            registry.arrived[term] += 1;
+            fire(&mut registry, term);
+        }
+        assert_eq!(arrived(id), "TERM");
+        unwatch(id);
+    }
+
+    /// #940: a cancelled arrival (its token gone) stops waiting although the
+    /// watch has not fired; the watch stays.
+    #[test]
+    fn a_cancelled_arrival_stops_waiting() {
+        let int = 1;
+        let id = watch(&[int]).expect("a watch");
+        let token = {
+            let mut registry = registry();
+            let token = registry.next;
+            registry.next += 1;
+            registry.arrivals.push(token);
+            token
+        };
+        let waiting = std::thread::spawn(move || await_watch_for(id, Some(token)));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        registry().arrivals.retain(|&waiting| waiting != token);
+        hub().changed.notify_all();
+        assert_eq!(waiting.join().expect("the waiting thread"), None);
+        assert!(registry().watches.iter().any(|(watch, _, _)| *watch == id));
+        unwatch(id);
+    }
 }

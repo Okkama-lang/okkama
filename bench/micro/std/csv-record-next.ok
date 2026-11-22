@@ -1,0 +1,34 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "async/atomic" take Atomic;
+import "csv" take CsvRecords, CsvRecord;
+
+object Bench {
+    Bench();
+
+    async run(n is int) is int {
+        let total = Atomic(0);
+        for 0..n -> i {
+            let v = i % 23 + 1;
+            let x = v.string();
+            let records = CsvRecords("n\r\n" + x + "\r\n");
+            let row = await records.next() else CsvRecord(fields: [""]);
+            let result = row.text("n").length();
+            total.replace(total.value() + result);
+        }
+        total.value();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

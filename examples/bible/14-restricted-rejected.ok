@@ -1,0 +1,15 @@
+module bible/restricted v1.0.0;
+
+role Presentation { label() is string; }
+
+object Customer does Presentation {
+    has number is int;
+    Customer(:number);
+    label() is string { "customer " + number.string(); }
+    id() is int { number; }
+}
+
+main() is int {
+    let shown is Presentation = Customer(number: 7);
+    shown.id();
+}

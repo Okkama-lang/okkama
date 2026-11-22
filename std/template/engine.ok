@@ -1,0 +1,1952 @@
+module template/engine v1.0.0;
+
+// Templates over JSON: one small language, compiled once, rendered as text.
+//
+//     let greeting = Template("Hello, {{user.name}}! You have {{user.unread}} new messages.");
+//     greeting.string(ParsedJson(text).root());
+//     greeting.write(data: data, destination: Stdout());
+//
+//     let order = Template("Order {{id}}:\n{{#items}}  - {{title}}\n{{/items}}{{^items}}  (empty)\n{{/items}}");
+//
+// The language (Mustache's core, nothing more):
+// - `{{path}}` is a value: a dotted path of members (`user.name`) read from the
+//   current context, or `{{.}}`, the context itself;
+// - `{{#path}}…{{/path}}` is a section and `{{^path}}…{{/path}}` an inverted one;
+// - `{{! comment }}` is dropped; `{{{{` and `}}}}` write `{{` and `}}`;
+// - a tag alone on its line takes its indentation and line end with it.
+// There are no expressions, filters, functions or assignments.
+//
+// Values. A string is written as it is, a number in its canonical form
+// (`12.5`), a boolean as `true` or `false`, null as nothing. An object or an
+// array as a value is NonScalarTemplateValue; a member that is not there is
+// MissingTemplateValue. Names are read from the current context only, not from
+// the contexts around it.
+//
+// Sections. A section on an array renders once per item, the item as the
+// context; on an object, once with the object as the context; on true, a
+// number or a non-empty string, once with that value as the context; on false,
+// null, "", [] or a missing member, not at all. An inverted section renders
+// once, in the enclosing context, exactly when the section would not render;
+// for an object it never does.
+//
+// Compiling. The source is parsed and checked whole on the first render and
+// kept: rendering again reuses it, and rendering never changes it. A source
+// that is not a template is TemplateFailure, with its line and column, before
+// anything is written. write() sends the output piece by piece; what was
+// written before a failure (a missing value, a limit) stays written.
+//
+// Limits (TemplateLimits): the source's characters, its tokens, how deep
+// sections nest, how many section bodies render, the output's UTF-8 bytes and
+// the members of an object read on a path. Going past one is its own error.
+
+import "template/tree" take TemplateTree, TemplateTreeNode, TemplateTreeKind;
+import "template/compile" take TemplateFailure, InvalidTemplateLimits, TemplateOutputLimitExceeded;
+import "template/json" take JsonTemplateStrings, TemplateJsonLimitExceeded, NonScalarTemplateValue;
+import "template/model" take MissingTemplateValue;
+import "template/path" take TemplatePathFromString;
+import "json" take Json, JsonKind, JsonField, ParsedJson;
+import "io/stream" take WritingText;
+import "async/atomic" take Atomic;
+import "collections/list" take List, EmptyList;
+import "runtime/template" take template_output_size;
+import "html/entities" take EscapedHtml;
+import "encoding/utf" take Utf8Decoded;
+import "error" take InvalidArgument;
+
+// How large a template, its rendering and its data may be.
+object TemplateLimits {
+    has characters, tokens, depth, iterations, output, members, partials is int;
+
+    // A source of 1 Mi characters and 20000 tokens, sections 64 deep, 10000
+    // section bodies and partials, 1 MiB of output, 1024 members an object and
+    // partials 32 deep, unless told.
+    TemplateLimits(
+        characters is int = 1048576,
+        tokens is int = 20000,
+        depth is int = 64,
+        iterations is int = 10000,
+        output is int = 1048576,
+        members is int = 1024,
+        partials is int = 32
+    ) {
+        confirm characters >= 0
+            && tokens >= 0
+            && depth >= 0
+            && iterations >= 0
+            && output >= 0
+            && members >= 0
+            && partials >= 0
+            else throw InvalidTemplateLimits.invalid;
+        self.partials = partials;
+        self.characters = characters;
+        self.tokens = tokens;
+        self.depth = depth;
+        self.iterations = iterations;
+        self.output = output;
+        self.members = members;
+    }
+
+    // Source characters and tokens (each partial's too), section depth,
+    // rendered section bodies and partials, output bytes, members an object
+    // and partial depth.
+    cap Limits {
+        partials is int {
+            partials;
+        }
+
+        characters is int {
+            characters;
+        }
+
+        tokens is int {
+            tokens;
+        }
+
+        depth is int {
+            depth;
+        }
+
+        iterations is int {
+            iterations;
+        }
+
+        output is int {
+            output;
+        }
+
+        members is int {
+            members;
+        }
+    }
+}
+
+// How values are written: as they are, or escaped for where they land in
+// HTML.
+enum TemplateEscaping = (text, html);
+
+// A template, compiled on first use and kept.
+object Template {
+    has origin is string;
+    has escaping is TemplateEscaping;
+    has partials is TemplatePartials;
+    has limits is TemplateLimits;
+
+    // A template of source, written as text unless escaping says HTML, that may
+    // include partials, within limits.
+    Template(
+        source is string,
+        escaping is TemplateEscaping = TemplateEscaping.text,
+        partials is TemplatePartials = TemplatePartials(),
+        limits is TemplateLimits = TemplateLimits()
+    ) {
+        origin = source;
+        self.escaping = escaping;
+        self.partials = partials;
+        self.limits = limits;
+    }
+
+    // Its source.
+    source() is string {
+        origin;
+    }
+
+    // The text for data; the source is checked whole first.
+    string(data is Json) is string {
+        let collected = TemplateCollected();
+        self.write(data, collected);
+        collected.string();
+    }
+
+    // Writes the text for data to destination, piece by piece; what was
+    // written before a failure stays written.
+    write(data is Json, destination is WritingText) is void {
+        let plan = self.plan();
+        TemplateRun(
+            plan: plan,
+            sink: TemplateSink(destination: destination, maximum: limits::Limits::output),
+            iterations: TemplateCounter(limits::Limits::iterations),
+            limits: limits,
+            depth: 0,
+            nesting: 0
+        ).write(plan.root(), data);
+    }
+
+    hidden plan() is TemplatePlan {
+        once let compiled = if escaping == TemplateEscaping.html {
+            TemplateHtmlPlan(
+                origin: TemplateCompilation(source: origin, partials: partials, limits: limits).plan(),
+                partials: partials,
+                limits: limits
+            ).plan();
+        }
+        else {
+            TemplateCompilation(source: origin, partials: partials, limits: limits).plan();
+        };
+        compiled;
+    }
+}
+
+// Named sources a template includes with `{{>name}}`, in the template's own
+// mode and with its data and limits.
+//
+//     Template(source: "{{#items}}{{>item}}{{/items}}", partials: TemplatePartials(["item": "- {{title}}\n"]));
+//
+// Names are exact, without trimming or case folding, and a map has each name
+// once. Only the partials a template reaches are compiled, each once, before
+// anything is written; one it reaches and the library lacks is
+// TemplateError.partial(name). A partial may include itself: TemplateLimits
+// bounds how deep partials nest and how many render.
+object TemplatePartials {
+    has sources is %string:string;
+
+    // None.
+    TemplatePartials() {
+        let none_here is %string:string = [:];
+        sources = none_here;
+    }
+
+    // The sources by name; InvalidArgument for an empty name.
+    TemplatePartials(sources is %string:string) {
+        for sources.keys() -> name {
+            confirm name != "" else throw InvalidArgument.because("a partial needs a name");
+        }
+        self.sources = sources;
+    }
+
+    // Whether a partial has the name.
+    membership(name is string) is bool {
+        sources.has(name);
+    }
+
+    // The source of the partial named name; TemplateError.partial(name) when none.
+    source(name is string) is string {
+        confirm self.membership(name) else throw TemplateError.partial(name);
+        sources[name];
+    }
+}
+
+// What a template could not do with its data; each case names its limit or
+// its part.
+enum TemplateError is Error = (
+    iterations(limit is int),
+    depth(limit is int),
+    partial(name is string),
+    partial_depth(limit is int),
+    html(reason is string)
+);
+
+// A template's steps and those of the partials it reaches, each compiled once.
+hidden object TemplatePlan {
+    has root is @TemplateStep;
+    has partials is %string:@TemplateStep;
+    has html is bool = false;
+
+    TemplatePlan(:root, :partials);
+
+    TemplatePlan(:root, :partials, :html);
+
+    html() is bool {
+        html;
+    }
+
+    root() is @TemplateStep {
+        root;
+    }
+
+    partial(name is string) is @TemplateStep {
+        partials[name];
+    }
+}
+
+// Compiles a template, then each partial it reaches, once, following their
+// references; a reference the library lacks fails before anything renders.
+hidden object TemplateCompilation {
+    has source is string;
+    has partials is TemplatePartials;
+    has limits is TemplateLimits;
+
+    TemplateCompilation(:source, :partials, :limits);
+
+    plan() is TemplatePlan {
+        let root = self.compiled(source);
+        let none_yet is %string:@TemplateStep = [:];
+        let reached = TemplateReached(
+            compilation: self,
+            done: none_yet,
+            pending: TemplateReferences(root).names()
+        );
+        loop {
+            last if reached.finished();
+            reached = reached.following();
+        }
+        TemplatePlan(root: root, partials: reached.done());
+    }
+
+    // The steps of the partial named name.
+    partial(name is string) is @TemplateStep {
+        self.compiled(partials.source(name));
+    }
+
+    hidden compiled(text is string) is @TemplateStep {
+        TemplateSteps(
+            TemplateTree(
+                source: text,
+                maximum_input: limits::Limits::characters,
+                maximum_tokens: limits::Limits::tokens,
+                maximum_depth: limits::Limits::depth
+            ).nodes()
+        ).steps();
+    }
+}
+
+// The partials compiled so far and those still to compile; each successor
+// compiles one, once.
+hidden object TemplateReached {
+    has compilation is TemplateCompilation;
+    has done is %string:@TemplateStep;
+    has pending is @string;
+
+    TemplateReached(:compilation, :done, :pending);
+
+    finished() is bool {
+        pending.size() == 0;
+    }
+
+    done() is %string:@TemplateStep {
+        done;
+    }
+
+    following() is ^TemplateReached {
+        let name = pending[0];
+        let rest = pending.slice(1, pending.size());
+        if done.has(name) {
+            ^pending = rest;
+            return;
+        }
+        let steps = compilation.partial(name);
+        ^done = done + [name: steps];
+        ^pending = rest + TemplateReferences(steps).names();
+    }
+}
+
+// The HTML plan of a compiled template (#178): every literal is followed
+// through an HTML lexer, so each value is known to land in text or in a quoted
+// attribute that takes it, and is escaped for that; any other place fails
+// closed with TemplateError.html before anything is written. A section, an
+// inverted section and a partial must leave the lexer in the state they found
+// it, so rendering a body zero, one or many times, and a partial wherever it
+// is included, never changes the context around them. A partial is analysed
+// in each state it is included in. The source ends in text, every element
+// closed.
+hidden object TemplateHtmlPlan {
+    has origin is TemplatePlan;
+    has partials is TemplatePartials;
+    has limits is TemplateLimits;
+
+    TemplateHtmlPlan(:origin, :partials, :limits);
+
+    plan() is TemplatePlan {
+        let none_yet is %string:@TemplateStep = [:];
+        let pass = TemplateHtmlPass(origin: origin, limits: limits);
+        let start = HtmlTemplateState();
+        let result = pass.steps(
+            steps: origin.root(),
+            state: start,
+            nesting: 0,
+            done: none_yet,
+            open: []
+        );
+        result.state().finish();
+        TemplatePlan(root: result.steps(), partials: result.done(), html: true);
+    }
+}
+
+// The HTML analysis of some steps from a state: the annotated steps, the state
+// after them and the partials analysed so far, by entry.
+hidden object TemplateHtmlResult {
+    has reversed is List<TemplateStep>;
+    has state is HtmlTemplateState;
+    has done is %string:@TemplateStep;
+
+    TemplateHtmlResult(state is HtmlTemplateState, done is %string:@TemplateStep) {
+        let empty is List<TemplateStep> = EmptyList();
+        reversed = empty;
+        self.state = state;
+        self.done = done;
+    }
+
+    TemplateHtmlResult(
+        reversed is List<TemplateStep>,
+        state is HtmlTemplateState,
+        done is %string:@TemplateStep
+    ) {
+        self.reversed = reversed;
+        self.state = state;
+        self.done = done;
+    }
+
+    steps() is @TemplateStep {
+        let backwards is @TemplateStep = reversed.map() -> step {
+            step;
+        };
+        let count = backwards.size();
+        (0..count).map() -> index {
+            backwards[count - 1 - index];
+        };
+    }
+
+    state() is HtmlTemplateState {
+        state;
+    }
+
+    done() is %string:@TemplateStep {
+        done;
+    }
+
+    // This result with step after its steps, in state, with done.
+    following(step is TemplateStep, state is HtmlTemplateState, done is %string:@TemplateStep) is TemplateHtmlResult {
+        TemplateHtmlResult(reversed: reversed.prefix(step), state: state, done: done);
+    }
+}
+
+hidden object TemplateHtmlPass {
+    has origin is TemplatePlan;
+    has limits is TemplateLimits;
+
+    TemplateHtmlPass(:origin, :limits);
+
+    steps(
+        steps is @TemplateStep,
+        state is HtmlTemplateState,
+        nesting is int,
+        done is %string:@TemplateStep,
+        open is @string
+    ) is TemplateHtmlResult {
+        steps.reduce(TemplateHtmlResult(state: state, done: done)) -> result, step {
+            let here = result.state();
+            match step.kind() {
+                case TemplateTreeKind.literal {
+                    confirm !step.text().contains(Utf8Decoded([byte(0)]).string())
+                        else throw TemplateError.html("NUL in source");
+                    result.following(step, here.after(step.text()), result.done());
+                }
+                case TemplateTreeKind.variable {
+                    let quotes = here.quotes();
+                    result.following(
+                        TemplateStep(
+                            origin: step,
+                            quotes: quotes,
+                            steps: step.steps(),
+                            entry: step.entry()
+                        ),
+                        here,
+                        result.done()
+                    );
+                }
+                case TemplateTreeKind.partial {
+                    let entry = step.text() + Utf8Decoded([byte(0)]).string() + here.key();
+                    let marked = TemplateStep(
+                        origin: step,
+                        quotes: false,
+                        steps: step.steps(),
+                        entry: entry
+                    );
+                    // Past the depth limit the partial is never entered: the
+                    // rendering stops with TemplateError.partial_depth first.
+                    if nesting >= limits::Limits::partials
+                        || result.done().has(entry)
+                        || open.filter() -> key {
+                            key == entry;
+                        }.size() > 0 {
+                            result.following(marked, here, result.done());
+                        }
+                        else {
+                            let inner = self.steps(
+                                steps: origin.partial(step.text()),
+                                state: here,
+                                nesting: nesting + 1,
+                                done: result.done(),
+                                open: open + [entry]
+                            );
+                            confirm inner.state().key() == here.key()
+                                else throw TemplateError.html(
+                                    "partial " + step.text() + " does not leave the HTML context it is included in"
+                                );
+                            result.following(marked, here, inner.done() + [entry: inner.steps()]);
+                        }
+                }
+                else {
+                    let inner = self.steps(
+                        steps: step.steps(),
+                        state: here,
+                        nesting: nesting,
+                        done: result.done(),
+                        open: open
+                    );
+                    confirm inner.state().key() == here.key()
+                        else throw TemplateError.html(
+                            "section " + step.text() + " does not leave the HTML context it opens in"
+                        );
+                    result.following(
+                        TemplateStep(
+                            origin: step,
+                            quotes: false,
+                            steps: inner.steps(),
+                            entry: step.entry()
+                        ),
+                        here,
+                        inner.done()
+                    );
+                }
+            }
+        };
+    }
+}
+
+// The partials steps name, in order, sections included.
+hidden object TemplateReferences {
+    has steps is @TemplateStep;
+
+    TemplateReferences(steps is @TemplateStep) {
+        self.steps = steps;
+    }
+
+    names() is @string {
+        let found is @string = [];
+        steps.reduce(found) -> names, step {
+            if step.kind() == TemplateTreeKind.partial {
+                names + [step.text()];
+            }
+            else {
+                names + TemplateReferences(step.steps()).names();
+            }
+        };
+    }
+}
+
+// One compiled step: a literal, a value, a section with its steps, or a
+// partial. Immutable; the data never reaches it.
+hidden object TemplateStep {
+    has kind is TemplateTreeKind;
+    has text is string;
+    has path is @string;
+    has steps is @TemplateStep;
+    // HTML: a value in a quoted attribute, where quotes are escaped too.
+    has quotes is bool = false;
+    // The plan's key of a partial's steps: its name, and in HTML the state it
+    // is included in.
+    has entry is string;
+
+    TemplateStep(kind is TemplateTreeKind, text is string, steps is @TemplateStep) {
+        self.kind = kind;
+        self.text = text;
+        entry = text;
+        path = if (kind == TemplateTreeKind.section || kind == TemplateTreeKind.inverted)
+            && text != "." {
+                TemplatePathFromString(text).path().segments().map() -> part {
+                    part;
+                };
+            }
+            else {
+                let none_here is @string = [];
+                none_here;
+            };
+        self.steps = steps;
+    }
+
+    // The same step as HTML sees it: quotes for a value, steps for a section,
+    // entry for a partial.
+    TemplateStep(origin is TemplateStep, quotes is bool, steps is @TemplateStep, entry is string) {
+        kind = origin.kind();
+        text = origin.text();
+        path = origin.path();
+        self.quotes = quotes;
+        self.steps = steps;
+        self.entry = entry;
+    }
+
+    kind() is TemplateTreeKind {
+        kind;
+    }
+
+    text() is string {
+        text;
+    }
+
+    path() is @string {
+        path;
+    }
+
+    quotes() is bool {
+        quotes;
+    }
+
+    entry() is string {
+        entry;
+    }
+
+    steps() is @TemplateStep {
+        steps;
+    }
+}
+
+// The steps of a parsed tree.
+hidden object TemplateSteps {
+    has nodes is @TemplateTreeNode;
+
+    TemplateSteps(nodes is @TemplateTreeNode) {
+        self.nodes = nodes;
+    }
+
+    steps() is @TemplateStep {
+        nodes.map() -> node {
+            TemplateStep(
+                kind: node.kind(),
+                text: node.text(),
+                steps: TemplateSteps(node.children()).steps()
+            );
+        };
+    }
+}
+
+// One rendering: its output, its iteration count and how deep it is. Nothing
+// here is shared between renderings.
+hidden object TemplateRun {
+    has plan is TemplatePlan;
+    has sink is TemplateSink;
+    has iterations is TemplateCounter;
+    has limits is TemplateLimits;
+    has depth, nesting is int;
+
+    TemplateRun(:plan, :sink, :iterations, :limits, :depth, :nesting);
+
+    write(steps is @TemplateStep, data is Json) is void {
+        for steps -> step {
+            match step.kind() {
+                case TemplateTreeKind.literal {
+                    sink.append(step.text());
+                }
+                case TemplateTreeKind.variable {
+                    let value = JsonTemplateStrings(
+                        origin: data,
+                        maximum_members: limits::Limits::members,
+                        maximum_output: sink.remaining()
+                    ).string(step.text());
+                    sink.append(if plan.html() {
+                        EscapedHtml(origin: value, quotes: step.quotes()).string();
+                    }
+                    else {
+                        value;
+                    });
+                }
+                case TemplateTreeKind.partial {
+                    self.partial(step.entry(), data);
+                }
+                else {
+                    self.section(step, data);
+                }
+            }
+        }
+    }
+
+    hidden section(step is TemplateStep, data is Json) is void {
+        let found = TemplateLookup(
+            origin: data,
+            path: step.path(),
+            maximum_members: limits::Limits::members
+        ).json();
+        let inverted = step.kind() == TemplateTreeKind.inverted;
+        match found.kind() {
+            case JsonKind.array_value {
+                let items = found.items();
+                if inverted {
+                    if items.size() == 0 {
+                        self.body(step, data);
+                    }
+                }
+                else {
+                    confirm items.size() <= iterations.remaining()
+                        else throw TemplateError.iterations(limits::Limits::iterations);
+                    for items -> item {
+                        self.body(step, item);
+                    }
+                }
+            }
+            case JsonKind.object_value {
+                if !inverted {
+                    confirm found.size() <= limits::Limits::members
+                        else throw TemplateJsonLimitExceeded.exceeded;
+                    self.body(step, found);
+                }
+            }
+            else {
+                let truth = TemplateTruth(found).truth();
+                if inverted && !truth {
+                    self.body(step, data);
+                }
+                if !inverted && truth {
+                    self.body(step, found);
+                }
+            }
+        }
+    }
+
+    hidden body(step is TemplateStep, context is Json) is void {
+        iterations.claim(limits::Limits::iterations);
+        confirm depth < limits::Limits::depth else throw TemplateError.depth(limits::Limits::depth);
+        TemplateRun(
+            plan: plan,
+            sink: sink,
+            iterations: iterations,
+            limits: limits,
+            depth: depth + 1,
+            nesting: nesting
+        ).write(step.steps(), context);
+    }
+
+    // A partial renders with the current context; it counts as an iteration,
+    // and its nesting is bounded.
+    hidden partial(name is string, context is Json) is void {
+        confirm nesting < limits::Limits::partials
+            else throw TemplateError.partial_depth(limits::Limits::partials);
+        iterations.claim(limits::Limits::iterations);
+        TemplateRun(
+            plan: plan,
+            sink: sink,
+            iterations: iterations,
+            limits: limits,
+            depth: depth,
+            nesting: nesting + 1
+        ).write(plan.partial(name), context);
+    }
+}
+
+// Whether a scalar renders a section: false, null and "" do not.
+hidden object TemplateTruth {
+    has value is Json;
+
+    TemplateTruth(value is Json) {
+        self.value = value;
+    }
+
+    truth() is bool {
+        match value.kind() {
+            case JsonKind.null_value: false;
+            case JsonKind.boolean_value: value.boolean();
+            case JsonKind.string_value: value.text() != "";
+            case _: true;
+        }
+    }
+}
+
+// The member at path from origin; a missing member, or one below a
+// non-object, is null. Each object on the way has at most maximum_members.
+hidden object TemplateLookup {
+    has origin is Json;
+    has path is @string;
+    has maximum_members is int;
+
+    TemplateLookup(:origin, :path, :maximum_members);
+
+    json() is Json {
+        let found = Atomic(origin);
+        for path -> name {
+            let current = found.value();
+            if current.kind() != JsonKind.object_value {
+                return Json();
+            }
+            confirm current.size() <= maximum_members else throw TemplateJsonLimitExceeded.exceeded;
+            if !current.has(name) {
+                return Json();
+            }
+            found.replace(current.get(name));
+        }
+        found.value();
+    }
+}
+
+// The section bodies a rendering may still render.
+hidden object TemplateCounter {
+    has left is Atomic<int>;
+
+    TemplateCounter(maximum is int) {
+        left = Atomic(maximum);
+    }
+
+    remaining() is int {
+        left.value();
+    }
+
+    // Spends one; TemplateError.iterations(limit) when none is left.
+    claim(limit is int) is void {
+        confirm left.value() > 0 else throw TemplateError.iterations(limit);
+        left.replace(left.value() - 1);
+    }
+}
+
+// The output of a rendering, at most maximum UTF-8 bytes: each piece is
+// measured before it goes out, and goes out in writes of at most 1024
+// characters.
+hidden object TemplateSink {
+    has destination is WritingText;
+    has maximum is int;
+    has used is Atomic<int>;
+
+    TemplateSink(destination is WritingText, maximum is int) {
+        self.destination = destination;
+        self.maximum = maximum;
+        used = Atomic(0);
+    }
+
+    remaining() is int {
+        maximum - used.value();
+    }
+
+    append(value is string) is void {
+        let size = template_output_size(value, maximum - used.value());
+        confirm size >= 0 else throw TemplateOutputLimitExceeded.exceeded;
+        used.replace(used.value() + size);
+        let count = value.length();
+        if count <= 1024 {
+            if count > 0 {
+                destination.write(value);
+            }
+            return;
+        }
+        for (0..((count + 1023) >> 10)) -> chunk {
+            let start = chunk << 10;
+            let end = if count - start > 1024 {
+                start + 1024;
+            }
+            else {
+                count;
+            };
+            destination.write(value.slice(start, end));
+        }
+    }
+}
+
+// Text written to it, kept in order, for Template.string().
+hidden object TemplateCollected does WritingText {
+    has parts is Atomic<List<string>>;
+
+    TemplateCollected() {
+        let empty is List<string> = EmptyList();
+        parts = Atomic(empty);
+    }
+
+    write(values is ...string) is void {
+        let listed is @string = values...;
+        for listed -> value {
+            parts.replace(parts.value().prefix(value));
+        }
+    }
+
+    writeln(values is ...string) is void {
+        let listed is @string = values...;
+        self.write(listed.join("") + "\n");
+    }
+
+    string() is string {
+        let reversed is @string = parts.value().map() -> part {
+            part;
+        };
+        let count = reversed.size();
+        let ordered is @string = (0..count).map() -> index {
+            reversed[count - 1 - index];
+        };
+        ordered.join("");
+    }
+}
+
+// Internal immutable lexical context. Names are bounded at 128 ASCII scalars;
+// the stack at 64. following() returns the next context without mutating this
+// one. The full constructor is infrastructure, not an application data schema.
+hidden object HtmlTemplateState {
+    has mode, tag, attribute, quote, pending is string;
+    has stack is List<string>;
+
+    HtmlTemplateState() {
+        mode = "text";
+        tag = "";
+        attribute = "";
+        quote = "";
+        pending = "";
+        let empty is List<string> = EmptyList();
+        stack = empty;
+    }
+
+    HtmlTemplateState(:mode, :tag, :attribute, :quote, :pending, :stack);
+
+    // The whole state as one text, to compare two states: a section or a
+    // partial must leave the state it found.
+    key() is string {
+        let open is @string = stack.map() -> name {
+            name;
+        };
+        // In text the lexer looks at nothing but the open elements.
+        if mode == "text" {
+            return "text|||||" + open.join(",");
+        }
+        mode + "|" + tag + "|" + attribute + "|" + quote + "|" + pending + "|" + open.join(",");
+    }
+
+    // The state after text, character by character.
+    after(text is string) is HtmlTemplateState {
+        text.characters().reduce(self) -> state, char {
+            state.following(char.string());
+        };
+    }
+
+    quotes() is bool {
+        if mode == "text" {
+            return false;
+        }
+        confirm mode == "quoted"
+            else throw TemplateError.html("interpolation outside text or quoted attribute");
+        let allowed = attribute == "id"
+            || attribute == "class"
+            || attribute == "title"
+            || attribute == "alt"
+            || attribute == "role"
+            || attribute == "lang"
+            || attribute == "dir"
+            || (attribute.length() > 5 && attribute.starts_with("aria-"))
+            || (attribute.length() > 5 && attribute.starts_with("data-"));
+        confirm allowed
+            else throw TemplateError.html(
+                "interpolation in restricted attribute: " + attribute
+            );
+        true;
+    }
+
+    finish() is void {
+        confirm mode == "text" && stack.size() == 0
+            else throw TemplateError.html("unfinished HTML context");
+    }
+
+    following(value is string) is HtmlTemplateState {
+        let char = HtmlTemplateCharacter(value);
+        if mode == "text" {
+            if value == "<" {
+                return HtmlTemplateState(
+                    mode: "open",
+                    tag: "",
+                    attribute: "",
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            return self;
+        }
+        if mode == "open" {
+            if value == "/" {
+                return HtmlTemplateState(
+                    mode: "close_start",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == "!" {
+                return HtmlTemplateState(
+                    mode: "bang",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: "",
+                    stack: stack
+                );
+            }
+            confirm char.letter() else throw TemplateError.html("invalid tag start");
+            return HtmlTemplateState(
+                mode: "tag",
+                tag: char.lower(),
+                attribute: attribute,
+                quote: quote,
+                pending: pending,
+                stack: stack
+            );
+        }
+        if mode == "tag" {
+            if char.name() {
+                confirm tag.length() < 128
+                    else throw TemplateError.html("tag name limit exceeded");
+                return HtmlTemplateState(
+                    mode: mode,
+                    tag: tag + char.lower(),
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if char.space() {
+                return HtmlTemplateState(
+                    mode: "space",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                return self.opened(false);
+            }
+            if value == "/" {
+                return HtmlTemplateState(
+                    mode: "slash",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            throw TemplateError.html("invalid tag name");
+        }
+        if mode == "space" || mode == "after_attr" {
+            if char.space() {
+                return self;
+            }
+            if mode == "after_attr" && value == "=" {
+                return HtmlTemplateState(
+                    mode: "value",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                return self.opened(false);
+            }
+            if value == "/" {
+                return HtmlTemplateState(
+                    mode: "slash",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            confirm char.letter() else throw TemplateError.html("invalid attribute name");
+            return HtmlTemplateState(
+                mode: "attr",
+                tag: tag,
+                attribute: char.lower(),
+                quote: quote,
+                pending: pending,
+                stack: stack
+            );
+        }
+        if mode == "attr" {
+            if char.name() {
+                confirm attribute.length() < 128
+                    else throw TemplateError.html("attribute name limit exceeded");
+                return HtmlTemplateState(
+                    mode: mode,
+                    tag: tag,
+                    attribute: attribute + char.lower(),
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if char.space() {
+                return HtmlTemplateState(
+                    mode: "after_attr",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == "=" {
+                return HtmlTemplateState(
+                    mode: "value",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                return self.opened(false);
+            }
+            if value == "/" {
+                return HtmlTemplateState(
+                    mode: "slash",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            throw TemplateError.html("invalid attribute name");
+        }
+        if mode == "value" {
+            if char.space() {
+                return self;
+            }
+            if value == "\"" || value == "'" {
+                return HtmlTemplateState(
+                    mode: "quoted",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: value,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            confirm value != ">" && value != "<" && value != "=" && value != "`"
+                else throw TemplateError.html("invalid unquoted attribute");
+            return HtmlTemplateState(
+                mode: "unquoted",
+                tag: tag,
+                attribute: attribute,
+                quote: quote,
+                pending: pending,
+                stack: stack
+            );
+        }
+        if mode == "quoted" {
+            if value == quote {
+                return HtmlTemplateState(
+                    mode: "after_quote",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            return self;
+        }
+        if mode == "unquoted" {
+            if char.space() {
+                return HtmlTemplateState(
+                    mode: "space",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                return self.opened(false);
+            }
+            confirm value != "<" && value != "=" && value != "`" && value != "\"" && value != "'"
+                else throw TemplateError.html("invalid unquoted attribute");
+            return self;
+        }
+        if mode == "after_quote" {
+            if char.space() {
+                return HtmlTemplateState(
+                    mode: "space",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                return self.opened(false);
+            }
+            if value == "/" {
+                return HtmlTemplateState(
+                    mode: "slash",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            throw TemplateError.html("attributes require whitespace separation");
+        }
+        if mode == "slash" {
+            confirm value == ">" else throw TemplateError.html("invalid self-closing tag");
+            return self.opened(true);
+        }
+        if mode == "close_start" {
+            confirm char.letter() else throw TemplateError.html("invalid closing tag");
+            return HtmlTemplateState(
+                mode: "close",
+                tag: char.lower(),
+                attribute: attribute,
+                quote: quote,
+                pending: pending,
+                stack: stack
+            );
+        }
+        if mode == "close" {
+            if char.name() {
+                confirm tag.length() < 128
+                    else throw TemplateError.html("tag name limit exceeded");
+                return HtmlTemplateState(
+                    mode: mode,
+                    tag: tag + char.lower(),
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            if char.space() {
+                return HtmlTemplateState(
+                    mode: "close_space",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending,
+                    stack: stack
+                );
+            }
+            confirm value == ">" else throw TemplateError.html("invalid closing tag");
+            return self.closed();
+        }
+        if mode == "close_space" {
+            if char.space() {
+                return self;
+            }
+            confirm value == ">" else throw TemplateError.html("invalid closing tag");
+            return self.closed();
+        }
+        if mode == "bang" {
+            if value == ">" {
+                confirm pending == "doctype html" && stack.size() == 0
+                    else throw TemplateError.html("unsupported declaration");
+                return HtmlTemplateState(
+                    mode: "text",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: "",
+                    stack: stack
+                );
+            }
+            let following_text = pending + char.lower();
+            if following_text == "--" {
+                return HtmlTemplateState(
+                    mode: "comment",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: "",
+                    stack: stack
+                );
+            }
+            confirm following_text == "-"
+                || (following_text.length() <= 12
+                && following_text == "doctype html".slice(0, following_text.length()))
+                else throw TemplateError.html("unsupported declaration");
+            return HtmlTemplateState(
+                mode: mode,
+                tag: tag,
+                attribute: attribute,
+                quote: quote,
+                pending: following_text,
+                stack: stack
+            );
+        }
+        if mode == "comment" {
+            if value == "-" {
+                confirm pending.length() < 2
+                    else throw TemplateError.html("invalid comment");
+                return HtmlTemplateState(
+                    mode: mode,
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: pending + value,
+                    stack: stack
+                );
+            }
+            if value == ">" {
+                confirm pending == "--"
+                    else throw TemplateError.html("ambiguous comment ending");
+                return HtmlTemplateState(
+                    mode: "text",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: "",
+                    stack: stack
+                );
+            }
+            confirm value != "<" && pending != "--"
+                else throw TemplateError.html("ambiguous comment content");
+            return HtmlTemplateState(
+                mode: mode,
+                tag: tag,
+                attribute: attribute,
+                quote: quote,
+                pending: "",
+                stack: stack
+            );
+        }
+        if mode == "raw" {
+            if value == "<" {
+                return HtmlTemplateState(
+                    mode: "raw_close",
+                    tag: tag,
+                    attribute: attribute,
+                    quote: quote,
+                    pending: "",
+                    stack: stack
+                );
+            }
+            return self;
+        }
+        if mode == "raw_close" {
+            let ending = "/" + tag;
+            if value == ">" {
+                confirm pending == ending
+                    else throw TemplateError.html("invalid raw-element close");
+                return self.closed();
+            }
+            if pending == ending && char.space() {
+                return self;
+            }
+            let following_text = pending + char.lower();
+            confirm following_text.length() <= ending.length()
+                && following_text == ending.slice(0, following_text.length())
+                else throw TemplateError.html("ambiguous raw-element content");
+            return HtmlTemplateState(
+                mode: mode,
+                tag: tag,
+                attribute: attribute,
+                quote: quote,
+                pending: following_text,
+                stack: stack
+            );
+        }
+        throw TemplateError.html("unknown internal HTML context");
+    }
+
+    hidden opened(slash is bool) is HtmlTemplateState {
+        confirm tag != "svg" && tag != "math" && tag != "plaintext"
+            else throw TemplateError.html("unsupported foreign or plaintext element");
+        let empty = [
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr"
+        ].contains(tag);
+        confirm !slash || empty
+            else throw TemplateError.html("self-closing non-void element");
+        if empty {
+            return HtmlTemplateState(
+                mode: "text",
+                tag: "",
+                attribute: "",
+                quote: "",
+                pending: "",
+                stack: stack
+            );
+        }
+        confirm stack.size() < 64
+            else throw TemplateError.html("HTML nesting limit exceeded");
+        let raw = [
+            "script",
+            "style",
+            "title",
+            "textarea",
+            "xmp",
+            "iframe",
+            "noembed",
+            "noframes",
+            "noscript"
+        ].contains(tag);
+        return HtmlTemplateState(
+            mode: if raw {
+                "raw";
+            }
+            else {
+                "text";
+            },
+            tag: tag,
+            attribute: "",
+            quote: "",
+            pending: "",
+            stack: stack.prefix(tag)
+        );
+    }
+
+    hidden closed() is HtmlTemplateState {
+        confirm stack.size() > 0 && stack.first() == tag
+            else throw TemplateError.html("mismatched closing HTML tag");
+        return HtmlTemplateState(
+            mode: "text",
+            tag: "",
+            attribute: "",
+            quote: "",
+            pending: "",
+            stack: stack.tail()
+        );
+    }
+}
+
+// Internal ASCII lexical observations, deliberately not Unicode case folding.
+hidden object HtmlTemplateCharacter {
+    has origin is string;
+
+    HtmlTemplateCharacter(origin is string) {
+        self.origin = origin;
+    }
+
+    letter() is bool {
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(origin);
+    }
+
+    name() is bool {
+        self.letter() || "0123456789-".contains(origin);
+    }
+
+    space() is bool {
+        origin == " "
+            || origin == "\t"
+            || origin == "\r"
+            || origin == "\n"
+            || origin == Utf8Decoded([byte(12)]).string();
+    }
+
+    lower() is string {
+        let parts = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin);
+        if parts.size() == 2 {
+            "abcdefghijklmnopqrstuvwxyz".slice(parts[0].length(), parts[0].length() + 1);
+        }
+        else {
+            origin;
+        }
+    }
+}
+
+// A destination that keeps each write apart, to see the pieces.
+hidden object TemplateTestWrites does WritingText {
+    has writes is Atomic<@string>;
+
+    TemplateTestWrites() {
+        let none_yet is @string = [];
+        writes = Atomic(none_yet);
+    }
+
+    write(values is ...string) is void {
+        let listed is @string = values...;
+        writes.replace(writes.value() + listed);
+    }
+
+    writeln(values is ...string) is void {
+        let listed is @string = values...;
+        writes.replace(writes.value() + listed + ["\n"]);
+    }
+
+    writes() is @string {
+        writes.value();
+    }
+}
+
+test "values: dotted paths, the current context, comments, escaped delimiters and standalone lines" {
+    let data = ParsedJson("{\"user\":{\"name\":\"Ada\",\"unread\":3},\"tags\":[\"a\",\"b\"]}").root();
+    test.is(
+        Template("Hello, {{ user.name }}! {{user.unread}} new{{! not shown }}.").string(data),
+        "Hello, Ada! 3 new."
+    );
+    test.is(Template("{{{{user.name}}}}").string(data), "{{user.name}}");
+    test.is(Template("{{#tags}}<{{.}}>{{/tags}}").string(data), "<a><b>");
+    test.is(
+        Template("a\n  {{! note }}\n  {{#tags}}\n- {{.}}\n  {{/tags}}\nb").string(data),
+        "a\n- a\n- b\nb"
+    );
+    test.is(Template("").string(data), "");
+    test.is(Template("{{.}}").string(Json("plain")), "plain");
+}
+
+test "every JSON kind as a value: text, canonical number, boolean, nothing for null; others refused" {
+    let data = ParsedJson(
+        "{\"s\":\"x & y\",\"n\":12.50,\"i\":-3,\"t\":true,\"f\":false,\"z\":null,\"o\":{},\"a\":[]}"
+    ).root();
+    test.is(
+        Template("{{s}}|{{n}}|{{i}}|{{t}}|{{f}}|{{z}}|").string(data),
+        "x & y|12.5|-3|true|false||"
+    );
+    test.is(
+        try {
+            Template("{{o}}").string(data);
+            "";
+        }
+        catch NonScalarTemplateValue.detailed(path, kind) {
+            path + " " + (kind == JsonKind.object_value).string();
+        },
+        "o true"
+    );
+    test.throws(NonScalarTemplateValue) {
+        Template("{{a}}").string(data);
+    };
+    test.is(
+        try {
+            Template("{{s.deeper}}").string(data);
+            "";
+        }
+        catch MissingTemplateValue.path(path) {
+            path;
+        },
+        "s.deeper"
+    );
+    test.throws(MissingTemplateValue) {
+        Template("{{missing}}").string(data);
+    };
+}
+
+test "sections: arrays per item, objects once, scalars by truth; inverted sections are the opposite" {
+    let data = ParsedJson(
+        "{\"items\":[{\"t\":\"Tea\"},{\"t\":\"Cake\"}],\"none\":[],\"user\":{\"name\":\"Ada\"},\"empty\":{},\"yes\":true,\"no\":false,\"zero\":0,\"blank\":\"\",\"word\":\"w\",\"nil\":null}"
+    ).root();
+    test.is(
+        Template("{{#items}}[{{t}}]{{/items}}{{^items}}none{{/items}}").string(data),
+        "[Tea][Cake]"
+    );
+    test.is(Template("{{#none}}x{{/none}}{{^none}}none{{/none}}").string(data), "none");
+    test.is(Template("{{#user}}{{name}}{{/user}}{{^user}}no{{/user}}").string(data), "Ada");
+    test.is(Template("{{#empty}}e{{/empty}}{{^empty}}no{{/empty}}").string(data), "e");
+    let shown = ["yes", "no", "zero", "blank", "word", "nil", "missing"].map() -> name {
+        Template("{{#" + name + "}}+{{/" + name + "}}{{^" + name + "}}-{{/" + name + "}}").string(
+            data
+        );
+    };
+    test.is(shown, ["+", "-", "+", "-", "+", "-", "-"]);
+    test.is(Template("{{#word}}{{.}}{{/word}} {{#zero}}{{.}}{{/zero}}").string(data), "w 0");
+    test.is(Template("{{#user.name}}{{.}}{{/user.name}}").string(data), "Ada");
+    test.is(Template("{{^yes}}{{word}}{{/yes}}{{^no}}{{word}}{{/no}}").string(data), "w");
+    let nested = ParsedJson("{\"rows\":[{\"cells\":[1,2]},{\"cells\":[3]}]}").root();
+    test.is(Template("{{#rows}}({{#cells}}{{.}}{{/cells}}){{/rows}}").string(nested), "(12)(3)");
+    test.is(Template("{{#.}}{{.}};{{/.}}").string(ParsedJson("[1,2]").root()), "1;2;");
+}
+
+test "a source is checked whole before anything is written, and kept for the next rendering" {
+    let writes = TemplateTestWrites();
+    test.is(
+        try {
+            Template("ok {{#a}} {{/b}}").write(Json(), writes);
+            [0, 0];
+        }
+        catch TemplateFailure.located(_, line, column, _) {
+            [line, column];
+        },
+        [1, 11]
+    );
+    test.is(writes.writes().size(), 0);
+    let template = Template("{{#xs}}{{.}}{{/xs}}");
+    let data = ParsedJson("{\"xs\":[1,2,3]}").root();
+    test.is(template.string(data), "123");
+    test.is(template.string(data), "123");
+    test.is(template.source(), "{{#xs}}{{.}}{{/xs}}");
+    for ["{{", "}}", "{{#a}}", "{{/a}}", "{{&a}}", "{{=<% %>=}}", "{{ }}", "{{a..b}}"] -> broken {
+        test.throws(TemplateFailure) {
+            Template(broken).string(Json());
+        };
+    }
+}
+
+test "write goes out piece by piece, and what came before a failure stays written" {
+    let writes = TemplateTestWrites();
+    let long = "x".repeat(2500);
+    Template("a{{s}}b").write(Json(JsonField("s", long)), writes);
+    test.is(writes.writes(), ["a", "x".repeat(1024), "x".repeat(1024), "x".repeat(452), "b"]);
+    let partial = TemplateTestWrites();
+    test.throws(MissingTemplateValue) {
+        Template("before {{missing}} after").write(Json(), partial);
+    };
+    test.is(partial.writes(), ["before "]);
+}
+
+test "every limit is its own failure" {
+    let data = ParsedJson(
+        "{\"xs\":[1,2,3],\"o\":{\"a\":1,\"b\":2},\"deep\":{\"deep\":{\"deep\":{}}}}"
+    ).root();
+    test.is(
+        try {
+            Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 2)).string(
+                data
+            );
+            0;
+        }
+        catch TemplateError.iterations(limit) {
+            limit;
+        },
+        2
+    );
+    test.is(
+        Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 3)).string(data),
+        "123"
+    );
+    // An array longer than what is left is refused before its first item; every
+    // body counts, nested ones too.
+    let refused = TemplateTestWrites();
+    test.throws(TemplateError) {
+        Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 2)).write(
+            data,
+            refused
+        );
+    };
+    test.is(refused.writes().size(), 0);
+    let nested = ParsedJson("{\"xs\":[1,2,3],\"t\":true}").root();
+    test.throws(TemplateError) {
+        Template(source: "{{#xs}}{{#.}}x{{/.}}{{/xs}}", limits: TemplateLimits(iterations: 5)).string(
+            nested
+        );
+    };
+    test.is(
+        Template(source: "{{#xs}}{{#.}}x{{/.}}{{/xs}}", limits: TemplateLimits(iterations: 6)).string(
+            nested
+        ),
+        "xxx"
+    );
+    test.throws(TemplateOutputLimitExceeded) {
+        Template(source: "{{#xs}}é{{/xs}}", limits: TemplateLimits(output: 5)).string(data);
+    };
+    test.is(
+        Template(source: "{{#xs}}é{{/xs}}", limits: TemplateLimits(output: 6)).string(data),
+        "ééé"
+    );
+    test.throws(TemplateJsonLimitExceeded) {
+        Template(source: "{{o.a}}", limits: TemplateLimits(members: 1)).string(data);
+    };
+    test.throws(TemplateJsonLimitExceeded) {
+        Template(source: "{{#o}}x{{/o}}", limits: TemplateLimits(members: 1)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "{{#a}}{{#b}}{{/b}}{{/a}}", limits: TemplateLimits(depth: 1)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "abc", limits: TemplateLimits(characters: 2)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "a{{b}}c", limits: TemplateLimits(tokens: 2)).string(
+            Json(JsonField("b", 1))
+        );
+    };
+    test.throws(InvalidTemplateLimits) {
+        TemplateLimits(output: -1);
+    };
+    test.is(
+        try {
+            Template("{{>item}}").string(data);
+            "";
+        }
+        catch TemplateError.partial(name) {
+            name;
+        },
+        "item"
+    );
+}
+
+test "partials render in the current context, inside sections and inside each other" {
+    let partials = TemplatePartials(
+        [
+            "item": "- {{title}}{{#tags}} #{{.}}{{/tags}}\n",
+            "list": "{{#items}}{{>item}}{{/items}}{{^items}}(empty)\n{{/items}}",
+            "header": "Order {{id}}\n",
+        ]
+    );
+    let order = Template(source: "{{>header}}{{>list}}", partials: partials);
+    let data = ParsedJson(
+        "{\"id\":17,\"items\":[{\"title\":\"Tea\",\"tags\":[\"hot\"]},{\"title\":\"Cake\",\"tags\":[]}]}"
+    ).root();
+    test.is(order.string(data), "Order 17\n- Tea #hot\n- Cake\n");
+    test.is(order.string(ParsedJson("{\"id\":18,\"items\":[]}").root()), "Order 18\n(empty)\n");
+    let writes = TemplateTestWrites();
+    order.write(data, writes);
+    test.is(writes.writes().join(""), order.string(data));
+    test.ok(partials.membership("item") && !partials.membership("Item") && !partials.membership(""));
+    test.is(partials.source("header"), "Order {{id}}\n");
+    test.throws(InvalidArgument) {
+        TemplatePartials(["": "x"]);
+    };
+}
+
+test "a partial the library lacks, or one that is not a template, fails before anything is written" {
+    let partials = TemplatePartials(
+        ["outer": "{{#never}}{{>inner}}{{/never}}", "broken": "{{#x}}", "unused": "{{"]
+    );
+    for ["text {{>missing}}", "text {{#no}}{{>missing}}{{/no}}", "text {{>outer}}"] -> source {
+        let writes = TemplateTestWrites();
+        let name = try {
+            Template(source: source, partials: partials).write(Json(), writes);
+            "";
+        }
+        catch TemplateError.partial(name) {
+            name;
+        };
+        test.ok(name == "missing" || name == "inner");
+        test.is(writes.writes().size(), 0);
+    }
+    let writes = TemplateTestWrites();
+    test.throws(TemplateFailure) {
+        Template(source: "text {{>broken}}", partials: partials).write(Json(), writes);
+    };
+    test.is(writes.writes().size(), 0);
+    test.is(Template(source: "fine", partials: partials).string(Json()), "fine");
+}
+
+test "a partial may include itself; how deep and how many is bounded" {
+    let tree = TemplatePartials(["node": "({{name}}{{#children}}{{>node}}{{/children}})"]);
+    let data = ParsedJson(
+        "{\"name\":\"a\",\"children\":[{\"name\":\"b\",\"children\":[{\"name\":\"c\",\"children\":[]}]},{\"name\":\"d\",\"children\":[]}]}"
+    ).root();
+    test.is(Template(source: "{{>node}}", partials: tree).string(data), "(a(b(c))(d))");
+    let forever = TemplatePartials(["loop": "x{{>loop}}"]);
+    test.is(
+        try {
+            Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(partials: 5)).string(
+                Json()
+            );
+            0;
+        }
+        catch TemplateError.partial_depth(limit) {
+            limit;
+        },
+        5
+    );
+    test.is(
+        try {
+            Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(iterations: 3)).string(
+                Json()
+            );
+            0;
+        }
+        catch TemplateError.iterations(limit) {
+            limit;
+        },
+        3
+    );
+    test.throws(TemplateOutputLimitExceeded) {
+        Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(output: 4)).string(
+            Json()
+        );
+    };
+    let deep = TemplatePartials(["in": "{{#.}}{{>in}}{{/.}}"]);
+    test.is(
+        try {
+            Template(source: "{{>in}}", partials: deep, limits: TemplateLimits(depth: 3)).string(
+                Json(true)
+            );
+            0;
+        }
+        catch TemplateError.depth(limit) {
+            limit;
+        },
+        3
+    );
+}
+
+// The reason an HTML template is refused, after checking nothing was written.
+hidden object TemplateHtmlRefusal {
+    has source is string;
+    has partials is TemplatePartials;
+
+    TemplateHtmlRefusal(source is string, partials is TemplatePartials = TemplatePartials()) {
+        self.source = source;
+        self.partials = partials;
+    }
+
+    reason() is string {
+        let writes = TemplateTestWrites();
+        let reason = try {
+            Template(source: source, escaping: TemplateEscaping.html, partials: partials).write(
+                ParsedJson("{\"x\":\"v\",\"t\":true,\"items\":[1]}").root(),
+                writes
+            );
+            "accepted";
+        }
+        catch TemplateError.html(reason) {
+            reason;
+        };
+        confirm writes.writes().size() == 0 else panic "an HTML refusal wrote output";
+        reason;
+    }
+}
+
+test "HTML: text escapes markup, a quoted ordinary attribute escapes quotes too" {
+    let card = Template(
+        source: "<p title=\"{{.}}\" class='{{.}}'>Hello, {{.}}</p>\n",
+        escaping: TemplateEscaping.html
+    );
+    test.is(
+        card.string(Json("Ada & \"friends\" <3 'x'")),
+        "<p title=\"Ada &amp; &quot;friends&quot; &lt;3 &#39;x&#39;\" class='Ada &amp; &quot;friends&quot; &lt;3 &#39;x&#39;'>Hello, Ada &amp; \"friends\" &lt;3 'x'</p>\n"
+    );
+    let attack = Json("<script>alert(1)</script>\" onmouseover=\"alert(2)");
+    let shown = Template(
+        source: "<div data-x=\"{{.}}\">{{.}}</div>",
+        escaping: TemplateEscaping.html
+    ).string(attack);
+    test.ok(
+        shown.starts_with(
+            "<div data-x=\"&lt;script&gt;alert(1)&lt;/script&gt;&quot; onmouseover=&quot;alert(2)\">"
+        )
+    );
+    test.ok(!shown.contains("<script>"));
+    test.is(
+        Template(
+            source: "<!doctype html><ul>{{#items}}<li>{{.}}</li>{{/items}}</ul>",
+            escaping: TemplateEscaping.html
+        ).string(
+            ParsedJson("{\"items\":[\"a<b\",\"c\"]}").root()
+        ),
+        "<!doctype html><ul><li>a&lt;b</li><li>c</li></ul>"
+    );
+    test.is(
+        Template(source: "{{x}}", escaping: TemplateEscaping.text).string(
+            Json(JsonField("x", "<b>"))
+        ),
+        "<b>"
+    );
+}
+
+test "HTML: every other place for a value fails closed, before anything is written" {
+    for [
+        "<p title={{x}}>x</p>",
+        "<p {{x}}=\"1\">x</p>",
+        "<{{x}}>",
+        "<p onclick=\"{{x}}\">x</p>",
+        "<a href=\"{{x}}\">x</a>",
+        "<img src='{{x}}'>",
+        "<p style=\"{{x}}\">x</p>",
+        "<script>var a = \"{{x}}\";</script>",
+        "<style>p { color: {{x}} }</style>",
+        "<!-- {{x}} -->",
+        "<textarea>{{x}}</textarea>",
+        "<title>{{x}}</title>",
+        "<p title=\"{{x}}\"",
+        "<b>{{x}}</i>",
+        "<svg><text>{{x}}</text></svg>",
+        "<p>unclosed",
+    ] -> source {
+        test.ok(TemplateHtmlRefusal(source).reason() != "accepted");
+    }
+    test.is(
+        TemplateHtmlRefusal("<p onclick=\"{{x}}\">x</p>").reason(),
+        "interpolation in restricted attribute: onclick"
+    );
+}
+
+test "HTML: a section or an inverted one must leave the context it opens in" {
+    let data = ParsedJson(
+        "{\"items\":[{\"name\":\"a\"},{\"name\":\"b\"}],\"vip\":true,\"none\":[]}"
+    ).root();
+    test.is(
+        Template(
+            source: "<ul>{{#items}}<li class=\"{{#vip}}gold{{/vip}}\">{{name}}</li>{{/items}}{{^none}}<li>none</li>{{/none}}</ul>",
+            escaping: TemplateEscaping.html
+        ).string(data),
+        "<ul><li class=\"\">a</li><li class=\"\">b</li><li>none</li></ul>"
+    );
+    for [
+        "{{#t}}<b>{{/t}}</b>",
+        "<b>{{#t}}</b>{{/t}}",
+        "{{^t}}<i>{{/t}}",
+        "<p {{#t}}title=\"{{/t}}\">",
+        "<p title=\"{{#t}}\" onclick=\"{{/t}}{{x}}\">",
+        "{{#t}}<!--{{/t}}-->",
+        "<p class=\"{{#t}}\"{{/t}}\">",
+    ] -> source {
+        test.ok(
+            TemplateHtmlRefusal(source).reason().contains("does not leave")
+                || TemplateHtmlRefusal(source).reason() != "accepted"
+        );
+    }
+    test.is(
+        TemplateHtmlRefusal("{{#t}}<b>{{/t}}</b>").reason(),
+        "section t does not leave the HTML context it opens in"
+    );
+    // A branch that never renders is checked all the same.
+    test.ok(
+        TemplateHtmlRefusal("{{#none}}<p onclick=\"{{x}}\"></p>{{/none}}").reason() != "accepted"
+    );
+}
+
+test "HTML: a partial is checked where it is included, and must leave that context" {
+    let partials = TemplatePartials(
+        [
+            "name": "{{n}}",
+            "open": "<b>",
+            "quote": "x\" onclick=\"y",
+            "row": "<li>{{n}}</li>",
+            "node": "<li>{{n}}<ul>{{#children}}{{>node}}{{/children}}</ul></li>",
+        ]
+    );
+    let data = Json(JsonField("n", "\"<&>'"));
+    test.is(
+        Template(
+            source: "<p title=\"{{>name}}\">{{>name}}</p>",
+            escaping: TemplateEscaping.html,
+            partials: partials
+        ).string(data),
+        "<p title=\"&quot;&lt;&amp;&gt;&#39;\">\"&lt;&amp;&gt;'</p>"
+    );
+    test.is(
+        Template(
+            source: "<ul>{{>row}}{{>row}}</ul>",
+            escaping: TemplateEscaping.html,
+            partials: partials
+        ).string(data),
+        "<ul><li>\"&lt;&amp;&gt;'</li><li>\"&lt;&amp;&gt;'</li></ul>"
+    );
+    test.is(
+        TemplateHtmlRefusal("{{>open}}</b>", partials).reason(),
+        "partial open does not leave the HTML context it is included in"
+    );
+    test.ok(TemplateHtmlRefusal("<p title=\"{{>quote}}\">x</p>", partials).reason() != "accepted");
+    test.ok(TemplateHtmlRefusal("<script>{{>name}}</script>", partials).reason() != "accepted");
+    let tree = ParsedJson("{\"n\":\"a\",\"children\":[{\"n\":\"<b>\",\"children\":[]}]}").root();
+    test.is(
+        Template(
+            source: "<ul>{{>node}}</ul>",
+            escaping: TemplateEscaping.html,
+            partials: partials,
+            limits: TemplateLimits(partials: 8)
+        ).string(tree),
+        "<ul><li>a<ul><li>&lt;b&gt;<ul></ul></li></ul></li></ul>"
+    );
+}
+
+test "the HTML lexer: text, quoted ordinary attributes, raw text and unfinished markup (from template/html)" {
+    let title = HtmlTemplateState().after("<p title=\"");
+    test.is(title.quotes(), true);
+    title.after("\"></p>").finish();
+    test.is(HtmlTemplateState().quotes(), false);
+    test.throws(TemplateError) {
+        HtmlTemplateState().after("<p onclick='").quotes();
+    };
+    test.throws(TemplateError) {
+        HtmlTemplateState().after("<script>").quotes();
+    };
+    test.is(HtmlTemplateCharacter("A").lower(), "a");
+    test.throws(TemplateError) {
+        HtmlTemplateState().after("<").finish();
+    };
+    test.is(TemplateError.html("test").text(), "TemplateError.html(\"test\")");
+}

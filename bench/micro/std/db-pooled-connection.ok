@@ -1,0 +1,81 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/atomic" take Atomic;
+import "db/sqlite" take SqliteMemory;
+import "db/acquisition" take DbAcquiring, DbAcquisition;
+import "db/connection" take DbConnection, DbConnecting;
+import "db/error" take DbClosed;
+import "db/value" take DbInteger;
+import "db/transaction" take TransactionOptions;
+import "db/pool" take DbPoolState, DbPool, DbPreparedPool, DbPhysical, PoolOptions, PooledTransactions, DbChecking;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+
+// A clock whose waits never end on their own: nothing here reads real time.
+hidden object StillClock does Timing {
+    StillClock();
+    instant() is Instant { Instant(origin: Duration(seconds: 0)); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    async wait(duration is Duration) is void { await Event().wait(); }
+}
+
+// Each acquisition is a new in-memory database.
+hidden object Memory does DbAcquiring {
+    Memory();
+    async acquisition() is DbAcquisition {
+        let connection = await SqliteMemory().connection();
+        DbAcquisition(connection: connection, preparation: connection, transactions: connection);
+    }
+}
+
+// Refuses the first connection it checks when picky, accepts the rest.
+hidden object Picky does DbChecking {
+    has picky is bool;
+    has seen is Atomic<int>;
+    Picky(picky is bool) { self.picky = picky; seen = Atomic(0); }
+    async healthy(origin is DbConnection) is bool {
+        seen.replace(seen.value() + 1);
+        !(picky && seen.value() == 1);
+    }
+}
+
+// A pooled lease used for a prepared insert, a query and a transaction left open; returned (reset rolls back) and taken again.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let pool = DbPreparedPool(origin: Memory(), options: PoolOptions(minimum: 0, maximum: 3, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5)), clock: StillClock());
+        let lease = await pool.connection();
+        await lease.execution("CREATE TABLE t(x INTEGER)");
+        let insert = await lease.prepared("INSERT INTO t(x) VALUES (?)");
+        await insert.execution(DbInteger(v));
+        await insert.execution(DbInteger(3));
+        let rows = await lease.query("SELECT x FROM t ORDER BY x").all(10);
+        let tx = await lease.transaction(TransactionOptions());
+        await tx.execution("INSERT INTO t(x) VALUES (?)", DbInteger(100));
+        let open = if lease.closed() { 0; } else { 1; };
+        lease.close();
+        let ok = if await lease.settled() { 2; } else { 0; };
+        let again = await pool.connection();
+        let count = await again.query("SELECT COUNT(*) AS c FROM t").all(1);
+        again.close();
+        pool.close();
+        let total = rows.size() + rows[0].int("x") + open + ok + 10 * count[0].int("c");
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

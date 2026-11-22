@@ -382,7 +382,9 @@ fn compare_flag(op: Cmp, order: Ordering) -> Word {
     })
 }
 
-fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word) -> Result<std::ops::Range<usize>, String> {
+pub(crate) fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word)
+    -> Result<std::ops::Range<usize>, String>
+{
     let (start, end) = (runtime.big_value(start), runtime.big_value(end));
     if start.is_negative() {
         return Err("Slice start must not be negative".into());
@@ -625,6 +627,116 @@ fn prepend_shared(runtime: &mut Runtime, repr: Repr, words: &[Word], size: usize
     Some(runtime.heap.allocate_view(repr, buffer, room, size))
 }
 
+/// `a + b + …` on arrays, for Tomato and Champ (#826): a chain of appends
+/// (#246) or prepends (#247) writes into a shared buffer; anything else is
+/// copied flat once, for the sum of the parts' lengths, and marked so that
+/// the next append or prepend to a long result starts a chain. A byte array
+/// (`bytes`, `@byte`) is packed and always copied.
+pub(crate) fn concat_arrays(runtime: &mut Runtime, repr: Repr, bytes: bool, words: &[Word]) -> Word {
+    let size: usize = words.iter().map(|&w| crate::heap::payload(runtime.heap.header_of(w)) as usize).sum();
+    if bytes {
+        let mut packed = Vec::with_capacity(size);
+        for &w in words {
+            packed.extend_from_slice(&runtime.heap.byte_view(w));
+        }
+        return runtime.heap.allocate_bytes(&packed);
+    }
+    if let Some(array) = append_shared(runtime, repr, words, size) {
+        return array;
+    }
+    if let Some(array) = prepend_shared(runtime, repr, words, size) {
+        return array;
+    }
+    let mut items = Vec::with_capacity(size);
+    for &w in words {
+        items.extend_from_slice(&runtime.heap.elements(w));
+    }
+    let array = runtime.heap.allocate_array(repr, &items);
+    if shared_arrays() && words.len() > 1 {
+        let first = crate::heap::payload(runtime.heap.header_of(words[0])) as usize;
+        let last = crate::heap::payload(runtime.heap.header_of(words[words.len() - 1])) as usize;
+        if first < crate::heap::CHAIN_MIN && last >= crate::heap::CHAIN_MIN {
+            runtime.heap.mark(array, crate::heap::PREPENDED);
+        }
+        if first >= crate::heap::CHAIN_MIN {
+            runtime.heap.mark_appended(array);
+        }
+    }
+    array
+}
+
+/// `array.slice(start, end)` (and `take`, `drop`), for Tomato and Champ: a
+/// view of the origin's storage when it keeps at least half of it (#249),
+/// else a copy of the range.
+pub(crate) fn slice_array(runtime: &mut Runtime, array: Word, start: Word, end: Word) -> Result<Word, String> {
+    let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+    let range = slice_bounds(runtime, length, start, end)?;
+    if runtime.heap.is_bytes(array) {
+        let bytes = runtime.heap.bytes(array)[range].to_vec();
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
+        return Ok(view);
+    }
+    let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
+/// The position `index` inside `array`, or `array.get`'s failure.
+fn position_inside(runtime: &Runtime, array: Word, index: Word) -> Result<usize, String> {
+    let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+    word::small_value(index)
+        .and_then(|i| usize::try_from(i).ok())
+        .filter(|&i| i < length)
+        .ok_or_else(|| "Array index out of bounds".to_string())
+}
+
+/// `array.removed(index)`, for Tomato and Champ: a copy without one element
+/// (#251); `array.get`'s bounds.
+pub(crate) fn remove_at(runtime: &mut Runtime, array: Word, index: Word) -> Result<Word, String> {
+    let at = position_inside(runtime, array, index)?;
+    if runtime.heap.is_bytes(array) {
+        let mut bytes = runtime.heap.bytes(array).to_vec();
+        bytes.remove(at);
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    let mut items = runtime.heap.elements(array).into_owned();
+    items.remove(at);
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
+/// `array.replaced(index, item)`, for Tomato and Champ: a copy with one
+/// element replaced; a chain of replacements in a large array becomes a
+/// trie, which copies one path per replacement instead of the array (#250).
+/// `array.get`'s bounds.
+pub(crate) fn replace_at(runtime: &mut Runtime, array: Word, index: Word, item: Word) -> Result<Word, String> {
+    let at = position_inside(runtime, array, index)?;
+    if runtime.heap.is_bytes(array) {
+        let mut bytes = runtime.heap.bytes(array).to_vec();
+        bytes[at] = item as u8;
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    let header = runtime.heap.header_of(array);
+    if trie_arrays() && header & crate::heap::TRIE != 0 {
+        return Ok(runtime.heap.trie_set(array, at, item));
+    }
+    let mut items = runtime.heap.elements(array).into_owned();
+    items[at] = item;
+    let length = items.len();
+    if trie_arrays() && length >= crate::heap::TRIE_MIN {
+        if header & crate::heap::REPLACED != 0 {
+            return Ok(runtime.heap.trie_from(repr, &items));
+        }
+        let copy = runtime.heap.allocate_array(repr, &items);
+        runtime.heap.mark(copy, crate::heap::REPLACED);
+        return Ok(copy);
+    }
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
 // ---- structural equality ----
 
 /// A new array for register `dst` of `function`: byte arrays (`@byte`) are
@@ -803,6 +915,110 @@ pub(crate) fn is_once_slot(name: &str) -> bool {
 
 // ---- the helper ----
 
+/// Positional builder entry points. Keep the generic path on the same
+/// implementation, including spare payloads and external-byte accounting.
+#[inline(never)]
+pub extern "C" fn rt_builder_new(ctx: *mut Ctx, repr: u64) -> Word {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    let word = builder_new(runtime, Repr::from_bits(repr));
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
+}
+
+#[inline(never)]
+pub extern "C" fn rt_builder_finish(ctx: *mut Ctx, builder: Word, packed: u64) -> Word {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    let word = builder_finish(runtime, builder, packed != 0);
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
+}
+
+/// #344 integration: the existing Rat/IntValue representation and exact
+/// constructor, without a second rational representation or instruction decode.
+#[inline(never)]
+pub extern "C" fn rt_rat_new(ctx: *mut Ctx, left: Word, right: Word) -> Word {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    let outcome = rat_new(runtime, left, right);
+    exec_outcome(runtime, ctx, frame, outcome, |_| Repr::Ref)
+}
+
+/// Read the concrete payload through Rust's checked downcast and Entries::len,
+/// never by assuming an offset in a Rust enum or BTreeMap. Heap::int preserves
+/// the tagged-small / BigInt rule even for a theoretical very large map.
+#[inline(never)]
+pub extern "C" fn rt_map_len(ctx: *mut Ctx, map: Word) -> Word {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    let word = map_len(runtime, map);
+    runtime.safepoint(frame, ctx, &[(word, Repr::Int)]);
+    word
+}
+
+/// Successful inline conversions still offer the collection opportunity that
+/// rt_exec offered. Their result is proven pointer-free (raw f64 or tagged int),
+/// so only the caller's unchanged root maps are needed here.
+#[inline(never)]
+pub extern "C" fn rt_scalar_safepoint(ctx: *mut Ctx, conversion: u64) {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    runtime.count(|_| if conversion == 0 { "fast cvt int.float" } else { "fast cvt float.int" }.into());
+    runtime.safepoint(frame, ctx, &[]);
+}
+
+pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
+    let spare = runtime.heap.allocate_spare(|payload| {
+        match payload.as_any_mut().downcast_mut::<Builder>() {
+            Some(builder) => {
+                builder.repr = repr;
+                builder.items.clear();
+                true
+            }
+            None => false,
+        }
+    });
+    spare.unwrap_or_else(|| runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
+}
+
+pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Word {
+    let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
+    let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
+    let array = if packed {
+        let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
+        runtime.heap.allocate_bytes(&bytes)
+    } else {
+        runtime.heap.allocate_array(repr, &items)
+    };
+    // #503: growth was charged as it happened. Preserve the capacity limit,
+    // discharge and retirement order exactly, including the large-buffer path.
+    runtime.heap.discharge_external(items.capacity() * 8);
+    if items.capacity() <= crate::heap::SPARE_CAPACITY {
+        items.clear();
+        if let Some(builder) = runtime.heap.payload_mut::<Builder>(object) {
+            builder.items = items;
+        }
+        runtime.heap.retire_payload(object);
+    }
+    array
+}
+
+fn rat_new(runtime: &mut Runtime, left: Word, right: Word) -> Outcome {
+    let ratio = Rat::new(&runtime.int_value(left), &runtime.int_value(right))?;
+    Ok(runtime.rational_new(ratio))
+}
+
+fn map_len(runtime: &mut Runtime, map: Word) -> Word {
+    let length = runtime.heap.payload::<MapValue>(map).expect("map").entries.len();
+    runtime.heap.int(length as i64)
+}
+
 /// `builder.push`: append a word to a builder (no collection here: the
 /// items vector is Rust memory). Returns the builder.
 #[inline(never)]
@@ -825,7 +1041,10 @@ pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word
 
 /// Grow a builder's items and charge the capacity its vector took on
 /// (#331): O(1), and nothing at all while the capacity holds.
-fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
+/// The most integers a range adds to a builder at once (#448).
+pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
+
+pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
     let grown = {
         let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
         let before = items.capacity();
@@ -858,15 +1077,28 @@ pub extern "C" fn rt_exec(
     // the instruction stays valid while the runtime is borrowed mutably.
     let instruction: &I = unsafe { &*(&runtime.loaded.program.functions[function].code[pc as usize] as *const I) };
     runtime.count(|_| format!("exec {}", instruction.mnemonic()));
+    // Direction-specific denominators for #537. Other cvt forms still use
+    // rt_exec, so the aggregate exec-cvt count is not a guard-miss count.
+    if runtime.stats.is_some()
+        && let I::Convert { dst, source } = instruction
+    {
+        let direction = match (runtime.ty(function, *source), runtime.ty(function, dst.0)) {
+            (Some(Type::Int), Some(Type::Float)) => Some("generic cvt int.float"),
+            (Some(Type::Float), Some(Type::Int)) => Some("generic cvt float.int"),
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            runtime.count(|_| direction.into());
+        }
+    }
     // The instruction's uses in visit order, as the call site recorded them
     // when it was compiled, and one word for each.
     // SAFETY: the table lives with the machine code; the caller spilled one
     // word per register.
     let registers = unsafe { std::slice::from_raw_parts(registers, count as usize) };
     let words = unsafe { std::slice::from_raw_parts(uses, count as usize) };
-    let value = |register: &okkama_sparrow::Register| {
-        words[registers.iter().position(|r| r == register).expect("used register")]
-    };
+    let operands = Operands::new(registers, words);
+    let value = |register: &okkama_sparrow::Register| operands.value(register);
     if runtime.limits.memory.is_some()
         && let Some(bytes) = result_bytes(runtime, instruction, &value)
             && runtime.would_exceed(bytes) {
@@ -885,12 +1117,27 @@ pub extern "C" fn rt_exec(
         }
         // The init of a constant runs machine code: it needs the context.
         I::GlobalGet { global, .. } => crate::intrinsics::global(ctx, runtime, *global as usize),
-        _ => execute(runtime, function, instruction, &value),
+        _ => execute(runtime, function, instruction, &operands),
     };
+    // #529: a container made from summarized parts is summarized at birth.
+    if let Ok(result) = outcome
+        && runtime.resources.enabled
+        && matches!(instruction, I::ArraySlice { .. } | I::ArrayConcat { .. } | I::MapNew { .. } | I::MapMerge { .. })
+    {
+        let types = &runtime.loaded.program.functions[function].registers;
+        let parts: Vec<(Word, Repr)> = registers.iter().zip(words)
+            .map(|(register, &word)| (word, runtime.kind_of(types[register.0 as usize]).repr()))
+            .collect();
+        runtime.inherit_summary(result, &parts);
+    }
+    exec_outcome(runtime, ctx, frame, outcome, |runtime| def_repr(runtime, function, instruction))
+}
+
+fn exec_outcome(runtime: &mut Runtime, ctx: &mut Ctx, frame: u64, outcome: Outcome, repr: impl FnOnce(&Runtime) -> Repr) -> Word {
     match outcome {
         Ok(word) => {
             if runtime.heap.needs_collection() {
-                let repr = def_repr(runtime, function, instruction);
+                let repr = repr(runtime);
                 runtime.safepoint(frame, ctx, &[(word, repr)]);
             }
             word
@@ -899,6 +1146,31 @@ pub extern "C" fn rt_exec(
             ctx.failure = runtime.failure_new(FailureKind::Program(message));
             ctx.status = crate::runtime::FAILED;
             0
+        }
+    }
+}
+
+/// The words of an instruction's uses, in the order the call site recorded
+/// them (the instruction's visit order, a register used twice twice).
+pub(crate) struct Operands<'a> {
+    registers: &'a [okkama_sparrow::Register],
+    words: &'a [Word],
+}
+impl<'a> Operands<'a> {
+    pub(crate) fn new(registers: &'a [okkama_sparrow::Register], words: &'a [Word]) -> Self {
+        Self { registers, words }
+    }
+    /// The word of `register`, searched: an instruction has a few uses.
+    pub(crate) fn value(&self, register: &okkama_sparrow::Register) -> Word {
+        self.words[self.registers.iter().position(|r| r == register).expect("used register")]
+    }
+    /// The word of `register`, the use at `index` in visit order: one
+    /// comparison for an instruction with many uses, which a search would
+    /// make quadratic (#449); a search if the order differs.
+    pub(crate) fn nth(&self, index: usize, register: &okkama_sparrow::Register) -> Word {
+        match self.registers.get(index) {
+            Some(r) if r == register => self.words[index],
+            _ => self.value(register),
         }
     }
 }
@@ -915,9 +1187,7 @@ fn result_bytes(runtime: &Runtime, instruction: &I, value: &dyn Fn(&okkama_sparr
             Some(parts + text(separator).len() as u64 * elements.len().saturating_sub(1) as u64)
         }
         I::StrReplace { text: source, pattern, replacement, .. } => {
-            let (source, pattern, replacement) = (text(source), text(pattern), text(replacement));
-            let count = if pattern.is_empty() { source.chars().count() + 1 } else { source.matches(pattern).count() };
-            Some(source.len() as u64 + count as u64 * replacement.len() as u64)
+            Some(replace_bytes(text(source), text(pattern), text(replacement)))
         }
         _ => None,
     }
@@ -933,7 +1203,8 @@ fn def_repr(runtime: &Runtime, function: usize, instruction: &I) -> Repr {
     repr
 }
 
-fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn Fn(&okkama_sparrow::Register) -> Word) -> Outcome {
+fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &Operands<'_>) -> Outcome {
+    let value = |register: &okkama_sparrow::Register| operands.value(register);
     // SAFETY: as in rt_exec, the loaded program is immutable during execution.
     let kinds: &[Kind] = unsafe { &*(runtime.loaded.functions[function].kinds.as_slice() as *const [Kind]) };
     match instruction {
@@ -943,25 +1214,15 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         | I::IntShl { left, right, .. }
         | I::IntShr { left, right, .. }
         | I::IntUshr { left, right, .. } => {
-            let shift = matches!(instruction, I::IntShl { .. } | I::IntShr { .. } | I::IntUshr { .. });
-            let r = if shift {
-                runtime
-                    .small_or_big(value(right))
-                    .filter(|n| (0..64).contains(n))
-                    .ok_or("Shift count must be in 0..63")?
-            } else {
-                runtime.small_or_big(value(right)).ok_or("Bitwise operand is outside signed-64 range")?
+            let op = match instruction {
+                I::IntAnd { .. } => Bitwise::And,
+                I::IntOr { .. } => Bitwise::Or,
+                I::IntXor { .. } => Bitwise::Xor,
+                I::IntShl { .. } => Bitwise::Shl,
+                I::IntShr { .. } => Bitwise::Shr,
+                _ => Bitwise::Ushr,
             };
-            let l = runtime.small_or_big(value(left)).ok_or("Bitwise operand is outside signed-64 range")?;
-            let result = match instruction {
-                I::IntAnd { .. } => l & r,
-                I::IntOr { .. } => l | r,
-                I::IntXor { .. } => l ^ r,
-                I::IntShl { .. } => l << r,
-                I::IntShr { .. } => l >> r,
-                _ => ((l as u64) >> r) as i64,
-            };
-            Ok(runtime.heap.int(result))
+            int_bitwise(runtime, op, value(left), value(right))
         }
         I::ByteAnd { left, right, .. }
         | I::ByteOr { left, right, .. }
@@ -969,59 +1230,19 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         | I::ByteShl { left, right, .. }
         | I::ByteShr { left, right, .. }
         | I::ByteUshr { left, right, .. } => {
-            let l = value(left) as u8;
-            let result = match instruction {
-                I::ByteAnd { .. } => l & value(right) as u8,
-                I::ByteOr { .. } => l | value(right) as u8,
-                I::ByteXor { .. } => l ^ value(right) as u8,
-                _ => {
-                    let count = runtime
-                        .small_or_big(value(right))
-                        .filter(|n| (0..8).contains(n))
-                        .ok_or("Shift count must be in 0..7")?;
-                    if matches!(instruction, I::ByteShl { .. }) { l << count } else { l >> count }
-                }
+            let op = match instruction {
+                I::ByteAnd { .. } => Bitwise::And,
+                I::ByteOr { .. } => Bitwise::Or,
+                I::ByteXor { .. } => Bitwise::Xor,
+                I::ByteShl { .. } => Bitwise::Shl,
+                I::ByteShr { .. } => Bitwise::Shr,
+                _ => Bitwise::Ushr,
             };
-            Ok(Word::from(result))
+            byte_bitwise(runtime, op, value(left), value(right))
         }
         I::ByteNot { operand, .. } => Ok(Word::from(!(value(operand) as u8))),
         I::Bits { op, byte, value: source, count, .. } => {
-            use okkama_sparrow::BitOp;
-            let word = if *byte {
-                value(source) as i64
-            } else {
-                runtime.small_or_big(value(source)).ok_or("Bitwise operand is outside signed-64 range")?
-            };
-            let rotation = || -> Result<u32, String> {
-                count
-                    .and_then(|c| runtime.small_or_big(value(&c)))
-                    .filter(|n| (0..if *byte { 8 } else { 64 }).contains(n))
-                    .map(|n| n as u32)
-                    .ok_or_else(|| if *byte { "Shift count must be in 0..7" } else { "Shift count must be in 0..63" }.into())
-            };
-            let result = if *byte {
-                let w = word as u8;
-                i64::from(match op {
-                    BitOp::BitCount => w.count_ones() as u8,
-                    BitOp::LeadingZeros => w.leading_zeros() as u8,
-                    BitOp::TrailingZeros => w.trailing_zeros() as u8,
-                    BitOp::RotateLeft => w.rotate_left(rotation()?),
-                    BitOp::RotateRight => w.rotate_right(rotation()?),
-                    BitOp::ReverseBits => w.reverse_bits(),
-                    BitOp::SwapBytes => w,
-                })
-            } else {
-                match op {
-                    BitOp::BitCount => i64::from(word.count_ones()),
-                    BitOp::LeadingZeros => i64::from(word.leading_zeros()),
-                    BitOp::TrailingZeros => i64::from(word.trailing_zeros()),
-                    BitOp::RotateLeft => word.rotate_left(rotation()?),
-                    BitOp::RotateRight => word.rotate_right(rotation()?),
-                    BitOp::ReverseBits => word.reverse_bits(),
-                    BitOp::SwapBytes => word.swap_bytes(),
-                }
-            };
-            Ok(if *byte && !op.counts() { result as u8 as Word } else { runtime.heap.int(result) })
+            bit_action(runtime, *op, *byte, value(source), count.map(|count| value(&count)))
         }
         I::RangeNew { start, end, inclusive, .. } => {
             let (start, end) = (value(start), value(end));
@@ -1049,40 +1270,15 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         }
         I::StrFn { op, args, .. } => str_fn(runtime, *op, args.iter().map(value).collect()),
         I::StrReplaceFirst { text, pattern, replacement, .. } => {
-            let replaced = runtime
-                .heap
-                .text(value(text))
-                .replacen(runtime.heap.text(value(pattern)), runtime.heap.text(value(replacement)), 1);
-            Ok(runtime.text_new(&replaced))
+            str_replace(runtime, value(text), value(pattern), value(replacement), true)
         }
-        I::IntNot { operand, .. } => {
-            let n = runtime.small_or_big(value(operand)).ok_or("Bitwise operand is outside signed-64 range")?;
-            Ok(runtime.heap.int(!n))
-        }
+        I::IntNot { operand, .. } => int_not(runtime, value(operand)),
         I::IntNeg { operand, .. } => {
             let n = -runtime.big_value(value(operand));
             Ok(integer_word(runtime, n))
         }
-        I::IntAbs { operand, .. } => {
-            let n = runtime.big_value(value(operand)).abs();
-            Ok(integer_word(runtime, n))
-        }
-        I::Sign { operand, .. } => {
-            let word = value(operand);
-            let sign = match kinds[operand.0 as usize] {
-                Kind::Int => match runtime.big_value(word).sign() {
-                    num_bigint::Sign::Minus => -1,
-                    num_bigint::Sign::NoSign => 0,
-                    num_bigint::Sign::Plus => 1,
-                },
-                Kind::Float => {
-                    let n = f64::from_bits(word);
-                    if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 }
-                }
-                _ => runtime.rational(word).sign(),
-            };
-            Ok(runtime.heap.int(sign))
-        }
+        I::IntAbs { operand, .. } => int_abs(runtime, value(operand)),
+        I::Sign { operand, .. } => sign(runtime, kinds[operand.0 as usize], value(operand)),
         I::FloatMod { left, right, .. } | I::FloatPow { left, right, .. } => {
             let op = if matches!(instruction, I::FloatMod { .. }) {
                 crate::scalar::FLOAT_MOD
@@ -1093,52 +1289,32 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 .map(f64::to_bits)
                 .map_err(Into::into)
         }
-        I::FloatSqrt { operand, .. } => {
-            let n = f64::from_bits(value(operand));
-            if n < 0.0 {
-                return Err(format!("Can't take sqrt of {}", crate::scalar::float_text(n)));
-            }
-            finite(n.sqrt())
-        }
+        I::FloatSqrt { operand, .. } => float_sqrt(value(operand)),
         I::Convert { dst, source } => convert(runtime, function, *source, dst.0, value(source)),
         I::ByteFrom { source, context, .. } => byte_from(runtime, kinds[source.0 as usize], value(source), context.as_deref()),
-        I::RatNew { left, right, .. } => {
-            let ratio = Rat::new(&runtime.int_value(value(left)), &runtime.int_value(value(right)))?;
-            Ok(runtime.rational_new(ratio))
-        }
+        I::RatNew { left, right, .. } => rat_new(runtime, value(left), value(right)),
         I::RatAdd { left, right, .. }
         | I::RatSub { left, right, .. }
         | I::RatMul { left, right, .. }
         | I::RatDiv { left, right, .. }
         | I::RatMod { left, right, .. } => {
-            // Borrowed operands: the result is computed before the runtime
-            // is borrowed again to allocate it (#326).
-            let result = {
-                let (a, b) = (runtime.rational(value(left)), runtime.rational(value(right)));
-                match instruction {
-                    I::RatAdd { .. } => a.add(b),
-                    I::RatSub { .. } => a.sub(b),
-                    I::RatMul { .. } => a.mul(b),
-                    I::RatDiv { .. } => a.div(b)?,
-                    _ => a.modulo(b)?,
-                }
+            let op = match instruction {
+                I::RatAdd { .. } => RatArith::Add,
+                I::RatSub { .. } => RatArith::Sub,
+                I::RatMul { .. } => RatArith::Mul,
+                I::RatDiv { .. } => RatArith::Div,
+                _ => RatArith::Mod,
             };
-            Ok(runtime.rational_new(result))
+            rat_arith(runtime, op, value(left), value(right))
         }
         I::RatNeg { operand, .. } | I::RatAbs { operand, .. } => {
-            let n = runtime.rational(value(operand));
-            let result = if matches!(instruction, I::RatNeg { .. }) { n.neg() } else { n.abs() };
-            Ok(runtime.rational_new(result))
+            rat_unary(runtime, matches!(instruction, I::RatNeg { .. }), value(operand))
         }
         I::RatCmp { op, left, right, .. } => {
             let order = runtime.rational(value(left)).compare(runtime.rational(value(right)));
             Ok(compare_flag(*op, order))
         }
-        I::RatPart { value: source, denominator, .. } => {
-            let ratio = runtime.rational(value(source));
-            let text = if *denominator { ratio.denominator() } else { ratio.numerator() }.to_string();
-            Ok(runtime.text_new(&text))
-        }
+        I::RatPart { value: source, denominator, .. } => Ok(rat_part(runtime, value(source), *denominator)),
         I::StrCmp { op, left, right, .. } => {
             let order = runtime.heap.text(value(left)).cmp(runtime.heap.text(value(right)));
             Ok(compare_flag(*op, order))
@@ -1147,56 +1323,13 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             let length = runtime.heap.char_count(value(text));
             Ok(runtime.heap.int(length as i64))
         }
-        I::StrSlice { text, start, end, .. } => {
-            let text = value(text);
-            // Code points map to bytes from the last position reached (#52).
-            let count = runtime.heap.char_count(text);
-            let range = slice_bounds(runtime, count, value(start), value(end))?;
-            let first = runtime.heap.char_offset(text, range.start);
-            let last = runtime.heap.char_offset(text, range.end);
-            Ok(runtime.heap.substring(text, first, last))
-        }
-        I::StrSplit { text, separator, .. } => {
-            let (text, separator) = (value(text), value(separator));
-            // Byte ranges of the parts, then one copy per part.
-            let ranges: Vec<(usize, usize)> = {
-                let (source, separator) = (runtime.heap.text(text), runtime.heap.text(separator));
-                if separator.is_empty() {
-                    source.char_indices().map(|(i, c)| (i, i + c.len_utf8())).collect()
-                } else {
-                    let mut ranges = Vec::new();
-                    let mut start = 0;
-                    for (at, matched) in source.match_indices(separator) {
-                        ranges.push((start, at));
-                        start = at + matched.len();
-                    }
-                    ranges.push((start, source.len()));
-                    ranges
-                }
-            };
-            let words: Vec<Word> = ranges.into_iter().map(|(a, b)| runtime.heap.substring(text, a, b)).collect();
-            Ok(runtime.heap.allocate_array(Repr::Ref, &words))
-        }
+        I::StrSlice { text, start, end, .. } => str_slice(runtime, value(text), value(start), value(end)),
+        I::StrSplit { text, separator, .. } => Ok(str_split(runtime, value(text), value(separator))),
         I::StrReplace { text, pattern, replacement, .. } => {
-            let replaced = runtime
-                .heap
-                .text(value(text))
-                .replace(runtime.heap.text(value(pattern)), runtime.heap.text(value(replacement)));
-            Ok(runtime.text_new(&replaced))
+            str_replace(runtime, value(text), value(pattern), value(replacement), false)
         }
-        I::StrTrim { text, .. } => {
-            let trimmed = runtime.heap.text(value(text)).trim_matches(char::is_whitespace).to_owned();
-            Ok(runtime.text_new(&trimmed))
-        }
-        I::StrChomp { text, .. } => {
-            let source = runtime.heap.text(value(text));
-            let chomped = source
-                .strip_suffix("\r\n")
-                .or_else(|| source.strip_suffix('\n'))
-                .unwrap_or(source)
-                .to_owned();
-            Ok(runtime.text_new(&chomped))
-        }
+        I::StrTrim { text, .. } => Ok(str_trim(runtime, value(text))),
+        I::StrChomp { text, .. } => Ok(str_chomp(runtime, value(text))),
         I::EnumCase { ty, case, .. } => Ok((u64::from(ty.0) << 32) | u64::from(*case)),
         I::EnumCmp { op, left, right, .. } => Ok(compare_flag(*op, value(left).cmp(&value(right)))),
         I::ValCmp { op, left, right, .. } => {
@@ -1215,102 +1348,19 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             let boxed = AnyBox { value: value(source), ty, repr };
             Ok(runtime.heap.allocate_payload(Box::new(boxed)))
         }
-        I::ArraySlice { array, start, end, .. } => {
-            let array = value(array);
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let range = slice_bounds(runtime, length, value(start), value(end))?;
-            // Copy only the range.
-            if runtime.heap.is_bytes(array) {
-                let bytes = runtime.heap.bytes(array)[range].to_vec();
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
-                return Ok(view);
-            }
-            let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
-        I::ArrayRemove { array, index, .. } => {
-            // A copy without one element (#251); `arr.get`'s bounds.
-            let (array, index) = (value(array), value(index));
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let at = word::small_value(index)
-                .and_then(|i| usize::try_from(i).ok())
-                .filter(|&i| i < length)
-                .ok_or_else(|| "Array index out of bounds".to_string())?;
-            if runtime.heap.is_bytes(array) {
-                let mut bytes = runtime.heap.bytes(array).to_vec();
-                bytes.remove(at);
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            let mut items = runtime.heap.elements(array).into_owned();
-            items.remove(at);
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
-        I::ArrayReplace { array, index, value: item, .. } => {
-            // A copy with one element replaced (#250); `arr.get`'s bounds.
-            let (array, index, item) = (value(array), value(index), value(item));
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let at = word::small_value(index)
-                .and_then(|i| usize::try_from(i).ok())
-                .filter(|&i| i < length)
-                .ok_or_else(|| "Array index out of bounds".to_string())?;
-            if runtime.heap.is_bytes(array) {
-                let mut bytes = runtime.heap.bytes(array).to_vec();
-                bytes[at] = item as u8;
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            let header = runtime.heap.header_of(array);
-            // A chain of replacements in a large array becomes a trie, which
-            // copies one path per replacement instead of the array (#250).
-            if trie_arrays() && header & crate::heap::TRIE != 0 {
-                return Ok(runtime.heap.trie_set(array, at, item));
-            }
-            let mut items = runtime.heap.elements(array).into_owned();
-            items[at] = item;
-            if trie_arrays() && length >= crate::heap::TRIE_MIN {
-                if header & crate::heap::REPLACED != 0 {
-                    return Ok(runtime.heap.trie_from(repr, &items));
-                }
-                let copy = runtime.heap.allocate_array(repr, &items);
-                runtime.heap.mark(copy, crate::heap::REPLACED);
-                return Ok(copy);
-            }
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
-        I::ArrayJoin { array, separator, .. } => {
-            let separator = runtime.heap.text(value(separator)).to_owned();
-            let mut text = String::new();
-            for (i, &element) in runtime.heap.elements(value(array)).iter().enumerate() {
-                if i != 0 {
-                    text.push_str(&separator);
-                }
-                text.push_str(runtime.heap.text(element));
-            }
-            Ok(runtime.text_new(&text))
-        }
+        I::ArraySlice { array, start, end, .. } => slice_array(runtime, value(array), value(start), value(end)),
+        I::ArrayRemove { array, index, .. } => remove_at(runtime, value(array), value(index)),
+        I::ArrayReplace { array, index, value: item, .. } => replace_at(runtime, value(array), value(index), value(item)),
+        I::ArrayJoin { array, separator, .. } => runtime
+            .heap
+            .allocate_join(value(array), value(separator))
+            .ok_or_else(|| "join: the result would pass the 4 GiB a string can hold".to_string()),
         I::BuilderNew { dst } => {
             let repr = match runtime.ty(function, dst.0) {
                 Some(Type::Builder(element)) => runtime.kind_of(*element).repr(),
                 _ => return Err("builder.new needs a builder type".into()),
             };
-            let spare = runtime.heap.allocate_spare(|payload| {
-                match payload.as_any_mut().downcast_mut::<Builder>() {
-                    Some(builder) => {
-                        builder.repr = repr;
-                        builder.items.clear();
-                        true
-                    }
-                    None => false,
-                }
-            });
-            match spare {
-                Some(object) => Ok(object),
-                None => Ok(runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() }))),
-            }
+            Ok(builder_new(runtime, repr))
         }
         I::BuilderPush { builder, value: item, .. } => {
             let (builder, item) = (value(builder), value(item));
@@ -1319,13 +1369,48 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         }
         I::BuilderAppend { builder, array, .. } => {
             let builder = value(builder);
-            let items = runtime.heap.elements(value(array)).to_vec();
-            grow_builder(&mut runtime.heap, builder, |all| all.extend(items));
+            // Straight from the source, with no staging copy (#448): a trie's
+            // elements come as an owned vector, a flat or shared array's are
+            // its slots, which growing the builder's own vector leaves alone.
+            let (owned, first, count) = match runtime.heap.elements(value(array)) {
+                std::borrow::Cow::Owned(items) => (Some(items), std::ptr::null(), 0),
+                std::borrow::Cow::Borrowed(slots) => (None, slots.as_ptr(), slots.len()),
+            };
+            match owned {
+                Some(items) => grow_builder(&mut runtime.heap, builder, |all| all.extend(items)),
+                None => {
+                    // SAFETY: see above; heap objects are neither moved nor freed here.
+                    let slots = unsafe { std::slice::from_raw_parts(first, count) };
+                    grow_builder(&mut runtime.heap, builder, |all| all.extend_from_slice(slots));
+                }
+            }
             Ok(builder)
         }
         I::BuilderRange { builder, start, end, inclusive, .. } => {
             let builder = value(builder);
-            let (start, end) = (runtime.big_value(value(start)), runtime.big_value(value(end)));
+            let (start, end) = (value(start), value(end));
+            // Inline endpoints, the usual case: every integer between them is
+            // inline too, pushed as a word with no BigInt (#448), and the
+            // builder grows a bounded chunk at a time.
+            if let (Some(first), Some(last)) = (crate::word::small_value(start), crate::word::small_value(end)) {
+                if first > last {
+                    return Err("Range start must be less than or equal to range end".into());
+                }
+                let stop = if *inclusive { last } else { last - 1 };
+                let mut from = first;
+                while from <= stop {
+                    let to = stop.min(from.saturating_add(RANGE_CHUNK - 1));
+                    grow_builder(&mut runtime.heap, builder, |all| {
+                        all.extend((from..=to).map(|n| crate::word::small(n).expect("between inline endpoints")));
+                    });
+                    if to == stop {
+                        break;
+                    }
+                    from = to + 1;
+                }
+                return Ok(builder);
+            }
+            let (start, end) = (runtime.big_value(start), runtime.big_value(end));
             if start > end {
                 return Err("Range start must be less than or equal to range end".into());
             }
@@ -1339,21 +1424,8 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             Ok(builder)
         }
         I::BuilderFinish { dst, builder } => {
-            let object = value(builder);
-            let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
-            let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
-            let array = new_array(runtime, function, dst.0, repr, &items);
-            // Its growth was charged as it grew; the buffer is freed or kept
-            // for the next builder here (#503).
-            runtime.heap.discharge_external(items.capacity() * 8);
-            if items.capacity() <= crate::heap::SPARE_CAPACITY {
-                items.clear();
-                if let Some(builder) = runtime.heap.payload_mut::<Builder>(object) {
-                    builder.items = items;
-                }
-                runtime.heap.retire_payload(object);
-            }
-            Ok(array)
+            let packed = matches!(runtime.ty(function, dst.0), Some(Type::Array(element)) if runtime.kind_of(*element) == Kind::Byte);
+            Ok(builder_finish(runtime, value(builder), packed))
         }
         I::MapNew { dst, entries } => {
             let mut map = map_for(runtime, function, dst.0)?;
@@ -1361,8 +1433,9 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             // What the entries own, counted as they go in, so the heap does
             // not walk the keys again to charge them (#325).
             let mut owned = 0;
-            for (key, item) in entries {
-                let (key, item) = (value(key), value(item));
+            // Uses in visit order: each entry's key, then its value.
+            for (index, (key, item)) in entries.iter().enumerate() {
+                let (key, item) = (operands.nth(2 * index, key), operands.nth(2 * index + 1, item));
                 let k = runtime.checked_key(key, key_kind, key_type)?;
                 let bytes = MAP_ENTRY_BYTES + k.owned_bytes();
                 if map.entries.upsert(k, (key, item)) {
@@ -1378,36 +1451,8 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 Some(Type::Array(element)) => *element,
                 _ => return Err("arr.concat needs an array type".into()),
             };
-            // The result is allocated once, for the sum of the parts' lengths.
-            let size: usize = words.iter().map(|&w| crate::heap::payload(runtime.heap.header_of(w)) as usize).sum();
-            if runtime.kind_of(element) == Kind::Byte {
-                let mut bytes = Vec::with_capacity(size);
-                for &w in &words {
-                    bytes.extend_from_slice(&runtime.heap.byte_view(w));
-                }
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = runtime.kind_of(element).repr();
-            if let Some(array) = append_shared(runtime, repr, &words, size) {
-                return Ok(array);
-            }
-            if let Some(array) = prepend_shared(runtime, repr, &words, size) {
-                return Ok(array);
-            }
-            let mut items = Vec::with_capacity(size);
-            for &w in &words {
-                items.extend_from_slice(&runtime.heap.elements(w));
-            }
-            let array = new_array(runtime, function, dst.0, repr, &items);
-            let first = crate::heap::payload(runtime.heap.header_of(words[0])) as usize;
-            let last = crate::heap::payload(runtime.heap.header_of(words[words.len() - 1])) as usize;
-            if shared_arrays() && words.len() > 1 && first < crate::heap::CHAIN_MIN && last >= crate::heap::CHAIN_MIN {
-                runtime.heap.mark(array, crate::heap::PREPENDED);
-            }
-            if shared_arrays() && words.len() > 1 && first >= crate::heap::CHAIN_MIN {
-                runtime.heap.mark_appended(array);
-            }
-            Ok(array)
+            let kind = runtime.kind_of(element);
+            Ok(concat_arrays(runtime, kind.repr(), kind == Kind::Byte, &words))
         }
         I::ArrayDiff { dst, array, removed } => {
             let element = match runtime.ty(function, dst.0) {
@@ -1509,10 +1554,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             // The entries were charged as the builder took them.
             Ok(runtime.heap.allocate_payload_moved(Box::new(finished)))
         }
-        I::MapLen { map, .. } => {
-            let length = runtime.heap.payload::<MapValue>(value(map)).expect("map").entries.len();
-            Ok(runtime.heap.int(length as i64))
-        }
+        I::MapLen { map, .. } => Ok(map_len(runtime, value(map))),
         I::MapHas { map, key, .. } | I::MapGet { map, key, .. } => {
             let (key_kind, key_type) = map_key(runtime, function, *map);
             let key_word = value(key);
@@ -1674,6 +1716,11 @@ pub extern "C" fn rt_int_text(ctx: *mut Ctx, word: Word) -> Word {
 fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Register, dst: okkama_sparrow::Register, word: Word) -> Outcome {
     let from = runtime.ty(function, source).cloned();
     let to = runtime.ty(function, dst).cloned();
+    convert_scalar(runtime, from, to, word)
+}
+
+/// `cvt` between scalar types on Tomato's representations; Champ's `Convert` shares it.
+pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Option<Type>, word: Word) -> Outcome {
     match (from, to) {
         (Some(Type::Int), Some(Type::Str)) => Ok(int_text(runtime, word)),
         (Some(Type::Bool), Some(Type::Str)) => Ok(runtime.text_new(if word != 0 { "true" } else { "false" })),
@@ -1719,7 +1766,9 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
             if !(-9223372036854775808.0..9223372036854775808.0).contains(&truncated) {
                 return Err(format!(
                     "Cannot convert float value {} to int: expected signed-64 range",
-                    crate::scalar::float_text(n)
+                    // Nonfinite low-level arguments must fail, not panic in
+                    // the finite-only formatter at an extern-C boundary.
+                    if n.is_finite() { crate::scalar::float_text(n) } else { n.to_string() }
                 ));
             }
             Ok(runtime.heap.int(truncated as i64))
@@ -1736,9 +1785,240 @@ fn int_value(runtime: &Runtime, word: Word) -> okkama_runtime_core::IntValue {
     }
 }
 
+// ---- scalar semantics shared by Tomato's instructions and Champ's SPB 17 helper ----
+
+/// The two-operand bit operations of int and byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Bitwise {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Ushr,
+}
+
+/// `int` bit operations on signed 64-bit operands; a shift count must be in 0..63.
+pub(crate) fn int_bitwise(runtime: &mut Runtime, op: Bitwise, left: Word, right: Word) -> Outcome {
+    let shift = matches!(op, Bitwise::Shl | Bitwise::Shr | Bitwise::Ushr);
+    let r = if shift {
+        runtime.small_or_big(right).filter(|n| (0..64).contains(n)).ok_or("Shift count must be in 0..63")?
+    } else {
+        runtime.small_or_big(right).ok_or("Bitwise operand is outside signed-64 range")?
+    };
+    let l = runtime.small_or_big(left).ok_or("Bitwise operand is outside signed-64 range")?;
+    let result = match op {
+        Bitwise::And => l & r,
+        Bitwise::Or => l | r,
+        Bitwise::Xor => l ^ r,
+        Bitwise::Shl => l << r,
+        Bitwise::Shr => l >> r,
+        Bitwise::Ushr => ((l as u64) >> r) as i64,
+    };
+    Ok(runtime.heap.int(result))
+}
+
+/// `byte` bit operations; a shift counts in `int` and must be in 0..7. A byte has no sign, so `>>>`
+/// shifts as `>>` does.
+pub(crate) fn byte_bitwise(runtime: &Runtime, op: Bitwise, left: Word, right: Word) -> Outcome {
+    let l = left as u8;
+    let result = match op {
+        Bitwise::And => l & right as u8,
+        Bitwise::Or => l | right as u8,
+        Bitwise::Xor => l ^ right as u8,
+        Bitwise::Shl | Bitwise::Shr | Bitwise::Ushr => {
+            let count = runtime.small_or_big(right)
+                .filter(|n| (0..8).contains(n))
+                .ok_or("Shift count must be in 0..7")?;
+            if op == Bitwise::Shl { l << count } else { l >> count }
+        }
+    };
+    Ok(Word::from(result))
+}
+
+/// The bit actions of int and byte (`bit_count()`, `rotate_left(n)`, …); `count` is an int word.
+pub(crate) fn bit_action(
+    runtime: &mut Runtime,
+    op: okkama_sparrow::BitOp,
+    byte: bool,
+    source: Word,
+    count: Option<Word>,
+) -> Outcome {
+    use okkama_sparrow::BitOp;
+    let word = if byte {
+        source as i64
+    } else {
+        runtime.small_or_big(source).ok_or("Bitwise operand is outside signed-64 range")?
+    };
+    let rotation = || -> Result<u32, String> {
+        count
+            .and_then(|count| runtime.small_or_big(count))
+            .filter(|n| (0..if byte { 8 } else { 64 }).contains(n))
+            .map(|n| n as u32)
+            .ok_or_else(|| if byte { "Shift count must be in 0..7" } else { "Shift count must be in 0..63" }.into())
+    };
+    let result = if byte {
+        let w = word as u8;
+        i64::from(match op {
+            BitOp::BitCount => w.count_ones() as u8,
+            BitOp::LeadingZeros => w.leading_zeros() as u8,
+            BitOp::TrailingZeros => w.trailing_zeros() as u8,
+            BitOp::RotateLeft => w.rotate_left(rotation()?),
+            BitOp::RotateRight => w.rotate_right(rotation()?),
+            BitOp::ReverseBits => w.reverse_bits(),
+            BitOp::SwapBytes => w,
+        })
+    } else {
+        match op {
+            BitOp::BitCount => i64::from(word.count_ones()),
+            BitOp::LeadingZeros => i64::from(word.leading_zeros()),
+            BitOp::TrailingZeros => i64::from(word.trailing_zeros()),
+            BitOp::RotateLeft => word.rotate_left(rotation()?),
+            BitOp::RotateRight => word.rotate_right(rotation()?),
+            BitOp::ReverseBits => word.reverse_bits(),
+            BitOp::SwapBytes => word.swap_bytes(),
+        }
+    };
+    Ok(if byte && !op.counts() { result as u8 as Word } else { runtime.heap.int(result) })
+}
+
+pub(crate) fn int_not(runtime: &mut Runtime, value: Word) -> Outcome {
+    let n = runtime.small_or_big(value).ok_or("Bitwise operand is outside signed-64 range")?;
+    Ok(runtime.heap.int(!n))
+}
+
+pub(crate) fn int_abs(runtime: &mut Runtime, value: Word) -> Outcome {
+    let n = runtime.big_value(value).abs();
+    Ok(integer_word(runtime, n))
+}
+
+/// `sign()` of an int, float or rat: -1, 0 or 1 (0 for both float zeros).
+pub(crate) fn sign(runtime: &mut Runtime, kind: Kind, word: Word) -> Outcome {
+    let sign = match kind {
+        Kind::Int => match runtime.big_value(word).sign() {
+            num_bigint::Sign::Minus => -1,
+            num_bigint::Sign::NoSign => 0,
+            num_bigint::Sign::Plus => 1,
+        },
+        Kind::Float => {
+            let n = f64::from_bits(word);
+            if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 }
+        }
+        _ => runtime.rational(word).sign(),
+    };
+    Ok(runtime.heap.int(sign))
+}
+
+pub(crate) fn float_sqrt(bits: Word) -> Outcome {
+    let n = f64::from_bits(bits);
+    if n < 0.0 {
+        return Err(format!("Can't take sqrt of {}", crate::scalar::float_text(n)));
+    }
+    finite(n.sqrt())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RatArith {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+/// Exact rational arithmetic; a zero divisor fails.
+pub(crate) fn rat_arith(runtime: &mut Runtime, op: RatArith, left: Word, right: Word) -> Outcome {
+    // Borrowed operands: the result is computed before the runtime
+    // is borrowed again to allocate it (#326).
+    let result = {
+        let (a, b) = (runtime.rational(left), runtime.rational(right));
+        match op {
+            RatArith::Add => a.add(b),
+            RatArith::Sub => a.sub(b),
+            RatArith::Mul => a.mul(b),
+            RatArith::Div => a.div(b)?,
+            RatArith::Mod => a.modulo(b)?,
+        }
+    };
+    Ok(runtime.rational_new(result))
+}
+
+pub(crate) fn rat_unary(runtime: &mut Runtime, negate: bool, value: Word) -> Outcome {
+    let n = runtime.rational(value);
+    let result = if negate { n.neg() } else { n.abs() };
+    Ok(runtime.rational_new(result))
+}
+
+/// The numerator or denominator of a rat as an `int` (#743); the denominator of the canonical form is positive.
+pub(crate) fn rat_part(runtime: &mut Runtime, value: Word, denominator: bool) -> Word {
+    let ratio = runtime.rational(value);
+    let part = if denominator { ratio.denominator() } else { ratio.numerator() };
+    let part = part.to_big().as_bigint().clone();
+    integer_word(runtime, part)
+}
+
+/// Code points `start..end`; a negative start, a reversed range or an end past the length fails.
+pub(crate) fn str_slice(runtime: &mut Runtime, text: Word, start: Word, end: Word) -> Outcome {
+    // Code points map to bytes from the last position reached (#52).
+    let count = runtime.heap.char_count(text);
+    let range = slice_bounds(runtime, count, start, end)?;
+    let first = runtime.heap.char_offset(text, range.start);
+    let last = runtime.heap.char_offset(text, range.end);
+    Ok(runtime.heap.substring(text, first, last))
+}
+
+/// The parts between separators; an empty separator splits into code points.
+pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> Word {
+    // Byte ranges of the parts, then one copy per part.
+    let ranges: Vec<(usize, usize)> = {
+        let (source, separator) = (runtime.heap.text(text), runtime.heap.text(separator));
+        if separator.is_empty() {
+            source.char_indices().map(|(i, c)| (i, i + c.len_utf8())).collect()
+        } else {
+            let mut ranges = Vec::new();
+            let mut start = 0;
+            for (at, matched) in source.match_indices(separator) {
+                ranges.push((start, at));
+                start = at + matched.len();
+            }
+            ranges.push((start, source.len()));
+            ranges
+        }
+    };
+    let words: Vec<Word> = ranges.into_iter().map(|(a, b)| runtime.heap.substring(text, a, b)).collect();
+    runtime.heap.allocate_array(Repr::Ref, &words)
+}
+
+/// The size of `source` with every `pattern` replaced, known before it is built (#72).
+pub(crate) fn replace_bytes(source: &str, pattern: &str, replacement: &str) -> u64 {
+    let count = if pattern.is_empty() { source.chars().count() + 1 } else { source.matches(pattern).count() };
+    source.len() as u64 + count as u64 * replacement.len() as u64
+}
+
+/// Every (or only the first) occurrence of `pattern` replaced.
+pub(crate) fn str_replace(runtime: &mut Runtime, text: Word, pattern: Word, replacement: Word, first: bool) -> Outcome {
+    let (source, pattern, replacement) =
+        (runtime.heap.text(text), runtime.heap.text(pattern), runtime.heap.text(replacement));
+    let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
+    Ok(runtime.text_new(&replaced))
+}
+
+/// Unicode whitespace removed from both ends.
+pub(crate) fn str_trim(runtime: &mut Runtime, text: Word) -> Word {
+    let trimmed = runtime.heap.text(text).trim_matches(char::is_whitespace).to_owned();
+    runtime.text_new(&trimmed)
+}
+
+/// One trailing `\r\n` or `\n` removed.
+pub(crate) fn str_chomp(runtime: &mut Runtime, text: Word) -> Word {
+    let source = runtime.heap.text(text);
+    let chomped = source.strip_suffix("\r\n").or_else(|| source.strip_suffix('\n')).unwrap_or(source).to_owned();
+    runtime.text_new(&chomped)
+}
+
 /// `str.fn` (#210, #231): the same contracts as the IR engine's
 /// `okkama_runtime_core::strings`.
-fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outcome {
+pub(crate) fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outcome {
     use okkama_runtime_core::strings;
     let text = runtime.heap.text(args[0]);
     match op {
@@ -1770,7 +2050,7 @@ fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outcome {
     }
 }
 
-fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: Option<&str>) -> Outcome {
+pub(crate) fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: Option<&str>) -> Outcome {
     let (name, text) = match kind {
         Kind::Float => {
             let n = f64::from_bits(word);

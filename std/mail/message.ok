@@ -14,7 +14,9 @@ module mail/message v1.0.0;
 //     back.headers().first("Subject");
 //
 // MailMessage(from:, to:, subject:, text:) adds Date, a fresh Message-ID,
-// MIME-Version and a UTF-8 Content-Type. A message knows nothing of the SMTP
+// MIME-Version and a UTF-8 Content-Type. Text beyond ASCII, or with a line
+// longer than 998 octets, goes out quoted-printable, which every transport
+// carries (RFC 2045 §6.7); other text stays 7bit. A message knows nothing of the SMTP
 // envelope; DeliveredMail is the copy to hand to a server, without Bcc.
 
 import "mime/part" take MimeBody, MimePart, MimeLimits, ParsedMime, InvalidMime, BinaryBody,
@@ -63,7 +65,9 @@ object MailMessage does ByteSource {
 
     // MailMessage(from: "Ada <ada@example.test>", to: ["grace@example.test"],
     // subject: "Lunch?", text: "Shall we?"): Date is now, Message-ID is fresh
-    // and the body is UTF-8 text. clock: and random: fix them, as tests do.
+    // and the body is UTF-8 text, quoted-printable when it is not ASCII or
+    // has a line over 998 octets.
+    // clock: and random: fix them, as tests do.
     MailMessage(
         from is string,
         to is Sequencing<string>,
@@ -123,10 +127,34 @@ object MailMessage does ByteSource {
                 value: "text/plain; charset=utf-8"
             ),
         );
+        let unaccented = Utf8Encoded(text).bytes().reduce(true) -> seven, octet {
+            seven && octet.int() < 128;
+        };
+        // A 7bit line holds at most 998 octets before its CRLF (RFC 5322 2.1.1).
+        let short = text.split("\n").reduce(true) -> fits, line {
+            let ending = if line.ends_with("\r") {
+                1;
+            }
+            else {
+                0;
+            };
+            fits && line.length() - ending <= 998;
+        };
+        let fields = if unaccented && short {
+            headers;
+        }
+        else {
+            headers.addition(
+                MessageHeader(
+                    name: MessageHeaderName("Content-Transfer-Encoding"),
+                    value: "quoted-printable"
+                )
+            );
+        };
         let limits = MimeLimits();
         bounds = limits;
         content = MimePart(
-            headers: headers,
+            headers: fields,
             body: TextBody(origin: text, charset: "utf-8"),
             limits: limits
         );
@@ -302,9 +330,9 @@ hidden object MailDatePrinting {
         let offset = origin.offset();
         let raw = offset::Span::seconds;
         let elapsed = origin.instant().unix_duration();
-        confirm elapsed::Span::seconds.denominator() == "1"
+        confirm elapsed::Span::seconds.denominator() == 1
             else throw InvalidMail.located(0, "mail time must contain whole seconds");
-        confirm raw.denominator() == "1"
+        confirm raw.denominator() == 1
             else throw InvalidMail.located(0, "mail offset must contain whole seconds");
         let seconds = raw.int();
         confirm seconds % 60 == 0 && seconds > -86400 && seconds < 86400
@@ -468,12 +496,12 @@ hidden object MailDateParsing {
     hidden zone(text is string) is MailDateOffset {
         let calendar = MailCalendar();
         let name = calendar.lower(text);
-        if text.length() == 5 && (text.slice(0, 1) == "+" || text.slice(0, 1) == "-") {
+        if text.length() == 5 && (text.starts_with("+") || text.starts_with("-")) {
             let hour = calendar.number(text.slice(1, 3), 2, 2);
             let minute = calendar.number(text.slice(3, 5), 2, 2);
             confirm hour <= 23 && minute <= 59
                 else throw InvalidMail.located(0, "mail numeric offset outside range");
-            let sign = if text.slice(0, 1) == "-" {
+            let sign = if text.starts_with("-") {
                 -1;
             }
             else {
@@ -519,7 +547,7 @@ hidden object MailDateParsing {
         if hours != 100 {
             return MailDateOffset(seconds: hours * 3600, known: true);
         }
-        if name.length() == 1 && "abcdefghiklmnopqrstuvwxyz".split(name).size() == 2 {
+        if name.length() == 1 && "abcdefghiklmnopqrstuvwxyz".contains(name) {
             return MailDateOffset(seconds: 0, known: false);
         }
         throw InvalidMail.located(0, "unsupported mail date zone");
@@ -836,6 +864,93 @@ test "a message from its fields sets its date, identifier and content type" {
             random: PcgRandom(1)
         );
     };
+}
+
+test "a text beyond ASCII goes out quoted-printable and comes back whole (#935)" {
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let text = "Café à midi? = oui\r\n" + "é".repeat(60) + "\r\n";
+    let message = MailMessage(
+        from: "Ada <ada@example.test>",
+        to: ["grace@example.test"],
+        subject: "Déjeuner",
+        text: text,
+        clock: clock,
+        random: PcgRandom(7)
+    );
+    test.is(
+        message.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
+    let wire = message.bytes();
+    test.ok(wire.reduce(true) -> seven, octet {
+        seven && octet.int() < 128;
+    });
+    test.ok(message.string().contains("\n\nCaf=C3=A9 =C3=A0 midi? =3D oui\n"));
+    let back = ParsedMail(wire).message();
+    test.is(Utf8Decoded(back.body().bytes()).string(), text);
+    let ascii = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "x",
+        text: "plain\r\n",
+        clock: clock,
+        random: PcgRandom(1)
+    );
+    test.ok(!ascii.headers().membership(MessageHeaderName("Content-Transfer-Encoding")));
+    test.ok(ascii.string().ends_with("\n\nplain\n"));
+}
+
+test "an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#936)" {
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let long = "a".repeat(1200) + "\r\nshort\r\n";
+    let message = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "long",
+        text: long,
+        clock: clock,
+        random: PcgRandom(2)
+    );
+    test.is(
+        message.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
+    let wire = message.bytes();
+    let widest = Utf8Decoded(wire).string().split("\r\n").reduce(0) -> most, line {
+        if line.length() > most {
+            line.length();
+        }
+        else {
+            most;
+        };
+    };
+    test.ok(widest <= 76);
+    test.is(Utf8Decoded(ParsedMail(wire).message().body().bytes()).string(), long);
+    let edge = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "edge",
+        text: "b".repeat(998) + "\r\n",
+        clock: clock,
+        random: PcgRandom(3)
+    );
+    test.ok(!edge.headers().membership(MessageHeaderName("Content-Transfer-Encoding")));
+    test.is(
+        Utf8Decoded(ParsedMail(edge.bytes()).message().body().bytes()).string(),
+        "b".repeat(998) + "\r\n"
+    );
+    let bare = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "bare",
+        text: "c".repeat(999) + "\n",
+        clock: clock,
+        random: PcgRandom(4)
+    );
+    test.is(
+        bare.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
 }
 
 test "a message from its fields drops the fraction of the clock's second (#518)" {

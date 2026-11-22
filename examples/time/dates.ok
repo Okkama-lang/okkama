@@ -19,6 +19,11 @@ main() is int {
     let leap = IsoText("2028-02-29").date();
     out.writeln("after the leap day: ", leap.shifted(1));
 
+    // Months keep the day where the target month has it, else take its last day.
+    let month_end = Date(year: 2024, month: 1, day: 31);
+    out.writeln("a month later: ", month_end.plus_months(1));
+    out.writeln("a year after the leap day: ", leap.plus_years(1));
+
     // Day numbers count from 0001-01-01; equal numbers mean the same day.
     let number = release.day_number();
     out.writeln("day number: ", number);

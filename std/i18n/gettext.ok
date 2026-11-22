@@ -26,6 +26,7 @@ import "collections/list" take List, EmptyList;
 import "collections/iteration" take Cursor, CursorItems;
 import "collections/ordering" take SortedBy;
 import "async/atomic" take Atomic;
+import "cell" take Cell;
 import "compare" take Order;
 import "regex/pattern" take Regex;
 import "regex/search" take RegexMatches, EntireRegexMatch;
@@ -125,16 +126,35 @@ hidden object GettextControl {
     }
 }
 
-hidden object GettextContains {
-    has origin, part is string;
+// A metadata field name: an ASCII letter, then ASCII letters, digits and hyphens.
+hidden object GettextFieldName {
+    has origin is string;
 
-    GettextContains(origin is string, part is string) {
+    GettextFieldName(origin is string) {
         self.origin = origin;
-        self.part = part;
     }
 
-    found() is bool {
-        origin.split(part).size() > 1;
+    valid() is bool {
+        let codes is @int = origin.characters().map() -> character {
+            character.code();
+        };
+        codes.size() > 0
+            && GettextLetter(codes[0]).letter()
+            && codes.reduce(true) -> valid, code {
+                valid && (GettextLetter(code).letter() || (code >= 48 && code <= 57) || code == 45);
+            };
+    }
+}
+
+hidden object GettextLetter {
+    has code is int;
+
+    GettextLetter(code is int) {
+        self.code = code;
+    }
+
+    letter() is bool {
+        (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
     }
 }
 
@@ -324,7 +344,21 @@ hidden object GettextConditional does GettextExpression {
 }
 
 // The operation of a binary node, decided once when the formula is parsed.
-hidden enum GettextOperation = (and, or, equal, unequal, less, at_most, greater, at_least, plus, minus, times, quotient, remainder);
+hidden enum GettextOperation = (
+    and,
+    or,
+    equal,
+    unequal,
+    less,
+    at_most,
+    greater,
+    at_least,
+    plus,
+    minus,
+    times,
+    quotient,
+    remainder
+);
 
 hidden object GettextBinary does GettextExpression {
     has left, right is GettextExpression;
@@ -521,28 +555,28 @@ hidden object GettextTokens {
     GettextTokens(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 2048
             else throw InvalidCatalog.located(0, "plural expression size must be 1..2048");
+        // A hand scanner: the tokens of `[0-9]+|n|==|!=|<=|>=|&&|\|\||[!?:()+*/%<>-]`
+        // between spaces, without a regex walk per token (#943).
+        let characters = origin.split("");
+        let size = characters.size();
         let empty is List<GettextToken> = EmptyList();
-        let items is Atomic<List<GettextToken>> = Atomic(empty);
-        let position = Atomic(0);
-        defer items.close();
-        defer position.close();
-        for RegexMatches(
-            origin: origin,
-            regex: Regex("[0-9]+|n|==|!=|<=|>=|&&|\\|\\||[!?:()+*/%<>-]")
-        ) -> token {
-            let at = token.range()::Bounds::start;
-            for (position.value()..at) -> index {
-                confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                    else throw InvalidCatalog.located(index, "invalid plural token");
+        let items = Cell(empty);
+        let position = Cell(0);
+        loop {
+            last if position.value() >= size;
+            let at = position.value();
+            if GettextSpace(characters[at]).matches() {
+                position.replace(at + 1);
             }
-            confirm items.value().size() < 512
-                else throw InvalidCatalog.located(at, "plural token budget 512");
-            items.replace(items.value().prefix(GettextToken(text: token.text(), offset: at)));
-            position.replace(token.range()::Bounds::end);
-        }
-        for (position.value()..origin.length()) -> index {
-            confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                else throw InvalidCatalog.located(index, "invalid plural token");
+            else {
+                let width = GettextTokenWidth(characters: characters, at: at).width();
+                confirm width > 0 else throw InvalidCatalog.located(at, "invalid plural token");
+                confirm items.value().size() < 512
+                    else throw InvalidCatalog.located(at, "plural token budget 512");
+                let token = GettextToken(text: origin.slice(at, at + width), offset: at);
+                items.replace(items.value().prefix(token));
+                position.replace(at + width);
+            }
         }
         values = GettextListArray(
             items.value().prefix(GettextToken(text: "", offset: origin.length()))
@@ -551,6 +585,57 @@ hidden object GettextTokens {
 
     values() is @GettextToken {
         values;
+    }
+}
+
+// How many characters the plural token at `at` takes; 0 for none.
+hidden object GettextTokenWidth {
+    has characters is @string;
+    has at is int;
+
+    GettextTokenWidth(characters is @string, at is int) {
+        self.characters = characters;
+        self.at = at;
+    }
+
+    width() is int {
+        let run = self.digits();
+        if run > 0 {
+            return run;
+        }
+        let symbol = characters[at];
+        if symbol == "n" {
+            return 1;
+        }
+        if at + 1 < characters.size() {
+            let pair = symbol + characters[at + 1];
+            if ["==", "!=", "<=", ">=", "&&", "||"].contains(pair) {
+                return 2;
+            }
+        }
+        if "!?:()+*/%<>-".contains(symbol) {
+            1;
+        }
+        else {
+            0;
+        }
+    }
+
+    // How many ASCII digits start at `at`.
+    digits() is int {
+        let count = Cell(0);
+        let going = Cell(true);
+        for (at..characters.size()) -> index {
+            if going.value() {
+                if "0123456789".contains(characters[index]) {
+                    count.replace(count.value() + 1);
+                }
+                else {
+                    going.replace(false);
+                }
+            }
+        }
+        count.value();
     }
 }
 
@@ -579,7 +664,8 @@ hidden object GettextExpressionParsing {
             let token = tokens[index];
             let text = token.text();
             let at = token.offset();
-            if text == "n" || RegexMatches(origin: text, regex: Regex("^[0-9]+$")).found() {
+            let digits = GettextTokenWidth(characters: text.split(""), at: 0).digits();
+            if text == "n" || digits == text.length() {
                 confirm expected.value()
                     else throw InvalidCatalog.located(at, "trailing plural token");
                 values.replace(values.value().prefix(GettextLiteral(token: text, offset: at)));
@@ -812,9 +898,9 @@ object PoComment {
     // A comment of kind with text.
     PoComment(kind is PoCommentKind, text is string) {
         confirm text.length() <= 4096
-            && !GettextContains(origin: text, part: "\n").found()
-            && !GettextContains(origin: text, part: "\r").found()
-            && !GettextContains(origin: text, part: GettextControl(0).string()).found()
+            && !text.contains("\n")
+            && !text.contains("\r")
+            && !text.contains(GettextControl(0).string())
             else throw InvalidCatalog.located(0, "invalid PO comment");
         self.kind = kind;
         origin = text;
@@ -973,8 +1059,8 @@ object PoEntry {
         let nul = GettextControl(0).string();
         let separator = GettextControl(4).string();
         for [context, identity, plural] -> text {
-            confirm !GettextContains(origin: text, part: nul).found()
-                && !GettextContains(origin: text, part: separator).found()
+            confirm !text.contains(nul)
+                && !text.contains(separator)
                 else throw InvalidCatalog.located(0, "reserved separator in PO identity");
         }
         let size = translations.size();
@@ -984,7 +1070,7 @@ object PoEntry {
             else throw InvalidCatalog.located(0, "empty msgid is reserved for metadata");
         let texts is @string = (0..size).map() -> index {
             let text = translations.item(index);
-            confirm text.length() <= 65536 && !GettextContains(origin: text, part: nul).found()
+            confirm text.length() <= 65536 && !text.contains(nul)
                 else throw InvalidCatalog.located(0, "translation length or NUL");
             text;
         };
@@ -1073,7 +1159,7 @@ object GettextMetadata {
                 confirm parts.size() >= 2
                     else throw InvalidCatalog.located(0, "metadata field lacks colon");
                 let name = parts[0];
-                confirm RegexMatches(origin: name, regex: Regex("^[A-Za-z][A-Za-z0-9-]*$")).found()
+                confirm GettextFieldName(name).valid()
                     else throw InvalidCatalog.located(0, "invalid metadata name");
                 let key = GettextAscii(name).lower();
                 let list = cell.value();
@@ -1240,27 +1326,32 @@ hidden object PoQuoted {
 
     PoQuoted(origin is string, offset is int, charset is GettextCharset) {
         confirm origin.length() >= 2
-            && origin.slice(0, 1) == "\""
-            && origin.slice(origin.length() - 1, origin.length()) == "\""
+            && origin.starts_with("\"")
+            && origin.ends_with("\"")
             else throw InvalidCatalog.located(offset, "expected quoted PO string");
         let text = origin.slice(1, origin.length() - 1);
+        let characters = text.split("");
         let empty is List<string> = EmptyList();
-        let pieces is Atomic<List<string>> = Atomic(empty);
-        let position = Atomic(0);
-        defer pieces.close();
-        defer position.close();
-        for RegexMatches(
-            origin: text,
-            regex: Regex("[^\\\\\"\\r\\n]+|\\\\(?:[abfnrtv\\\\\"']|[0-7]{1,3}|x[0-9A-Fa-f]+)")
-        ) -> token {
-            let at = token.range()::Bounds::start;
+        let pieces = Cell(empty);
+        let position = Cell(0);
+        let scan = Cell(0);
+        loop {
+            let at = scan.value();
+            last if at >= characters.size();
+            let width = PoStringToken(characters: characters, at: at).width();
+            if width == 0 {
+                // Regex search skipped unmatched characters. Keep its distinction
+                // between a gap before another token and an unmatched ending.
+                scan.replace(at + 1);
+                next;
+            }
             confirm at == position.value()
                 else throw InvalidCatalog.located(
                     offset + 1 + position.value(),
                     "invalid PO escape or literal"
                 );
-            let spelling = token.text();
-            let bytes = if spelling.slice(0, 1) != "\\" {
+            let spelling = characters.slice(at, at + width).join("");
+            let bytes = if !spelling.starts_with("\\") {
                 charset.encoded(spelling, offset + 1 + at);
             }
             else {
@@ -1297,7 +1388,7 @@ hidden object PoQuoted {
                         39;
                     }
                     else {
-                        if escape.slice(0, 1) == "x" {
+                        if escape.starts_with("x") {
                             PoNumericEscape(
                                 origin: escape.slice(1, escape.length()),
                                 base: 16,
@@ -1319,7 +1410,8 @@ hidden object PoQuoted {
             confirm pieces.value().size() < 65536
                 else throw InvalidCatalog.located(offset + 1 + at, "PO string fragment budget");
             pieces.replace(pieces.value().prefix(Latin1Decoded(bytes).string()));
-            position.replace(token.range()::Bounds::end);
+            position.replace(at + width);
+            scan.replace(at + width);
         }
         confirm position.value() == text.length()
             else throw InvalidCatalog.located(
@@ -1340,6 +1432,69 @@ hidden object PoQuoted {
 
     string() is string {
         charset.decoded(value, offset);
+    }
+}
+
+// Width of one literal run or C escape, in Unicode scalars.
+hidden object PoStringToken {
+    has characters is @string;
+    has at is int;
+
+    PoStringToken(characters is @string, at is int) {
+        self.characters = characters;
+        self.at = at;
+    }
+
+    width() is int {
+        let size = characters.size();
+        let symbol = characters[at];
+        if symbol == "\"" || symbol == "\r" || symbol == "\n" {
+            return 0;
+        }
+        let end = Cell(at + 1);
+        if symbol != "\\" {
+            loop {
+                let index = end.value();
+                last if index >= size;
+                let current = characters[index];
+                last if current == "\\" || current == "\"" || current == "\r" || current == "\n";
+                end.replace(index + 1);
+            }
+            return end.value() - at;
+        }
+        if at + 1 >= size {
+            return 0;
+        }
+        let escape = characters[at + 1];
+        if "abfnrtv\\\"'".contains(escape) {
+            return 2;
+        }
+        let hex = escape == "x";
+        let alphabet = if hex {
+            "0123456789abcdefABCDEF";
+        }
+        else {
+            "01234567";
+        };
+        let start = at + (if hex {
+            2;
+        }
+        else {
+            1;
+        });
+        end.replace(start);
+        loop {
+            let index = end.value();
+            last if index >= size || (!hex && index >= start + 3);
+            last if !alphabet.contains(characters[index]);
+            end.replace(index + 1);
+        }
+        if end.value() == start {
+            0;
+        }
+        else {
+            end.value() - at;
+        }
     }
 }
 
@@ -1540,48 +1695,143 @@ hidden object PoPrinting {
     }
 }
 
+// The closing quote of the same unanchored grammar as PO's former regex.
+hidden object PoQuoteEnd {
+    has characters is @string;
+    has at is int;
+
+    PoQuoteEnd(characters is @string, at is int) {
+        self.characters = characters;
+        self.at = at;
+    }
+
+    end() is int {
+        let scan = Cell(at + 1);
+        loop {
+            let index = scan.value();
+            last if index >= characters.size();
+            let symbol = characters[index];
+            if symbol == "\"" {
+                return index + 1;
+            }
+            if symbol == "\r" || symbol == "\n" {
+                return -1;
+            }
+            if symbol == "\\" {
+                if index + 1 >= characters.size() || characters[index + 1] == "\n" {
+                    return -1;
+                }
+                scan.replace(index + 2);
+            }
+            else {
+                scan.replace(index + 1);
+            }
+        }
+        -1;
+    }
+
+    // Does any later opening quote reach a closing quote? Work backwards:
+    // a literal takes the next suffix, an escape takes the suffix two ahead.
+    // This also handles escaped quotes inside a failed candidate in linear time.
+    following() is bool {
+        let next_end = Cell(false);
+        let after_next = Cell(false);
+        for (0..characters.size() - at) -> distance {
+            let index = characters.size() - 1 - distance;
+            let symbol = characters[index];
+            if symbol == "\"" && next_end.value() {
+                return true;
+            }
+            let closes = if symbol == "\"" {
+                true;
+            }
+            else {
+                if symbol == "\\" {
+                    index + 1 < characters.size()
+                        && characters[index + 1] != "\n"
+                        && after_next.value();
+                }
+                else {
+                    symbol != "\r" && symbol != "\n" && next_end.value();
+                }
+            };
+            after_next.replace(next_end.value());
+            next_end.replace(closes);
+        }
+        false;
+    }
+}
+
 hidden object PoLineStrings {
-    has octets is string;
+    has origin is string;
+    has offset is int;
+    has charset is GettextCharset;
 
     PoLineStrings(origin is string, offset is int, charset is GettextCharset) {
+        self.origin = origin;
+        self.offset = offset;
+        self.charset = charset;
+    }
+
+    octets() is string {
+        let characters = origin.split("");
         let empty is List<string> = EmptyList();
-        let pieces is Atomic<List<string>> = Atomic(empty);
-        let position = Atomic(0);
-        defer pieces.close();
-        defer position.close();
-        for RegexMatches(origin: origin, regex: Regex("\"(?:[^\\\\\"\\r\\n]|\\\\.)*\"")) -> part {
-            for (position.value()..part.range()::Bounds::start) -> index {
-                confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                    else throw InvalidCatalog.located(offset + index, "text between quoted strings");
+        let pieces = Cell(empty);
+        let position = Cell(0);
+        let scan = Cell(0);
+        loop {
+            let at = scan.value();
+            last if at >= characters.size();
+            if characters[at] != "\"" {
+                scan.replace(at + 1);
+                next;
             }
+            let end = PoQuoteEnd(characters: characters, at: at).end();
+            if end < 0 {
+                // A failed opening quote can hide a later matching pair. Only
+                // the error path needs the reverse scan; it never rescans a suffix.
+                if PoQuoteEnd(characters: characters, at: at).following() {
+                    self.gap(
+                        characters,
+                        position.value(),
+                        at + 1,
+                        offset,
+                        "text between quoted strings"
+                    );
+                }
+                last;
+            }
+            self.gap(characters, position.value(), at, offset, "text between quoted strings");
             confirm pieces.value().size() < 8192
                 else throw InvalidCatalog.located(offset, "quoted-fragment count");
             pieces.replace(
                 pieces.value().prefix(
                     Latin1Decoded(
                         PoQuoted(
-                            origin: part.text(),
-                            offset: offset + part.range()::Bounds::start,
+                            origin: characters.slice(at, end).join(""),
+                            offset: offset + at,
                             charset: charset
                         ).bytes()
                     ).string()
                 )
             );
-            position.replace(part.range()::Bounds::end);
+            position.replace(end);
+            scan.replace(end);
         }
         confirm pieces.value().size() > 0
             else throw InvalidCatalog.located(offset, "expected PO quoted string");
-        for (position.value()..origin.length()) -> index {
-            confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                else throw InvalidCatalog.located(offset + index, "trailing PO field text");
-        }
-        octets = GettextListArray(pieces.value()).values().join("");
-        confirm self.octets.length() <= 262144
+        self.gap(characters, position.value(), characters.size(), offset, "trailing PO field text");
+        let octets = GettextListArray(pieces.value()).values().join("");
+        confirm octets.length() <= 262144
             else throw InvalidCatalog.located(offset, "PO line byte budget");
+        octets;
     }
 
-    octets() is string {
-        octets;
+    hidden gap(characters is @string, start is int, end is int, offset is int, reason is string) is void {
+        for (start..end) -> index {
+            confirm GettextSpace(characters[index]).matches()
+                else throw InvalidCatalog.located(offset + index, reason);
+        }
     }
 }
 
@@ -1829,7 +2079,7 @@ hidden object PoParsing {
             start.replace(index + 1);
         }
         let end = raw.length() - (if raw.length() > 0
-            && raw.slice(raw.length() - 1, raw.length()) == "\r" {
+            && raw.ends_with("\r") {
                 1;
             }
             else {
@@ -1840,7 +2090,7 @@ hidden object PoParsing {
         }
         let text = raw.slice(start.value(), end);
         let at = offset + start.value();
-        if text.slice(0, 1) == "#" {
+        if text.starts_with("#") {
             confirm text.length() < 2 || text.slice(1, 2) != "~"
                 else throw InvalidCatalog.located(
                     at,
@@ -1898,7 +2148,7 @@ hidden object PoParsing {
             }
             return;
         }
-        if text.slice(0, 1) == "\"" {
+        if text.starts_with("\"") {
             confirm fields.value().size() > 0
                 else throw InvalidCatalog.located(at, "orphan PO continuation");
             let current = fields.value();
@@ -1911,18 +2161,62 @@ hidden object PoParsing {
             );
             return;
         }
-        let expression = Regex(
-            "^(msgctxt|msgid_plural|msgid|msgstr)(?:\\[([0-9]{1,2})\\])?[ \\t]+(.*)$"
-        );
-        confirm RegexMatches(origin: text, regex: expression).found()
+        let characters = text.split("");
+        let name = if text.starts_with("msgid_plural") {
+            "msgid_plural";
+        }
+        else {
+            if text.starts_with("msgctxt") {
+                "msgctxt";
+            }
+            else {
+                if text.starts_with("msgid") {
+                    "msgid";
+                }
+                else {
+                    if text.starts_with("msgstr") {
+                        "msgstr";
+                    }
+                    else {
+                        "";
+                    }
+                }
+            }
+        };
+        confirm name != "" else throw InvalidCatalog.located(at, "unknown PO directive");
+        let position = Cell(name.length());
+        let indexed = position.value() < characters.size() && characters[position.value()] == "[";
+        let number = Cell(0);
+        if indexed {
+            position.replace(position.value() + 1);
+            let start = position.value();
+            loop {
+                let index = position.value();
+                last if index >= characters.size() || index >= start + 2;
+                let digit = characters[index];
+                last if !"0123456789".contains(digit);
+                number.replace(number.value() * 10 + Number(digit).int());
+                position.replace(index + 1);
+            }
+            confirm position.value() > start
+                && position.value() < characters.size()
+                && characters[position.value()] == "]"
+                else throw InvalidCatalog.located(at, "unknown PO directive");
+            position.replace(position.value() + 1);
+        }
+        let separator = position.value();
+        loop {
+            let index = position.value();
+            last if index >= characters.size()
+                || (characters[index] != " " && characters[index] != "\t");
+            position.replace(index + 1);
+        }
+        confirm position.value() > separator
             else throw InvalidCatalog.located(at, "unknown PO directive");
-        let directive = EntireRegexMatch(origin: text, regex: expression);
-        let name = directive.capture(1).text();
-        let indexed = directive.capture(2).matched();
         confirm !indexed || name == "msgstr"
             else throw InvalidCatalog.located(at, "index on nontranslation directive");
         let index = if indexed {
-            Number(directive.capture(2).text()).int();
+            number.value();
         }
         else {
             -1;
@@ -1953,8 +2247,8 @@ hidden object PoParsing {
         let empty is List<string> = EmptyList();
         let field = PoField(name: name, index: index, offset: at, pieces: empty, amount: 0).following(
             PoLineStrings(
-                origin: directive.capture(3).text(),
-                offset: at + directive.capture(3).range()::Bounds::start,
+                origin: text.slice(position.value(), text.length()),
+                offset: at + position.value(),
                 charset: charset
             ).octets()
         );
@@ -2374,4 +2668,239 @@ test "plural formulas keep their GNU unsigned 64-bit results (#205)" {
     );
     test.is(refused("nplurals=2; plural=n/2>=1 && n/2<2;", "3"), "1");
     test.is(refused("nplurals=2; plural=n/2>=1 && n/2<2;", "4"), "0");
+}
+
+test "plural expressions tokenize numbers, n and one- and two-character operators" {
+    let russian = GettextPluralRule(
+        "nplurals=3; plural=n%10==1&&n%100!=11?0:n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?1:2;"
+    );
+    let forms is @int = [1, 2, 5, 11, 21, 22, 25, 111, 104].map() -> count {
+        russian.index(Decimal(count.string()));
+    };
+    test.is(forms, [0, 1, 2, 2, 0, 1, 2, 2, 1]);
+    let ten = GettextPluralRule("nplurals=2; plural=n==10 || !(n>3)&&n<=1;");
+    test.is(
+        [0, 1, 2, 3, 9, 10].map() -> count {
+            ten.index(Decimal(count.string()));
+        },
+        [1, 1, 0, 0, 0, 1]
+    );
+    let refused = [
+        ["nplurals=2; plural=n = 1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=n & 1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=n |1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=1 \u{e9};", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=nn;", "InvalidCatalog.located(1, \"trailing plural token\")"],
+        ["nplurals=2; plural=n==;", "InvalidCatalog.located(3, \"expected literal or n\")"],
+    ];
+    for refused -> pair {
+        test.is(
+            try {
+                GettextPluralRule(pair[0]);
+                "";
+            }
+            catch failure is InvalidCatalog {
+                failure.text();
+            },
+            pair[1]
+        );
+    }
+}
+
+test "metadata names and PO directives are checked by their grammar" {
+    test.is(GettextMetadata("X-a9-: v\nLanguage: de").text("x-a9-"), "v");
+    for ["1bad: x", "Bad_Name: x", "\u{c4}: x", "-x: y"] -> header {
+        test.is(
+            try {
+                GettextMetadata(header);
+                "";
+            }
+            catch failure is InvalidCatalog {
+                failure.text();
+            },
+            "InvalidCatalog.located(0, \"invalid metadata name\")"
+        );
+    }
+    test.is(
+        try {
+            ParsedPo("msgid \"a\"\nmsgfoo \"b\"\n");
+            "";
+        }
+        catch failure is InvalidCatalog {
+            failure.text();
+        },
+        "InvalidCatalog.located(10, \"unknown PO directive\")"
+    );
+}
+
+test "PO scanner preserves escapes, Unicode, comments and CRLF continuations" {
+    let document = ParsedPo(
+        "# translator\r\n#. extracted\r\n#: file:1\r\n#, fuzzy, c-format\r\n#| msgid \"old\"\r\n#= no-wrap\r\n\tmsgctxt \"меню\"\r\nmsgid \"é\" \"\\\"\\\\\"\r\n\"中\"\r\nmsgstr \"\\a\\b\\f\\n\\r\\t\\v\\'\\101\\x42\"\r\n\r\n# tail\r\n"
+    ).document();
+    let entry = document.entries().item(0);
+    test.is(entry::Entry::context, "меню");
+    test.is(entry::Entry::identity, "é\"\\中");
+    test.is(entry::Entry::translations, ["\u{7}\u{8}\u{c}\n\r\t\u{b}'AB"]);
+    let records = entry.comments().records();
+    test.is(records.size(), 7);
+    test.is(
+        (0..records.size()).map() -> i {
+            records.item(i)::Comment::kind;
+        },
+        [
+            PoCommentKind.translator,
+            PoCommentKind.extracted,
+            PoCommentKind.reference,
+            PoCommentKind.flag,
+            PoCommentKind.flag,
+            PoCommentKind.previous,
+            PoCommentKind.flag
+        ]
+    );
+    test.is(document.trailing_comments().records().item(0)::Comment::text, "tail");
+    test.is(
+        PoString(ParsedPo(PoString(document).string()).document()).string(),
+        PoString(document).string()
+    );
+}
+
+test "PO scanner accepts adjacent strings, tabs and two-digit plural indexes" {
+    let document = ParsedPo(
+        "msgid\t\"a\"\"b\"\nmsgid_plural \"ab's\"\nmsgstr[01] \"many\"\nmsgstr[00] \"one\"\n"
+    ).document();
+    let entry = document.entries().item(0);
+    test.is(entry::Entry::identity, "ab");
+    test.is(entry::Entry::plural, "ab's");
+    test.is(entry::Entry::translations, ["one", "many"]);
+    test.is(
+        ParsedPo("  \t\r\n#\nmsgid \"a\"\nmsgstr \"\\1012\\x0042z\"\n").document().entries().item(0)::Entry::translations,
+        ["A2Bz"]
+    );
+}
+
+test "PO scanner reports exact scalar offsets and grammar errors" {
+    let cases = [
+        ["msgid \"unterminated", "InvalidCatalog.located(6, \"expected PO quoted string\")"],
+        ["msgid \"a\" junk", "InvalidCatalog.located(10, \"trailing PO field text\")"],
+        ["msgid junk \"a\"", "InvalidCatalog.located(6, \"text between quoted strings\")"],
+        ["msgid \"a\" junk \"b\"", "InvalidCatalog.located(10, \"text between quoted strings\")"],
+        ["msgid \"a\\q\"", "InvalidCatalog.located(8, \"invalid PO escape or literal\")"],
+        ["msgid \"a\\x\"", "InvalidCatalog.located(8, \"invalid PO escape or literal\")"],
+        ["msgid \"\\400\"", "InvalidCatalog.located(7, \"numeric PO escape exceeds one byte\")"],
+        ["msgid \"\\x100\"", "InvalidCatalog.located(7, \"numeric PO escape exceeds one byte\")"],
+        ["msgid \"a\r\"", "InvalidCatalog.located(6, \"expected PO quoted string\")"],
+        ["msgid \"a\\\r\"", "InvalidCatalog.located(8, \"invalid PO string ending\")"],
+        ["msgid \"a\r\"b\"", "InvalidCatalog.located(6, \"text between quoted strings\")"],
+        ["msgid \"a\\\"b\\\"\r", "InvalidCatalog.located(6, \"expected PO quoted string\")"],
+        ["msgid\"a\"", "InvalidCatalog.located(0, \"unknown PO directive\")"],
+        ["msgid[0] \"a\"", "InvalidCatalog.located(0, \"index on nontranslation directive\")"],
+        ["msgstr[16] \"b\"", "InvalidCatalog.located(0, \"plural index exceeds 15\")"],
+        ["msgstr[001] \"b\"", "InvalidCatalog.located(0, \"unknown PO directive\")"],
+        [
+            "msgid \"a\"\r\n  msgstr[0] \"b\"",
+            "InvalidCatalog.located(13, \"wrong singular/plural msgstr\")"
+        ],
+        ["\u{feff}msgid \"a\"", "InvalidCatalog.located(0, \"unknown PO directive\")"],
+        ["\"orphan\"", "InvalidCatalog.located(0, \"orphan PO continuation\")"],
+        [
+            "#~ msgid \"a\"",
+            "InvalidCatalog.located(0, \"obsolete PO entries belong to translation tooling\")"
+        ],
+        ["#, ", "InvalidCatalog.located(0, \"empty PO flag\")"],
+        [
+            "msgid \"é😀\"\r\n\tmsgstr \"x\" !",
+            "InvalidCatalog.located(24, \"trailing PO field text\")"
+        ],
+        [
+            "msgid \"a\"\nmsgid \"b\"",
+            "InvalidCatalog.located(10, \"previous PO entry has no translation\")"
+        ],
+        [
+            "msgid \"a\"\nmsgstr \"b\"\nmsgid \"a\"\nmsgstr \"c\"",
+            "InvalidCatalog.located(0, \"duplicate message identity/context\")"
+        ],
+        [
+            "msgid \"a\"\nmsgid_plural \"as\"\nmsgstr[1] \"b\"",
+            "InvalidCatalog.located(28, \"duplicate, missing or wrong plural translation index\")"
+        ],
+        ["msgid \u{000b}\"a\"", "InvalidCatalog.located(6, \"text between quoted strings\")"],
+        ["msgid \"a\"\u{000b}", "InvalidCatalog.located(9, \"trailing PO field text\")"],
+        ["msgid \"a\\\"", "InvalidCatalog.located(6, \"expected PO quoted string\")"],
+        ["msgid \"a\" \"b", "InvalidCatalog.located(10, \"trailing PO field text\")"],
+        ["msgid \"\\x\" \"later\"", "InvalidCatalog.located(7, \"invalid PO escape or literal\")"]
+    ];
+    for cases -> pair {
+        test.is(
+            try {
+                ParsedPo(pair[0]);
+                "accepted";
+            }
+            catch failure is InvalidCatalog {
+                failure.text();
+            },
+            pair[1]
+        );
+    }
+}
+
+test "PO scanner joins encoded bytes across strings and continuations" {
+    test.is(
+        ParsedPo("msgid \"a\"\nmsgstr \"\\303\" \"\\xA9\"\n\"\\360\\237\"\n\"\\230\\200\"\n").document().entries().item(
+            0
+        )::Entry::translations,
+        ["é😀"]
+    );
+    test.is(
+        ParsedPo(origin: "msgid \"é\"\nmsgstr \"\\351\"\n", charset: "latin1").document().entries().item(
+            0
+        )::Entry::translations,
+        ["é"]
+    );
+    test.is(
+        try {
+            ParsedPo(origin: "msgid \"a\"\nmsgstr \"é\"\n", charset: "ASCII");
+            "accepted";
+        }
+        catch failure is InvalidCatalog {
+            failure.text();
+        },
+        "InvalidCatalog.located(18, \"text cannot be represented in US-ASCII\")"
+    );
+}
+
+test "PO scanner keeps fragment and numeric escape budgets" {
+    let quotes = (0..8192).map() -> i {
+        "\"\"";
+    };
+    test.is(
+        ParsedPo("msgid \"a\"\nmsgstr " + quotes.join("")).document().entries().item(0)::Entry::translations,
+        [""]
+    );
+    test.is(
+        try {
+            ParsedPo("msgid \"a\"\nmsgstr " + quotes.join("") + "\"\"");
+            "accepted";
+        }
+        catch failure is InvalidCatalog {
+            failure.text();
+        },
+        "InvalidCatalog.located(17, \"quoted-fragment count\")"
+    );
+    let zeros = (0..4094).map() -> i {
+        "0";
+    };
+    test.is(
+        ParsedPo("msgid \"a\"\nmsgstr \"\\x" + zeros.join("") + "41\"").document().entries().item(0)::Entry::translations,
+        ["A"]
+    );
+    test.is(
+        try {
+            ParsedPo("msgid \"a\"\nmsgstr \"\\x0" + zeros.join("") + "41\"");
+            "accepted";
+        }
+        catch failure is InvalidCatalog {
+            failure.text();
+        },
+        "InvalidCatalog.located(18, \"numeric escape length\")"
+    );
 }

@@ -8,13 +8,15 @@
 //! `barrier.rs`, `semaphore.rs`, the `sleep_nanoseconds` native).
 #![allow(unsafe_code)]
 
+use std::collections::VecDeque;
+
 use crate::heap::Payload;
 use crate::intrinsics::{Intrinsic, call_function, call_role, thrown};
 use crate::primitives::{COMPLETED, REFUSED, State, WAITING};
 use crate::program::Kind;
 use crate::runtime::{Ctx, FAILED, FailureKind, OK, Runtime};
 use crate::tasks::{self, DELIVER_NOW, DONE, FAILURE_STATE, FLAGS, PARKED, REGISTERS, RESULT, RESUME};
-use crate::word::{Repr, UNBOUND, Word};
+use crate::word::{FastMap, FastSet, Repr, UNBOUND, Word};
 
 #[derive(Debug)]
 pub enum Step {
@@ -55,6 +57,7 @@ pub fn drive(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word) -> bool {
             true
         }
         Done(value) => {
+            // A Champ Future's outcome packet is in its cache before its waiters wake (draft 3 §9, #601 Q1).
             runtime.settle(frame, DONE, value);
             false
         }
@@ -148,9 +151,13 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
     use crate::host::Start;
     let started = match runtime.io.requests.get(&frame) {
         Some(&id) => {
-            if deliver && !crate::host::cancel(runtime, id) {
-                runtime.io.requests.remove(&frame);
-                return cancelled(runtime);
+            if deliver {
+                // A cleanup may need the reactor whatever woke the body.
+                runtime.io.off_reactor.remove(&frame);
+                if !crate::host::cancel(runtime, id) {
+                    runtime.io.requests.remove(&frame);
+                    return cancelled(runtime);
+                }
             }
             let waker = runtime.io.waker(frame);
             match crate::host::poll(runtime, native, id, &waker) {
@@ -169,6 +176,9 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
                     // is observed, as on the other engines. The frame is woken
                     // at once and polls the request then.
                     runtime.io.requests.insert(frame, id);
+                    if crate::host::off_reactor(runtime, id) {
+                        runtime.io.off_reactor.insert(frame);
+                    }
                     runtime.io.waker(frame).wake();
                     return Pending;
                 }
@@ -177,6 +187,7 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
         }
     };
     runtime.io.requests.remove(&frame);
+    runtime.io.off_reactor.remove(&frame);
     match started {
         Start::Done(value) => Done(value),
         Start::Raise(failure) => Failed(failure),
@@ -234,6 +245,9 @@ fn intrinsic_step(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: u
             let owner = runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
             let guard = runtime.heap.object_new(owner, &[]);
             runtime.state_new(guard, State::Grant { pool, closed: false });
+            // #846: a granted LockGuard or Permit is a resource (its `destroy` closes it): its identity exists before
+            // the Future publishes it, so the outcome owns it and its owner's close releases the grant.
+            runtime.created(owner as usize, guard);
             Done(guard)
         }
         BarrierWait => {
@@ -281,6 +295,7 @@ fn intrinsic_step(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: u
             }
         }
         Send | Receive => channel(runtime, frame, function, intrinsic == Send, deliver),
+        SelectionItem => selection(runtime, frame, function, deliver),
         GroupWait | ScopeResult => group_wait(runtime, ctx, frame, function, intrinsic == ScopeResult, deliver),
         CollectAll | CollectRace | CollectFirst | TimeoutBefore | TimeoutWithin => {
             collect(runtime, ctx, frame, function, intrinsic, deliver)
@@ -332,6 +347,8 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     if *channel.borrow_mut().repr.get_or_insert(repr) != repr {
         return fail(runtime, FailureKind::Program("Channel endpoints disagree on the message type".into()));
     }
+    // #587 (OIR-2 §7.3): a fresh message belongs to its send until accepted, to the channel's packet while
+    // buffered, and to the receiving Future from delivery on. A rendezvous hands it straight over.
     if send {
         let value = param(runtime, frame, function, 1);
         let mut c = channel.borrow_mut();
@@ -341,11 +358,18 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
         }
         if let Some(receiver) = Runtime::pop_parked(&mut c.receivers) {
             drop(c);
-            runtime.complete_wait(receiver, COMPLETED, Some(value));
+            runtime.message_deliver(runtime.held(frame, tasks::Held::Inputs), receiver, value, repr);
+            if tasks::get(receiver, FLAGS) & tasks::SELECTING != 0 {
+                runtime.selection_commit(receiver, &channel, value);
+            } else {
+                runtime.complete_wait(receiver, COMPLETED, Some(value));
+            }
             return Done(endpoint);
         }
         if c.messages.len() < c.capacity {
             c.messages.push_back(value);
+            drop(c);
+            runtime.message_accept(frame, &channel, value, repr);
             return Done(endpoint);
         }
         c.senders.push_back(frame);
@@ -355,10 +379,14 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     }
     let mut c = channel.borrow_mut();
     if let Some(value) = c.messages.pop_front() {
-        if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
+        let packet = c.packet;
+        let sender = Runtime::pop_parked(&mut c.senders);
+        drop(c);
+        runtime.message_deliver(packet, frame, value, repr);
+        if let Some(sender) = sender {
             let payload = send_function(runtime, sender);
-            c.messages.push_back(payload);
-            drop(c);
+            channel.borrow_mut().messages.push_back(payload);
+            runtime.message_accept(sender, &channel, payload, repr);
             runtime.complete_wait(sender, COMPLETED, None);
         }
         return Done(value);
@@ -366,6 +394,7 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
         drop(c);
         let value = send_function(runtime, sender);
+        runtime.message_deliver(runtime.held(sender, tasks::Held::Inputs), frame, value, repr);
         runtime.complete_wait(sender, COMPLETED, None);
         return Done(value);
     }
@@ -375,6 +404,136 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     }
     c.receivers.push_back(frame);
     drop(c);
+    wait(frame, 0);
+    Pending
+}
+
+// ---- Atomic channel selection (#509) ----
+
+impl Runtime {
+    /// Remove all alternatives synchronously. No user code or safepoint occurs
+    /// between committing the winner, clearing PARKED and this cleanup.
+    fn selection_unwait(&mut self, frame: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let channels = self.selection_mut(selector).expect("selection").channels.clone();
+        for channel in channels.iter() {
+            channel.borrow_mut().receivers.retain(|&w| w != frame);
+        }
+    }
+
+    fn selection_result(&mut self, frame: Word, index: usize, value: Word) -> Word {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let selection = self.selection_mut(selector).expect("selection");
+        selection.next = (index + 1) % selection.channels.len();
+        let owner = self.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
+        let source = self.heap.int(index as i64);
+        let item = self.heap.object_new(owner, &[source, value]);
+        self.created(owner as usize, item);
+        item
+    }
+
+    /// Called only for a still-parked receiver popped by a sender. The sender
+    /// has transferred ownership; completion irrevocably claims this frame.
+    fn selection_commit(&mut self, frame: Word, channel: &std::rc::Rc<std::cell::RefCell<crate::primitives::Channel>>, value: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let index = self.selection_mut(selector).expect("selection").channels.iter()
+            .position(|c| std::rc::Rc::ptr_eq(c, channel)).expect("registered channel");
+        let item = self.selection_result(frame, index, value);
+        let committed = self.complete_wait(frame, COMPLETED, Some(item));
+        debug_assert!(committed);
+        self.selection_unwait(frame);
+    }
+
+    /// One close cannot refuse a selector with another usable source. A
+    /// suspended selection has no buffered messages; still test exhaustion
+    /// explicitly so the rule remains the same as a ready scan's.
+    pub(crate) fn selection_closed(&mut self, frame: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let channels = self.selection_mut(selector).expect("selection").channels.clone();
+        if channels.iter().all(|c| { let c = c.borrow(); c.closed && c.messages.is_empty() }) {
+            self.complete_wait(frame, REFUSED, None);
+            self.selection_unwait(frame);
+        }
+    }
+}
+
+fn selection(runtime: &mut Runtime, frame: Word, function: usize, deliver: bool) -> Step {
+    let selector = param(runtime, frame, function, 0);
+    let Some(s) = runtime.selection_mut(selector) else {
+        return fail(runtime, FailureKind::Program("Invalid channel selector".into()));
+    };
+    match resume(frame) {
+        COMPLETED | REFUSED => {
+            s.pending = None;
+            tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) & !tasks::SELECTING);
+            return if resume(frame) == COMPLETED { Done(tasks::get(frame, RESULT)) }
+                else { Failed(failure_of(runtime, function, 1)) };
+        }
+        _ if deliver => {
+            // A cancelled cold request has never reserved the selector. Never
+            // clear another request's reservation (including rejected calls).
+            if s.pending == Some(frame) {
+                runtime.selection_unwait(frame);
+                runtime.selection_mut(selector).expect("selection").pending = None;
+            }
+            tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) & !tasks::SELECTING);
+            return cancelled(runtime);
+        }
+        WAITING => return Pending,
+        _ => {}
+    }
+    if s.pending.is_some() {
+        return Failed(failure_of(runtime, function, 2));
+    }
+    let channels = s.channels.clone();
+    let start = s.next;
+    let owner = runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
+    let payload = runtime.loaded.program.objects[owner as usize].fields[1].1;
+    let repr = Kind::of(&runtime.loaded.program, payload).repr();
+    let mut open = false;
+    for offset in 0..channels.len() {
+        let index = (start + offset) % channels.len();
+        let channel = &channels[index];
+        let mut c = channel.borrow_mut();
+        if *c.repr.get_or_insert(repr) != repr {
+            drop(c);
+            return fail(runtime, FailureKind::Program("Channel endpoints disagree on the message type".into()));
+        }
+        if let Some(value) = c.messages.pop_front() {
+            let packet = c.packet;
+            let sender = Runtime::pop_parked(&mut c.senders);
+            drop(c);
+            runtime.message_deliver(packet, frame, value, repr);
+            if let Some(sender) = sender {
+                let payload = param(runtime, sender, runtime.function_of(sender), 1);
+                channel.borrow_mut().messages.push_back(payload);
+                runtime.message_accept(sender, channel, payload, repr);
+                runtime.complete_wait(sender, COMPLETED, None);
+            }
+            return Done(runtime.selection_result(frame, index, value));
+        }
+        if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
+            drop(c);
+            let value = param(runtime, sender, runtime.function_of(sender), 1);
+            runtime.message_deliver(runtime.held(sender, tasks::Held::Inputs), frame, value, repr);
+            runtime.complete_wait(sender, COMPLETED, None);
+            return Done(runtime.selection_result(frame, index, value));
+        }
+        open |= !c.closed;
+    }
+    if !open {
+        return Failed(failure_of(runtime, function, 1));
+    }
+    runtime.selection_mut(selector).expect("selection").pending = Some(frame);
+    tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) | tasks::SELECTING);
+    for channel in channels.iter() {
+        let mut c = channel.borrow_mut();
+        if !c.closed { c.receivers.push_back(frame); }
+    }
     wait(frame, 0);
     Pending
 }
@@ -402,9 +561,12 @@ fn set_state(runtime: &mut Runtime, frame: Word, payload: Box<dyn Payload>) {
 
 #[derive(Debug)]
 struct GroupWait {
-    /// 0 start, 1 body pending (scope), 2 waiting for members.
+    /// 0 start, 1 body pending (scope), 2 members, 3 scope cleanup.
     phase: u8,
     group: Word,
+    /// A scope owns its internal group and body Future until all children
+    /// settle; the body receives a borrowed supervising capability.
+    resources: Word,
     body: Word,
     value: Word,
     value_repr: Repr,
@@ -415,6 +577,7 @@ struct GroupWait {
 impl Payload for GroupWait {
     fn trace(&self, visit: &mut dyn FnMut(Word, Repr)) {
         visit(self.group, Repr::Ref);
+        visit(self.resources, Repr::Ref);
         visit(self.body, Repr::Ref);
         visit(self.value, self.value_repr);
         if let Some(external) = self.external {
@@ -440,14 +603,21 @@ fn group_wait(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
         let group = if scope {
             let owner = runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
             let group = runtime.heap.object_new(owner, &[]);
+            runtime.created(owner as usize, group);
             runtime.state_new(group, State::Group(Default::default()));
             group
         } else {
             receiver
         };
+        let resources = if scope {
+            let resources = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + crate::failures::REGION_SLOTS]);
+            runtime.region_add(resources, group, true);
+            resources
+        } else { UNBOUND };
         let wait = GroupWait {
             phase: if scope { 0 } else { 2 },
             group,
+            resources,
             body: UNBOUND,
             value: if value_repr == Repr::Raw { crate::word::UNBOUND_RAW } else { UNBOUND },
             value_repr,
@@ -460,6 +630,9 @@ fn group_wait(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
             seal(runtime, frame);
         }
     }
+    if scope && state::<GroupWait>(runtime, frame).expect("group wait").phase == 3 {
+        return scope_cleanup(runtime, ctx, frame, deliver);
+    }
     let group = state::<GroupWait>(runtime, frame).expect("group wait").group;
     if state::<GroupWait>(runtime, frame).expect("group wait").phase == 0 {
         let action = runtime.heap.field(receiver, 0);
@@ -467,7 +640,11 @@ fn group_wait(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
         let s = state::<GroupWait>(runtime, frame).expect("group wait");
         s.phase = 1;
         match unsafe { (*ctx).status } {
-            OK => s.body = body,
+            OK => {
+                s.body = body;
+                let resources = s.resources;
+                runtime.region_add(resources, body, true);
+            }
             _ => match call_failed(ctx) {
                 Ok(failure) => {
                     s.external = Some(failure);
@@ -600,7 +777,19 @@ fn group_members(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, scope: bool,
         }
     };
     let s = state::<GroupWait>(runtime, frame).expect("group wait");
-    let (external, value) = (s.external, s.value);
+    let external = s.external;
+    if scope {
+        let primary = match (external, result) {
+            (Some(external), Err(failed)) if failed != external => Some(runtime.failure_link(external, failed, true)),
+            (Some(external), _) => Some(external),
+            (None, Err(failed)) => Some(failed),
+            (None, Ok(_)) => None,
+        };
+        let s = state::<GroupWait>(runtime, frame).expect("group wait");
+        s.external = primary;
+        s.phase = 3;
+        return scope_cleanup(runtime, ctx, frame, false);
+    }
     if let Some(external) = external {
         if let Err(failed) = result
             && failed != external {
@@ -610,8 +799,28 @@ fn group_members(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, scope: bool,
     }
     match result {
         Err(failure) => Failed(failure),
-        Ok(_) if scope => Done(value),
         Ok(_) => Done(param(runtime, frame, runtime.function_of(frame), 0)),
+    }
+}
+
+/// Close the scope's internal ownership packet, preserving only the published
+/// body result (or failure). Async destroys use the ordinary shielded settle.
+fn scope_cleanup(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, deliver: bool) -> Step {
+    if deliver && state::<GroupWait>(runtime, frame).expect("group wait").external.is_none() {
+        let failure = runtime.cancelled_failure();
+        state::<GroupWait>(runtime, frame).expect("group wait").external = Some(failure);
+    }
+    let s = state::<GroupWait>(runtime, frame).expect("group wait");
+    let (resources, value, primary) = (s.resources, s.value, s.external);
+    let keep = if s.value_repr == Repr::Ref && primary.is_none() { value } else { UNBOUND };
+    match tasks::rt_region_settle(ctx, frame, resources, keep, primary.unwrap_or(UNBOUND)) {
+        tasks::AWAIT_PENDING => Pending,
+        _ if unsafe { (*ctx).status } != OK => match call_failed(ctx) {
+            Ok(failure) => Failed(failure),
+            Err(()) => Stop,
+        },
+        _ if primary.is_some() => Failed(unsafe { (*ctx).scratch }),
+        _ => Done(value),
     }
 }
 
@@ -632,10 +841,23 @@ struct Collection {
     entries: Vec<Word>,
     consumed: Vec<bool>,
     cancelled: Vec<bool>,
-    initial_order: u64,
+    /// Inputs not consumed yet.
+    remaining: usize,
+    /// Settled inputs in the order they are consumed: those settled at the
+    /// start by input position, then the rest as they settle (#443).
+    ready: VecDeque<usize>,
+    /// Inputs that settled since the frame last ran, in settlement order.
+    /// The frame listens once to every unsettled input, and `settled` fills
+    /// this, so a run costs the settled inputs, not all of them.
+    inbox: Vec<Word>,
+    /// (input, position), sorted: the positions of a settled input.
+    positions: Vec<(Word, usize)>,
     winner: Option<Word>,
     winner_repr: Repr,
+    /// Failures in the order observed, each once.
     failures: Vec<Word>,
+    /// The failures already in `failures` (#445).
+    failed: FastSet<Word>,
     external: Option<Word>,
     finishing: bool,
 }
@@ -658,6 +880,27 @@ fn collection(runtime: &mut Runtime, frame: Word) -> &mut Collection {
     state::<Collection>(runtime, frame).expect("collection")
 }
 
+/// `future`, which the INBOX driver `frame` listens to, settled. A
+/// collection queues it and is woken (#443). A `completion()` request
+/// listens for its stream: the stream queues it and serves its waiting
+/// requests now, and the listening frame is not woken (#444).
+pub(crate) fn settled(runtime: &mut Runtime, frame: Word, future: Word) -> bool {
+    if let Some(c) = state::<Collection>(runtime, frame) {
+        c.inbox.push(future);
+        return true;
+    }
+    let function = runtime.function_of(frame);
+    if runtime.intrinsics[function] != Some(Intrinsic::StreamCompletion) {
+        return true;
+    }
+    let receiver = param(runtime, frame, function, 0);
+    if let Some(stream) = runtime.stream_mut(receiver) {
+        stream.inbox.push(future);
+        runtime.stream_poll(receiver, UNBOUND);
+    }
+    false
+}
+
 fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, intrinsic: Intrinsic, deliver: bool) -> Step {
     let receiver = param(runtime, frame, function, 0);
     if state::<Collection>(runtime, frame).is_none() {
@@ -674,10 +917,14 @@ fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
             entries: Vec::new(),
             consumed: Vec::new(),
             cancelled: Vec::new(),
-            initial_order: 0,
+            remaining: 0,
+            ready: VecDeque::new(),
+            inbox: Vec::new(),
+            positions: Vec::new(),
             winner: None,
             winner_repr,
             failures: Vec::new(),
+            failed: FastSet::default(),
             external: None,
             finishing: false,
         };
@@ -698,65 +945,66 @@ fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
                 return Stop;
             }
         }
-        let completions = runtime.completions;
         let c = collection(runtime, frame);
         c.consumed = vec![false; entries.len()];
         c.cancelled = vec![false; entries.len()];
-        c.initial_order = completions;
+        c.remaining = entries.len();
         c.started = true;
+        // Inputs settled by now go first, by input position. The frame then
+        // listens once to each unsettled input; `settled` reports them in
+        // settlement order, which is the order they are consumed in.
+        let mut pending = Vec::new();
+        for (index, &entry) in entries.iter().enumerate() {
+            if matches!(tasks::get(entry, tasks::STATE), DONE | FAILURE_STATE) {
+                c.ready.push_back(index);
+            } else {
+                pending.push(entry);
+            }
+        }
+        c.positions = entries.iter().enumerate().map(|(index, &entry)| (entry, index)).collect();
+        c.positions.sort_unstable();
+        pending.sort_unstable();
+        pending.dedup();
+        tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) | tasks::INBOX);
+        for entry in pending {
+            runtime.listen(entry, frame);
+        }
     }
-    let entries = collection(runtime, frame).entries.clone();
-    // Whatever woke this frame, stop listening to the other entries.
-    for &entry in &entries {
-        runtime.remove_waiter(entry, frame);
-    }
-    if deliver {
+    if deliver && !timeout_committed_selection(runtime, ctx, frame, function) {
         let failure = runtime.cancelled_failure();
         collection(runtime, frame).external = Some(failure);
         cancel_collection(runtime, ctx, frame);
     }
     loop {
         let c = collection(runtime, frame);
-        let mut best: Option<(u8, u64, usize)> = None;
-        let mut remaining = false;
-        for (index, &entry) in c.entries.iter().enumerate() {
-            if c.consumed[index] {
-                continue;
-            }
-            remaining = true;
-            if matches!(tasks::get(entry, tasks::STATE), DONE | FAILURE_STATE) {
-                let order = Runtime::completion_order(entry);
-                let key = if order <= c.initial_order { (0, 0, index) } else { (1, order, index) };
-                if best.is_none_or(|b| key < b) {
-                    best = Some(key);
+        if !c.inbox.is_empty() {
+            let mut inbox = std::mem::take(&mut c.inbox);
+            for &future in &inbox {
+                let first = c.positions.partition_point(|&(entry, _)| entry < future);
+                for &(entry, index) in &c.positions[first..] {
+                    if entry != future {
+                        break;
+                    }
+                    c.ready.push_back(index);
                 }
             }
+            inbox.clear();
+            c.inbox = inbox;
         }
-        match best {
-            Some((_, _, index)) => consume(runtime, ctx, frame, function, index),
-            None if remaining => {
-                let c = collection(runtime, frame);
-                let pending: Vec<Word> = c
-                    .entries
-                    .iter()
-                    .zip(&c.consumed)
-                    .filter(|&(_, &consumed)| !consumed)
-                    .map(|(&e, _)| e)
-                    .collect();
-                for entry in pending {
-                    runtime.listen(entry, frame);
-                }
-                return Pending;
-            }
+        match c.ready.pop_front() {
+            Some(index) => consume(runtime, ctx, frame, function, index),
+            None if c.remaining > 0 => return Pending,
             None => break,
         }
     }
-    collect_finish(runtime, frame, function)
+    collect_finish(runtime, ctx, frame, function)
 }
 
 /// Read the origins of a collection through their sequence role; None when
 /// the entries are ready to start.
 fn collect_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, receiver: Word) -> Option<Step> {
+    // Champ (#810 G1 step 3): the sequence's own `size` and `item`, called through the driver call bridge. Each
+    // origin joins the collection at once, so the next call's collection keeps it.
     let program = &runtime.loaded.program;
     let receiver_type = program.functions[function].registers[program.functions[function].params[0].0 as usize];
     let Some(okkama_sparrow::Type::Object(owner)) = program.ty(receiver_type) else {
@@ -782,6 +1030,7 @@ fn collect_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
         let Some(item) = call_role(ctx, runtime, sequence, role, item_slot, &[position]) else {
             return Some(call_failed(ctx).map_or(Stop, Failed));
         };
+        runtime.driver_input(frame, item);
         collection(runtime, frame).entries.push(item);
     }
     None
@@ -815,17 +1064,17 @@ fn timeout_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
     let timer = (|| {
         let mut limit = runtime.heap.field(receiver, 1);
         if before {
-            let now = call_function(ctx, runtime, helpers[0], &[clock])?;
+            let now = helper_call(ctx, runtime, frame, helpers[0], &[clock])?;
             runtime.roots.push((now, Repr::Ref));
-            let remaining = call_function(ctx, runtime, helpers[1], &[limit, now]);
+            let remaining = helper_call(ctx, runtime, frame, helpers[1], &[limit, now]);
             runtime.roots.pop();
             limit = remaining?;
         }
         runtime.roots.push((limit, Repr::Ref));
-        let amount = call_function(ctx, runtime, helpers[offset], &[limit]);
+        let amount = helper_call(ctx, runtime, frame, helpers[offset], &[limit]);
         let result = amount.and_then(|amount| {
             if runtime.rational(amount).sign() > 0 {
-                call_function(ctx, runtime, helpers[offset + 1], &[clock, limit]).map(Some)
+                helper_call(ctx, runtime, frame, helpers[offset + 1], &[clock, limit]).map(Some)
             } else {
                 Some(None)
             }
@@ -844,6 +1093,13 @@ fn timeout_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
     };
     collection(runtime, frame).entries.push(timer);
     None
+}
+
+/// A helper call of a driver: on Champ through the driver call bridge, which keeps a returned packet in the
+/// driver's inputs (#810, memo §6.4); on Tomato a plain call.
+fn helper_call(ctx: *mut Ctx, runtime: &mut Runtime, frame: Word, function: usize, args: &[Word]) -> Option<Word> {
+    let _ = frame;
+    call_function(ctx, runtime, function, args)
 }
 
 /// An inert result word for a settled timer stand-in of `function`.
@@ -870,6 +1126,16 @@ fn cancel_collection(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word) {
 }
 
 fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, index: usize) {
+    // A timeout's cancellation cannot abandon an irrevocably received value,
+    // even if its timer notification was queued before origin publication.
+    if index == 1 {
+        let c = collection(runtime, frame);
+        if c.strategy == Strategy::Timeout && !c.finishing
+            && tasks::get(c.entries[1], tasks::STATE) == DONE
+        {
+            timeout_committed_selection(runtime, ctx, frame, function);
+        }
+    }
     let entry = collection(runtime, frame).entries[index];
     let mut result = match tasks::get(entry, tasks::STATE) {
         DONE => Ok(tasks::get(entry, RESULT)),
@@ -889,18 +1155,21 @@ fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
         Ok(_) => false,
     };
     let c = collection(runtime, frame);
+    debug_assert!(!c.consumed[index], "input {index} consumed twice");
     c.consumed[index] = true;
+    c.remaining -= 1;
     let mut cancel = false;
     match result {
         Ok(value) if !c.finishing && c.strategy != Strategy::All => {
             if c.strategy == Strategy::First {
                 c.failures.clear();
+                c.failed.clear();
             }
             c.winner = Some(value);
             cancel = true;
         }
         Err(failure) if !ignore => {
-            if !c.failures.contains(&failure) {
+            if c.failed.insert(failure) {
                 c.failures.push(failure);
             }
             if !c.finishing && c.strategy != Strategy::First {
@@ -914,18 +1183,62 @@ fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
     }
 }
 
-fn collect_finish(runtime: &mut Runtime, frame: Word, function: usize) -> Step {
+/// Preserve a timeout's directly selected origin before attempting cancellation.
+/// This only publishes a receive already committed by the channel: it never
+/// starts or polls an uncommitted origin, nor changes ordinary future races.
+fn timeout_committed_selection(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> bool {
+    let c = collection(runtime, frame);
+    if c.strategy != Strategy::Timeout {
+        return false;
+    }
+    let origin = c.entries[0];
+    if runtime.intrinsics[runtime.function_of(origin)] != Some(Intrinsic::SelectionItem) {
+        return false;
+    }
+    let c = collection(runtime, frame);
+    if c.consumed[0] {
+        // The committed value remains irrevocable while the wrapper waits
+        // for its cancelled timer to finish cleanup (#940).
+        return c.winner.is_some();
+    }
+    if c.finishing {
+        return false;
+    }
+    let committed = tasks::get(origin, tasks::STATE) == DONE
+        || (tasks::get(origin, tasks::STATE) == tasks::RUNNING && resume(origin) == COMPLETED);
+    if !committed {
+        return false;
+    }
+    if tasks::get(origin, tasks::STATE) != DONE {
+        // The selection driver only publishes its committed outcome here;
+        // there is no user code, safepoint or further channel operation.
+        drive(runtime, ctx, origin);
+    }
+    consume(runtime, ctx, frame, function, 0);
+    let c = collection(runtime, frame);
+    c.ready.retain(|&index| index != 0);
+    c.inbox.retain(|&entry| entry != origin);
+    true
+}
+
+fn collect_finish(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> Step {
+    let _ = ctx;
     let c = collection(runtime, frame);
     let (strategy, entries, winner, mut failures, external) =
         (c.strategy, c.entries.clone(), c.winner, c.failures.clone(), c.external);
     if let Some(primary) = external.or_else(|| failures.first().copied()) {
         // AllFutures keeps the first observed failure as primary and attaches
         // the others in input order.
-        if strategy == Strategy::All {
-            let position = |failure: Word| {
-                entries.iter().position(|&e| tasks::get(e, tasks::STATE) == FAILURE_STATE && tasks::get(e, tasks::FAILURE) == failure)
-            };
-            failures.sort_by_key(|&f| position(f));
+        if strategy == Strategy::All && failures.len() > 1 {
+            // The first input position of each failure, found in one pass
+            // (#445); a failure no input holds sorts first, as before.
+            let mut first: FastMap<Word, usize> = FastMap::with_capacity_and_hasher(failures.len(), Default::default());
+            for (index, &entry) in entries.iter().enumerate() {
+                if tasks::get(entry, tasks::STATE) == FAILURE_STATE {
+                    first.entry(tasks::get(entry, tasks::FAILURE)).or_insert(index);
+                }
+            }
+            failures.sort_by_key(|failure| first.get(failure).copied());
         }
         for failure in failures {
             if failure != primary {
@@ -936,6 +1249,7 @@ fn collect_finish(runtime: &mut Runtime, frame: Word, function: usize) -> Step {
     }
     if strategy == Strategy::All {
         let values: Vec<Word> = entries.iter().map(|&e| tasks::get(e, RESULT)).collect();
+        // Champ (#810 G1 step 3, ruling Q1): the program's `Wrap` helper makes the `Sequencing<T>` result.
         let program = &runtime.loaded.program;
         let owner = program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
         let items = program.objects[owner as usize].fields[0].1;
@@ -949,7 +1263,12 @@ fn collect_finish(runtime: &mut Runtime, frame: Word, function: usize) -> Step {
         } else {
             runtime.heap.allocate_array(kind.repr(), &values)
         };
-        return Done(runtime.heap.object_new(owner, &[array]));
+        let result = runtime.heap.object_new(owner, &[array]);
+        // Like obj.new, register the wrapper's identity so the awaiter's
+        // region can adopt its result graph. An unregistered object stops
+        // the ownership walk, leaving its resources free for later callees.
+        runtime.created(owner as usize, result);
+        return Done(result);
     }
     match winner {
         Some(winner) => Done(winner),
@@ -969,10 +1288,6 @@ fn completion(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
         Err(Some(failure)) => return Failed(failure),
         Err(None) => return Stop,
     }
-    let entries = runtime.stream_mut(receiver).expect("stream").entries.clone();
-    for &entry in &entries {
-        runtime.remove_waiter(entry, frame);
-    }
     match resume(frame) {
         COMPLETED => return Done(tasks::get(frame, RESULT)),
         REFUSED => return Failed(tasks::get(frame, RESULT)),
@@ -989,6 +1304,7 @@ fn completion(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
             stream.waiters.push_back(frame);
             if !stream.started && !stream.aborting {
                 stream.started = true;
+                let entries = stream.entries.clone();
                 for &entry in &entries {
                     Runtime::observe(entry);
                     runtime.spawn(ctx, entry);
@@ -996,8 +1312,27 @@ fn completion(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
                         return Stop;
                     }
                 }
-                let completions = runtime.completions;
-                runtime.stream_mut(receiver).expect("stream").initial_order = completions;
+                let stream = runtime.stream_mut(receiver).expect("stream");
+                // Inputs settled by now are queued by position. This frame
+                // then listens once to each unsettled input for the stream:
+                // `settled` hands them over in settlement order (#444).
+                let mut pending = Vec::new();
+                for (index, &entry) in entries.iter().enumerate() {
+                    if matches!(tasks::get(entry, tasks::STATE), DONE | FAILURE_STATE) {
+                        stream.emitted[index] = true;
+                        stream.queue.push_back(index);
+                    } else {
+                        pending.push(entry);
+                    }
+                }
+                stream.positions = entries.iter().enumerate().map(|(index, &entry)| (entry, index)).collect();
+                stream.positions.sort_unstable();
+                pending.sort_unstable();
+                pending.dedup();
+                tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) | tasks::INBOX);
+                for entry in pending {
+                    runtime.listen(entry, frame);
+                }
             }
         }
         _ if deliver => {
@@ -1012,6 +1347,7 @@ fn completion(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
             }
             stream.aborting = true;
             stream.aborted = Some(failure);
+            let entries = stream.entries.clone();
             for (index, &entry) in entries.iter().enumerate() {
                 if !matches!(tasks::get(entry, tasks::STATE), DONE | FAILURE_STATE) {
                     runtime.stream_mut(receiver).expect("stream").cancelled[index] = true;
@@ -1026,14 +1362,6 @@ fn completion(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize
     runtime.stream_poll(receiver, frame);
     if resume(frame) == COMPLETED {
         return Done(tasks::get(frame, RESULT));
-    }
-    if !runtime.stream_mut(receiver).expect("stream").aborting {
-        let stream = runtime.stream_mut(receiver).expect("stream");
-        let pending: Vec<Word> =
-            stream.entries.iter().zip(&stream.emitted).filter(|&(_, &emitted)| !emitted).map(|(&e, _)| e).collect();
-        for entry in pending {
-            runtime.listen(entry, frame);
-        }
     }
     wait(frame, 0);
     Pending
@@ -1074,6 +1402,7 @@ fn drain(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, receiver: Word) -> S
     }
     let stream = runtime.stream_mut(receiver).expect("stream");
     stream.queue.clear();
+    stream.inbox.clear();
     stream.delivered = stream.entries.len();
     stream.reserved = stream.entries.len();
     stream.abort_done = true;
@@ -1085,3 +1414,7 @@ fn drain(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, receiver: Word) -> S
     }
     Failed(primary)
 }
+
+#[cfg(test)]
+#[path = "selection_tests.rs"]
+mod selection_tests;

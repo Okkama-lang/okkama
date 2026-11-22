@@ -1,3 +1,3 @@
 module app v1.0.0;
 
-main() is int { true ?? 1 !! false; }
+main() is int { let paid = true; match paid { case true: 1; case false: false; }; }

@@ -10,7 +10,9 @@ module html/entities v1.0.0;
 // attribute value, nothing more. Unescaping knows all 2231 named references of
 // the HTML standard.
 
-import "runtime/html" take html_events, html_event_value;
+import "html/events" take HtmlEvents, HandlingHtmlEvent, StartingHtmlTag, EndingHtmlTag,
+    ContainingHtmlText, ContainingHtmlComment, DeclaringHtml, ProcessingHtmlInstruction;
+import "async/atomic" take Atomic;
 
 // Text with `&`, `<` and `>` escaped, and quotes too when asked.
 object EscapedHtml {
@@ -49,12 +51,10 @@ object EscapedHtml {
 // and digitless numeric references stay literal; invalid numeric scalars become
 // U+FFFD and HTML C1 replacements apply. This is not attribute-context decoding,
 // document parsing, sanitization or recursive decoding of the resulting text.
-// The pinned runtime/html table supplies all 2231 named spellings.
+// The hidden tokenizer uses the pinned 2231-spelling table in Okkama.
 // Example: UnescapedHtml("<b>&amp;lt;</b>").string() == "<b>&lt;</b>".
-// Empty source bypasses native allocation. Each other observation uses O(n)
-// memory and one private immutable event handle, retained by the native registry
-// until interpreter teardown (no scope release/close API). Repeated calls agree
-// but allocate anew. Native failures propagate; no external resources or I/O.
+// Each observation uses O(n) temporary memory; no native registry handle,
+// external resources or I/O. Repeated observations agree.
 object UnescapedHtml {
     has origin is string;
 
@@ -71,8 +71,11 @@ object UnescapedHtml {
         else {
             // Prevent markup recognition without escaping original references.
             // No literal '<' remains: exactly one text event, decoded once.
-            let state = html_events(origin.replace("<", "&lt;"));
-            html_event_value(state, 0);
+            let text = HtmlDecodedText();
+            for HtmlEvents(origin.replace("<", "&lt;")) -> event {
+                event.dispatch(text);
+            }
+            text.string();
         }
     }
 }
@@ -114,4 +117,59 @@ test "HTML references are ordinary source and queries repeat" {
     test.is(escaped.string(), "&amp;amp; &lt;");
     test.is(escaped.string(), "&amp;amp; &lt;");
     test.is(source, "&amp; <");
+}
+
+hidden object HtmlDecodedText does HandlingHtmlEvent {
+    has text is Atomic<string>;
+
+    HtmlDecodedText() {
+        text = Atomic("");
+    }
+
+    handle(event is ContainingHtmlText) is void {
+        text.replace(event.text());
+    }
+
+    handle(event is StartingHtmlTag) is void {}
+
+    handle(event is EndingHtmlTag) is void {}
+
+    handle(event is ContainingHtmlComment) is void {}
+
+    handle(event is DeclaringHtml) is void {}
+
+    handle(event is ProcessingHtmlInstruction) is void {}
+
+    string() is string {
+        text.value();
+    }
+}
+
+test "HTML numeric references recover scalar limits overflow and leading zeros" {
+    test.is(
+        UnescapedHtml("&#0;|&#xD7FF;|&#xD800;|&#xDFFF;|&#xE000;|&#x10FFFF;|&#x110000;").string(),
+        "�|\u{d7ff}|�|�|\u{e000}|\u{10ffff}|�"
+    );
+    test.is(
+        UnescapedHtml(
+            "&#999999999999999999999; &#xFFFFFFFFFFFFFFFF; &#000000000000000000065; &#x0000000000041;"
+        ).string(),
+        "� � A A"
+    );
+    test.is(
+        UnescapedHtml("&#; &#x; &#Xz; &#-1; &#65z &#X41z").string(),
+        "&#; &#x; &#Xz; &#-1; Az Az"
+    );
+    test.is(
+        UnescapedHtml("&#128; &#129; &#130; &#159; &#160; &#13;").string(),
+        "€ \u{81} ‚ Ÿ \u{a0} \r"
+    );
+}
+
+test "HTML named references use longest case sensitive spellings and multiple scalars" {
+    test.is(
+        UnescapedHtml("&NotEqualTilde; &fjlig; &notin; &notit; &AMP; &Amp; &acE;").string(),
+        "≂̸ fj ∉ ¬it; & &Amp; ∾̳"
+    );
+    test.is(UnescapedHtml("é\u{0}\r\n &amp;lt; <&copy;>").string(), "é\u{0}\r\n &lt; <©>");
 }

@@ -1,0 +1,43 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/error" take HostOperation;
+import "crypto/nonce" take RandomNonce, Entropy;
+import "crypto/password" take PasswordCheck, Argon2Policy;
+import "crypto/secret" take SecretBytes;
+
+// Deterministic "entropy": bytes counting up from a start.
+hidden object Counter does Entropy {
+    has start is int;
+    Counter(start is int) { self.start = start; }
+    bytes(size is int) is @byte { (0..size).map() -> k { byte((start + k) % 256); }; }
+}
+
+// Host crypto operations called directly (Ed25519 public key, constant-time equality); nonces from counted entropy; stored Argon2 hashes checked for an outdated cost.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let s = i % 16;
+        let seed is @byte = (0..32).map() -> k { byte((k * 3 + s) % 256); };
+        let public = HostOperation(operation: "ed25519-public", arguments: [seed]).bytes();
+        let same = HostOperation(operation: "ct-equal", arguments: [seed, if i % 3 == 0 { public; } else { seed; }]).truth();
+        let nonce = RandomNonce(entropy: Counter(i), size: i % 24 + 1).bytes();
+        let stored = "$argon2id$v=19$m=" + (if i % 2 == 0 { "19456,t=2"; } else { "1024,t=1"; }) + ",p=1$c2FsdA$aGFzaA";
+        let total = public[0].int() + (if same { 256; } else { 0; }) + 1000 * nonce.size() + 100000 * nonce[nonce.size() - 1].int()
+            + (if PasswordCheck(stored: stored, password: SecretBytes("pw")).outdated(Argon2Policy()) { 512; } else { 0; });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

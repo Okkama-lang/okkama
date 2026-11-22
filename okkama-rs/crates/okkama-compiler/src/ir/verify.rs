@@ -878,6 +878,14 @@ impl<'a> FunctionVerifier<'a> {
         })
     }
 
+    /// #909 2b: `resource.*` take an object whose type has a destroy of its own.
+    fn static_resource(&self, value: ValueId) -> std::result::Result<(), String> {
+        match self.ty(value)? {
+            Type::Object(id) if self.module.objects.get(id.0).is_some_and(|object| object.destroy.is_some()) => Ok(()),
+            other => Err(format!("{value} of type {other} is not a resource with a destroy of its own")),
+        }
+    }
+
     fn expect_type(&self, value: ValueId, expected: &Type) -> std::result::Result<(), String> {
         let actual = self.ty(value)?;
         if actual == expected {
@@ -1093,6 +1101,14 @@ impl<'a> FunctionVerifier<'a> {
             InstKind::SuccTake(operand) => match self.ty(*operand)? {
                 Type::Successor(object) => Type::Object(*object),
                 other => return Err(format!("succ.take of {operand}: {other}, expected ^T")),
+            },
+            // #790: only `Future<^C>` → `Future<C>`, the same object `C`.
+            InstKind::FutureHandoff(operand) => match self.ty(*operand)? {
+                Type::Future(result) if matches!(**result, ResultType::Value(Type::Successor(_))) => {
+                    let ResultType::Value(Type::Successor(object)) = **result else { unreachable!("matched above") };
+                    Type::Future(Box::new(ResultType::Value(Type::Object(object))))
+                }
+                other => return Err(format!("future.handoff of {operand}: {other}, expected Future<^T>")),
             },
             InstKind::RoleWrap(operand) => {
                 let Some(result) = result else {
@@ -1561,7 +1577,7 @@ impl<'a> FunctionVerifier<'a> {
                     _ => Err("call.cap result does not match the cap field".to_string()),
                 };
             }
-            InstKind::Await(future) => {
+            InstKind::Await(future) | InstKind::AwaitTake(future) => {
                 if !self.function.is_async() {
                     return Err("await is allowed only in async functions".to_string());
                 }
@@ -1656,7 +1672,7 @@ impl<'a> FunctionVerifier<'a> {
             }
             InstKind::RatPart { value, .. } => {
                 self.expect_type(*value, &Type::Rat)?;
-                Type::Str
+                Type::Int
             }
             InstKind::Undef => {
                 return match result {
@@ -1727,6 +1743,36 @@ impl<'a> FunctionVerifier<'a> {
             InstKind::FailSecondary { primary, cleanup } => {
                 self.expect_type(*primary, &Type::Failure)?;
                 self.expect_type(*cleanup, &Type::Failure)?;
+                Type::Failure
+            }
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => {
+                self.static_resource(*value)?;
+                return match result {
+                    None => Ok(()),
+                    Some(_) => Err("`resource.pin`/`resource.leave` define no value".to_string()),
+                };
+            }
+            InstKind::ResourceUnwind { value, failure } => {
+                self.static_resource(*value)?;
+                self.expect_type(*failure, &Type::Failure)?;
+                Type::Failure
+            }
+            InstKind::ResourceSettle { value } => {
+                self.static_resource(*value)?;
+                if !self.function.is_async() {
+                    return Err("`resource.settle` outside an async function".to_string());
+                }
+                return match result {
+                    None => Ok(()),
+                    Some(_) => Err("`resource.settle` defines no value".to_string()),
+                };
+            }
+            InstKind::ResourceSettleUnwind { value, failure } => {
+                self.static_resource(*value)?;
+                if !self.function.is_async() {
+                    return Err("`resource.settle_unwind` outside an async function".to_string());
+                }
+                self.expect_type(*failure, &Type::Failure)?;
                 Type::Failure
             }
             InstKind::EnumCase { ty, case } => {

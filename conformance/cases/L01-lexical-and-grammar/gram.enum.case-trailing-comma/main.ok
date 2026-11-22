@@ -1,0 +1,12 @@
+module app v1.0.0;
+
+enum State = (open, closed,);
+
+enum Effect = (
+    charge(cents is int),
+    receipt(text is string,),
+);
+
+main() is int {
+    0;
+}

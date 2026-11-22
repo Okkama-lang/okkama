@@ -1,0 +1,40 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "math/decimal" take Decimal;
+import "db/value" take DbValue, DbValueKind, DbNull, DbBoolean, DbInteger, DbFloating, DbDecimal, DbText, DbBytes;
+import "db/row" take Row, Column;
+
+// The remaining presence readers; direct row readers of every kind.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let names is @string = ["b", "y", "d", "f", "g", "n", "t", "z"];
+        let columns is @Column = (0..8).map() -> at { Column(index: at, name: names[at], declaration: ""); };
+        let values is @DbValue = [DbBoolean(v % 2 == 0), DbBytes([byte(v), byte(5)]), DbDecimal(Decimal(x + ".5")), DbInteger(i % 2),
+            DbFloating(if v > 4 { 6.5; } else { 2.5; }), DbInteger(v * 13), DbText("t" + x), DbNull()];
+        let row = Row(columns: columns, values: values);
+        let total = (match row.presence("g").floating() { case Presence.some(g) { g.int(); } else { 0; } })
+            + (match row.presence("n").int() { case Presence.some(found) { found; } case Presence.none { 1000; } else { 2000; } })
+            + (match row.presence("z").integer() { case Presence.some(found) { found; } case Presence.none { 1000; } else { 2000; } })
+            + (match row.presence("t").text() { case Presence.some(t) { t.length(); } else { 0; } })
+            + (if row.boolean("b") { 1; } else { 0; }) + row.bytes("y")[0].int() + row.decimal("d").string().length()
+            + (if row.flag("f") { 1; } else { 0; });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

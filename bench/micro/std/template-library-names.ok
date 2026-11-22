@@ -1,0 +1,51 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "template/library" take TemplateLibrary;
+import "template/html_library" take HtmlTemplateLibrary;
+import "template/compile" take TextTemplate;
+import "template/html" take HtmlTemplate;
+
+object Bench {
+    has plain is TextTemplate;
+    has html is HtmlTemplate;
+
+    Bench() {
+        plain = TextTemplate("x");
+        html = HtmlTemplate("x");
+    }
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let x = v.string();
+        let a = TemplateLibrary([x: plain]);
+        let b = HtmlTemplateLibrary([x: html]);
+        let result = a.names().first().length() + b.names().first().length() + (if a.membership(x) {
+            1;
+        }
+        else {
+            0;
+        }) + (if b.membership(x) {
+            1;
+        }
+        else {
+            0;
+        });
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

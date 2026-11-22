@@ -1,0 +1,32 @@
+// #244: Граница сегмента пути cookie.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/cookie_policy" take CookiePathMatch;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let yes = CookiePathMatch("/a" + x, "/a" + x + "/child").matches();
+        let no = CookiePathMatch("/a" + x, "/a" + x + "x").matches();
+        let contribution = if yes && !no { v; } else { 999; };
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

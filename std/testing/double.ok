@@ -15,23 +15,22 @@ import "testing/check" take CheckContext;
 import "async/atomic" take Atomic;
 import "collections/sequence" take Sequencing;
 import "collections/list" take List, EmptyList;
-import "numbers/bigint" take BigInt;
 import "runtime/testing" as backend;
 
 // Fresh state per owner; explicit role fakes compose these values. No reset,
 // reflection, generated mocks or implicit expectations. Stored T is borrowed.
 object Recorded<T> {
-    has index is BigInt;
+    has index is int;
     has value is T;
 
     // value recorded at index.
-    Recorded(index is BigInt, value is T) {
+    Recorded(index is int, value is T) {
         self.index = index;
         self.value = value;
     }
 
     // Its position, from 0.
-    index() is BigInt {
+    index() is int {
         index;
     }
 
@@ -60,7 +59,7 @@ object RecordedCalls<T> {
         let old = cell.value();
         confirm old.size() < 65536 else throw InvalidTestDouble.because("recorder capacity");
         let index = backend.test_state_next(state);
-        cell.replace(old.prefix(Recorded(index: BigInt(index), value: value)));
+        cell.replace(old.prefix(Recorded(index: index, value: value)));
     }
 
     // How many.

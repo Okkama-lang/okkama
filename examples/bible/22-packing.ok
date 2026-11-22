@@ -1,0 +1,32 @@
+module bible/packing v1.0.0;
+
+// Compression with a limit on what comes back out, and a ZIP archive written
+// into memory and read again; an entry's path cannot climb out of the archive.
+import "compression/gzip" take GzipCompressed, GzipDecompressed;
+import "compression/state" take CompressionLimitExceeded;
+import "archive/zip" take ZipWriting, ZipArchive;
+import "archive/path" take UnsafeArchivePath;
+import "io/buffer" take ByteBuffer;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let out = Stdout();
+    let text = Utf8Encoded("tea ".repeat(250)).bytes();
+    let packed = GzipCompressed(text).bytes();
+    out.writeln(text.size().string() + " bytes packed into " + packed.size().string());
+    out.writeln("back: " + (GzipDecompressed(origin: packed, limit: 4096).bytes() == text).string());
+    out.writeln(try { GzipDecompressed(origin: packed, limit: 100).bytes().size().string(); }
+        catch e is CompressionLimitExceeded { "over the limit: refused"; });
+    let buffer = ByteBuffer();
+    let zip = ZipWriting(destination: buffer.writing());
+    zip.add(name: "notes/a.txt", bytes: Utf8Encoded("first").bytes());
+    zip.add(name: "notes/b.txt", bytes: text);
+    out.writeln(try { zip.add(name: "../escape.txt", bytes: []); "added"; }
+        catch e is UnsafeArchivePath { "../escape.txt: refused"; });
+    zip.close();
+    for ZipArchive(buffer.content().bytes()).entries() -> entry {
+        out.writeln(entry.name() + ": " + (await entry.bytes(limit: 4096)).size().string() + " bytes");
+    }
+    0;
+}

@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "encoding/quoted_printable" take QuotedPrintableDecoded;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let value = i % 256;
+        let upper = i % 2 == 0;
+        let high = byte(HexDigitCode(value: (value / 16).int(), upper: upper).code());
+        let low = byte(HexDigitCode(value: value % 16, upper: upper).code());
+        let text = [byte(61), high, low, byte(97), byte(98), byte(99), byte(61), byte(51), byte(68)];
+        let decoded = QuotedPrintableDecoded(origin: text).bytes();
+        self.run(i + 1, n, acc + (decoded[0].int() + decoded.size()) % 7);
+    }
+}
+
+// The ASCII code of one hexadecimal digit, upper- or lowercase.
+object HexDigitCode {
+    has value is int;
+    has upper is bool;
+
+    HexDigitCode(value is int, upper is bool) {
+        self.value = value;
+        self.upper = upper;
+    }
+
+    code() is int {
+        if value < 10 { return 48 + value; }
+        if upper { 55 + value; } else { 87 + value; }
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -13,7 +13,7 @@ come from an oracle written here in Python with Okkama's semantics
 float text), never from running Okkama.
 
 Each family writes t/gen/<family>/NN.ok: one program, checks grouped forty
-to an action (the JVM limits the size of a method), TAP through t/support/
+to an action (to keep generated programs small), TAP through t/support/
 tap.ok. The output is deterministic; t/gen is not committed — the runner
 generates it.
 """
@@ -331,12 +331,12 @@ def values_family():
             f = program.fresh("f")
             check(f"{f}({literal})", "a closure parameter", [f"let {f} = (x is {type_name}) is {type_name} {{ x; }};"])
             check(f"Maybe{typed}.some({literal}) else {other}", "Maybe else")
-            check(f"Maybe{typed}.some({literal}) ?? .some(x): x !! .none: {other}", "a choice on Maybe")
+            check(f"match Maybe{typed}.some({literal}) {{ case Maybe.some(x): x; case Maybe.none: {other}; }}", "a compact match on Maybe")
             check(f"match Slot<{type_name}>.full({literal}) {{ case Slot.full(x) {{ x; }} case Slot.vacant {{ {other}; }} }}", "a variant payload")
             check(f"if 1 < 2 {{ {literal}; }} else {{ {other}; }}", "the then branch")
             check(f"if 2 < 1 {{ {other}; }} else {{ {literal}; }}", "the else branch")
             check(f"match 2 {{ case 1 {{ {other}; }} case 2 {{ {literal}; }} else {{ {other}; }} }}", "a match arm")
-            check(f"false ?? {other} !! {literal}", "a boolean choice")
+            check(f"if false {{ {other}; }} else {{ {literal}; }}", "an if expression")
             check(f"loop {{ last {literal}; }}", "loop last")
             check(f"(0..0).reduce({literal}) -> acc, i {{ acc; }}", "an initial reduce value")
             check(f"try {{ {literal}; }} catch e is Error {{ {other}; }}", "a try value")
@@ -509,8 +509,8 @@ def rat_family():
         batch.is_(f"{A}.abs().string()", lit_str(text_rat(abs(a))), f"{a}.abs()")
         batch.is_(f"{A}.sign()", lit_int(cmp(a, 0)), f"{a}.sign()")
         batch.is_(f"{A}.int()", lit_int(int(a)), f"{a}.int()")
-        batch.is_(f"{A}.numerator()", lit_str(str(a.numerator)), f"{a}.numerator()")
-        batch.is_(f"{A}.denominator()", lit_str(str(a.denominator)), f"{a}.denominator()")
+        batch.is_(f"{A}.numerator()", lit_int(a.numerator), f"{a}.numerator()")
+        batch.is_(f"{A}.denominator()", lit_int(a.denominator), f"{a}.denominator()")
         batch.is_(f"{A}.float()", lit_float(float(a)), f"{a}.float()")
         batch.is_(f"string({A})", lit_str(text_rat(a)), f"string({a})")
         for e in [-2, -1, 0, 1, 3]:
@@ -883,7 +883,7 @@ def roles_family():
             mb = f("mb")
             yield "Maybe else", [f"let {mb} is Maybe<Shape> = Maybe.some({V});"], f"{mb} else {O}", "let"
             mb = f("mb")
-            yield "a choice on Maybe", [f"let {mb} is Maybe<Shape> = Maybe.some({V});"], f"{mb} ?? .some(s): s !! .none: {O}", "let"
+            yield "a compact match on Maybe", [f"let {mb} is Maybe<Shape> = Maybe.some({V});"], f"match {mb} {{ case Maybe.some(s): s; case Maybe.none: {O}; }}", "let"
             yield "a variant payload", [], f"match Held.one({V}) {{ case Held.one(s) {{ s; }} case Held.nothing {{ {O}; }} }}", "let"
             p = f("p")
             yield "a generic pair", [f"let {p} is Pair<Shape> = Pair(first: {V}, second: {O});"], f"{p}.left()", "let"
@@ -947,7 +947,7 @@ def roles_family():
             program.is_(f"{a}.any() -> s {{ s.area() == 0; }}", lit_bool(any(s.area() == 0 for s in combo)), f"{desc}: any")
             program.is_(f"{a}.all() -> s {{ s.area() > 0; }}", lit_bool(all(s.area() > 0 for s in combo)), f"{desc}: all")
             first = next((s for s in combo if s.area() > 3), None)
-            program.is_(f'{a}.find() -> s {{ s.area() > 3; }} ?? .some(s): s.name() !! .none: "none"', lit_str(first.name() if first else "none"), f"{desc}: find")
+            program.is_(f'match {a}.find() -> s {{ s.area() > 3; }} {{ case Maybe.some(s): s.name(); case Maybe.none: "none"; }}', lit_str(first.name() if first else "none"), f"{desc}: find")
             program.is_(f"({a}.map() -> s {{ s.scaled(2); }}).reduce(0) -> sum, s {{ sum + s.area(); }}", lit_int(sum(s.scaled(2).area() for s in combo)), f"{desc}: successors in a map")
             program.is_(f"{a}.size()", lit_int(len(combo)), f"{desc}: size")
             if combo:
@@ -1176,8 +1176,8 @@ WRAPPERS = {
     "else-if": lambda e, t, alt, d: f"if false {{ {alt}; }} else if true {{ {tail(e)} }} else {{ {alt}; }}",
     "match-int": lambda e, t, alt, d: f"match 2 {{ case 1 {{ {alt}; }} case 2, 3 {{ {tail(e)} }} else {{ {alt}; }} }}",
     "match-enum": lambda e, t, alt, d: f"match Status.done {{ case Status.ready {{ {alt}; }} case Status.done {{ {tail(e)} }} case Status.failed {{ {alt}; }} }}",
-    "choice-bool": lambda e, t, alt, d: f"(true ?? {e} !! {alt})",
-    "choice-maybe": lambda e, t, alt, d: f"(Maybe.some(1) ?? .some(n{d}): {e} !! .none: {alt})",
+    "choice-bool": lambda e, t, alt, d: f"(if true {{ {e}; }} else {{ {alt}; }})",
+    "choice-maybe": lambda e, t, alt, d: f"(match Maybe.some(1) {{ case Maybe.some(n{d}): {e}; case Maybe.none: {alt}; }})",
     # `last if …` is read as a postfix condition (#303): an `if` goes in parentheses.
     "loop-last": lambda e, t, alt, d: f"loop {{ last {f'({e})' if e.startswith('if ') else e}; }}",
     "closure": lambda e, t, alt, d: f"(() is {t} {{ {tail(e)} }})()",
@@ -1606,8 +1606,8 @@ def nesting_family():
         return expr
 
     def forbidden(chain):
-        # Compact choices never nest, not even through other constructs (Book §24.3).
-        return sum(1 for name in chain if name.startswith("choice")) > 1
+        # #893: compact match cases nest like any expression; nothing is forbidden.
+        return False
 
     for type_name, value, alt, compare in NEST_TYPES:
         for chain in itertools.product(names, repeat=2):
@@ -2368,14 +2368,17 @@ def enum_arm(ctor, type_name, case, fields, style, choice):
 
 
 def enum_match(type_name, ctor, cases, subject, style):
-    arms = [enum_arm(ctor, type_name, (i, c), f, style, style.startswith("choice")) for i, (c, f) in enumerate(cases)]
+    arms = [enum_arm(ctor, type_name, (i, c), f, style, False) for i, (c, f) in enumerate(cases)]
+    # #893: the compact form of `match`, one `case pattern: value;` per case.
     if style == "choice":
-        return f"({subject} ?? " + " !! ".join(f"{h}: {r}" for h, r in arms) + ")"
+        return f"(match {subject} {{ " + " ".join(f"case {h}: {r};" for h, r in arms) + " })"
     if style == "choice wildcard":
-        rest = " !! _: 0" if len(cases) > 1 else ""
-        return f"({subject} ?? {arms[0][0]}: {arms[0][1]}{rest})"
+        rest = " case _: 0;" if len(cases) > 1 else ""
+        return f"(match {subject} {{ case {arms[0][0]}: {arms[0][1]};{rest} }})"
     if style == "else":
-        return f"(match {subject} {{ case {arms[0][0]} {{ {arms[0][1]}; }} else {{ 0; }} }})"
+        # An else after cases that cover every value is unreachable (#286): a one-case enum has none.
+        rest = " else { 0; }" if len(cases) > 1 else ""
+        return f"(match {subject} {{ case {arms[0][0]} {{ {arms[0][1]}; }}{rest} }})"
     return f"(match {subject} {{ " + " ".join(f"case {h} {{ {r}; }}" for h, r in arms) + " })"
 
 

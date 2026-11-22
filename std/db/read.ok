@@ -1,12 +1,12 @@
 module db/read v1.0.0;
 
+import "strings/parse" take Number;
 // Reading values out of rows: one reader per column, with the conversions
 // db/row offers, and Maybe and Presence for NULL and missing columns. Row uses
 // it.
 
 import "db/value" take DbValue, ObservedDbValue, DbValueKind, InvalidDbValue, DbNativeValue,
     DbNativeKind, WrongDbValue;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "runtime/db" as native_db;
 import "db/value" take DbInteger, DbDecimal, DbFloating, DbText;
@@ -29,7 +29,7 @@ hidden object RowReader {
         DbColumnReader(name: name, origin: origin.value(name)).int();
     }
 
-    integer(name is string) is BigInt {
+    integer(name is string) is int {
         DbColumnReader(name: name, origin: origin.value(name)).integer();
     }
 
@@ -231,12 +231,12 @@ object DbColumnReader {
         }
     }
 
-    // An integer as BigInt; RowValueFailure otherwise.
-    integer() is BigInt {
+    // An integer as int; RowValueFailure otherwise.
+    integer() is int {
         try {
             let state = self.native_cell();
             self.require(DbValueKind.integer);
-            BigInt(native_db.db_integer_value(state));
+            Number(native_db.db_integer_value(state)).int();
         }
         catch failure is Error {
             throw RowValueFailure.located(name, "integer", self.kind(), failure.text());
@@ -368,7 +368,7 @@ object DbColumnReader {
     }
 }
 
-// Reads a column that may be NULL (none) or missing.
+// Reads a column that may be NULL none or missing.
 object DbPresenceReader {
     has origin is Presence<DbColumnReader>;
 
@@ -407,8 +407,8 @@ object DbPresenceReader {
         }
     }
 
-    // An integer as BigInt, or none for NULL, missing for no such column.
-    integer() is Presence<BigInt> {
+    // An integer as int, or none for NULL, missing for no such column.
+    integer() is Presence<int> {
         match origin {
             case Presence.some(column) {
                 Presence.some(column.integer());
@@ -533,8 +533,8 @@ object DbMaybeReader {
         origin.int().fold();
     }
 
-    // An integer as BigInt, or none for NULL.
-    integer() is Maybe<BigInt> {
+    // An integer as int, or none for NULL.
+    integer() is Maybe<int> {
         origin.integer().fold();
     }
 

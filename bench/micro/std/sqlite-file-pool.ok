@@ -1,0 +1,82 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteDatabase, SqliteOptions, SqliteConnector;
+import "db/acquisition" take PortableDbAcquiring;
+import "db/pool" take DbPool, PoolOptions;
+import "db/value" take DbInteger;
+import "fs/temp" take TemporaryDirectory;
+import "os/environment" take Environment;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-db-");
+            let database = SqliteDatabase(path: scratch.path().child("app.db"), options: SqliteOptions());
+            let direct = await SqliteConnector(database).connection();
+            await direct.execution("CREATE TABLE t(x INTEGER)");
+            await direct.execution("INSERT INTO t(x) VALUES (?)", DbInteger(i % 9));
+            let acquired = await PortableDbAcquiring(SqliteConnector(database)).acquisition();
+            let summed = await acquired.connection().query("SELECT SUM(x) AS s FROM t").all(1);
+            acquired.connection().close();
+            let options = PoolOptions(minimum: 0, maximum: 2, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5));
+            let pool = DbPool(origin: SqliteConnector(database), options: options, clock: StillClock());
+            let pooled = await pool.connection();
+            await pooled.execution("INSERT INTO t(x) VALUES (?)", DbInteger(3));
+            pooled.close();
+            pool.close();
+            let owner = await database.connection();
+            let report = await owner.backup(target: scratch.path().child("copy.db"), pages: 16, clock: StillClock(), timeout: Duration(seconds: 5));
+            owner.close();
+            direct.close();
+            scratch.close();
+            let whole = if report.copies() == report.total() { 1; } else { 0; };
+            sum = sum.add((summed[0].int("s") + report.total() + whole) % 7);
+        }
+        sum.total();
+    }
+}
+
+// A clock whose waits never end on their own: nothing here reads real time.
+object StillClock does Timing {
+    StillClock();
+
+    instant() is Instant {
+        Instant(origin: Duration(seconds: 0));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(origin: Duration(seconds: 0));
+    }
+
+    async wait(duration is Duration) is void {
+        await Event().wait();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

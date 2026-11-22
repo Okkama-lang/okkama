@@ -1,0 +1,58 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/atomic" take Atomic;
+import "encoding/utf" take Utf8Encoded;
+import "io/stream" take AsyncReading, AsyncWriting, ByteSource;
+import "json" take ParsedJson, JsonItems, JsonLines;
+
+hidden object Pieces does AsyncReading {
+    has content is @byte;
+    has position is Atomic<int>;
+    Pieces(content is @byte) { self.content = content; position = Atomic(0); }
+    async bytes(limit is int) is @byte {
+        let at = position.value();
+        let end = if at + 7 < content.size() { at + 7; } else { content.size(); };
+        position.replace(end);
+        content.slice(at, end);
+    }
+}
+
+hidden object Sink does AsyncWriting {
+    has written is Atomic<int>;
+    Sink() { written = Atomic(0); }
+    async write(source is ByteSource) is AsyncWriting { written.replace(written.value() + source.bytes().size()); self; }
+    async write(bytes is @byte) is AsyncWriting { written.replace(written.value() + bytes.size()); self; }
+    size() is int { written.value(); }
+}
+
+// JSON lines read from a reader seven bytes at a time; one node written as a line.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let items = JsonItems(Pieces(Utf8Encoded("{\"n\":" + x + "}\n{\"n\":2}\n").bytes()));
+        let first = await items.next();
+        let second = await items.next();
+        let sink = Sink();
+        let lines = JsonLines(sink);
+        await lines.write(ParsedJson("{\"k\": " + x + ", \"t\": [true]}").root());
+        let total = (match first { case Maybe.some(item) { item.integer("n"); } else { 0; } })
+            + (match second { case Maybe.some(item) { item.integer("n"); } else { 0; } }) + sink.size();
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

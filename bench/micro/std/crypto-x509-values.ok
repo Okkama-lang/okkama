@@ -1,0 +1,40 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/x509/name" take NameAttribute, RelativeDistinguishedName, DistinguishedName;
+import "crypto/x509/value" take CertificateConstraints, CertificateValidity, InvalidCertificate;
+import "crypto/x509/certificate" take CertificatePurpose, CertificateExtension;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+
+// X.509 values built in code: names of two relative names, path constraints, a validity (reversed every third time), a purpose and an extension.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let name = DistinguishedName(RelativeDistinguishedName(NameAttribute(identifier: "2.5.4.3", value: "host" + x)),
+            RelativeDistinguishedName(NameAttribute(identifier: "2.5.4.10", value: "Org"), NameAttribute(identifier: "2.5.4.11", value: "Unit")));
+        let starts = Instant(origin: Duration(seconds: 1000 * v));
+        let ends = Instant(origin: Duration(seconds: if i % 3 == 0 { 10; } else { 100000; }));
+        let validity = try { CertificateValidity(starts: starts, ends: ends); 1; } catch e is InvalidCertificate { 2; };
+        let total = name.relative_names().size() + 10 * name.relative_names().item(1).attributes().size()
+            + 100 * CertificateConstraints(authority: true, maximum_depth: v).maximum_depth() + 1000 * validity
+            + 10000 * CertificatePurpose("1.3.6.1.5.5.7.3." + x).identifier().length()
+            + (if CertificateExtension(identifier: "2.5.29.19", critical: i % 2 == 0, origin: [byte(48), byte(0)]).critical() { 100000; } else { 0; });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

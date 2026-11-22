@@ -1,0 +1,31 @@
+module bible/before v1.0.0;
+
+// Before: the status is a string, urgency is a flag, and the object hands
+// out its parts so that the caller can decide everything.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has title is string;
+    has status is string;
+    has urgent is bool;
+    Ticket(:title, :status, :urgent);
+    title() is string { title; }
+    status() is string { status; }
+    urgent() is bool { urgent; }
+}
+
+main() is int {
+    let out = Stdout();
+    let tickets = [
+        Ticket(title: "printer", status: "open", urgent: true),
+        Ticket(title: "coffee", status: "closed", urgent: false),
+        Ticket(title: "wifi", status: "open", urgent: false)
+    ];
+    for tickets -> ticket {
+        if ticket.status() == "open" {
+            let mark = if ticket.urgent() { "!"; } else { " "; };
+            out.writeln(mark + " " + ticket.title());
+        }
+    }
+    0;
+}

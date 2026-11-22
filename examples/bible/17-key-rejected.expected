@@ -1,0 +1,1 @@
+17-key-rejected.ok:15:31: semantic error: Generic parameter "T" for object "Tally" is a map key: Map key type @int is not a scalar key type

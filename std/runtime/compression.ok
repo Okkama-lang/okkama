@@ -13,8 +13,9 @@ module runtime/compression v1.0.0;
 native object CodecState;
 
 // format: "deflate", "zlib" or "gzip". level 0..9 compresses; limit is the
-// most bytes a decompressor may produce in all (positive), unused when
-// compressing.
+// most bytes a decompressor may produce in all (positive). Compressing, limit
+// is the size of the whole input when it is known, so the codec sizes its
+// tables for it (zstd), or -1.
 native codec_open(format is string, compress is bool, level is int, limit is int) is CodecState;
 
 // The output that the input makes available now, possibly none.

@@ -1,5 +1,5 @@
 //! `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
-//! `JsonNatives` JVM. Смещения, строки и столбцы — в символах (code points),
+//! Смещения, строки и столбцы — в символах (code points),
 //! тексты отказов — как у Perl-provider.
 use super::Error;
 use super::json_split::{SplitState, Splitter, Step};
@@ -9,7 +9,7 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Глубина рекурсии разбора, на которой JVM теряет стек (`StackOverflowError`).
+/// Предел глубины рекурсии разбора для переносимого отказа.
 const STACK_DEPTH: i64 = 100_000;
 
 #[derive(Debug)]
@@ -523,19 +523,9 @@ fn bytes_state(bytes: &[u8], maximum_depth: IntValue) -> ParseState {
     }
 }
 
-/// JSON text being written: appends go to the end, and every append answers
-/// the UTF-8 size of the whole text so far.
-struct Output(RefCell<String>);
-
-impl Output {
-    fn appended(&self, append: impl FnOnce(&mut String)) -> Value {
-        let mut text = self.0.borrow_mut();
-        append(&mut text);
-        int_value(text.len() as i64)
-    }
-}
-
-/// Appends the JSON string literal of `origin` (see [`quote`]).
+/// Appends the JSON string literal of `origin`: `"` and `\` escaped, `\n`,
+/// `\r`, `\t` by name, the other controls U+0000..U+001F as lowercase
+/// `\u00xx`, everything else as is.
 fn push_quoted(quoted: &mut String, origin: &str) {
     quoted.push('"');
     for character in origin.chars() {
@@ -552,14 +542,6 @@ fn push_quoted(quoted: &mut String, origin: &str) {
         }
     }
     quoted.push('"');
-}
-
-/// A JSON string literal: `"` and `\` escaped, `\n`, `\r`, `\t` by name, the
-/// other controls U+0000..U+001F as lowercase `\u00xx`, everything else as is.
-fn quote(origin: &str) -> String {
-    let mut quoted = String::with_capacity(origin.len() + 2);
-    push_quoted(&mut quoted, origin);
-    quoted
 }
 
 /// The JSON spelling of an exact decimal (as `json.Json` writes it):
@@ -782,15 +764,11 @@ pub fn execute(native: Native, args: &[Value], arrays: &ArrayHeap) -> Result<Val
             }
             _ => Err(invalid("JSON node is not an array")),
         },
-        Native::JsonJsonMemberName | Native::JsonJsonMemberValue => match node(&args[0])?.as_ref() {
-            Node::Object(names, values) => {
+        Native::JsonJsonMemberValue => match node(&args[0])?.as_ref() {
+            Node::Object(_, values) => {
                 let at = super::support::small(int(&args[1])?, values.len())
                     .ok_or_else(|| invalid("JSON member index is outside the node"))?;
-                Ok(if native == Native::JsonJsonMemberName {
-                    Value::Str(names[at].clone())
-                } else {
-                    node_value(values[at].clone())
-                })
+                Ok(node_value(values[at].clone()))
             }
             _ => Err(invalid("JSON node is not an object")),
         },
@@ -801,36 +779,6 @@ pub fn execute(native: Native, args: &[Value], arrays: &ArrayHeap) -> Result<Val
             }
             _ => Err(invalid("JSON node is not an object")),
         },
-        Native::JsonJsonQuote => Ok(text(quote(string(&args[0])?))),
-        Native::JsonJsonNumberText => super::numbers::components(string(&args[0])?)
-            .map(|parts| text(number_text(&parts)))
-            .ok_or_else(|| invalid("not a decimal number")),
-        Native::JsonJsonOutput => Ok(new_handle(Output(RefCell::new(String::new())))),
-        Native::JsonJsonOutputRaw => {
-            let raw = string(&args[1])?;
-            Ok(handle::<Output>(&args[0])?.appended(|text| text.push_str(raw)))
-        }
-        Native::JsonJsonOutputText => {
-            let origin = string(&args[1])?;
-            Ok(handle::<Output>(&args[0])?.appended(|text| push_quoted(text, origin)))
-        }
-        Native::JsonJsonOutputNumber => {
-            let parts = super::numbers::components(string(&args[1])?)
-                .ok_or_else(|| invalid("not a decimal number"))?;
-            Ok(handle::<Output>(&args[0])?.appended(|text| text.push_str(&number_text(&parts))))
-        }
-        Native::JsonJsonOutputMember => {
-            let name = string(&args[1])?;
-            let first = matches!(args[2], Value::Bool(true));
-            Ok(handle::<Output>(&args[0])?.appended(|text| {
-                if !first {
-                    text.push(',');
-                }
-                push_quoted(text, name);
-                text.push(':');
-            }))
-        }
-        Native::JsonJsonOutputString => Ok(text(handle::<Output>(&args[0])?.0.borrow().clone())),
         Native::JsonJsonMemberText => match member(&args[0], &args[1])? {
             Some(Node::Text(value)) => Ok(Value::Str(value.clone())),
             _ => Err(invalid("JSON member is missing or not a string")),

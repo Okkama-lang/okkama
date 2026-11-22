@@ -16,7 +16,6 @@ module http/websocket v1.0.0;
 // http/websocket_server, a client through http/websocket_client.
 
 import "encoding/utf" take Utf8Encoded;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "json" take Json, ParsedJson;
 
@@ -99,20 +98,20 @@ object BinaryWebSocketMessage does WebSocketMessage {
 
 // How large messages and frames may be, and how many wait to be read.
 object WebSocketLimits {
-    has message_bytes is BigInt;
+    has message_bytes is int;
     has frame_bytes, queue is int;
 
     // 16 MiB per message, 64 KiB per frame, 16 queued messages.
     WebSocketLimits() {
-        message_bytes = BigInt(16777216);
+        message_bytes = 16777216;
         frame_bytes = 65536;
         queue = 16;
     }
 
     // The limits as given.
-    WebSocketLimits(message_bytes is BigInt, frame_bytes is int, queue is int) {
+    WebSocketLimits(message_bytes is int, frame_bytes is int, queue is int) {
         confirm message_bytes.sign() > 0
-            && message_bytes.order(BigInt(1073741824)) != Order.greater
+            && message_bytes.order((1073741824)) != Order.greater
             && frame_bytes > 0
             && frame_bytes <= 1048576
             && queue > 0
@@ -124,7 +123,7 @@ object WebSocketLimits {
     }
 
     // Bytes per message.
-    message_bytes() is BigInt {
+    message_bytes() is int {
         message_bytes;
     }
 

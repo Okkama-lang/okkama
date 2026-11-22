@@ -1,0 +1,1 @@
+12-assign-rejected.ok:7:9: semantic error: Field "count" cannot be assigned after construction: objects are immutable; return a successor instead (`is ^Counter` and `^count = …`)

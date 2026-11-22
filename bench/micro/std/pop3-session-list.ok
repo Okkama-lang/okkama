@@ -1,0 +1,54 @@
+// #244: pop3-session-list; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;
+import "mail/pop3_session" take PopSession, PopCommand, PopSimpleCommand, PopMessageCommand, PreviewedPopMail, PopDeleteReset;
+import "mail/pop3" take PopCapabilities, PopListingLimits, PopNumber;
+import "mail/pop3_reply" take PopReply, PopReplyLimits, PopReplyMode;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let wire = "+OK 1 "+x+"\r\n+OK 1 "+x+"\r\n+OK list\r\n1 "+x+"\r\n.\r\n+OK list\r\n1 "+x+"\r\n.\r\n+OK done\r\n+OK reset\r\n+OK reset\r\n+OK bye\r\n";
+
+            let input = ByteBodyInput(Utf8Encoded(wire).bytes());
+            let sink = Sink();
+            let capabilities = PopCapabilities(PopReply(true,"caps",Utf8Encoded("TOP\r\n").bytes(),1,true));
+            let session = PopSession(input,sink,input,capabilities,[],PopReplyLimits(),PopListingLimits());
+            let mailbox = session.mailbox();
+
+            let a = await session.state();
+            let b = await mailbox.state();
+            let c = await session.messages();
+            let d = await mailbox.messages();
+            let command = PopCommand(PopSimpleCommand.stat);
+            let reply = await session.run(command);
+            await session.reset();
+            await PopDeleteReset(session).reset();
+            await session.quit();
+            session.abort();
+            let contribution = a.size()+b.size()+c.item(0).size()+d.item(0).size()+reply::Reply::text.length()+(if command.mode()==PopReplyMode.single { 1; } else { 0; });
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

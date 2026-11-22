@@ -1,0 +1,4 @@
+in-13.txt:   595 format pattern;  2371 format text;  1185 parse pattern;  1132 parse read;  2 parse refused;  715 parse text;inputs 6000, differences 0;
+in-14.txt:   621 format pattern;  2410 format text;  1155 parse pattern;  1079 parse read;  6 parse refused;  729 parse text;inputs 6000, differences 0;
+in-15.txt:   603 format pattern;  2432 format text;  1121 parse pattern;  1125 parse read;  5 parse refused;  714 parse text;inputs 6000, differences 0;
+tests.txt:   6 format pattern;  5 format text;  3 parse pattern;  7 parse read;  10 parse text;inputs 31, differences 0;

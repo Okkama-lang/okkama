@@ -1,0 +1,32 @@
+// #244: Парсинг и рендеринг HTTP version.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/version" take Http1VersionText, ParsedHttp1Version;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let text = if i % 2 == 0 { "HTTP/1.0"; } else { "HTTP/1.1"; };
+        let value = ParsedHttp1Version(text).version();
+        let contribution = Http1VersionText(value).string().characters()[7].code();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,32 @@
+// Deterministic composite iteration; see oracles.py for the independent checksum.
+// RegexParts.new(origin is string, regex is Regex) is RegexParts | RegexParts.new(origin is string, regex is Regex, limit is int) is RegexParts
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "regex/split" take RegexParts;
+import "regex/pattern" take Regex;
+
+
+object Bench {
+    has pattern is Regex;
+    Bench() { pattern = Regex(","); }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let parts = RegexParts("a," + i.string() + ",bb", pattern);
+        let cursor = parts.cursor();
+        let contribution = cursor.item().length() + cursor.successor().item().length();
+        self.run(i + 1, n, acc + contribution % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

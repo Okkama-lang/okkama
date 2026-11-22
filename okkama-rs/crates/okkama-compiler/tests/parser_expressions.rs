@@ -596,6 +596,21 @@ fn test_throws_is_a_try_with_one_catch() {
     assert!(!body_sexpr("checker.throws(Refused);").contains("TryExpr"));
 }
 
+/// `test.case(name) { … }` (#809) is the `if` it means: `test.case` decides,
+/// and the block runs in a `try` whose catch of `Error` fails the sub-case;
+/// both close it with `test.case#end`.
+#[test]
+fn test_case_is_an_if_around_a_try_that_closes_the_sub_case() {
+    let tree = body_sexpr("test.case(row.name()) { test.is(row.got(), 1); };");
+    assert!(tree.contains("(if (call (. test case) (call (. row name)))"), "{tree}");
+    assert!(tree.contains("test.case#error"), "{tree}");
+    assert_eq!(tree.matches("(call (. test case#end))").count(), 2, "{tree}");
+    assert!(tree.contains("catches=[(CatchClause name=test.case#error type=Error body={(call (. test fail) (call (. test.case#error text)))"), "{tree}");
+    assert_rejects("module app v1.0.0; main() is int { test.case(\"x\"); 0; }", "Expect a block after test.case(name)");
+    // `case` after anything but `test` is not this form.
+    assert_rejects("module app v1.0.0; main() is int { other.case(\"x\") { }; 0; }", "");
+}
+
 #[test]
 fn map_values_may_start_with_a_parenthesis() {
     // #263: `key: (` is a map entry, not the removed `Type:(args)` projection.
@@ -604,7 +619,6 @@ fn map_values_may_start_with_a_parenthesis() {
         ("[1: (2) + 1]", "(map 1:(+ (group 2) 1))"),
         ("[\"x\": (-1)]", "(map \"x\":(group (- 1)))"),
         ("[\"a\": 1, \"b\": (2 + 3) * 2]", "(map \"a\":1 \"b\":(* (group (+ 2 3)) 2))"),
-        ("[\"x\": (true ?? 1 !! 2)]", "(map \"x\":(group (CompactChoice expression=(if true {1} {2}))))"),
         ("[x: (2)]", "(map x:(group 2))"),
         ("[LIMIT:(4)]", "(map LIMIT:(group 4))"),
         ("[\"o\": [\"i\": (7)]]", "(map \"o\":(map \"i\":(group 7)))"),
@@ -624,4 +638,66 @@ fn map_values_may_start_with_a_parenthesis() {
     }
     assert_rejects("module app v1.0.0; main() is int { let m = [\"a\": (]; 0; }", "Expect expression.");
     assert_rejects("module app v1.0.0; main() is int { let m = [\"a\": (1]; 0; }", "Expect \")\" after expression.");
+}
+
+/// #921: the compact `if` builds the very `if` the block form builds (spans aside).
+#[track_caller]
+fn same_as(compact: &str, block: &str) {
+    assert_eq!(body_sexpr(compact), body_sexpr(block), "{compact}");
+}
+
+#[test]
+fn compact_if_is_the_block_if() {
+    // initializer, result, arguments, arithmetic and collections
+    same_as("let x = if ready: 1 else: 0;", "let x = if ready { 1; } else { 0; };");
+    // as the result of a body: an expression statement, as the block-form expression in that place
+    assert_eq!(body_sexpr("if ready: 1 else: 0;"), body_sexpr("(if ready { 1; } else { 0; });").replace("(group ", "").replacen("))", ")", 1));
+    same_as("let r = calculate(if enabled: 100 else: 50);", "let r = calculate(if enabled { 100; } else { 50; });");
+    same_as("let x = 10 + (if flag: 5 else: 0);", "let x = 10 + (if flag { 5; } else { 0; });");
+    same_as("let v = [1, if c: 2 else: 3, 4];", "let v = [1, if c { 2; } else { 3; }, 4];");
+    same_as("let m = [\"k\": if c: 2 else: 3];", "let m = [\"k\": if c { 2; } else { 3; }];");
+    same_as("let r = if value > 0: value else: 0;", "let r = if value > 0 { value; } else { 0; };");
+    // the else branch is a whole expression, the lowest-precedence form
+    same_as("let x = if c: 1 else: 2 + 3;", "let x = if c { 1; } else { 2 + 3; };");
+    // line breaks do not matter
+    same_as("let r = if condition:\n    calculate()\nelse:\n    fallback();", "let r = if condition { calculate(); } else { fallback(); };");
+}
+
+#[test]
+fn compact_if_nests_and_else_goes_to_the_nearest_if() {
+    // the inner `if` is the then branch; the first `else:` is its own
+    assert_eq!(body_sexpr("let x = if a: if b: 1 else: 2 else: 3;"), "(LetStatement name=x type=_ value=(if a {(if b {1} {2})} {3}))");
+    same_as("let x = if a: (if b: 1 else: 2) else: 3;", "let x = if a { (if b { 1; } else { 2; }); } else { 3; };");
+    assert_eq!(body_sexpr("let x = if a: 1 else: if b: 2 else: 3;"), "(LetStatement name=x type=_ value=(if a {1} {(if b {2} {3})}))");
+}
+
+#[test]
+fn compact_if_leaves_the_fallback_operator_alone() {
+    // `else:` separates branches; a branch's fallback takes parentheses
+    same_as("let x = if ready: value else: fallback;", "let x = if ready { value; } else { fallback; };");
+    same_as("let x = if ready: (optional else 10) else: 0;", "let x = if ready { (optional else 10); } else { 0; };");
+    same_as("let x = if ready: 10 else: (optional else 0);", "let x = if ready { 10; } else { (optional else 0); };");
+    same_as("let x = if ready: items[0] else: 1;", "let x = if ready { items[0]; } else { 1; };");
+    // the operator itself is unchanged
+    assert_eq!(body_sexpr("let x = optional else 1;"), body_sexpr("let x = (optional) else 1;").replace("(group optional)", "optional"));
+}
+
+#[test]
+fn compact_if_rejects_what_its_grammar_does_not_have() {
+    let program = |body: &str| format!("module app v1.0.0; main() is int {{ {body} 0; }}");
+    assert_rejects(&program("let x = if ready: 1;"), "A compact if needs an else branch");
+    assert_rejects(&program("let x = if ready 1 else: 0;"), "Expect \"{\" or \":\" after the if condition");
+    assert_rejects(&program("let x = if ready: 1 else 0;"), "writes \"else:\" before its other branch");
+    assert_rejects(&program("let x = if ready: 1 else { 0; };"), "the forms do not mix");
+    assert_rejects(&program("let x = if ready { 1; } else: 0;"), "A block if takes a block after \"else\"");
+    assert_rejects(&program("if ready { 1; } else: 0;"), "A block if takes a block after \"else\"");
+    assert_rejects(&program("let x = if ready: { 1; } else: { 0; };"), "not a block");
+    assert_rejects(&program("let x = if ready: 1 else: { 0; };"), "not a block");
+}
+
+#[test]
+fn block_if_is_unchanged() {
+    assert_eq!(body_sexpr("let v = if c { 1; } else { 2; };"), "(LetStatement name=v type=_ value=(if c {1} {2}))");
+    assert_eq!(body_sexpr("let x = if a { 1; } else if b { 2; } else { 3; };"),
+        "(LetStatement name=x type=_ value=(if a {1} {(if b {2} {3})}))");
 }

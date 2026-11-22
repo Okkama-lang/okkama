@@ -1,0 +1,31 @@
+module bible/atomic_borrows v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+object Lamp {
+    has name is string;
+
+    Lamp(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("  " + name + " off"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let hall = Lamp(name: "hall");
+    // The cell names a lamp; it does not own one.
+    let current = Atomic(hall);
+    {
+        let desk = Lamp(name: "desk");
+        current.replace(desk);
+        out.writeln("the cell names " + current.value().label());
+    }
+    // desk's block has ended, and so has desk: the cell still names it.
+    out.writeln("after the block the cell names " + current.value().label());
+    current.replace(hall);
+    out.writeln("the cell names " + current.value().label() + " again");
+    0;
+}

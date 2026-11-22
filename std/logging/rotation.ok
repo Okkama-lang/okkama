@@ -3,14 +3,14 @@ module logging/rotation v1.0.0;
 // Log files that rotate by size or by time, keeping some backups.
 //
 //     let file = RotatingLogFile(path: Path("app.log"), options: options,
-//         rotation: SizeRotating(BigInt(10485760)), backups: 5, clock: SystemClock());
+//         rotation: SizeRotating((10485760)), backups: 5, clock: SystemClock());
 
 import "logging/file" take FileLogOptions, LogFileState, ClosedLogFile;
 import "fs/path" take Path, PathStyle;
 import "fs/error" take FileFailure;
 import "io/stream" take ByteSource, Writing, Closing;
 import "async/atomic" take Atomic;
-import "numbers/bigint" take BigInt, InvalidBigInt;
+import "strings/parse" take Number, InvalidInteger;
 import "compare" take Order;
 import "collections/list" take List, EmptyList;
 import "collections/ordering" take SortedBy;
@@ -29,24 +29,24 @@ import "encoding/utf" take Utf8Encoded;
 // When and how a log file rotates.
 role Rotating {
     // Whether to rotate now, given the size and when the file was opened.
-    needed(size is BigInt, opened is Instant, now is Instant) is bool;
+    needed(size is int, opened is Instant, now is Instant) is bool;
     // The suffix of backup index at now.
     suffix(now is Instant, index is int) is string;
 }
 
 // Rotation once a file reaches a size; backups are `.1`, `.2`…
 object SizeRotating does Rotating {
-    has limit is BigInt;
+    has limit is int;
 
     // At limit bytes; InvalidLogRotation below 1.
-    SizeRotating(limit is BigInt) {
+    SizeRotating(limit is int) {
         confirm limit.sign() > 0
             else throw InvalidLogRotation.because("size limit must be positive");
         self.limit = limit;
     }
 
     // Whether size reached the limit.
-    needed(size is BigInt, opened is Instant, now is Instant) is bool {
+    needed(size is int, opened is Instant, now is Instant) is bool {
         size.order(limit) != Order.less;
     }
 
@@ -70,7 +70,7 @@ object IntervalRotating does Rotating {
     }
 
     // Whether the interval has passed since opened.
-    needed(size is BigInt, opened is Instant, now is Instant) is bool {
+    needed(size is int, opened is Instant, now is Instant) is bool {
         now.minus(opened)::Span::seconds >= interval::Span::seconds;
     }
 
@@ -82,9 +82,9 @@ object IntervalRotating does Rotating {
 
 hidden object LogArchive {
     has path is Path;
-    has generation is BigInt;
+    has generation is int;
 
-    LogArchive(path is Path, generation is BigInt) {
+    LogArchive(path is Path, generation is int) {
         self.path = path;
         self.generation = generation;
     }
@@ -93,7 +93,7 @@ hidden object LogArchive {
         path;
     }
 
-    generation() is BigInt {
+    generation() is int {
         generation;
     }
 }
@@ -129,10 +129,10 @@ hidden object LogArchiveCatalog {
                 let tail = text.slice(prefix.length(), text.length());
                 let parts = tail.split(".");
                 let valid = try {
-                    let generation = BigInt(parts[0]);
+                    let generation = Number(parts[0]).int();
                     generation.sign() > 0 && generation.string() == parts[0] && parts.size() > 1;
                 }
-                catch e is InvalidBigInt {
+                catch e is InvalidInteger {
                     false;
                 };
                 if valid {
@@ -147,7 +147,7 @@ hidden object LogArchiveCatalog {
                         else throw InvalidLogRotation.because(
                             "archive namespace contains a non-regular file"
                         );
-                    old.prefix(LogArchive(path: entry, generation: BigInt(parts[0])));
+                    old.prefix(LogArchive(path: entry, generation: Number(parts[0]).int()));
                 }
                 else {
                     old;
@@ -163,8 +163,8 @@ hidden object LogArchiveCatalog {
         snapshot;
     }
 
-    next(records is @LogArchive) is BigInt {
-        let latest = records.reduce(BigInt(0)) -> old, item {
+    next(records is @LogArchive) is int {
+        let latest = records.reduce((0)) -> old, item {
             if item.generation().order(old) == Order.greater {
                 item.generation();
             }
@@ -172,13 +172,13 @@ hidden object LogArchiveCatalog {
                 old;
             }
         };
-        (latest + BigInt(1));
+        (latest + 1);
     }
 
     trim(records is @LogArchive, retained is int) is void {
-        let ordered is SortedBy<LogArchive, BigInt> = SortedBy(
+        let ordered is SortedBy<LogArchive, int> = SortedBy(
             origin: records,
-            key: (item is LogArchive) is BigInt {
+            key: (item is LogArchive) is int {
                 item.generation();
             }
         );
@@ -285,16 +285,16 @@ object RotatingLogFile does Writing, Closing {
         self.close();
     }
 
-    hidden size() is BigInt {
+    hidden size() is int {
         try {
             let metadata = fs.lstat(fs.path_encode(path.string()));
             confirm metadata["kind"] == 1
                 else throw InvalidLogRotation.because("active log must be a regular file");
-            BigInt(metadata["size"]);
+            (metadata["size"]);
         }
         catch failure is NativeFailure {
             if failure.code() == "not_found" {
-                BigInt(0);
+                0;
             }
             else {
                 throw FileFailure(failure).error();
@@ -311,9 +311,9 @@ object RotatingLogFile does Writing, Closing {
             && suffix.length() <= 128
             && suffix != "."
             && suffix != ".."
-            && suffix.split("/").size() == 1
-            && suffix.split("\\").size() == 1
-            && suffix.split(":").size() == 1
+            && !suffix.contains("/")
+            && !suffix.contains("\\")
+            && !suffix.contains(":")
             else throw InvalidLogRotation.because("invalid archive suffix");
         let target = Path(
             path.string() + ".archive." + generation.string() + "." + suffix,
@@ -348,17 +348,17 @@ enum InvalidLogRotation is Error = (because(reason is string));
 test "size and interval rotation decide and name the archive" {
     let start = Instant(Duration(seconds: 1700000000));
     let later = Instant(Duration(seconds: 1700003600));
-    let size = SizeRotating(BigInt(10));
-    test.is(size.needed(BigInt(9), start, start), false);
-    test.is(size.needed(BigInt(10), start, start), true);
+    let size = SizeRotating((10));
+    test.is(size.needed((9), start, start), false);
+    test.is(size.needed((10), start, start), true);
     test.is(size.suffix(start, 3), "3");
     test.throws(InvalidLogRotation) {
-        SizeRotating(BigInt(0));
+        SizeRotating((0));
     };
     let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0));
     let hourly = IntervalRotating(interval: Duration(seconds: 3600), zone: utc);
-    test.is(hourly.needed(BigInt(1), start, Instant(Duration(seconds: 1700003599))), false);
-    test.is(hourly.needed(BigInt(1), start, later), true);
+    test.is(hourly.needed((1), start, Instant(Duration(seconds: 1700003599))), false);
+    test.is(hourly.needed((1), start, later), true);
     test.is(hourly.suffix(start, 2), "2023-11-14T22-13-20Z-2");
     test.throws(InvalidLogRotation) {
         IntervalRotating(interval: Duration(seconds: 0), zone: utc);
@@ -380,7 +380,7 @@ test "a rotating file archives by generation and keeps the newest backups" {
     let logs = RotatingLogFile(
         path: path,
         options: options,
-        rotation: SizeRotating(BigInt(10)),
+        rotation: SizeRotating((10)),
         backups: 2,
         clock: clock
     );
@@ -408,7 +408,7 @@ test "a rotating file archives by generation and keeps the newest backups" {
         RotatingLogFile(
             path: path,
             options: options,
-            rotation: SizeRotating(BigInt(10)),
+            rotation: SizeRotating((10)),
             backups: -1,
             clock: clock
         );

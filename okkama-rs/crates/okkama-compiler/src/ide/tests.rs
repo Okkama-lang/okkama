@@ -41,9 +41,12 @@ enum Currency = (euro, dollar);
 const MAIN: &str = r#"module app v1.0.0;
 import "shop/money" take Money, Currency;
 
+// A wallet holding its total.
 object Wallet {
     has total is Money;
+    // Bind the initial total.
     Wallet(total is Money) { self.total = total; }
+    // Add an amount to the total.
     add(amount is Money) is Money {
         let sum = total.plus(amount);
         sum;
@@ -64,6 +67,87 @@ fn inspect(text: &str) -> Inspection {
         LIBRARY.to_string(),
     )]));
     lowering::inspect(&source, &mut loader, false)
+}
+
+#[test]
+fn doc_model_drives_imported_hover_completion_links_and_unsaved_overloads() {
+    let library = "module shop/money;\n\n// Public [Money] and [Money.plus].\nobject Money {\n    // Construct an amount.\n    Money() {}\n    // Integer amount; see [Money].\n    //\n    // ```text\n    // [NotALink]\n    // ```\n    plus(value is int = 1) is int { value; }\n    // Text amount.\n    plus(value is string) is string { value; }\n    // Never publish this.\n    hidden secret() is void {}\n}\n// Never publish this type.\nhidden object Secret { Secret() {} }\n";
+    let text = "module app;\nimport \"shop/money\" take Money;\nmain() is int { let m = Money(); let _s = m.plus(\"x\"); m.plus(2); }\n";
+    let file = SourceFile::new("/app/main.ok", text).unwrap();
+    let mut loader = Memory(HashMap::from([("shop/money".into(), library.into())]));
+    let inspection = lowering::inspect(&file, &mut loader, false);
+    let integer = at(&inspection, text, "plus(2)", 0, 1);
+    assert!(integer.hover.contains("Integer amount"), "{}", integer.hover);
+    assert!(integer.hover.contains("value is int = 1"));
+    assert!(!integer.hover.contains("Text amount"));
+    assert!(integer.hover.contains("[Money](okkama-doc:/shop/money#Money)"));
+    let string = at(&inspection, text, "plus(\"x\")", 0, 1);
+    assert!(string.hover.contains("Text amount"));
+    assert!(!string.hover.contains("Integer amount"));
+    assert_eq!(integer.definition.as_ref().unwrap().range.start.line, 11);
+    let members = inspection.members.get("Money").unwrap();
+    let completions: Vec<_> = members.iter().filter(|member| member.label == "plus").collect();
+    assert_eq!(completions.len(), 2);
+    assert!(completions[0].documentation.contains("Integer amount"));
+    assert!(completions[0].documentation.contains("value is int = 1"));
+    assert!(completions[1].documentation.contains("Text amount"));
+    assert!(!members.iter().any(|member| member.label == "secret"));
+    let imported = at(&inspection, text, "take Money", 0, 6);
+    assert!(imported.hover.contains("Construct an amount"));
+    assert!(!imported.hover.contains("Never publish"));
+    let library_file = SourceFile::new("/lib/shop/money.ok", library).unwrap();
+    let doc = crate::doc::document(&library_file, &mut loader).unwrap();
+    let item = doc.item("Money").unwrap();
+    let member = &item.members[1];
+    let expected_hover = crate::doc::render::hover(&doc, item, Some(member));
+    assert_eq!(integer.hover, expected_hover);
+    assert_eq!(completions[0].documentation, expected_hover);
+    let page = crate::doc::render::item_markdown(&doc, item, Some(&[member]));
+    let prose = member.doc.as_ref().unwrap().markdown();
+    assert!(page.contains(&prose));
+    assert!(integer.hover.contains(&prose));
+    assert!(integer.hover.contains("```text\n[NotALink]\n```"));
+    assert!(page.contains("Integer amount; see [Money](okkama-doc:/shop/money#Money)."));
+    loader.0.insert("shop/money".into(), library.replace("Integer amount", "Updated buffer"));
+    let updated = lowering::inspect(&file, &mut loader, false);
+    let hover = &at(&updated, text, "plus(2)", 0, 1).hover;
+    assert!(hover.contains("Updated buffer"), "{hover}");
+    assert!(!hover.contains("Integer amount"));
+}
+
+#[test]
+fn doc_links_use_import_scopes_explicit_modules_and_warning_ranges() {
+    let text = "module app;\r\nimport \"shop/money\" as cash;\r\n\r\n// See [cash.Money], [shop/money.Money.plus], [Money], [shop/money.Nope].\r\n//\r\n// ~~~\r\n// [NotALink]\r\n// ~~~\r\n\r\nobject Public {}\r\n";
+    let inspection = inspect(text);
+    let warnings: Vec<_> = inspection.diagnostics.iter().filter(|d| d.code.as_deref() == Some("unresolved-doc-link")).collect();
+    assert_eq!(warnings.len(), 2, "{:?}", inspection.diagnostics);
+    for warning in warnings {
+        assert_eq!(warning.severity, Severity::Warning);
+        let range = LineIndex::new(text);
+        let span = Span::new(range.offset(warning.range.start), range.offset(warning.range.end));
+        assert!(["[Money]", "[shop/money.Nope]"].contains(&&text[span.range()]));
+    }
+}
+
+#[test]
+fn doc_model_selects_role_and_constructor_overloads_and_filters_hidden_globals() {
+    let text = "module app;\nrole Reading {\n    // Integer role action.\n    read(x is int) is int;\n    // Text role action.\n    read(x is string) is string;\n}\nobject Reader does Reading {\n    // Empty reader.\n    Reader() {}\n    // Reader from a number.\n    Reader(x is int) {}\n    read(x is int) is int { x; }\n    read(x is string) is string { x; }\n}\n// Hidden documentation.\nhidden object Secret { Secret() {} }\nmain() is int {\n    let reader is Reading = Reader(1);\n    let _text = reader.read(\"x\");\n    reader.read(2);\n}\n";
+    let inspection = inspect(text);
+    assert!(inspection.parsed);
+    assert!(!inspection.diagnostics.iter().any(|diagnostic| diagnostic.severity == Severity::Error), "{:?}", inspection.diagnostics);
+    let integer = &at(&inspection, text, "read(2)", 0, 1).hover;
+    assert!(integer.contains("Integer role action"), "{integer}");
+    assert!(!integer.contains("Text role action"));
+    let string = &at(&inspection, text, "read(\"x\")", 0, 1).hover;
+    assert!(string.contains("Text role action"), "{string}");
+    assert!(!string.contains("Integer role action"));
+    let constructor = &at(&inspection, text, "Reader(1)", 0, 1).hover;
+    assert!(constructor.contains("Reader from a number"), "{constructor}");
+    assert!(!constructor.contains("Empty reader"));
+    let completions = &inspection.members["Reading"];
+    assert!(completions[0].documentation.contains("Integer role action"));
+    assert!(completions[1].documentation.contains("Text role action"));
+    assert!(!inspection.globals.iter().any(|item| item.label == "Secret"));
 }
 
 /// Символ на `occurrence`-м вхождении `needle` (смещение `shift` внутри).
@@ -169,7 +253,7 @@ fn locals_hover_with_their_type_and_lead_to_their_binding() {
     assert_eq!(
         definition.range.start,
         Position {
-            line: 7,
+            line: 10,
             character: 12
         }
     );
@@ -216,7 +300,7 @@ fn constructors_fields_enum_cases_and_types_resolve() {
     assert_eq!(
         field.definition.as_ref().unwrap().range.start,
         Position {
-            line: 4,
+            line: 5,
             character: 8
         }
     );
@@ -271,7 +355,7 @@ fn errors_keep_the_index_and_point_at_their_span() {
     );
     let error = &inspection.diagnostics[0];
     assert_eq!(error.severity, Severity::Error);
-    assert_eq!(error.range.start.line, 14);
+    assert_eq!(error.range.start.line, 17);
     assert!(
         at(&inspection, &text, "plus", 0, 1)
             .hover
@@ -344,6 +428,9 @@ main() is int {
             ("unused-let".to_string(), 7),
             ("unreachable".to_string(), 10),
             ("unused-hidden".to_string(), 12),
+            ("missing-docs".to_string(), 3),
+            ("missing-docs".to_string(), 5),
+            ("missing-docs".to_string(), 6),
         ],
         "{found:?}"
     );
@@ -351,7 +438,7 @@ main() is int {
     assert!(
         diagnostics
             .iter()
-            .filter(|found| found.code.is_some())
+            .filter(|found| found.code.is_some() && found.code.as_deref() != Some("missing-docs"))
             .all(|found| found.unnecessary)
     );
 }
@@ -377,7 +464,7 @@ main() is int {
     return Box(Money(camelName)).sum([1]);
 }
 "#;
-    assert_eq!(lints(text), [("snake-case".to_string(), 15)]);
+    assert_eq!(lints(text), [("snake-case".to_string(), 15), ("missing-docs".to_string(), 3), ("missing-docs".to_string(), 5), ("missing-docs".to_string(), 6)]);
 }
 
 #[test]
@@ -397,7 +484,7 @@ main() is int {
     Service().run(1);
 }
 "#;
-    assert_eq!(lints(text), [("hidden-error".to_string(), 6)]);
+    assert_eq!(lints(text), [("hidden-error".to_string(), 6), ("missing-docs".to_string(), 3), ("missing-docs".to_string(), 4), ("missing-docs".to_string(), 5)]);
 }
 
 #[test]
@@ -422,7 +509,7 @@ main() is int {
     0;
 }
 "#;
-    assert_eq!(lints(text), [("non-exhaustive-match".to_string(), 5)]);
+    assert_eq!(lints(text), [("non-exhaustive-match".to_string(), 5), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1)]);
     let diagnostics = inspect(text).diagnostics;
     assert!(diagnostics[0].message.contains("does not handle captured"));
 }
@@ -715,4 +802,16 @@ fn chains_complete_through_fields_indexing_generics_bindings_and_new_locals() {
     assert!(complete(&fresh, "        c.").contains(&"abs".to_string()), "{:?}", complete(&fresh, "        c."));
     let typed = edit("let d is Money = sum;\n        d.");
     assert_eq!(complete(&typed, "        d."), money);
+}
+
+
+#[test]
+fn missing_docs_is_a_user_warning_and_ignores_private_implementation() {
+    let text = "module app;\nobject Public {\n    Public();\n    hidden helper() is int { 1; }\n}\nhidden object Secret { Secret(); }\nmain() is int { 0; }\n";
+    let inspection = inspect(text);
+    let found: Vec<_> = inspection.diagnostics.iter().filter(|d| d.code.as_deref() == Some("missing-docs")).collect();
+    assert_eq!(found.len(), 2, "{:?}", inspection.diagnostics);
+    assert!(found.iter().all(|d| d.severity == Severity::Warning && !d.unnecessary));
+    assert_eq!(found[0].range.start.line, 1);
+    assert_eq!(found[1].range.start.line, 2);
 }

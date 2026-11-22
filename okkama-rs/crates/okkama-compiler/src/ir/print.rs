@@ -489,6 +489,7 @@ fn write_inst(
             write_list(f, captures)?;
             f.write_char(']')
         }
+        InstKind::AwaitTake(future) => write!(f, "await.take {future}"),
         InstKind::Await(future) => write!(f, "await {future}"),
         InstKind::CapMake(owner) => write!(f, "cap.make {owner}"),
         InstKind::CallCap { cap, field } => write!(f, "call.cap {cap}, #{field}()"),
@@ -519,6 +520,7 @@ fn write_inst(
             f.write_char(')')
         }
         InstKind::SuccTake(operand) => write!(f, "succ.take {operand}"),
+        InstKind::FutureHandoff(operand) => write!(f, "future.handoff {operand}"),
         InstKind::Cvt(operand) => write!(f, "cvt {operand}"),
         InstKind::RoleWrap(operand) => write!(f, "role.wrap {operand}"),
         InstKind::VariantNew { case, fields } => {
@@ -700,6 +702,11 @@ fn write_inst(
         InstKind::FailSecondary { primary, cleanup } => {
             write!(f, "fail.secondary {primary}, {cleanup}")
         }
+        InstKind::ResourcePin { value } => write!(f, "resource.pin {value}"),
+        InstKind::ResourceLeave { value } => write!(f, "resource.leave {value}"),
+        InstKind::ResourceUnwind { value, failure } => write!(f, "resource.unwind {value}, {failure}"),
+        InstKind::ResourceSettle { value } => write!(f, "resource.settle {value}"),
+        InstKind::ResourceSettleUnwind { value, failure } => write!(f, "resource.settle_unwind {value}, {failure}"),
         InstKind::EnumCompare { op, left, right } => {
             write!(f, "enum.{} {left}, {right}", op.suffix())
         }
@@ -928,4 +935,15 @@ fn write_string(f: &mut Formatter<'_>, text: &str) -> fmt::Result {
         }
     }
     f.write_char('"')
+}
+
+/// One function as text, with the module's names (development dumps, okkama-devtrace).
+pub fn function_text(module: &Module, function: &Function) -> String {
+    struct One<'a>(&'a Module, &'a Function);
+    impl Display for One<'_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write_function(f, self.0, self.1)
+        }
+    }
+    One(module, function).to_string()
 }

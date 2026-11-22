@@ -1,0 +1,32 @@
+// #244: imap-search-operators; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "mail/imap_search" take AllMail, UnseenMail, AndMail, OrMail, NotMail, SinceMail, ImapSearchKey, ImapSearchLimits;
+import "time/date" take Date;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let limits = ImapSearchLimits(nodes:16,depth:8,wire_bytes:256);
+        let dated = SinceMail(Date(2020,1,v%28+1));
+        let left = AndMail(AllMail(),dated,limits);
+        let right = NotMail(UnseenMail(),limits);
+        let combined = OrMail(left,right,limits);
+        let direct = ImapSearchKey(date:Date(2020,1,v%28+1),limits:limits);
+        let contribution = combined.key().bytes().size()+AllMail().key().bytes().size()+UnseenMail().key().bytes().size()+direct.bytes().size();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

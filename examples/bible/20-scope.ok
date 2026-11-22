@@ -1,0 +1,45 @@
+module bible/scope v1.0.0;
+
+// A FutureScope runs one body with a group it may start children in; the
+// scope's outcome is the body's result once every child has finished. A
+// body that fails cancels the children it started and waits for them.
+import "async/scope" take FutureScope, Supervising;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (refused);
+
+object Child {
+    has name is string;
+    has gate is Event;
+    Child(:name, :gate);
+    async run() is int {
+        defer Stdout().writeln(name + " done");
+        await gate.wait();
+        1;
+    }
+}
+
+object Batch {
+    has gate is Event;
+    Batch(:gate);
+    async run(children is Supervising<int>) is string {
+        children.start(Child(name: "a", gate: gate).run());
+        children.start(Child(name: "b", gate: gate).run());
+        gate.set();
+        "batch";
+    }
+    async fail(children is Supervising<int>) is string {
+        children.start(Child(name: "c", gate: gate).run());
+        throw Refused.refused;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let scope is FutureScope<int, string> = FutureScope(action: Batch(gate: Event()).run);
+    out.writeln("outcome " + await scope.outcome());
+    let failing is FutureScope<int, string> = FutureScope(action: Batch(gate: Event()).fail);
+    out.writeln(try { await failing.outcome(); } catch e is Refused { "refused"; });
+    0;
+}

@@ -1,0 +1,51 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L03.if.compact",
+  "title": "if expressions in the compact form",
+  "purpose": "`if c: a else: b` is the block if spelled with colons: one expression per branch, only the chosen one runs, else goes to the nearest if, and a branch fallback takes parentheses (#921).",
+  "level": "L03",
+  "contracts": [
+    {
+      "contract": "CTRL.IF",
+      "aspects": [
+        "normal",
+        "boundary"
+      ]
+    },
+    {
+      "contract": "GRAM.IF",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "high low\n0 2\nmedium\n1\n15 3\n10\npositive\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-grammar-1.0.ebnf",
+    "docs/okkama-spec-11072026.md#8.11"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #921 (owner's specification)",
+    "expected_basis": "grammar: if_expr = \"if\" expr (block \"else\" (if_expr | block) | \":\" expr \"else\" \":\" expr); spec 8.11: the compact form is the block form."
+  },
+  "status": "mandatory"
+}

@@ -2,8 +2,11 @@
 //!
 //! Every function takes the context and its parameters as words and returns
 //! one word (floats travel as bits). Calls go through the code table: a zero
-//! entry compiles the callee first. Integer and reference registers are
-//! declared for stack maps, so every call is a precise safepoint; the
+//! entry compiles the callee first. Known ordinary entries already published
+//! in this runtime can embed their stable address (see docs/ready-callees.md).
+//! Integer and reference registers are
+//! declared for stack maps unless every definition is proven pointer-free.
+//! Every collecting call remains a precise safepoint; the
 //! collector walks frame records (frame pointers are preserved) and reads the
 //! spilled slots of each frame from the map of its return address.
 #![allow(unsafe_code)]
@@ -37,36 +40,52 @@ pub enum Effect {
     Fails,
 }
 
+const fn registered_effects(name: &str, legacy: &'static [Effect]) -> &'static [Effect] {
+    let _ = name;
+    legacy
+}
+
 /// One description per helper (H-06): its Rust signature, checked at compile
 /// time (the function must coerce to exactly that `extern "C"` pointer type;
-/// every word is 8 bytes), the Cranelift signature derived from it, and its
+/// each scalar is 8 bytes), the Cranelift signature derived from it, and its
 /// effects. A panic inside a helper aborts with its message at the `extern
 /// "C"` boundary and never unwinds through machine code.
 macro_rules! helpers {
-    ($($field:ident = $function:path as ($ctx:ident $(, $arg:ident: $ty:ty)*) $(-> $ret:ty)? ; [$($effect:ident),*];)*) => {
+    ($(
+        $(#[$meta:meta])* $field:ident = $function:path
+        as ($ctx:ident $(, $arg:ident: $ty:ty)*) $(-> $ret:ty)? ; [$($effect:ident),*];
+    )*) => {
         #[derive(Debug)]
-        struct Helpers { $($field: FuncId,)* }
+        struct Helpers { $($(#[$meta])* $field: FuncId,)* }
 
         /// Every helper and its effects, in declaration order.
-        pub const HELPERS: &[(&str, &[Effect])] = &[$((stringify!($field), &[$(Effect::$effect),*]),)*];
+        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), registered_effects(stringify!($field), &[$(Effect::$effect),*])),)*];
+
 
         $(
+            $(#[$meta])*
             const _: () = {
-                $(assert!(std::mem::size_of::<$ty>() == 8);)*
+                $(assert!(std::mem::size_of::<$ty>() == 8
+                    || (std::mem::size_of::<$ty>() == 16 && std::mem::align_of::<$ty>() == 8));)*
                 $(assert!(std::mem::size_of::<$ret>() == 8);)?
             };
+            $(#[$meta])*
             const _: extern "C" fn(*mut Ctx $(, $ty)*) $(-> $ret)? = $function;
         )*
 
         fn declare_helpers(builder: &mut JITBuilder) {
-            $(builder.symbol(concat!("sparrow_core_", stringify!($field)), $function as *const u8);)*
+            $($(#[$meta])* builder.symbol(concat!("sparrow_core_", stringify!($field)), $function as *const u8);)*
         }
 
         fn import_helpers(module: &mut JITModule) -> Result<Helpers, Error> {
-            Ok(Helpers { $($field: {
+            Ok(Helpers { $($(#[$meta])* $field: {
                 let mut signature = module.make_signature();
                 signature.params.push(AbiParam::new(types::I64));
-                $(let _ = stringify!($arg); signature.params.push(AbiParam::new(types::I64));)*
+                $(let _ = stringify!($arg);
+                    for _ in 0..std::mem::size_of::<$ty>() / 8 {
+                        signature.params.push(AbiParam::new(types::I64));
+                    }
+                )*
                 $(let _ = stringify!($ret); signature.returns.push(AbiParam::new(types::I64));)?
                 module
                     .declare_function(concat!("sparrow_core_", stringify!($field)), Linkage::Import, &signature)
@@ -77,7 +96,7 @@ macro_rules! helpers {
         impl Helpers {
             /// The ids in `HELPERS` order.
             fn ids(&self) -> Vec<FuncId> {
-                vec![$(self.$field),*]
+                vec![$($(#[$meta])* self.$field),*]
             }
         }
     };
@@ -98,25 +117,38 @@ helpers! {
     native = runtime::rt_native as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     float = runtime::rt_float as (ctx, op: u64, left: u64, right: u64) -> u64; [Allocates, Fails];
     exec = crate::ops::rt_exec as (ctx, function: u64, pc: u64, uses: *const Word, registers: *const okkama_sparrow::Register, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
-    closure = runtime::rt_closure as (ctx, function: u64, captures: *const Word, count: u64) -> Word; [Allocates, Collects];
+    closure = runtime::rt_closure as (ctx, function: u64, captures: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     call_closure = runtime::rt_call_closure as (ctx, closure: Word, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     map_find = runtime::rt_map_find as (ctx, function: u64, pc: u64, map: Word, key: Word) -> u64; [];
     intrinsic = crate::intrinsics::rt_intrinsic as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     failure_op = crate::failures::rt_failure_op as (ctx, function: u64, pc: u64, uses: *const Word) -> Word; [Allocates, Collects, Reenters, Fails];
     catch = crate::failures::rt_catch as (ctx, function: u64, pc: u64, failure: Word) -> u64; [Allocates];
     created = crate::failures::rt_created as (ctx, descriptor: u64, object: Word); [];
-    region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64); [];
+    region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64) -> Word; [Allocates];
+    region_new = crate::failures::rt_region_new as (ctx) -> Word; [Allocates];
     region_leave = crate::failures::rt_region_leave as (ctx, region: Word, keep: *const Word, count: u64); [Allocates, Collects, Reenters, Fails];
+    resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
+    dev_site = crate::failures::rt_dev_site as (ctx, kind: u64, function: u64, pc: u64); [];
+    resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
+    builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
+    builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects];
+    rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
+    map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
+    scalar_safepoint = crate::ops::rt_scalar_safepoint as (ctx, conversion: u64); [Collects];
     trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
     int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
+    await_take = crate::tasks::rt_await_take as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     region_settle = crate::tasks::rt_region_settle as (ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64; [Allocates, Collects, Reenters, Fails];
+    resource_settle = crate::tasks::rt_resource_settle as (ctx, this: Word, object: Word, failure: Word) -> u64; [Allocates, Collects, Reenters, Fails];
     complete = crate::tasks::rt_complete as (ctx, frame: Word, value: Word); [Collects, Reenters];
     spawn = crate::tasks::rt_spawn as (ctx, future: Word) -> Word; [Reenters, Fails];
     fut = crate::tasks::rt_fut as (ctx, op: u64, future: Word) -> Word; [Reenters, Fails];
 }
+
+const COMPILE_HEADER: &str = "; compile\tfunction\tinstructions\tregisters\tsuspensions\tclif blocks\tclif instructions\tsafepoints\tcode bytes\tframe bytes\tdeclare\tliveness\temit\tfinalize\tcodegen\tmaps\tdefinitions\ttables (microseconds)";
 
 pub struct Jit {
     module: JITModule,
@@ -129,6 +161,10 @@ pub struct Jit {
     ranges: Vec<(u64, u64)>,
     /// (role, slot) → function index by object descriptor (u64::MAX: none).
     dispatch: BTreeMap<(u32, u32), Box<[u64]>>,
+    /// #588: the object capacity of a session runtime. Machine code embeds a dispatch table's address and indexes
+    /// it by descriptor, so a session's tables are this long from the start and an extension fills new entries in
+    /// place; 0 outside a session.
+    pub(crate) object_capacity: usize,
     /// The registers each `rt_exec` call site passes, in visit order: the
     /// helper reads them instead of visiting the instruction on every call
     /// (#325). Machine code holds their addresses, so they live as long.
@@ -148,6 +184,12 @@ pub struct Jit {
     /// instruction that has one runs through the shared slow path instead
     /// (`SPARROW_CORE_PLAIN`).
     plain: Chosen,
+    /// Keep lazy dispatch for selected callers (`SPARROW_CORE_OLD_DISPATCH`).
+    old_dispatch: Chosen,
+    /// Callers compiled without inlining (`SPARROW_CORE_NO_INLINE`, #927), for differential runs.
+    no_inline: Chosen,
+    #[cfg(test)]
+    emitted: BTreeMap<usize, cranelift_codegen::ir::Function>,
     /// Async bodies whose stack maps Cranelift's frontend keeps, as before
     /// #354 (`SPARROW_CORE_FRONTEND_MAPS`); synchronous functions always do
     /// (#362).
@@ -198,6 +240,31 @@ impl Chosen {
     }
 }
 
+/// The implementation of role `role`'s slot `slot` per descriptor (`u64::MAX`: none), `length` entries long.
+fn dispatch_table(program: &okkama_sparrow::Program, role: u32, slot: u32, length: usize) -> Box<[u64]> {
+    let mut table = vec![u64::MAX; length];
+    for (entry, object) in table.iter_mut().zip(&program.objects) {
+        if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
+            *entry = u64::from(witness.slots[slot as usize].0);
+        }
+    }
+    table.into_boxed_slice()
+}
+
+impl Jit {
+    /// #588: fill the dispatch entries of the objects an extension appended, in place (the tables are as long as
+    /// the session's object capacity).
+    pub(crate) fn extend_dispatch(&mut self, program: &okkama_sparrow::Program, from: usize) {
+        for (&(role, slot), table) in &mut self.dispatch {
+            for (descriptor, object) in program.objects.iter().enumerate().skip(from) {
+                if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
+                    table[descriptor] = u64::from(witness.slots[slot as usize].0);
+                }
+            }
+        }
+    }
+}
+
 /// The target for compiled code, at a Cranelift optimization level.
 fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, Error> {
     let mut flags = settings::builder();
@@ -213,7 +280,8 @@ fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::
     // of the compile time of a large async program (#345). Debug builds,
     // and so the gate's debug tests, keep it; `SPARROW_CORE_VERIFY=1` turns
     // it on in a release build.
-    let verify = cfg!(debug_assertions) || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+    let verify = cfg!(debug_assertions)
+        || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
     set(&mut flags, "enable_verifier", if verify { "true" } else { "false" })?;
     cranelift_native::builder()
         .map_err(|e| Error(format!("JIT target: {e}")))?
@@ -262,6 +330,7 @@ impl Jit {
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
+            object_capacity: 0,
             operands: Vec::new(),
             helper_counts: vec![0; HELPERS.len()].into_boxed_slice(),
             largest_frame: 0,
@@ -269,12 +338,16 @@ impl Jit {
             unoptimized,
             unoptimized_isa,
             plain: Chosen::from_env("SPARROW_CORE_PLAIN"),
+            old_dispatch: Chosen::from_env("SPARROW_CORE_OLD_DISPATCH"),
+            no_inline: Chosen::from_env("SPARROW_CORE_NO_INLINE"),
+            #[cfg(test)]
+            emitted: BTreeMap::new(),
             frontend_maps: Chosen::from_env("SPARROW_CORE_FRONTEND_MAPS"),
             alloc_sites: Vec::new(),
             profile: std::env::var("SPARROW_CORE_PROFILE_COMPILE")
                 .is_ok_and(|value| !value.is_empty() && value != "0")
                 .then(|| {
-                    eprintln!("; compile\tfunction\tinstructions\tregisters\tsuspensions\tclif blocks\tclif instructions\tsafepoints\tcode bytes\tframe bytes\tdeclare\tliveness\temit\tfinalize\tcodegen\tmaps\tdefinitions\ttables (microseconds)");
+                    eprintln!("{COMPILE_HEADER}");
                     cranelift_codegen::timing::PassTimes::default()
                 }),
         })
@@ -288,7 +361,11 @@ impl Jit {
             .zip(self.helper_counts.iter())
             .filter(|(_, count)| **count > 0)
             .map(|((name, _), &count)| (format!("helper {name}"), count))
-            .chain([("largest machine frame, bytes".to_string(), u64::from(self.largest_frame))])
+            .chain([
+                ("largest machine frame, bytes".to_string(), u64::from(self.largest_frame)),
+                ("stack map sites".to_string(), self.maps.len() as u64),
+                ("stack map root words, static sum".to_string(), self.maps.iter().map(|(_, _, slots)| slots.len() as u64).sum()),
+            ])
             .chain(self.alloc_sites.iter().filter(|(_, counts)| counts[0] > 0).flat_map(|(site, counts)| {
                 [(format!("alloc site {site}, count"), counts[0]), (format!("alloc site {site}, bytes"), counts[1])]
             }))
@@ -308,13 +385,34 @@ impl Jit {
     pub(crate) unsafe fn frame_roots(&self, mut frame: u64, entry: u64, visit: &mut dyn FnMut(Word, Repr)) {
         // Rust frames between machine frames (a helper that calls a closure)
         // are passed over; the walk ends at the frame that entered machine code.
+        // A deep stack repeats a few return addresses (recursion): a small direct-mapped cache of what each one
+        // resolved to spares the two binary searches per frame (#917: deep, ~100 000 frames per collection).
+        const NOT_CODE: u32 = u32::MAX;
+        const NO_MAP: u32 = u32::MAX - 1;
+        let mut cache = [(0u64, 0u32); 64];
         while frame != 0 && frame != entry {
             let (caller, ret) = unsafe { (*(frame as *const u64), *((frame + 8) as *const u64)) };
-            if !self.in_code(ret) {
+            let slot = &mut cache[((ret >> 2) & 63) as usize];
+            let resolved = if slot.0 == ret && ret != 0 {
+                slot.1
+            } else {
+                let resolved = if !self.in_code(ret) {
+                    NOT_CODE
+                } else {
+                    match self.maps.binary_search_by_key(&ret, |(address, _, _)| *address) {
+                        Ok(index) => index as u32,
+                        Err(_) => NO_MAP,
+                    }
+                };
+                *slot = (ret, resolved);
+                resolved
+            };
+            if resolved == NOT_CODE {
                 frame = caller;
                 continue;
             }
-            if let Ok(index) = self.maps.binary_search_by_key(&ret, |(address, _, _)| *address) {
+            if resolved != NO_MAP {
+                let index = resolved as usize;
                 // The machine frame's SP at the call, from its own FP (`caller`):
                 // the callee's frame record says nothing about where the caller's
                 // SP was (Linux puts the record below the callee's saved registers).
@@ -411,11 +509,16 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
     leaders
 }
 
+
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
-    if runtime.code[function] != 0 {
-        return Ok(runtime.code[function]);
+    if runtime.invocations[function].code != 0 {
+        return Ok(runtime.invocations[function].code);
     }
-    let Runtime { heap, loaded, jit, code, constants, resources, limits, budget, stats, .. } = runtime;
+    let _span = okkama_devtrace::span!("jit", "compile");
+    okkama_devtrace::count!("jit", "functions compiled");
+    let closure_reference = runtime.closure_bridge_reference;
+    let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
+    let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);
     // Stage boundaries under `SPARROW_CORE_PROFILE_COMPILE` (#345).
     let profiling = jit.profile.is_some();
@@ -465,16 +568,24 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     };
     mark!();
     let plain = jit.plain.has(symbol);
+    let late_bound = plain || jit.old_dispatch.has(symbol) || jit.unoptimized.has(symbol);
+    let no_inline = late_bound || jit.no_inline.has(symbol);
     // Explicit roots for async bodies (#354), unless the analysis is too
     // large: there Cranelift's reloads after every call made more than half
     // of the code. A synchronous function keeps Cranelift's stack maps, which
     // cost a third less in call-heavy code such as recursion (#362).
     let explicit = source.is_async && !jit.frontend_maps.has(symbol);
-    let root_live = explicit.then(|| okkama_sparrow::live_sets(source)).flatten();
+    // #552: a big async body keeps every register in its heap frame (stored at definition, loaded at use), so a
+    // suspension copies nothing; otherwise each await saves and reloads every register, O(awaits × registers).
+    let suspensions = source.code.iter().filter(|instruction| suspends(instruction)).count();
+    let resident = frame_resident(source.is_async, suspensions, source.registers.len(), plain);
+    let frame_live = (source.is_async && !resident).then(|| okkama_sparrow::live_sets(source).map(std::sync::Arc::new)).flatten();
+    let root_live = if explicit && !resident { frame_live.clone() } else { None };
     let config = jit.module.target_config();
     let mut context = jit.module.make_context();
     context.func.signature = jit.signature(params);
     let mut frontend = FunctionBuilderContext::new();
+    let call_sites;
     {
         let mut builder = FunctionBuilder::new(&mut context.func, &mut frontend);
         let mut emit = Emitter {
@@ -482,7 +593,8 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             heap,
             loaded,
             jit,
-            code_table: code.as_ptr() as i64,
+            invocations,
+            late_bound,
             constants,
             resources,
             function,
@@ -493,6 +605,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             frame: None,
             polled: limits.polled(),
             count_helpers: stats.is_some(),
+            closure_reference,
             fuel: budget.fuel.address(),
             refusable: limits.memory.is_some(),
             pc: 0,
@@ -502,15 +615,29 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             cost_limit,
             plain,
             root_live,
+            frame_live,
+            resident,
             roots: None,
+            call_sites: [0; 3],
+            inline: None,
+            inlined: 0,
+            no_inline,
         };
         emit.body()?;
+        call_sites = emit.call_sites;
         mark!();
         builder.seal_all_blocks();
         builder.finalize(config);
     }
     mark!();
-    let clif = (context.func.layout.blocks().count(), context.func.dfg.num_insts());
+    // Sample before codegen, only for the diagnostic report (#481).
+    let clif = profiling.then(|| {
+        #[cfg(test)]
+        profile_tests::SAMPLES.with(|samples| samples.set(samples.get() + 1));
+        (context.func.layout.blocks().count(), context.func.dfg.num_insts())
+    });
+    #[cfg(test)]
+    jit.emitted.insert(function, context.func.clone());
     let dump = jit.dump.has(symbol);
     if dump {
         // Callees by their CLIF names: the runtime's helpers and the program's functions.
@@ -574,6 +701,18 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         .map_err(|e| Error(format!("JIT finalize: {e}")))?;
     mark!();
     let safepoints = maps.len();
+    let (root_words, traced, omitted) = if dump || profiling || stats.is_some() {
+        let root_words: usize = maps.iter().map(|(_, words)| words.len()).sum();
+        let info = &loaded.functions[function];
+        let omitted = info.kinds.iter().zip(&info.pointer_free).filter(|(kind, free)| kind.traced() && **free).count();
+        let traced = info.kinds.iter().filter(|kind| kind.traced()).count() - omitted;
+        (root_words, traced, omitted)
+    } else {
+        (0, 0, 0)
+    };
+    if dump || profiling {
+        eprintln!("; roots\t{symbol}\ttraced registers {traced}\tomitted registers {omitted}\tstack-map words {root_words}");
+    }
     let address = jit.module.get_finalized_function(id) as u64;
     for (ret, slots) in maps {
         jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
@@ -581,12 +720,15 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     jit.maps.sort_by_key(|(address, _, _)| *address);
     jit.ranges.push((address, address + u64::from(size)));
     jit.ranges.sort_unstable();
-    code[function] = address;
+    // Publish only after finalization and registration of maps/ranges. All
+    // static/role/async/closure users read this same stable record.
+    invocations[function].code = address;
     mark!();
     if let Some(passes) = jit.profile.as_mut() {
+        let clif = clif.expect("profiling sampled CLIF before codegen");
         passes.add(&cranelift_codegen::timing::take_current());
         let micros: Vec<String> = marks.windows(2).map(|pair| (pair[1] - pair[0]).as_micros().to_string()).collect();
-        eprintln!(
+        report_compile(format_args!(
             "; compile\t{symbol}\t{}\t{}\t{}\t{}\t{}\t{safepoints}\t{size}\t{fp_to_sp}\t{}",
             source.code.len(),
             source.registers.len(),
@@ -594,16 +736,23 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             clif.0,
             clif.1,
             micros.join("\t")
-        );
+        ));
     }
     if dump && let Some(listing) = &compiled.vcode {
         eprintln!("; machine code of {symbol} at {address:#x}, {size} bytes, frame {fp_to_sp} bytes\n{listing}");
     }
     if let (Some(stats), Some(started)) = (stats, started) {
+        // Emitted sites, not executed calls; no machine-code instrumentation.
+        for (kind, count) in ["ready static", "lazy static", "dynamic"].into_iter().zip(call_sites) {
+            *stats.entry(format!("call dispatch {kind}, sites")).or_default() += count;
+        }
         let micros = started.elapsed().as_micros() as u64;
         for (key, value) in [
             (format!("compile {symbol}, microseconds"), micros),
             (format!("machine code {symbol}, bytes"), u64::from(size)),
+            (format!("roots {symbol}, traced registers"), traced as u64),
+            (format!("roots {symbol}, omitted registers"), omitted as u64),
+            (format!("roots {symbol}, stack-map words"), root_words as u64),
             ("compile, microseconds".to_string(), micros),
             ("machine code, bytes".to_string(), u64::from(size)),
         ] {
@@ -613,12 +762,22 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     Ok(address)
 }
 
+fn report_compile(report: std::fmt::Arguments<'_>) {
+    #[cfg(test)]
+    profile_tests::REPORTS.with(|reports| reports.borrow_mut().push(report.to_string()));
+    eprintln!("{report}");
+}
+
 struct Emitter<'a, 'b> {
     builder: &'a mut FunctionBuilder<'b>,
     heap: &'a mut Heap,
     loaded: &'a crate::program::Loaded,
     jit: &'a mut Jit,
-    code_table: i64,
+    invocations: &'a [runtime::Invocation],
+    /// Reference dispatch for forced-old/plain/unoptimized callers.
+    late_bound: bool,
+    /// Emitted ready-static, lazy-static and dynamic sites (`--stats`).
+    call_sites: [u64; 3],
     constants: &'a mut Vec<(Word, Repr)>,
     resources: &'a crate::failures::Resources,
     function: usize,
@@ -643,6 +802,8 @@ struct Emitter<'a, 'b> {
     polled: bool,
     /// Count helper calls (`--stats`).
     count_helpers: bool,
+    /// `SPARROW_CORE_CLOSURE_BRIDGE=reference`: every closure call goes through the helper.
+    closure_reference: bool,
     /// Address of the runtime's fuel cell.
     fuel: i64,
     /// Allocation slow paths may refuse under a memory budget.
@@ -653,9 +814,49 @@ struct Emitter<'a, 'b> {
     spill_area: Option<cranelift_codegen::ir::StackSlot>,
     /// Registers live before each instruction, for explicit roots (#354);
     /// `None`: Cranelift's frontend keeps the stack maps.
-    root_live: Option<Vec<Vec<u64>>>,
+    root_live: Option<std::sync::Arc<okkama_sparrow::LiveSets>>,
+    /// Live registers at suspension, independently of the stack-map strategy.
+    frame_live: Option<std::sync::Arc<okkama_sparrow::LiveSets>>,
+    /// #552: every register lives in the heap frame (a big async body).
+    resident: bool,
     roots: Option<Roots>,
+    /// The callee being inlined, if any (#926).
+    inline: Option<Inline>,
+    /// Instructions inlined into this function so far (#927).
+    inlined: usize,
+    /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
+    no_inline: bool,
 }
+
+/// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
+/// `fail`, where the caller's own check after the call takes over, as after a real call.
+#[derive(Clone, Copy)]
+struct Inline {
+    ok: Block,
+    fail: Block,
+    depth: u32,
+}
+
+/// Does `source` jump backwards (a loop)? Such a callee is not inlined: its loop amortizes the call, and moved into
+/// a bigger caller it competes for the caller's registers (0.6.1 micro `float`: 9.4 -> 15.5 ns on Linux when
+/// `Bench.run`'s loop was inlined into `main`).
+fn has_loop(source: &okkama_sparrow::Function) -> bool {
+    let mut backwards = false;
+    for (pc, instruction) in source.code.iter().enumerate() {
+        instruction.visit(&mut |access| {
+            if let okkama_sparrow::Access::Target(target) = access
+                && target.pc as usize <= pc
+            {
+                backwards = true;
+            }
+        });
+    }
+    backwards
+}
+
+/// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
+const INLINE_CALLEE: usize = 24;
+const INLINE_TOTAL: usize = 160;
 
 /// GC roots kept by the core instead of Cranelift's frontend (#354). The
 /// heap does not move, so a pointer never has to be reloaded after a
@@ -684,6 +885,13 @@ struct Roots {
 
 
 const MEMORY: MemFlagsData = MemFlagsData::trusted();
+
+/// A constant table index is not enough: only the bytecode's static call
+/// instructions establish the ordinary entry ABI. Role targets stay dynamic.
+enum CallTarget {
+    Static(usize),
+    Dynamic(Value),
+}
 
 impl Emitter<'_, '_> {
     fn ctx(&self) -> Value {
@@ -761,11 +969,41 @@ impl Emitter<'_, '_> {
     }
 
     fn get(&mut self, register: &okkama_sparrow::Register) -> Value {
+        if self.resident {
+            let word = self.frame_register(register.0 as usize);
+            return if self.kinds[register.0 as usize] == Kind::Float {
+                self.builder.ins().bitcast(types::F64, MemFlagsData::new(), word)
+            } else {
+                word
+            };
+        }
         self.builder.use_var(self.vars[register.0 as usize])
     }
 
     fn set(&mut self, register: &okkama_sparrow::Register, value: Value) {
+        if self.resident {
+            // Stored when defined, the value is rooted by the frame from now on.
+            let word = if self.kinds[register.0 as usize] == Kind::Float {
+                self.builder.ins().bitcast(types::I64, MemFlagsData::new(), value)
+            } else {
+                value
+            };
+            let frame = self.builder.use_var(self.frame.expect("frame"));
+            let offset = crate::tasks::REGISTERS as i32 + register.0 as i32 * 8;
+            self.builder.ins().store(MEMORY, word, frame, offset);
+            return;
+        }
         self.builder.def_var(self.vars[register.0 as usize], value);
+        // If liveness exceeds its analysis budget, keep the heap snapshot
+        // current at every pointer definition instead. Saving an unrooted old
+        // machine register at a later suspension could resurrect freed memory.
+        if self.frame_live.is_none() && self.kinds[register.0 as usize].traced()
+            && let Some(frame) = self.frame
+        {
+            let frame = self.builder.use_var(frame);
+            let offset = crate::tasks::REGISTERS as i32 + register.0 as i32 * 8;
+            self.builder.ins().store(MEMORY, value, frame, offset);
+        }
         if let Some(roots) = &self.roots
             && let Some(word) = roots.word[register.0 as usize]
         {
@@ -812,12 +1050,17 @@ impl Emitter<'_, '_> {
         let fatal = self.builder.create_block();
         self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
         self.builder.switch_to_block(fatal);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(recorded);
         let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
-        let frame = self.builder.ins().get_frame_pointer(types::I64);
+        let mut frame = self.builder.ins().get_frame_pointer(types::I64);
+        if let Some(inline) = &self.inline {
+            // An inlined activation shares its caller's frame: frame pointers are 16-aligned, so `fp - depth` keys
+            // it apart for the trace's once-per-activation rule (#926).
+            let depth = inline.depth;
+            frame = self.builder.ins().iadd_imm_s(frame, -i64::from(depth));
+        }
         self.helper(|h| h.trace, &[ctx, function, at, frame]);
         let handler = self.loaded.program.functions[self.function]
             .handlers
@@ -838,8 +1081,7 @@ impl Emitter<'_, '_> {
                 self.jump_then(&handler.target, handler.failure, failure);
             }
             None => {
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
             }
         }
         self.builder.switch_to_block(next);
@@ -871,8 +1113,7 @@ impl Emitter<'_, '_> {
         self.builder.set_cold_block(stop);
         self.builder.ins().brif(status, stop, &[], next, &[]);
         self.builder.switch_to_block(stop);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(next);
     }
 
@@ -886,9 +1127,113 @@ impl Emitter<'_, '_> {
         self.builder.set_cold_block(stop);
         self.builder.ins().brif(cell, next, &[], stop, &[]);
         self.builder.switch_to_block(stop);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(next);
+    }
+
+    /// Leave this activation with `value`: return it, or, inlined, continue the caller with it (#926).
+    fn exit_ok(&mut self, value: Value) {
+        match self.inline {
+            Some(inline) => {
+                self.builder.ins().jump(inline.ok, &[value.into()]);
+            }
+            None => {
+                self.builder.ins().return_(&[value]);
+            }
+        }
+    }
+
+    /// Leave this activation on a failure or a stop (the status says which): return 0, or, inlined, go to the
+    /// caller's check after the call (#926).
+    fn exit_fail(&mut self) {
+        match self.inline {
+            Some(inline) => {
+                self.builder.ins().jump(inline.fail, &[]);
+            }
+            None => {
+                let zero = self.iconst(0);
+                self.builder.ins().return_(&[zero]);
+            }
+        }
+    }
+
+    /// Can the static call of `callee` with `args` arguments be inlined here (#927)? A small synchronous Okkama
+    /// function without handlers, into a synchronous caller that keeps Cranelift's stack maps, one level deep.
+    fn inlinable(&self, callee: usize, args: usize) -> bool {
+        if self.no_inline || self.inline.is_some() || self.frame.is_some() || self.roots.is_some() {
+            return false;
+        }
+        let source = &self.loaded.program.functions[callee];
+        !source.is_async
+            && source.native.is_none()
+            && source.intrinsic.is_none()
+            && source.handlers.is_empty()
+            && source.params.len() == args
+            && source.code.len() <= INLINE_CALLEE
+            && self.inlined + source.code.len() <= INLINE_TOTAL
+            && !source.code.iter().any(|instruction| matches!(instruction, I::Catch { .. }) || suspends(instruction))
+            && !has_loop(source)
+    }
+
+    /// The body of `callee` in place of its call at `pc` (#926, #927). Its entry is a step; its registers are
+    /// variables of this function (with stack maps where traced); a failure inside it records the callee's frame
+    /// and then the caller's at `pc`, as the call would.
+    fn inline_call(&mut self, pc: usize, callee: usize, args: &[okkama_sparrow::Register]) -> Result<Value, Error> {
+        okkama_devtrace::count!("jit", "calls inlined");
+        let values: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let ok = self.builder.create_block();
+        self.builder.append_block_param(ok, types::I64);
+        let fail = self.builder.create_block();
+        self.builder.set_cold_block(fail);
+        let loaded = self.loaded;
+        let source = &loaded.program.functions[callee];
+        let info = &loaded.functions[callee];
+        let saved_function = std::mem::replace(&mut self.function, callee);
+        let saved_kinds = std::mem::replace(&mut self.kinds, &info.kinds);
+        let saved_vars = std::mem::take(&mut self.vars);
+        let saved_blocks = std::mem::take(&mut self.blocks);
+        let saved_live = self.live.take();
+        self.inline = Some(Inline { ok, fail, depth: 1 });
+        self.inlined += source.code.len();
+        for (register, kind) in info.kinds.iter().enumerate() {
+            let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
+            if kind.traced() && !info.pointer_free[register] {
+                self.builder.declare_var_needs_stack_map(var);
+            }
+            let initial = if *kind == Kind::Float {
+                self.builder.ins().f64const(f64::from_bits(word::UNBOUND_RAW))
+            } else {
+                self.iconst(0)
+            };
+            self.builder.def_var(var, initial);
+            self.vars.push(var);
+        }
+        for (register, value) in source.params.iter().zip(values) {
+            self.set_word(register, value);
+        }
+        // A function entry is a step.
+        if self.polled {
+            self.poll();
+        }
+        self.blocks = leaders(source).into_iter().map(|leader| leader.then(|| self.builder.create_block())).collect();
+        let first = self.block(0);
+        self.builder.ins().jump(first, &[]);
+        let emitted = self.emit_code();
+        self.function = saved_function;
+        self.kinds = saved_kinds;
+        self.vars = saved_vars;
+        self.blocks = saved_blocks;
+        self.live = saved_live;
+        self.inline = None;
+        self.pc = pc;
+        emitted?;
+        // A failure or a stop in the callee: the caller's check, as after the call; it always leaves.
+        self.builder.switch_to_block(fail);
+        self.check(pc);
+        let zero = self.iconst(0);
+        self.builder.ins().jump(ok, &[zero.into()]);
+        self.builder.switch_to_block(ok);
+        Ok(self.builder.block_params(ok)[0])
     }
 
     /// The block of a leader instruction.
@@ -969,23 +1314,54 @@ impl Emitter<'_, '_> {
         self.iconst(word as i64)
     }
 
-    /// Call `function` through the code table, compiling it first if needed.
-    fn call(&mut self, pc: usize, function: Value, args: &[Value]) -> Value {
+    /// Use a published ordinary entry only for a proven static target.
+    /// Addresses are immutable until this runtime's JIT is dropped; publication
+    /// follows finalization and stack-map installation in `compile`.
+    fn ready_static(&self, function: usize, params: usize) -> Option<u64> {
+        if self.late_bound || function == self.function {
+            return None;
+        }
+        let source = self.loaded.program.functions.get(function)?;
+        if source.is_async || source.native.is_some() || source.intrinsic.is_some() || source.params.len() != params {
+            return None;
+        }
+        self.invocations.get(function).map(|entry| entry.code).filter(|&address| address != 0)
+    }
+
+    /// Resolve the code address; both paths use the same call, roots and check.
+    fn call(&mut self, pc: usize, target: CallTarget, args: &[Value]) -> Value {
         let ctx = self.ctx();
-        let base = self.iconst(self.code_table);
-        let offset = self.builder.ins().ishl_imm_u(function, 3);
-        let entry = self.builder.ins().iadd(base, offset);
-        let code = self.builder.ins().load(types::I64, MEMORY, entry, 0);
-        let ready = self.builder.create_block();
-        let compile = self.builder.create_block();
-        self.builder.append_block_param(ready, types::I64);
-        self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
-        self.builder.switch_to_block(compile);
-        let compiled = self.helper(|h| h.compile, &[ctx, function]).expect("result");
-        self.check(pc);
-        self.builder.ins().jump(ready, &[compiled.into()]);
-        self.builder.switch_to_block(ready);
-        let code = self.builder.block_params(ready)[0];
+        let address = match target {
+            CallTarget::Static(function) => self.ready_static(function, args.len()),
+            CallTarget::Dynamic(_) => None,
+        };
+        let kind = match target {
+            CallTarget::Static(_) => usize::from(address.is_none()),
+            CallTarget::Dynamic(_) => 2,
+        };
+        self.call_sites[kind] += 1;
+        let code = if let Some(address) = address {
+            self.iconst(address as i64)
+        } else {
+            let function = match target {
+                CallTarget::Static(function) => self.iconst(function as i64),
+                CallTarget::Dynamic(function) => function,
+            };
+            let base = self.iconst(self.invocations.as_ptr() as i64);
+            let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
+            let entry = self.builder.ins().iadd(base, offset);
+            let code = self.builder.ins().load(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, code) as i32);
+            let ready = self.builder.create_block();
+            let compile = self.builder.create_block();
+            self.builder.append_block_param(ready, types::I64);
+            self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
+            self.builder.switch_to_block(compile);
+            let compiled = self.helper(|h| h.compile, &[ctx, function]).expect("result");
+            self.check(pc);
+            self.builder.ins().jump(ready, &[compiled.into()]);
+            self.builder.switch_to_block(ready);
+            self.builder.block_params(ready)[0]
+        };
         let signature = self.jit.signature(args.len());
         let signature = self.builder.import_signature(signature);
         let mut values = vec![ctx];
@@ -995,6 +1371,62 @@ impl Emitter<'_, '_> {
         let result = self.builder.inst_results(call)[0];
         self.check(pc);
         result
+    }
+
+    /// A closure call through the runtime's helper: it reads the captures, compiles the function if needed and
+    /// makes an async one's cold Future.
+    fn closure_call_slow(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
+        let ctx = self.ctx();
+        let closure = self.get(callee);
+        let address = self.spill(args);
+        let count = self.iconst(args.len() as i64);
+        let result = self.helper(|h| h.call_closure, &[ctx, closure, address, count]).expect("result");
+        self.check(pc);
+        result
+    }
+
+    /// A closure call (#928): a synchronous function whose captures fill the first parameters is called
+    /// directly, the captures read from the closure's fields, for up to `CLOSURE_DIRECT_CAPTURES` captures; the
+    /// rest (async functions, more captures) goes through the helper. The function comes from the closure's
+    /// header, and an uncompiled one is compiled on its first call, as any dynamic call.
+    fn closure_call(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
+        const CLOSURE_DIRECT_CAPTURES: usize = 2;
+        let closure = self.get(callee);
+        let header = self.builder.ins().load(types::I64, MEMORY, closure, 0);
+        let function = self.builder.ins().ushr_imm_u(header, 32);
+        let base = self.iconst(self.invocations.as_ptr() as i64);
+        let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
+        let entry = self.builder.ins().iadd(base, offset);
+        // uload32/uload8 zero-extend into an i64 themselves.
+        let params = self.builder.ins().uload32(MEMORY, entry, std::mem::offset_of!(runtime::Invocation, params) as i32);
+        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
+        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        for captured in 0..=CLOSURE_DIRECT_CAPTURES {
+            if args.len() + captured > 8 {
+                break;
+            }
+            let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
+            let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
+            let direct = self.builder.ins().band(arity, sync);
+            let call = self.builder.create_block();
+            let next = self.builder.create_block();
+            self.builder.ins().brif(direct, call, &[], next, &[]);
+            self.builder.switch_to_block(call);
+            let mut values = Vec::with_capacity(captured + words.len());
+            for index in 0..captured {
+                values.push(self.builder.ins().load(types::I64, MEMORY, closure, (8 + index * 8) as i32));
+            }
+            values.extend_from_slice(&words);
+            let result = self.call(pc, CallTarget::Dynamic(function), &values);
+            self.builder.ins().jump(merge, &[result.into()]);
+            self.builder.switch_to_block(next);
+        }
+        let result = self.closure_call_slow(pc, callee, args);
+        self.builder.ins().jump(merge, &[result.into()]);
+        self.builder.switch_to_block(merge);
+        self.builder.block_params(merge)[0]
     }
 
     /// Words of `registers` in the function's spill area; returns its address.
@@ -1037,13 +1469,14 @@ impl Emitter<'_, '_> {
         let explicit = self.root_live.is_some();
         let mut words = Vec::with_capacity(self.kinds.len());
         let mut next = 0u32;
-        for kind in self.kinds {
+        for (register, kind) in self.kinds.iter().enumerate() {
             let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
-            if kind.traced() && explicit {
+            let traced = kind.traced() && !self.loaded.functions[self.function].pointer_free[register];
+            if traced && explicit {
                 words.push(Some(next));
                 next += 1;
             } else {
-                if kind.traced() {
+                if traced {
                     self.builder.declare_var_needs_stack_map(var);
                 }
                 words.push(None);
@@ -1069,7 +1502,8 @@ impl Emitter<'_, '_> {
             self.roots = Some(Roots { slot, word: words, frame, reported: frame.into_iter().collect() });
         }
         // Registers start unbound; the verifier proves defined use.
-        for (register, kind) in self.kinds.iter().enumerate() {
+        let resident = self.resident;
+        for (register, kind) in self.kinds.iter().enumerate().filter(|_| !resident) {
             let value = if *kind == Kind::Float {
                 self.builder.ins().f64const(f64::from_bits(word::UNBOUND_RAW))
             } else {
@@ -1152,8 +1586,13 @@ impl Emitter<'_, '_> {
         }
         self.builder.switch_to_block(overflow);
         self.helper(|h| h.stack_overflow, &[ctx]);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
+        self.emit_code()
+    }
+
+    /// Emit the instructions of the current function (the compiled one, or an inlined callee).
+    fn emit_code(&mut self) -> Result<(), Error> {
+        let source = &self.loaded.program.functions[self.function];
         // Open: the previous instruction falls through into this one.
         let mut open = false;
         for pc in 0..source.code.len() {
@@ -1213,7 +1652,8 @@ impl Emitter<'_, '_> {
         }
         switch.emit(self.builder, resume, start);
         self.builder.switch_to_block(start);
-        for register in &source.params {
+        let resident = self.resident;
+        for register in source.params.iter().filter(|_| !resident) {
             let value = self.frame_register(register.0 as usize);
             self.set_word(register, value);
         }
@@ -1221,7 +1661,7 @@ impl Emitter<'_, '_> {
         self.builder.ins().jump(first, &[]);
         for (pc, block) in reloads {
             self.builder.switch_to_block(block);
-            for register in 0..self.kinds.len() {
+            for register in (0..self.kinds.len()).filter(|_| !resident) {
                 let value = self.frame_register(register);
                 self.set_word(&okkama_sparrow::Register(register as u32), value);
             }
@@ -1246,11 +1686,16 @@ impl Emitter<'_, '_> {
         let ready = self.builder.create_block();
         let pending = self.builder.ins().icmp_imm_u(IntCC::Equal, outcome, crate::tasks::AWAIT_PENDING as i64);
         self.builder.ins().brif(pending, suspend, &[], ready, &[]);
-        // Save every register and re-enter this await when resumed.
+        // Save the live continuation and re-enter this await when resumed.
+        // Dead machine registers may already point to reclaimed cells. They
+        // must never be published back into a precisely traced heap frame.
         self.builder.switch_to_block(suspend);
         let frame = self.builder.use_var(self.frame.expect("frame"));
-        for register in 0..self.kinds.len() {
-            let value = self.word(&okkama_sparrow::Register(register as u32));
+        let resident = self.resident;
+        for register in (0..self.kinds.len()).filter(|_| !resident) {
+            let live = self.frame_live.as_ref().is_none_or(|sets|
+                sets[pc].get(register / 64).is_some_and(|word| word >> (register % 64) & 1 != 0));
+            let value = if live { self.word(&okkama_sparrow::Register(register as u32)) } else { self.iconst(0) };
             let offset = crate::tasks::REGISTERS as i32 + register as i32 * 8;
             self.builder.ins().store(MEMORY, value, frame, offset);
         }
@@ -1506,10 +1951,13 @@ impl Emitter<'_, '_> {
                 self.set_word(&dst.0, value);
             }
             I::ObjNew { dst, object, fields } => {
-                let words = fields.len().max(1) + 1;
-                let pointer = self.allocate(words);
-                let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
-                self.builder.ins().store(MEMORY, header, pointer, 0);
+                let pointer = {
+                    let words = self.object_words(object.0 as usize, fields.len());
+                    let pointer = self.allocate(words);
+                    let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
+                    self.builder.ins().store(MEMORY, header, pointer, 0);
+                    pointer
+                };
                 for (i, field) in fields.iter().enumerate() {
                     let value = self.word(field);
                     self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
@@ -1532,16 +1980,19 @@ impl Emitter<'_, '_> {
                     Some(Type::Object(o) | Type::Successor(o)) => o.0 as usize,
                     _ => return Err(unsupported()),
                 };
-                let count = program.objects[declared].fields.len();
-                let pointer = self.allocate(count.max(1) + 1);
-                let source_object = self.get(object);
-                for word_index in 0..=count {
-                    let value = match updates.iter().find(|(f, _)| *f as usize + 1 == word_index) {
-                        Some((_, register)) => self.word(register),
-                        None => self.builder.ins().load(types::I64, MEMORY, source_object, (word_index * 8) as i32),
-                    };
-                    self.builder.ins().store(MEMORY, value, pointer, (word_index * 8) as i32);
-                }
+                let pointer = {
+                    let count = program.objects[declared].fields.len();
+                    let pointer = self.allocate(self.object_words(declared, count));
+                    let source_object = self.get(object);
+                    for word_index in 0..=count {
+                        let value = match updates.iter().find(|(f, _)| *f as usize + 1 == word_index) {
+                            Some((_, register)) => self.word(register),
+                            None => self.builder.ins().load(types::I64, MEMORY, source_object, (word_index * 8) as i32),
+                        };
+                        self.builder.ins().store(MEMORY, value, pointer, (word_index * 8) as i32);
+                    }
+                    pointer
+                };
                 self.set(&dst.0, pointer);
                 self.created(declared, pointer);
             }
@@ -1554,10 +2005,13 @@ impl Emitter<'_, '_> {
             // номер случая — разность дескрипторов.
             I::VariantNew { dst, variant, case, fields } => {
                 let object = program.variants[variant.0 as usize].cases[*case as usize].1;
-                let words = fields.len().max(1) + 1;
-                let pointer = self.allocate(words);
-                let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
-                self.builder.ins().store(MEMORY, header, pointer, 0);
+                let pointer = {
+                    let words = self.object_words(object.0 as usize, fields.len());
+                    let pointer = self.allocate(words);
+                    let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
+                    self.builder.ins().store(MEMORY, header, pointer, 0);
+                    pointer
+                };
                 for (i, field) in fields.iter().enumerate() {
                     let value = self.word(field);
                     self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
@@ -1604,20 +2058,8 @@ impl Emitter<'_, '_> {
                 self.set(&dst.0, value);
             }
             I::CallRole { dst, receiver, role, slot, args } => {
-                let objects = program.objects.len();
-                let table = self.jit.dispatch.entry((role.0, *slot)).or_insert_with(|| {
-                    program
-                        .objects
-                        .iter()
-                        .map(|o| {
-                            o.does
-                                .iter()
-                                .find(|w| w.role == *role)
-                                .map_or(u64::MAX, |w| u64::from(w.slots[*slot as usize].0))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice()
-                });
+                let objects = program.objects.len().max(self.jit.object_capacity);
+                let table = self.jit.dispatch.entry((role.0, *slot)).or_insert_with(|| dispatch_table(program, role.0, *slot, objects));
                 debug_assert_eq!(table.len(), objects);
                 let table = table.as_ptr() as i64;
                 let object = self.get(receiver);
@@ -1648,7 +2090,7 @@ impl Emitter<'_, '_> {
                         let value = self.word(arg);
                         values.push(value);
                     }
-                    self.call(pc, function, &values)
+                    self.call(pc, CallTarget::Dynamic(function), &values)
                 };
                 if let Some(dst) = dst {
                     self.set_word(&dst.0, result);
@@ -1680,14 +2122,24 @@ impl Emitter<'_, '_> {
                     .expect("result");
                     self.check(pc);
                     result
+                } else if let Some((param, field)) = accessor(callee).filter(|_| !self.plain) {
+                    // #541: a field accessor is its load. Its entry stays a
+                    // step, and it cannot fail, allocate or reach a safepoint,
+                    // so no failure, trace or root differs from the call.
+                    if self.polled {
+                        self.poll();
+                    }
+                    let pointer = self.get(&args[param]);
+                    self.builder.ins().load(types::I64, MEMORY, pointer, ((field + 1) * 8) as i32)
+                } else if self.inlinable(function.0 as usize, args.len()) {
+                    self.inline_call(pc, function.0 as usize, args)?
                 } else {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         let value = self.word(arg);
                         values.push(value);
                     }
-                    let index = self.iconst(i64::from(function.0));
-                    self.call(pc, index, &values)
+                    self.call(pc, CallTarget::Static(function.0 as usize), &values)
                 };
                 if let Some(dst) = dst {
                     self.set_word(&dst.0, result);
@@ -1700,8 +2152,8 @@ impl Emitter<'_, '_> {
                     .ok_or_else(unsupported)?
                     .1
                     .0;
-                let index = self.iconst(i64::from(function));
                 let result = if program.functions[function as usize].is_async {
+                    let index = self.iconst(i64::from(function));
                     let address = self.spill(std::slice::from_ref(cap));
                     let count = self.iconst(1);
                     let future = self.helper(|h| h.future_new, &[ctx, index, address, count]).expect("result");
@@ -1709,7 +2161,7 @@ impl Emitter<'_, '_> {
                     future
                 } else {
                     let receiver = self.word(cap);
-                    self.call(pc, index, &[receiver])
+                    self.call(pc, CallTarget::Static(function as usize), &[receiver])
                 };
                 self.set_word(&dst.0, result);
             }
@@ -1717,16 +2169,14 @@ impl Emitter<'_, '_> {
                 let value = self.get(value);
                 self.helper(|h| h.throw, &[ctx, value]);
                 self.check(pc);
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
                 return Ok(true);
             }
             I::Trap { message, .. } => {
                 let message = self.constant_text(message);
                 self.helper(|h| h.trap, &[ctx, message]);
                 self.check(pc);
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
                 return Ok(true);
             }
             I::Jump { target } => {
@@ -1754,7 +2204,7 @@ impl Emitter<'_, '_> {
                     let done = self.iconst(0);
                     self.builder.ins().return_(&[done]);
                 } else {
-                    self.builder.ins().return_(&[value]);
+                    self.exit_ok(value);
                 }
                 return Ok(true);
             }
@@ -1773,10 +2223,28 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.suspend_unless_ready(pc, outcome, dst);
             }
-            I::Await { dst, future } if self.frame.is_some() => {
+            I::ResourceSettle { .. } | I::ResourceSettleUnwind { .. } if self.frame.is_some() => {
+                let this = self.builder.use_var(self.frame.expect("frame"));
+                let unbound = self.iconst(word::UNBOUND as i64);
+                let (value, failure, dst) = match instruction {
+                    I::ResourceSettle { value } => (*value, unbound, None),
+                    I::ResourceSettleUnwind { dst, value, failure } => (*value, self.get(failure), Some(*dst)),
+                    _ => unreachable!("matched above"),
+                };
+                let object = self.word(&value);
+                let outcome = self.helper(|h| h.resource_settle, &[ctx, this, object, failure]).expect("result");
+                self.check(pc);
+                self.suspend_unless_ready(pc, outcome, dst);
+            }
+            I::Await { dst, future } | I::AwaitTake { dst, future } if self.frame.is_some() => {
                 let this = self.builder.use_var(self.frame.expect("frame"));
                 let future = self.get(future);
-                let outcome = self.helper(|h| h.await_, &[ctx, this, future]).expect("result");
+                let helper: fn(&Helpers) -> FuncId = if matches!(instruction, I::AwaitTake { .. }) {
+                    |h| h.await_take
+                } else {
+                    |h| h.await_
+                };
+                let outcome = self.helper(helper, &[ctx, this, future]).expect("result");
                 self.check(pc);
                 self.suspend_unless_ready(pc, outcome, *dst);
             }
@@ -1841,14 +2309,15 @@ impl Emitter<'_, '_> {
                 let index = self.iconst(i64::from(function.0));
                 let count = self.iconst(captures.len() as i64);
                 let closure = self.helper(|h| h.closure, &[ctx, index, address, count]).expect("result");
+                self.check(pc);
                 self.set(&dst.0, closure);
             }
             I::CallFn { dst, callee, args } => {
-                let closure = self.get(callee);
-                let address = self.spill(args);
-                let count = self.iconst(args.len() as i64);
-                let result = self.helper(|h| h.call_closure, &[ctx, closure, address, count]).expect("result");
-                self.check(pc);
+                let result = if self.plain || self.count_helpers || self.closure_reference {
+                    self.closure_call_slow(pc, callee, args)
+                } else {
+                    self.closure_call(pc, callee, args)
+                };
                 if let Some(dst) = dst {
                     self.set_word(&dst.0, result);
                 }
@@ -1873,6 +2342,11 @@ impl Emitter<'_, '_> {
                 self.jump(next);
                 return Ok(true);
             }
+            I::RegionEnter { dst } if !self.plain => {
+                // #530: a region is made at its first add that holds something (`rt_region_add`); most stay empty.
+                let none = self.iconst(0);
+                self.set(&dst.0, none);
+            }
             I::RegionEnter { dst } => {
                 // `[overflow, slots…]`, all unbound (see `failures::REGION_SLOTS`).
                 let length = 1 + crate::failures::REGION_SLOTS;
@@ -1885,16 +2359,87 @@ impl Emitter<'_, '_> {
                 }
                 self.set(&dst.0, cell);
             }
-            I::RegionAdopt { region, value } | I::RegionTrack { region, value } => {
-                let (region, value) = (self.get(region), self.word(value));
+            I::RegionAdopt { region: region_register, value: register } | I::RegionTrack { region: region_register, value: register } => {
+                let region_register = *region_register;
+                // A scalar never reaches an identity.
+                if !self.kinds[register.0 as usize].traced() && !self.plain {
+                    return Ok(false);
+                }
+                let (region, value) = (self.get(&region_register), self.word(register));
                 let own = self.iconst(i64::from(matches!(instruction, I::RegionAdopt { .. })));
-                self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                self.dev_site(1);
+                if self.plain {
+                    let made = self.helper(|h| h.region_add, &[ctx, region, value, own]).expect("result");
+                    self.set(&region_register, made);
+                } else {
+                    // #529: `region_add` returns at once unless the value may reach a free identity
+                    // (`Runtime::may_reach_free`); most adds are objects without an identity, decided here.
+                    let call = self.builder.create_block();
+                    let done = self.builder.create_block();
+                    self.may_reach_identity(value, call, done);
+                    self.builder.switch_to_block(call);
+                    let made = self.helper(|h| h.region_add, &[ctx, region, value, own]).expect("result");
+                    self.set(&region_register, made);
+                    self.builder.ins().jump(done, &[]);
+                    self.builder.switch_to_block(done);
+                }
+            }
+            I::ResourcePin { value: register } => {
+                let offset = self.static_identity(register);
+                let value = self.word(register);
+                match offset {
+                    // #909: pin in machine code: a free owner word becomes static (`Runtime::resource_pin`).
+                    Some(offset) => {
+                        let owner = self.builder.ins().load(types::I64, MEMORY, value, offset + 8);
+                        let free = self.builder.ins().icmp_imm_u(IntCC::Equal, owner, 0);
+                        let (pin, done) = (self.builder.create_block(), self.builder.create_block());
+                        self.builder.ins().brif(free, pin, &[], done, &[]);
+                        self.builder.switch_to_block(pin);
+                        let pinned = self.iconst(2);
+                        self.builder.ins().store(MEMORY, pinned, value, offset + 8);
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
+                    }
+                    None => {
+                        self.helper(|h| h.resource_pin, &[ctx, value]);
+                    }
+                }
+            }
+            I::ResourceLeave { value: register } => {
+                let offset = self.static_identity(register);
+                let destroy = match self.register_type(register) {
+                    Some(Type::Object(object)) => program.objects[object.0 as usize].destroy.map(|f| f.0 as usize),
+                    _ => None,
+                };
+                let value = self.word(register);
+                match (offset, destroy) {
+                    // #909: a static resource still static dies here: mark it dead, then call its destroy directly
+                    // (`Runtime::resource_close`); a destroy failure fails this instruction like any call.
+                    (Some(offset), Some(destroy)) if !program.functions[destroy].is_async => {
+                        let owner = self.builder.ins().load(types::I64, MEMORY, value, offset + 8);
+                        let pinned = self.builder.ins().icmp_imm_u(IntCC::Equal, owner, 2);
+                        let (close, done) = (self.builder.create_block(), self.builder.create_block());
+                        self.builder.ins().brif(pinned, close, &[], done, &[]);
+                        self.builder.switch_to_block(close);
+                        let dead = self.iconst(1);
+                        self.builder.ins().store(MEMORY, dead, value, offset + 8);
+                        self.call(pc, CallTarget::Static(destroy), &[value]);
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
+                    }
+                    _ => {
+                        self.helper(|h| h.resource_leave, &[ctx, value]);
+                        self.check(pc);
+                    }
+                }
             }
             I::RegionLeave { region, .. } => {
-                // A region that tracked nothing closes without a call.
+                // A region never made (#530) or that tracked nothing closes without a call.
                 let cell = self.get(region);
+                let (made, close, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.ins().brif(cell, made, &[], done, &[]);
+                self.builder.switch_to_block(made);
                 let entries = self.builder.ins().load(types::I64, MEMORY, cell, 16);
-                let (close, done) = (self.builder.create_block(), self.builder.create_block());
                 self.builder.ins().brif(entries, close, &[], done, &[]);
                 self.builder.switch_to_block(close);
                 let I::RegionLeave { keep, .. } = instruction else { unreachable!() };
@@ -1905,6 +2450,28 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.builder.ins().jump(done, &[]);
                 self.builder.switch_to_block(done);
+            }
+            I::RegionTransfer { to, .. } if !self.plain => {
+                // #530: a transfer into a region not made yet makes it first, then runs as before.
+                let target = self.get(to);
+                let (make, ready) = (self.builder.create_block(), self.builder.create_block());
+                self.builder.ins().brif(target, ready, &[], make, &[]);
+                self.builder.switch_to_block(make);
+                let made = self.helper(|h| h.region_new, &[ctx]).expect("result");
+                self.set(to, made);
+                self.builder.ins().jump(ready, &[]);
+                self.builder.switch_to_block(ready);
+                let mut uses = Vec::new();
+                instruction.visit(&mut |access| {
+                    if let okkama_sparrow::Access::Use(register) = access {
+                        uses.push(register);
+                    }
+                });
+                let address = self.spill(&uses);
+                let function = self.iconst(self.function as i64);
+                let at = self.iconst(pc as i64);
+                self.helper(|h| h.failure_op, &[ctx, function, at, address]);
+                self.check(pc);
             }
             other if failure_or_region(other) => {
                 let mut uses = Vec::new();
@@ -1920,8 +2487,7 @@ impl Emitter<'_, '_> {
                 let result = self.helper(|h| h.failure_op, &[ctx, function, at, address]).expect("result");
                 self.check(pc);
                 if matches!(other, I::Raise { .. } | I::Panic { .. }) {
-                    let zero = self.iconst(0);
-                    self.builder.ins().return_(&[zero]);
+                    self.exit_fail();
                     return Ok(true);
                 }
                 if let Some(def) = def {
@@ -2090,9 +2656,98 @@ impl Emitter<'_, '_> {
                     self.set(&dst.0, flag);
                 }
             }
+            I::BuilderNew { dst } => {
+                let Some(Type::Builder(element)) = self.register_type(&dst.0) else {
+                    self.generic_instruction(pc, instruction);
+                    return Ok(false);
+                };
+                let repr = Kind::of(program, *element).repr();
+                let repr = self.iconst(repr as i64);
+                let result = self.helper(|h| h.builder_new, &[ctx, repr]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
+            I::BuilderFinish { dst, builder } => {
+                let Some(Type::Array(element)) = self.register_type(&dst.0) else {
+                    self.generic_instruction(pc, instruction);
+                    return Ok(false);
+                };
+                let packed = Kind::of(program, *element) == Kind::Byte;
+                let packed = self.iconst(i64::from(packed));
+                let builder = self.get(builder);
+                let result = self.helper(|h| h.builder_finish, &[ctx, builder, packed]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
+            I::RatNew { dst, left, right } => {
+                let (left, right) = (self.get(left), self.get(right));
+                let result = self.helper(|h| h.rat_new, &[ctx, left, right]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
+            I::MapLen { dst, map } if matches!(self.register_type(map), Some(Type::Map(..))) => {
+                let map = self.get(map);
+                let result = self.helper(|h| h.map_len, &[ctx, map]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
             I::BuilderPush { dst, builder, value } => {
                 let (builder, value) = (self.get(builder), self.word(value));
                 let result = self.helper(|h| h.builder_push, &[ctx, builder, value]).expect("result");
+                self.set(&dst.0, result);
+            }
+            I::Convert { dst, source }
+                if matches!(self.register_type(source), Some(Type::Int)) && matches!(self.register_type(&dst.0), Some(Type::Float)) =>
+            {
+                let value = self.get(source);
+                let small = self.builder.ins().band_imm_u(value, 1);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.append_block_param(done, types::F64);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let integer = self.builder.ins().sshr_imm_u(value, 1);
+                let result = self.builder.ins().fcvt_from_sint(types::F64, integer);
+                let conversion = self.iconst(0);
+                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
+                self.builder.ins().jump(done, &[result.into()]);
+                self.builder.switch_to_block(slow);
+                let bits = self.exec_generic(pc, instruction);
+                let result = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), bits);
+                self.builder.ins().jump(done, &[result.into()]);
+                self.builder.switch_to_block(done);
+                let result = self.builder.block_params(done)[0];
+                self.set(&dst.0, result);
+            }
+            I::Convert { dst, source }
+                if matches!(self.register_type(source), Some(Type::Float)) && matches!(self.register_type(&dst.0), Some(Type::Int)) =>
+            {
+                let value = self.get(source);
+                let truncated = self.builder.ins().trunc(value);
+                // Ordered comparisons reject NaN and infinities. Both bounds
+                // are exact binary64 powers of two; SMALL_MAX as f64 would
+                // round UP and incorrectly allow 2^62, which needs a BigInt.
+                let lower = self.builder.ins().f64const(word::SMALL_MIN as f64);
+                let upper = self.builder.ins().f64const(-(word::SMALL_MIN as f64));
+                let above = self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, truncated, lower);
+                let below = self.builder.ins().fcmp(FloatCC::LessThan, truncated, upper);
+                let small = self.builder.ins().band(above, below);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.append_block_param(done, types::I64);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                // The trapping conversion is reached only after the range
+                // proof; tagging cannot overflow the tagged-small domain.
+                let integer = self.builder.ins().fcvt_to_sint(types::I64, truncated);
+                let doubled = self.builder.ins().ishl_imm_u(integer, 1);
+                let result = self.builder.ins().bor_imm_u(doubled, 1);
+                let conversion = self.iconst(1);
+                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
+                self.builder.ins().jump(done, &[result.into()]);
+                self.builder.switch_to_block(slow);
+                let result = self.exec_generic(pc, instruction);
+                self.builder.ins().jump(done, &[result.into()]);
+                self.builder.switch_to_block(done);
+                let result = self.builder.block_params(done)[0];
                 self.set(&dst.0, result);
             }
             I::Convert { dst, source }
@@ -2302,14 +2957,164 @@ impl Emitter<'_, '_> {
         result
     }
 
+
+
+    /// #912: with `OKKAMA_DEV=runtime`, count this site's executions (0: an identity is requested, 1: a region
+    /// add). Nothing is emitted otherwise, and never in a release build.
+    fn dev_site(&mut self, kind: u64) {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if !GATE.on() {
+            return;
+        }
+        let ctx = self.ctx();
+        let (kind, function, pc) = (self.iconst(kind as i64), self.iconst(self.function as i64), self.iconst(self.pc as i64));
+        self.helper(|h| h.dev_site, &[ctx, kind, function, pc]);
+    }
+
+    /// #909: the offset of the hidden identity words of `descriptor` when machine code may handle them itself: an
+    /// inline identity (#528) and nothing that observes each step (no stats, no devtrace, no destroy trace).
+    fn inline_identity(&self, descriptor: usize) -> Option<i32> {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if self.count_helpers || self.plain || GATE.on() || !self.resources.inline_ownership() {
+            return None;
+        }
+        self.resources.inline[descriptor].map(|offset| offset as i32)
+    }
+
+    /// `inline_identity` of a static resource register's object type.
+    fn static_identity(&self, register: &okkama_sparrow::Register) -> Option<i32> {
+        match self.register_type(register) {
+            Some(Type::Object(object)) => self.inline_identity(object.0 as usize),
+            _ => None,
+        }
+    }
+
+    /// The words of a new object (#528: the heap adds its identity words).
+    fn object_words(&self, descriptor: usize, fields: usize) -> usize {
+        self.heap.object_words(descriptor as u32, fields)
+    }
+
+    /// Branch to `maybe` when `value` may reach a free identity, else to `never`: the header test of
+    /// `Runtime::may_reach_free` without the owner lookup (an object with an identity goes to `maybe`).
+    fn may_reach_identity(&mut self, value: Value, maybe: Block, never: Block) {
+        // UNBOUND (0) and tagged immediates hold no pointer.
+        let pointer = self.builder.create_block();
+        let tag = self.builder.ins().band_imm_u(value, 1);
+        let low = self.builder.ins().icmp_imm_u(IntCC::NotEqual, tag, 0);
+        let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, value, 0);
+        let none = self.builder.ins().bor(low, zero);
+        self.builder.ins().brif(none, never, &[], pointer, &[]);
+        self.builder.switch_to_block(pointer);
+        self.pointer_may_reach_identity(value, maybe, never, true);
+    }
+
+    /// The header part of the test above, for a word known to be a heap pointer. With `summaries`, a summarized
+    /// container goes to `never`: it reaches no free identity (a walk from no region stops at it).
+    fn pointer_may_reach_identity(&mut self, value: Value, maybe: Block, never: Block, summaries: bool) {
+        let header = self.builder.ins().load(types::I64, MEMORY, value, 0);
+        let kind = self.builder.ins().band_imm_u(header, 0xff);
+        let is_object = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::OBJECT as i64);
+        let (object, rest) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(is_object, object, &[], rest, &[]);
+        self.builder.switch_to_block(object);
+        let identity = self.builder.ins().band_imm_u(header, heap::IDENTITY as i64);
+        self.builder.ins().brif(identity, maybe, &[], never, &[]);
+        self.builder.switch_to_block(rest);
+        if summaries {
+            let summarized = self.builder.ins().band_imm_u(header, heap::SUMMARY as i64);
+            let open = self.builder.create_block();
+            self.builder.ins().brif(summarized, never, &[], open, &[]);
+            self.builder.switch_to_block(open);
+        }
+        // A reference array (not packed) or a closure, payload or frame may reach one; nothing else can.
+        let is_array = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::ARRAY as i64);
+        let (array, other) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(is_array, array, &[], other, &[]);
+        self.builder.switch_to_block(array);
+        // Repr bits 9–10: 2 and 3 are Ref (`Repr::from_bits`); a packed array holds bytes.
+        let bits = self.builder.ins().band_imm_u(header, (heap::PACKED | (2 << 9)) as i64);
+        let reference = self.builder.ins().icmp_imm_u(IntCC::Equal, bits, (2 << 9) as i64);
+        self.builder.ins().brif(reference, maybe, &[], never, &[]);
+        self.builder.switch_to_block(other);
+        let closure = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::CLOSURE as i64);
+        let payload = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::PAYLOAD as i64);
+        let frame = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::FRAME as i64);
+        let either = self.builder.ins().bor(closure, payload);
+        let any = self.builder.ins().bor(either, frame);
+        self.builder.ins().brif(any, maybe, &[], never, &[]);
+    }
+
+    /// Branch to `maybe` when field `word` of representation `repr` may reach an identity, as
+    /// `Runtime::fields_may_reach_identity` decides it (an unbound reference field may: it is set later).
+    fn field_may_reach_identity(&mut self, word: Value, repr: Repr, maybe: Block, never: Block) {
+        let pointer = self.builder.create_block();
+        match repr {
+            Repr::Raw => {
+                self.builder.ins().jump(never, &[]);
+                return;
+            }
+            Repr::Int => {
+                let tag = self.builder.ins().band_imm_u(word, 1);
+                let low = self.builder.ins().icmp_imm_u(IntCC::NotEqual, tag, 0);
+                let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, word, 0);
+                let none = self.builder.ins().bor(low, zero);
+                self.builder.ins().brif(none, never, &[], pointer, &[]);
+            }
+            Repr::Ref => {
+                let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, word, 0);
+                self.builder.ins().brif(zero, maybe, &[], pointer, &[]);
+            }
+        }
+        self.builder.switch_to_block(pointer);
+        // Here any identity counts, owned or not (`created_built`): summaries do not answer that.
+        self.pointer_may_reach_identity(word, maybe, never, false);
+    }
+
     /// Give a new object a resource identity when its type can reach a destroy.
     fn created(&mut self, descriptor: usize, object: Value) {
         let resources = &self.resources;
-        if resources.enabled && resources.flags[descriptor] {
-            let ctx = self.ctx();
-            let descriptor = self.iconst(descriptor as i64);
-            self.helper(|h| h.created, &[ctx, descriptor, object]);
+        if !resources.enabled || !resources.flags[descriptor] {
+            return;
         }
+        self.dev_site(0);
+        if let Some(offset) = self.inline_identity(descriptor) {
+            // #909: an object with a destroy of its own numbers its identity in machine code: serial + 1, the
+            // serial and a free owner in its hidden words, the identity bit in its header (`Runtime::created`).
+            let counter = self.iconst(self.resources.serial_address() as i64);
+            let serial = self.builder.ins().load(types::I64, MEMORY, counter, 0);
+            let serial = self.builder.ins().iadd_imm_u(serial, 1);
+            self.builder.ins().store(MEMORY, serial, counter, 0);
+            self.builder.ins().store(MEMORY, serial, object, offset);
+            let free = self.iconst(0);
+            self.builder.ins().store(MEMORY, free, object, offset + 8);
+            let header = self.builder.ins().load(types::I64, MEMORY, object, 0);
+            let header = self.builder.ins().bor_imm_u(header, heap::IDENTITY as i64);
+            self.builder.ins().store(MEMORY, header, object, 0);
+            return;
+        }
+        let resources = &self.resources;
+        let layout = self.heap.layouts().objects[descriptor].clone();
+        // #529: an object without its own destroy gets an identity only when a field reaches one
+        // (`Runtime::created_built`); with few fields that is decided here, without the call.
+        let inline = resources.leaf_capable[descriptor] && layout.len() <= 8 && !self.plain;
+        let ctx = self.ctx();
+        let descriptor_value = self.iconst(descriptor as i64);
+        if !inline {
+            self.helper(|h| h.created, &[ctx, descriptor_value, object]);
+            return;
+        }
+        let (call, done) = (self.builder.create_block(), self.builder.create_block());
+        for (index, repr) in layout.into_iter().enumerate() {
+            let next = self.builder.create_block();
+            let word = self.builder.ins().load(types::I64, MEMORY, object, ((index + 1) * 8) as i32);
+            self.field_may_reach_identity(word, repr, call, next);
+            self.builder.switch_to_block(next);
+        }
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(call);
+        self.helper(|h| h.created, &[ctx, descriptor_value, object]);
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(done);
     }
 
     /// Jump to `target` after its edge moves, then define `register` as `word`.
@@ -2327,11 +3132,42 @@ impl Emitter<'_, '_> {
     }
 }
 
+/// #552: above this many (suspensions × registers), an async body keeps its registers in its frame.
+const RESIDENT_LIMIT: usize = 40_000;
+
+/// #552: does an async body keep its registers in its frame? Only a big one: a small body is faster with machine
+/// registers saved at its few suspensions. `SPARROW_CORE_PLAIN` keeps the classic path.
+fn frame_resident(is_async: bool, suspensions: usize, registers: usize, plain: bool) -> bool {
+    is_async && !plain && suspensions.saturating_mul(registers) > RESIDENT_LIMIT
+}
+
+#[cfg(test)]
+mod frame_resident_tests {
+    /// The fixture of #552 (300 awaits, about 600 registers) goes to the frame; a usual async action does not,
+    /// nor a synchronous one, nor a plain compile.
+    #[test]
+    fn only_a_big_async_body_keeps_its_registers_in_its_frame() {
+        assert!(super::frame_resident(true, 300, 600, false));
+        assert!(!super::frame_resident(true, 5, 60, false));
+        assert!(!super::frame_resident(false, 300, 600, false));
+        assert!(!super::frame_resident(true, 300, 600, true));
+        assert!(!super::frame_resident(true, 200, 200, false), "exactly the limit stays classic");
+    }
+}
+
 /// Instructions executed by `failures::rt_failure_op`.
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
 fn suspends(instruction: &I) -> bool {
-    matches!(instruction, I::Await { .. } | I::RegionSettle { .. } | I::RegionSettleUnwind { .. })
+    matches!(
+        instruction,
+        I::Await { .. }
+            | I::AwaitTake { .. }
+            | I::RegionSettle { .. }
+            | I::RegionSettleUnwind { .. }
+            | I::ResourceSettle { .. }
+            | I::ResourceSettleUnwind { .. }
+    )
 }
 
 fn failure_or_region(instruction: &I) -> bool {
@@ -2343,12 +3179,29 @@ fn failure_or_region(instruction: &I) -> bool {
             | I::RegionTransfer { .. }
             | I::RegionLeave { .. }
             | I::RegionUnwind { .. }
+            | I::ResourceUnwind { .. }
             | I::FailSecondary { .. }
             | I::FailCaused { .. }
             | I::Raise { .. }
             | I::Panic { .. }
             | I::RoleNarrow { .. }
     )
+}
+
+/// The parameter and field of a function whose whole body is `obj.get` of a
+/// parameter and `ret` of it (#541): a synchronous Okkama function without
+/// handlers, so inlining it changes nothing a program can observe.
+fn accessor(function: &okkama_sparrow::Function) -> Option<(usize, u32)> {
+    use okkama_sparrow::Instruction as I;
+    if function.is_async || function.native.is_some() || function.intrinsic.is_some() || !function.handlers.is_empty() {
+        return None;
+    }
+    match function.code.as_slice() {
+        [I::ObjGet { dst, object, field }, I::Return { value: Some(returned) }] if dst.0 == *returned => {
+            function.params.iter().position(|param| param == object).map(|param| (param, *field))
+        }
+        _ => None,
+    }
 }
 
 /// Instructions executed by `ops::rt_exec`.
@@ -2457,3 +3310,77 @@ fn int_condition(op: Cmp) -> IntCC {
         Cmp::Ge => IntCC::SignedGreaterThanOrEqual,
     }
 }
+
+#[cfg(test)]
+#[path = "jit_pointer_free_tests.rs"]
+mod pointer_free_tests;
+
+#[cfg(test)]
+#[path = "dispatch_537_tests.rs"]
+mod dispatch_537_tests;
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        pub(super) static SAMPLES: Cell<usize> = const { Cell::new(0) };
+        pub(super) static REPORTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[test]
+    fn compile_profile_preserves_diagnostics_and_code_characteristics() {
+        assert_eq!(COMPILE_HEADER.split('\t').collect::<Vec<_>>(), [
+            "; compile", "function", "instructions", "registers", "suspensions",
+            "clif blocks", "clif instructions", "safepoints", "code bytes", "frame bytes",
+            "declare", "liveness", "emit", "finalize", "codegen", "maps", "definitions", "tables (microseconds)",
+        ]);
+        crate::on_vm_thread(|| {
+            let program = okkama_sparrow::assemble(
+                "sparrow 16\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
+                 function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
+                 0: const r0, int 7\n 1: ret r0\n}\nentry f0\n"
+            ).unwrap();
+            let mut characteristics = Vec::new();
+            for enabled in [false, true] {
+                SAMPLES.set(0);
+                REPORTS.with(|reports| reports.borrow_mut().clear());
+                let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program.clone()))?);
+                runtime.jit.profile = enabled.then(Default::default);
+                assert_eq!(runtime.run_entry(crate::STACK_BYTES)?, 7);
+                assert_eq!(SAMPLES.get(), usize::from(enabled));
+                REPORTS.with(|reports| {
+                    let reports = reports.borrow();
+                    assert_eq!(reports.len(), usize::from(enabled));
+                    if enabled {
+                        let columns: Vec<_> = reports[0].split('\t').collect();
+                        assert_eq!(columns.len(), 18);
+                        // Pre-codegen CLIF includes entry/limit/failure blocks.
+                        let expected = ["; compile", "main", "2", "1", "0", "3", "10", "0"];
+                        assert_eq!(&columns[..8], &expected);
+                        for column in &columns[8..] {
+                            column.parse::<u64>().unwrap();
+                        }
+                    }
+                });
+                characteristics.push((runtime.jit.ranges[0].1 - runtime.jit.ranges[0].0,
+                    runtime.jit.largest_frame, runtime.jit.maps.len()));
+            }
+            assert_eq!(characteristics[0], characteristics[1]);
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod ready_callees_tests;
+#[cfg(test)]
+mod accessor_inline_tests;
+#[cfg(test)]
+mod frame_roots_tests;
+#[cfg(test)]
+mod inline_tests;
+#[cfg(test)]
+mod closure_call_tests;
+

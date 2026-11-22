@@ -5,10 +5,10 @@ import "io/stdout" take Stdout;
 object Show {
     Show() {}
     index(found is Maybe<int>) is string {
-        found ?? .some(i): i.string() !! .none: "none";
+        match found { case Maybe.some(i): i.string(); case Maybe.none: "none"; };
     }
     flag(value is bool) is string {
-        value ?? "yes" !! "no";
+        if value { "yes"; } else { "no"; };
     }
     ints(values is @int) is string {
         "[" + values.map() -> v { v.string(); }.join(" ") + "]";

@@ -25,16 +25,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Код для C ABI: 1 invalid, 2 authentication, 3 unsupported, 4 failed.
-    pub fn code(&self) -> i32 {
-        match self {
-            Error::Invalid(_) => 1,
-            Error::Authentication(_) => 2,
-            Error::Unsupported(_) => 3,
-            Error::Failed(_) => 4,
-        }
-    }
-
     pub fn message(&self) -> &str {
         match self {
             Error::Invalid(text)
@@ -663,10 +653,14 @@ fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     }
 }
 
+/// ECDSA on one curve (#943). Signing stays on RustCrypto for the RFC 6979
+/// deterministic nonces the std module promises, from the secret scalar alone
+/// (a `SigningKey` would derive the public key a second time); verification
+/// runs on aws-lc, five times faster. Both accept a high S, as the curves do
+/// not normalize it.
 macro_rules! ecdsa_curve {
-    ($curve:ident, $op:expr, $args:expr, $field:expr) => {{
-        use $curve::ecdsa::signature::{Signer, Verifier};
-        use $curve::ecdsa::{Signature, SigningKey, VerifyingKey};
+    ($curve:ident, $point:ty, $digest:ty, $verifying:expr, $op:expr, $args:expr, $field:expr) => {{
+        use $curve::ecdsa::{SigningKey, VerifyingKey};
         use $curve::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
         let args = $args;
         match $op {
@@ -685,18 +679,22 @@ macro_rules! ecdsa_curve {
             }
             "sign" => {
                 arity(args, 2, "ecdsa sign")?;
-                let key = SigningKey::from_pkcs8_der(args[0]).map_err(|_| invalid("invalid ECDSA PKCS#8 key"))?;
-                let signature: Signature = key.sign(args[1]);
+                // Decoding checks an embedded public key against the scalar.
+                let secret = $curve::SecretKey::from_pkcs8_der(args[0]).map_err(|_| invalid("invalid ECDSA PKCS#8 key"))?;
+                let digest = <$digest as sha2::Digest>::digest(args[1]);
+                let (signature, _) = ecdsa::hazmat::sign_prehashed_rfc6979::<$point, $digest>(
+                    &secret.to_nonzero_scalar(),
+                    &digest,
+                    &[],
+                );
                 Ok(signature.to_der().as_bytes().to_vec())
             }
             "verify" => {
                 arity(args, 3, "ecdsa verify")?;
                 let key = VerifyingKey::from_public_key_der(args[0]).map_err(|_| invalid("invalid ECDSA SPKI key"))?;
-                let valid = match Signature::from_der(args[2]) {
-                    Ok(signature) => key.verify(args[1], &signature).is_ok(),
-                    Err(_) => false,
-                };
-                Ok(truth(valid))
+                let point = key.to_sec1_point(false);
+                let public = aws_lc_rs::signature::UnparsedPublicKey::new($verifying, point.as_bytes());
+                Ok(truth(public.verify(args[1], args[2]).is_ok()))
             }
             other => Err(Error::Unsupported(format!("unknown ECDSA operation {other}"))),
         }
@@ -708,8 +706,24 @@ fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
         .split_once('-')
         .ok_or_else(|| invalid("ECDSA operation"))?;
     match curve {
-        "p256" => ecdsa_curve!(p256, action, args, 32),
-        "p384" => ecdsa_curve!(p384, action, args, 48),
+        "p256" => ecdsa_curve!(
+            p256,
+            p256::NistP256,
+            sha2::Sha256,
+            &aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1,
+            action,
+            args,
+            32
+        ),
+        "p384" => ecdsa_curve!(
+            p384,
+            p384::NistP384,
+            sha2::Sha384,
+            &aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1,
+            action,
+            args,
+            48
+        ),
         other => Err(Error::Unsupported(format!("unknown ECDSA curve {other}"))),
     }
 }
@@ -842,3 +856,4 @@ fn algorithm_text(algorithm: &spki::AlgorithmIdentifierRef<'_>) -> String {
         }
     text
 }
+

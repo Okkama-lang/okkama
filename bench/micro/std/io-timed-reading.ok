@@ -1,0 +1,90 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "async/atomic" take Atomic;
+import "io/buffer" take ByteBuffer;
+import "io/stream" take AsyncReading, AsyncWriting, ByteSource;
+import "io/decorators" take TimedAsyncReading;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+
+object MemoryReading does AsyncReading {
+    has buffer is ByteBuffer;
+
+    MemoryReading(data is @byte) {
+        buffer = ByteBuffer(data);
+    }
+
+    async bytes(limit is int) is @byte {
+        buffer.reading().bytes(limit);
+    }
+}
+
+object MemoryWriting does AsyncWriting {
+    has buffer is ByteBuffer;
+
+    MemoryWriting(:buffer);
+
+    async write(bytes is @byte) is AsyncWriting {
+        buffer.writing().write(bytes);
+        self;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        buffer.writing().write(source);
+        self;
+    }
+
+    async flush() is void {
+        buffer.writing().flush();
+    }
+}
+
+object StillClock does Timing {
+    StillClock();
+
+    instant() is Instant {
+        Instant(Duration(seconds: 0));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(Duration(seconds: 0));
+    }
+
+    async wait(duration is Duration) is void {
+        await Event().wait();
+    }
+}
+
+object Bench {
+    Bench();
+
+    async run(n is int) is int {
+        let total = Atomic(0);
+        for 0..n -> i {
+            let v = i % 23 + 1;
+            let input = TimedAsyncReading(
+                MemoryReading([byte(v)]),
+                Duration(seconds: 1),
+                StillClock()
+            );
+            let data = await input.bytes(1);
+            let result = data[0].int();
+            total.replace(total.value() + result);
+        }
+        total.value();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

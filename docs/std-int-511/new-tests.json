@@ -1,0 +1,62 @@
+[
+  {
+    "module": "numbers/bigint",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/numbers/bigint.ok",
+    "code": 0,
+    "output": "=== RUN   511 int quotient and remainder agree with BigInt for every sign\n--- PASS: 511 int quotient and remainder agree with BigInt for every sign\n=== RUN   511 bounded powers keep every parser budget and reject oversized products\n--- PASS: 511 bounded powers keep every parser budget and reject oversized products\nPASS\n"
+  },
+  {
+    "module": "numbers/bigrational",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/numbers/bigrational.ok",
+    "code": 0,
+    "output": "=== RUN   511 rational int components normalize every sign without narrowing\n--- PASS: 511 rational int components normalize every sign without narrowing\nPASS\n"
+  },
+  {
+    "module": "json",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/json.ok",
+    "code": 0,
+    "output": "=== RUN   511 exact int JSON preserves large values presence and bounded reads\n--- PASS: 511 exact int JSON preserves large values presence and bounded reads\nPASS\n"
+  },
+  {
+    "module": "db/value",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/db/value.ok",
+    "code": 0,
+    "output": "=== RUN   511 DB int callbacks and native cells preserve precision and nullability\n--- PASS: 511 DB int callbacks and native cells preserve precision and nullability\nPASS\n"
+  },
+  {
+    "module": "plist/write",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/plist/write.ok",
+    "code": 0,
+    "output": "=== RUN   511 plist int byte extraction keeps signed and unsigned 128 bit limits\n--- PASS: 511 plist int byte extraction keeps signed and unsigned 128 bit limits\nPASS\n"
+  },
+  {
+    "module": "plist/parse",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/plist/parse.ok",
+    "code": 0,
+    "output": "=== RUN   511 plist int round trips preserve large signed values in both formats\n--- PASS: 511 plist int round trips preserve large signed values in both formats\nPASS\n"
+  },
+  {
+    "module": "locale/number",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/locale/number.ok",
+    "code": 0,
+    "output": "=== RUN   511 locale int quantization preserves quotient remainder and negative rounding\n--- PASS: 511 locale int quantization preserves quotient remainder and negative rounding\nPASS\n"
+  },
+  {
+    "module": "net/ip",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/net/ip.ok",
+    "code": 0,
+    "output": "=== RUN   511 IPv6 full space size is an exact int\n--- PASS: 511 IPv6 full space size is an exact int\nPASS\n"
+  },
+  {
+    "module": "time/duration",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/time/duration.ok",
+    "code": 0,
+    "output": "=== RUN   511 duration nanoseconds preserve large signed ints\n--- PASS: 511 duration nanoseconds preserve large signed ints\nPASS\n"
+  },
+  {
+    "module": "http/http1_framing",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter 511 std/http/http1_framing.ok",
+    "code": 0,
+    "output": "=== RUN   511 HTTP lengths retain exact int values and reject invalid grammar\n--- PASS: 511 HTTP lengths retain exact int values and reject invalid grammar\nPASS\n"
+  }
+]

@@ -1,0 +1,62 @@
+// Extracted from secondary-failures; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+enum Body is Error = (failed);
+enum Cleanup is Error = (first, second);
+object Bomb {
+    has name is string;
+    has log is Atomic<string>;
+    Bomb(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    destroy {
+        let alias = self;
+        log.replace(log.value() + name);
+        if name == "B" {
+            throw Cleanup.second;
+        }
+        else {
+            throw Cleanup.first;
+        }
+    }
+}
+object Observer {
+    has log is Atomic<string>;
+    Observer(log is Atomic<string>) {
+        self.log = log;
+    }
+    destroy {
+        confirm log.value() == "BA";
+        Stdout().writeln(log.value());
+        {
+            let fresh = Res("C", log);
+        }
+        confirm log.value() == "BAC";
+        Stdout().writeln(log.value());
+        log.close();
+    }
+}
+main() is int {
+    let log = Atomic("");
+    let observer = Observer(log);
+    let a = Bomb("A", log);
+    let b = Bomb("B", log);
+    throw Body.failed;
+    0;
+}

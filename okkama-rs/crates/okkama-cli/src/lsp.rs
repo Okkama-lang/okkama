@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::process::ExitCode;
 use std::str::FromStr;
 
@@ -27,11 +28,12 @@ use lsp_types::{
     },
     request::{
         Completion, DocumentHighlightRequest, DocumentSymbolRequest, Formatting, GotoDefinition,
-        HoverRequest, PrepareRenameRequest, References, Rename, Request as _, SignatureHelpRequest,
+        HoverRequest, PrepareRenameRequest, References, Rename, Request as _, ResolveCompletionItem, SignatureHelpRequest,
     },
 };
 use okkama_compiler::ide::{self, Inspection, LineIndex, OutlineItem, OutlineKind};
-use okkama_compiler::{SourceFile, lowering};
+use okkama_compiler::SourceFile;
+use okkama_compiler::lowering::ModuleLoader as _;
 use serde_json::Value;
 
 use super::FileLoader;
@@ -39,10 +41,11 @@ use super::FileLoader;
 /// Открытый файл.
 struct Document {
     path: PathBuf,
-    text: String,
-    inspection: Inspection,
+    /// Shared, not copied, with the loaders' overlays and `good` (#472).
+    text: Rc<str>,
+    inspection: Rc<Inspection>,
     /// Последний разобранный текст и его результат (наведение при ошибке разбора).
-    good: Option<(String, Inspection)>,
+    good: Option<(Rc<str>, Rc<Inspection>)>,
     /// Пути, в которые публиковались диагностики этого файла.
     published: Vec<String>,
     /// Версия текста от клиента: диагностики публикуются с ней (#48).
@@ -103,6 +106,7 @@ pub fn run() -> ExitCode {
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         })),
         completion_provider: Some(lsp_types::CompletionOptions {
+            resolve_provider: Some(true),
             trigger_characters: Some(
                 [".", "(", ",", "\"", "/"]
                     .iter()
@@ -222,8 +226,8 @@ impl Server {
                     uri.to_string(),
                     Document {
                         path,
-                        text: text.to_string(),
-                        inspection: Inspection::default(),
+                        text: Rc::from(text),
+                        inspection: Rc::default(),
                         good: None,
                         published: Vec::new(),
                         version: document.get("version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok()),
@@ -232,6 +236,7 @@ impl Server {
                 // Сразу: правки, пришедшие следом, не должны лишить файл
                 // разобранного варианта (дополнение опирается на него).
                 self.check(uri);
+                dirty.extend(self.documents.keys().filter(|other| *other != uri).cloned());
             }
             DidChangeTextDocument::METHOD => {
                 let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) else {
@@ -245,7 +250,7 @@ impl Server {
                     .and_then(Value::as_str);
                 let version = params.pointer("/textDocument/version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok());
                 if let (Some(document), Some(text)) = (self.documents.get_mut(uri), text) {
-                    document.text = text.to_string();
+                    document.text = Rc::from(text);
                     document.version = version;
                     dirty.push(uri.to_string());
                 }
@@ -267,6 +272,7 @@ impl Server {
                     }
                 }
                 dirty.retain(|other| other != uri);
+                dirty.extend(self.documents.keys().cloned());
             }
             _ => {}
         }
@@ -282,7 +288,7 @@ impl Server {
         for document in self.documents.values() {
             let canonical =
                 std::fs::canonicalize(&document.path).unwrap_or_else(|_| document.path.clone());
-            loader.overlay.insert(canonical, document.text.clone());
+            loader.overlay.insert(canonical, Rc::clone(&document.text));
         }
         loader
     }
@@ -295,12 +301,10 @@ impl Server {
             .unwrap_or_else(|_| document.path.clone())
             .display()
             .to_string();
-        let Ok(source) = SourceFile::new(name, document.text.clone()) else {
+        let Ok(source) = SourceFile::new(name, document.text.to_string()) else {
             return;
         };
-        let test_mode = ide::has_tests(&source);
-        let mut loader = self.loader(test_mode);
-        let inspection = lowering::inspect(&source, &mut loader, test_mode);
+        let inspection = Rc::new(super::inspect_file(&source, |test_mode| self.loader(test_mode)));
 
         // Диагностики по файлам; ошибки других файлов — ещё и на первом импорте корня.
         let mut by_path: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
@@ -357,7 +361,7 @@ impl Server {
         }
         if let Some(document) = self.documents.get_mut(uri) {
             if inspection.parsed {
-                document.good = Some((document.text.clone(), inspection.clone()));
+                document.good = Some((Rc::clone(&document.text), Rc::clone(&inspection)));
             }
             document.inspection = inspection;
             document.published = published;
@@ -398,6 +402,7 @@ impl Server {
             Completion::METHOD => self.completion(params).map_or(Value::Null, |found| {
                 serde_json::to_value(found).unwrap_or(Value::Null)
             }),
+            ResolveCompletionItem::METHOD => self.resolve_completion(params),
             SignatureHelpRequest::METHOD => {
                 self.signature_help(params).map_or(Value::Null, |found| {
                     serde_json::to_value(found).unwrap_or(Value::Null)
@@ -461,10 +466,10 @@ impl Server {
         let document = self.documents.get(uri)?;
         let position = ide::Position { line, character };
         let (text, inspection) = if document.inspection.parsed {
-            (&document.text, &document.inspection)
+            (&*document.text, &*document.inspection)
         } else {
             let (text, inspection) = document.good.as_ref()?;
-            (text, inspection)
+            (&**text, &**inspection)
         };
         let offset = LineIndex::new(text).offset(position);
         inspection.symbol_at(offset).cloned()
@@ -479,10 +484,10 @@ impl Server {
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
         let (text, inspection) = if document.inspection.parsed {
-            (document.text.as_str(), &document.inspection)
+            (&*document.text, &*document.inspection)
         } else {
             let (text, inspection) = document.good.as_ref()?;
-            (text.as_str(), inspection)
+            (&**text, &**inspection)
         };
         Some((document, offset, text, inspection))
     }
@@ -496,7 +501,8 @@ impl Server {
         let character = params.pointer("/position/character")?.as_u64()? as u32;
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
-        let found = ide::std_completions(&document.text, offset, &self.loader(false).stdlib)?;
+        let loader = self.loader(false);
+        let found = ide::std_completions_with_overlay(&document.text, offset, &loader.stdlib, &loader.overlay)?;
         let items = found
             .into_iter()
             .map(|found| lsp_types::CompletionItem {
@@ -512,6 +518,11 @@ impl Server {
                 // Сначала текущий уровень, потом целые пути из глубины.
                 sort_text: Some(format!("{}{}", u8::from(found.deep), found.label)),
                 detail: (!found.detail.is_empty()).then_some(found.detail),
+                // A std index can contain hundreds of modules. Resolve the
+                // selected item's imports and links on demand, through doc.
+                data: found.documentation_source.as_ref().map(|(module, declaration)| serde_json::json!({
+                    "okkamaDocumentation": {"module": module, "declaration": declaration}
+                })),
                 documentation: (!found.documentation.is_empty()).then_some(
                     lsp_types::Documentation::MarkupContent(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -523,6 +534,28 @@ impl Server {
             })
             .collect();
         Some(lsp_types::CompletionResponse::Array(items))
+    }
+
+    fn resolve_completion(&self, params: &Value) -> Value {
+        let mut item = params.clone();
+        let Some(data) = params.pointer("/data/okkamaDocumentation") else { return item; };
+        let Some(module) = data.get("module").and_then(Value::as_str) else { return item; };
+        if !module.split('/').all(super::man::segment) { return item; }
+        // A pending completion may have become hidden or been removed since
+        // the list was requested. Do not retain its old documentation.
+        if let Some(fields) = item.as_object_mut() { fields.remove("documentation"); }
+        let mut loader = self.loader(false);
+        let Ok(Some(loaded)) = loader.load_std(module, "<input>") else { return item; };
+        let Ok(doc) = okkama_compiler::doc::document(&loaded.source, &mut loader) else { return item; };
+        let markdown = if let Some(name) = data.get("declaration").and_then(Value::as_str) {
+            doc.item(name).map(|decl| okkama_compiler::doc::render::hover(&doc, decl, None))
+        } else {
+            doc.overview.as_ref().map(|overview| overview.markdown())
+        };
+        if let Some(markdown) = markdown {
+            item["documentation"] = serde_json::json!({"kind": "markdown", "value": markdown});
+        }
+        item
     }
 
     /// Путь `import "pkg/…"` у курсора: зависимости проекта и их модули с диска.
@@ -763,12 +796,13 @@ impl Server {
 
     fn hover(&self, params: &Value) -> Option<Hover> {
         let symbol = self.symbol(params)?;
+        let (_, _, text, _) = self.position(params)?;
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: symbol.hover,
             }),
-            range: None,
+            range: Some(lsp_range(LineIndex::new(text).range(symbol.span))),
         })
     }
 
@@ -790,7 +824,7 @@ impl Server {
         else {
             return Ok(Vec::new());
         };
-        let source = SourceFile::new(document.path.display().to_string(), document.text.clone())
+        let source = SourceFile::new(document.path.display().to_string(), document.text.to_string())
             .map_err(|error| error.to_string())?;
         let formatted = match okkama_compiler::syntax::format::format(&source) {
             Ok(formatted) => formatted,
@@ -799,7 +833,7 @@ impl Server {
                 return Err(format!("okkama fmt: {message}"));
             }
         };
-        if formatted == document.text {
+        if *formatted == *document.text {
             return Ok(Vec::new());
         }
         let lines = LineIndex::new(&document.text);
@@ -930,6 +964,36 @@ fn path_uri(path: &str) -> Option<Uri> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documentation_reads_unsaved_imports_and_the_selected_overload() {
+        let dir = std::env::temp_dir().join(format!("okkama-lsp-doc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let library = "module money;\n// A public amount.\nobject Money {\n    Money() {}\n    // Integer amount.\n    plus(x is int) is int { x; }\n    // Text amount.\n    plus(x is string) is string { x; }\n    // A private secret.\n    hidden secret() is void {}\n}\n";
+        let path = dir.join("money.ok");
+        std::fs::write(&path, library).unwrap();
+        let app = dir.join("app.ok");
+        let text = "module app;\nimport \"money\" take Money;\nmain() is int { Money().plus(1); }\n";
+        let uri = path_uri(app.to_str().unwrap()).unwrap().to_string();
+        let library_uri = path_uri(path.to_str().unwrap()).unwrap().to_string();
+        let (connection, _client) = Connection::memory();
+        let mut server = Server { connection, documents: HashMap::new(), stdlib: None, import_dirs: Vec::new() };
+        let mut dirty = Vec::new();
+        for (uri, text) in [(&uri, text.to_string()), (&library_uri, library.replace("Integer amount", "Unsaved amount"))] {
+            server.notification(Notification::new("textDocument/didOpen".into(), serde_json::json!({"textDocument": {"uri": uri, "text": text, "version": 1}})), &mut dirty);
+        }
+        server.check(&uri);
+        let params = serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 2, "character": 25}});
+        let hover = serde_json::to_value(server.hover(&params).unwrap()).unwrap();
+        let value = hover.pointer("/contents/value").unwrap().as_str().unwrap();
+        assert!(value.contains("Unsaved amount"), "{value}");
+        assert!(!value.contains("Text amount"));
+        let doc = &server.documents[&uri].inspection;
+        let members = &doc.members["Money"];
+        assert!(members.iter().any(|m| m.documentation.contains("Unsaved amount")));
+        assert!(!members.iter().any(|m| m.label == "secret"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn file_uris_round_trip_with_escapes() {

@@ -1,0 +1,11 @@
+source: sent 1
+total: got 1
+total: got 4
+source: sent 2
+source: sent 3
+source: sent 4
+source: sent 5
+total: got 9
+total: got 16
+total: got 25
+sum of squares: 55

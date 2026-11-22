@@ -232,7 +232,8 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         if self.ctx.is_plain(&value.ty) || value.ty.is_builder() {
             return;
         }
-        if let Some(region) = self.tracking_region_at(self.cleanups.len() - 1) {
+        let depth = (self.cleanups.len() - 1).min(self.exiting.unwrap_or(usize::MAX));
+        if let Some(region) = self.tracking_region_at(depth) {
             self.note_owned(&value.ty);
             self.b.emit_void(
                 InstKind::RegionTrack {
@@ -329,7 +330,10 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     self.tries.push(ctx);
                     self.retarget();
                     let defer = self.cleanups[index].defers[k - 1];
-                    if !self.lower_defer(defer)? {
+                    let outer = self.exiting.replace(index);
+                    let finished = self.lower_defer(defer);
+                    self.exiting = outer;
+                    if !finished? {
                         self.tries = saved;
                         return Ok(false);
                     }

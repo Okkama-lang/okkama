@@ -1,0 +1,41 @@
+// #244: URL-encoded form parser на памяти.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/form" take FormLimits, ParsedUrlEncodedForm;
+import "http/body" take BodyOpening, TextBody;
+import "url/query" take QueryParameters;
+
+
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let reader = TextBody("id="+x+"&name=a%20b").opening().reading();
+            let parser = ParsedUrlEncodedForm(reader,FormLimits());
+            let value = await parser.parameters();
+            let contribution = value.int("id");
+            parser.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

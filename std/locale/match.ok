@@ -360,9 +360,11 @@ object LocalePreference {
     }
 }
 
-// RFC 4647 lookup skips '*' and truncates a range, removing a newly dangling
-// singleton too. Explicit fallback must be in the available set and its first
-// available representative is returned. No likely-subtag or CLDR expansion.
+// RFC 4647 lookup (§3.4) skips '*' and truncates a range, removing a newly
+// dangling singleton too; each truncation must equal an available tag (case
+// aside): a tag is not chosen for a shorter range it extends (#941). Explicit
+// fallback must be in the available set and its first available representative
+// is returned. No likely-subtag or CLDR expansion.
 object LookedUpLocale {
     has inputs is LocaleSelectionInputs;
     has fallback_index is int;
@@ -410,7 +412,7 @@ object LookedUpLocale {
                         let prefix is @string = (0..width).map() -> index {
                             parts[index];
                         };
-                        let position = lookup.position(prefix.join("-"));
+                        let position = lookup.position(prefix.join("-").lower());
                         if position >= 0 {
                             return choices[position];
                         }
@@ -422,9 +424,9 @@ object LookedUpLocale {
     }
 }
 
-// Complete Locale spellings contain only ASCII letters/digits/hyphens.
-// The lexical interval [prefix, prefix+".") contains its exact key and every
-// whole-subtag descendant ("-" precedes "."), excluding e.g. eng for en.
+// The first available position of each normalized tag: a scan up to 8 tags, a
+// sorted index above, where equal tags are adjacent and the range-minimum tree
+// gives the earliest of them.
 hidden object LocaleAvailableIndex {
     has names, original is @string;
     has positions is @LocalePositionRange;
@@ -454,22 +456,24 @@ hidden object LocaleAvailableIndex {
         }
     }
 
-    position(prefix is string) is int {
+    // The first available position of tag (normalized), or -1.
+    position(tag is string) is int {
         if original.size() <= 8 {
             for (0..original.size()) -> index {
-                let tag = original[index];
-                if tag == prefix
-                    || (tag.length() > prefix.length()
-                    && tag.slice(0, prefix.length() + 1) == prefix + "-") {
-                        return index;
-                    }
+                if original[index] == tag {
+                    return index;
+                }
             }
             -1;
         }
         else {
-            let start = LowerBound(origin: names, item: prefix).index();
-            let stop = LowerBound(origin: names, item: prefix + ".").index();
-            positions[0].earliest(start, stop);
+            let start = LowerBound(origin: names, item: tag).index();
+            for (start..names.size()) -> index {
+                if names[index] != tag {
+                    return positions[0].earliest(start, index);
+                }
+            }
+            positions[0].earliest(start, names.size());
         }
     }
 }
@@ -557,4 +561,82 @@ test "basic range grammar rejects extended wildcard and POSIX syntax" {
             true;
         });
     }
+}
+
+test "lookup takes the first exact tag of each truncation, then the fallback" {
+    let available = [
+        Locale("en-US"),
+        Locale("en-GB"),
+        Locale("de-DE"),
+        Locale("de"),
+        Locale("fr-CA")
+    ];
+    let chosen = (range is string) is string {
+        LookedUpLocale(
+            requested: [BasicLanguageRange(range)],
+            available: available,
+            fallback: Locale("de")
+        )
+            .locale()
+            .string();
+    };
+    test.is(chosen("en"), "de");
+    test.is(chosen("de"), "de");
+    test.is(chosen("fr-FR"), "de");
+    test.is(chosen("de-DE-1996"), "de-DE");
+    test.is(chosen("EN-gb"), "en-GB");
+    test.is(chosen("de-CH"), "de");
+}
+
+test "lookup tries the ranges in order, skips the wildcard and drops a dangling singleton" {
+    let supported = [Locale("en"), Locale("de"), Locale("zh-Hant")];
+    let asked = [BasicLanguageRange("de-CH"), BasicLanguageRange("en")];
+    test.is(
+        LookedUpLocale(requested: asked, available: supported, fallback: Locale("en")).locale().string(),
+        "de"
+    );
+    let wild = [
+        BasicLanguageRange("*"),
+        BasicLanguageRange("fr"),
+        BasicLanguageRange("zh-Hant-CN-x-private")
+    ];
+    test.is(
+        LookedUpLocale(requested: wild, available: supported, fallback: Locale("en")).locale().string(),
+        "zh-Hant"
+    );
+    let unmatched = [BasicLanguageRange("*"), BasicLanguageRange("fr-FR")];
+    test.is(
+        LookedUpLocale(requested: unmatched, available: supported, fallback: Locale("de")).locale().string(),
+        "de"
+    );
+}
+
+test "lookup over more than eight locales matches exactly" {
+    let available = [
+        Locale("en-US"),
+        Locale("en-GB"),
+        Locale("de-DE"),
+        Locale("de-AT"),
+        Locale("fr-CA"),
+        Locale("fr-FR"),
+        Locale("it"),
+        Locale("es-ES"),
+        Locale("pt-BR"),
+        Locale("de"),
+        Locale("DE")
+    ];
+    let chosen = (range is string) is string {
+        LookedUpLocale(
+            requested: [BasicLanguageRange(range)],
+            available: available,
+            fallback: Locale("it")
+        )
+            .locale()
+            .string();
+    };
+    test.is(chosen("en"), "it");
+    test.is(chosen("de-CH"), "de");
+    test.is(chosen("fr-CA-x-y"), "fr-CA");
+    test.is(chosen("pt"), "it");
+    test.is(chosen("zz"), "it");
 }

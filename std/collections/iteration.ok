@@ -15,6 +15,10 @@ module collections/iteration v1.0.0;
 // an old one stays where it was. Iterating is for collections that can be
 // walked again; a consumable stream such as a file or a network body is a
 // Batching, read one batch at a time. map, filter, reduce and find accept both.
+//
+// The errors below are the role contracts: arrays (whose cursors the language
+// makes) throw them, and other cursors are expected to do the same; the compiler
+// does not check that a user's implementation does.
 
 // A position in a walk; successor() moves on by giving a new cursor.
 role Cursor<T> {
@@ -22,7 +26,8 @@ role Cursor<T> {
     available() is bool;
     // The item here; IterationEnded at the end.
     item() is T;
-    // The position after this one.
+    // The position after this one; the last item's successor is the end, and the
+    // end has none: IterationEnded.
     successor() is Cursor<T>;
 }
 

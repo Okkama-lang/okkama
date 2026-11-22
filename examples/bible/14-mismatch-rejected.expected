@@ -1,0 +1,1 @@
+14-mismatch-rejected.ok:5:8: semantic error: Action "reading" parameter 1 on object "Thermometer" must be int for role "Meter", got float

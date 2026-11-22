@@ -1,0 +1,83 @@
+module bible/decide v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What the core decided. Nothing has happened yet.
+enum Effect = (
+    charge(customer is string, cents is int),
+    reorder(item is string, count is int),
+    receipt(customer is string, text is string)
+);
+
+object Line {
+    has item is string;
+    has count is int;
+    has price is int;
+    has stock is int;
+
+    Line(:item, :count, :price, :stock);
+
+    cost() is int {
+        count * price;
+    }
+
+    missing() is int {
+        if stock < count { count - stock; } else { 0; }
+    }
+
+    item() is string {
+        item;
+    }
+}
+
+// The core decides and returns its decisions as values. It writes nothing,
+// sends nothing and reads no clock.
+object Checkout {
+    has customer is string;
+    has lines is @Line;
+
+    Checkout(:customer, :lines);
+
+    effects() is @Effect {
+        let total = lines.reduce(0) -> sum, line { sum + line.cost(); };
+        let short = lines.filter() -> line { line.missing() > 0; };
+        let reorders = short.map() -> line { Effect.reorder(line.item(), line.missing()); };
+        [Effect.charge(customer, total)] + reorders + [Effect.receipt(customer, "paid " + total.string())];
+    }
+}
+
+// The shell performs decisions and makes none.
+object Shell {
+    has out is Stdout;
+
+    Shell(:out);
+
+    performed(effect is Effect) is void {
+        match effect {
+            case Effect.charge(customer, cents) {
+                out.writeln("charge " + customer + " " + cents.string());
+            }
+            case Effect.reorder(item, count) {
+                out.writeln("reorder " + count.string() + " x " + item);
+            }
+            case Effect.receipt(customer, text) {
+                out.writeln("mail " + customer + ": " + text);
+            }
+        }
+    }
+}
+
+main() is int {
+    let checkout = Checkout(customer: "ada", lines: [
+        Line(item: "tea", count: 2, price: 450, stock: 10),
+        Line(item: "cups", count: 6, price: 120, stock: 4),
+    ]);
+    let effects = checkout.effects();
+    let charged = effects.first() == Effect.charge("ada", 1620);
+    Stdout().writeln(effects.size().string() + " effects, charge first: " + charged.string());
+    let shell = Shell(out: Stdout());
+    for effects -> effect {
+        shell.performed(effect);
+    }
+    0;
+}

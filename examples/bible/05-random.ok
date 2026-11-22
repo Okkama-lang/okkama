@@ -1,0 +1,34 @@
+module bible/random v1.0.0;
+
+// Randomness is a capability passed in, not a global. A seeded source repeats
+// its sequence exactly, so a program that draws numbers can be tested; a
+// secure source has no seed at all.
+import "io/stdout" take Stdout;
+import "random/source" take Randomizing, PcgRandom, SecureRandom;
+
+// Rolls two dice with whatever source it is given.
+object Table {
+    has dice is Randomizing;
+    Table(:dice);
+
+    // How often each sum from 2 to 12 comes up in `rolls` throws.
+    counts(rolls is int) is @int {
+        (1..=rolls).reduce([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) -> seen, roll {
+            let sum = dice.integer(1, 7) + dice.integer(1, 7);
+            seen.replaced(sum - 2, seen[sum - 2] + 1);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let first = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let again = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let other = Table(dice: PcgRandom(seed: 7)).counts(3600);
+    out.writeln("seed 2026: " + first.map() -> n { n.string(); }.join(" "));
+    out.writeln("same seed: " + (first == again).string());
+    out.writeln("seed 7:    " + other.map() -> n { n.string(); }.join(" "));
+    out.writeln("sevens expected: " + (3600 / 6).string());
+    out.writeln("secure token: " + SecureRandom().bytes(16).size().string() + " bytes, never the same twice");
+    0;
+}

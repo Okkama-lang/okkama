@@ -48,7 +48,7 @@ object OriginTarget does RequestTarget {
 
     // The path and query are kept in their canonical spelling.
     OriginTarget(path is string, query is Maybe<string>) {
-        confirm path != "" && path.length() <= 8192 && path.slice(0, 1) == "/"
+        confirm path != "" && path.length() <= 8192 && path.starts_with("/")
             else throw InvalidRequestTarget.because("absolute origin path required");
         let canonical = try {
             UrlComponentText(origin: path, component: UrlComponent.path).string();
@@ -328,7 +328,7 @@ object ParsedRequestTarget {
                     AuthorityTarget(ParsedUrl("//" + origin).parts());
                 }
                 else {
-                    if origin.slice(0, 1) == "/" {
+                    if origin.starts_with("/") {
                         let mark = origin.find("?") else -1;
                         let query is Maybe<string> = if mark < 0 {
                             Maybe<string>.none;
@@ -386,9 +386,6 @@ object RequestTargetSnapshot {
             }
             case RequestTargetKind.asterisk {
                 AsteriskTarget();
-            }
-            else {
-                throw InvalidRequestTarget.because("unknown target form");
             }
         };
         confirm checked.string() == wire

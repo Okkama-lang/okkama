@@ -194,6 +194,9 @@ pub(crate) struct Heap {
     pub(crate) test_failures: Option<Vec<String>>,
     /// The reason of the running test's `test.skip`.
     pub(crate) test_skipped: Option<String>,
+    /// The sub-cases of the running test (#809): what has run, and which
+    /// may run.
+    pub(crate) test_cases: crate::test_report::SubCaseState,
     /// Core object of each live handle, and back.
     objects: crate::word::FastMap<u64, Word>,
     ids: crate::word::FastMap<Word, u64>,
@@ -219,6 +222,7 @@ impl Heap {
             futures: Arena::default(),
             test_failures: None,
             test_skipped: None,
+            test_cases: Default::default(),
             stdin: None,
             arguments: Vec::new(),
             objects: Default::default(),
@@ -230,6 +234,14 @@ impl Heap {
         };
         heap.intern(Shape::Unknown);
         heap
+    }
+
+    /// #588: an extension may introduce the program's native failure object (appended, so no earlier value
+    /// depends on it).
+    pub(crate) fn extend(&mut self, program: &okkama_sparrow::Program) {
+        if self.native_failure.is_none() {
+            self.native_failure = program.objects.iter().position(|o| o.is_native_failure()).map(|d| d as u32);
+        }
     }
 
     fn core(&self) -> &crate::heap::Heap {
@@ -381,15 +393,37 @@ impl Heap {
     pub fn allocate_text(&mut self, value: String) -> Result<Slot, Error> {
         Ok(Slot { bits: self.core_mut().allocate_text(&value), tag: STR })
     }
+    /// The integer as an owned value: a big one's digits are copied into a
+    /// new `Rc`. For a value kept past the call; readers use the views below.
     pub fn integer(&self, slot: Slot) -> Result<Integer, Error> {
+        Ok(match self.integer_view(slot)? {
+            crate::heap::Integer::Small(n) => Integer::Small(n),
+            crate::heap::Integer::Big(n) => Integer::Big(Rc::new(n.clone())),
+        })
+    }
+    /// The integer borrowed from the heap, with no copy of the digits
+    /// (#451). The borrow of the heap keeps it from outliving an
+    /// allocation, a collection or a suspension.
+    pub fn integer_view(&self, slot: Slot) -> Result<crate::heap::Integer<'_>, Error> {
         match slot.kind() {
-            SMALL => Ok(Integer::Small(slot.bits as i64)),
-            BIG => Ok(match self.core().integer(slot.bits) {
-                crate::heap::Integer::Small(n) => Integer::Small(n),
-                crate::heap::Integer::Big(n) => Integer::Big(Rc::new(n.clone())),
-            }),
+            SMALL => Ok(crate::heap::Integer::Small(slot.bits as i64)),
+            BIG => Ok(self.core().integer(slot.bits)),
             _ => Err(Error("expected integer slot".into())),
         }
+    }
+    /// The integer as an `i64` when it fits, None when it does not.
+    pub fn int64(&self, slot: Slot) -> Result<Option<i64>, Error> {
+        Ok(match self.integer_view(slot)? {
+            crate::heap::Integer::Small(n) => Some(n),
+            crate::heap::Integer::Big(n) => n.to_i64(),
+        })
+    }
+    /// The integer as a `BigInt`: a big one borrowed, a small one converted.
+    pub fn bigint(&self, slot: Slot) -> Result<std::borrow::Cow<'_, BigInt>, Error> {
+        Ok(match self.integer_view(slot)? {
+            crate::heap::Integer::Small(n) => std::borrow::Cow::Owned(BigInt::from(n)),
+            crate::heap::Integer::Big(n) => std::borrow::Cow::Borrowed(n),
+        })
     }
     pub(crate) fn allocate(&mut self, value: BigInt) -> Result<Slot, Error> {
         if let Some(value) = value.to_i64() {
@@ -402,7 +436,19 @@ impl Heap {
             return Err(Error("expected array slot".into()));
         }
         let shape = self.shapes.get((value.tag >> 8) as usize).cloned().unwrap_or(Shape::Unknown);
-        Ok(self.core().elements(value.bits).iter().map(|&w| self.slot(w, &shape)).collect())
+        // One copy, into the slots (#446): a byte array or a trie is not
+        // first widened or flattened into a vector of words.
+        let core = self.core();
+        let mut slots = Vec::with_capacity(core.array_length(value.bits));
+        core.each_element(value.bits, &mut |word| slots.push(self.slot(word, &shape)));
+        Ok(slots)
+    }
+    /// The number of elements of an array slot, with no copy (#446).
+    pub fn array_length(&self, value: Slot) -> Result<usize, Error> {
+        if value.kind() != ARRAY {
+            return Err(Error("expected array slot".into()));
+        }
+        Ok(self.core().array_length(value.bits))
     }
     /// The bytes of a `@byte` slot, borrowed from the core heap.
     pub fn byte_slice(&self, value: Slot) -> Result<std::borrow::Cow<'_, [u8]>, Error> {
@@ -918,6 +964,14 @@ pub fn poll(runtime: &mut Runtime, native: Native, id: u64, waker: &std::task::W
             }
         }
         Some(host.settled(native, id))
+    })
+}
+
+/// True when only a provider thread can wake request `id` (see
+/// `Heap::native_io_threaded`): the scheduler's spin need not turn the reactor.
+pub fn off_reactor(runtime: &mut Runtime, id: u64) -> bool {
+    with_host(runtime, true, |host| {
+        host.futures.get(id).ok().and_then(|cell| cell.io.as_ref().map(|request| request.off_reactor())).unwrap_or(false)
     })
 }
 

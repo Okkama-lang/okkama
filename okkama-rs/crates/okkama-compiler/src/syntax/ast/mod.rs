@@ -379,6 +379,9 @@ pub struct EnumDecl {
     pub role: Option<Name>,
     pub payloads: Vec<Vec<Param>>,
     pub cases: Vec<Name>,
+    /// Each case through the end of its payload: `okkama fmt` looks for a
+    /// trailing comma after the last one, as in every other list (#594).
+    pub case_spans: Vec<Span>,
     pub span: Span,
 }
 

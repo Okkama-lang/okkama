@@ -59,7 +59,11 @@ object HttpConnectRequest {
         confirm parts::Parts::scheme == "https" && parts::Parts::userinfo == Maybe<string>.none
             else throw InvalidProxyRequest.because("HTTPS tunnel target required");
         let port = parts::Parts::port else 443;
-        let authority = ParsedUrl("//" + (parts::Parts::host else "") + ":" + port.string()).parts();
+        // Keep host and port structured instead of parsing a synthetic URL twice (#943).
+        let authority = UrlParts(
+            host: Maybe.some(parts::Parts::host else ""),
+            port: Maybe.some(port)
+        );
         let fields = ProxyRequestFields(
             origin: Headers(Header(name: HeaderName("Host"), value: authority.authority())),
             fields: proxy_fields
@@ -129,5 +133,17 @@ test "a forward request keeps the absolute target; CONNECT names the authority" 
     test.is(tunnel::Head::headers.values(HeaderName("Host")).item(0), "example.com:443");
     test.throws(InvalidProxyRequest) {
         HttpConnectRequest(origin: ParsedUrl("http://example.com/").parts(), proxy_fields: []);
+    };
+}
+
+test "CONNECT retains canonical hosts and explicit ports while dropping URL suffixes" {
+    for ["example.test", "[::1]", "BÜCHER.test"] -> host {
+        let url = ParsedUrl("https://" + host + ":8443/a?q#f").parts();
+        let request = HttpConnectRequest(url, []).request();
+        test.is(request::Head::target.string(), (url::Parts::host else "") + ":8443");
+        test.is(request::Head::headers.text("Host"), request::Head::target.string());
+    }
+    test.throws(InvalidProxyRequest) {
+        HttpConnectRequest(ParsedUrl("https://user@example.test/").parts(), []);
     };
 }

@@ -1,0 +1,1 @@
+04-compare-rejected.ok:4:16: semantic error: Cannot compare int and float

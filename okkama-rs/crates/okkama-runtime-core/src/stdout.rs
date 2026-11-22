@@ -10,6 +10,43 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
+thread_local! {
+    static CAPTURE: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+    static TO_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Send what the program on the current VM thread writes to standard output
+/// to standard error instead, while `body` runs: a machine-readable test report
+/// then owns standard output alone (#339). Nothing is buffered on the way; the
+/// guard restores the previous destination even if `body` panics.
+pub fn to_stderr<T>(body: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TO_STDERR.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(TO_STDERR.with(|flag| flag.replace(true)));
+    body()
+}
+
+/// Capture a bounded embedding run on the current VM thread, including explicit flushes.
+/// The guard restores the previous destination even if the embedding panics.
+pub fn capture<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>) {
+    struct Restore(Option<Vec<u8>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAPTURE.with(|capture| *capture.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = CAPTURE.with(|capture| capture.replace(Some(Vec::new())));
+    let restore = Restore(previous);
+    let result = body();
+    let output = CAPTURE.with(|capture| capture.borrow_mut().take().unwrap_or_default());
+    drop(restore);
+    (result, output)
+}
+
 /// The block a pipe or a file gets at once.
 const BLOCK: usize = 64 * 1024;
 
@@ -31,6 +68,22 @@ pub fn terminal() -> bool {
 /// Append `bytes`: a terminal gets every complete line now, and a full block
 /// goes out at once.
 pub fn write(bytes: &[u8]) -> io::Result<()> {
+    if CAPTURE.with(|capture| {
+        let mut capture = capture.borrow_mut();
+        if let Some(output) = capture.as_mut() {
+            output.extend_from_slice(bytes);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Ok(());
+    }
+    if TO_STDERR.with(std::cell::Cell::get) {
+        let mut err = io::stderr().lock();
+        err.write_all(bytes)?;
+        return err.flush();
+    }
     let mut pending = pending();
     pending.extend_from_slice(bytes);
     if terminal() {
@@ -48,6 +101,9 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
 
 /// Write out everything pending.
 pub fn flush() -> io::Result<()> {
+    if CAPTURE.with(|capture| capture.borrow().is_some()) {
+        return Ok(());
+    }
     let mut pending = pending();
     let all = std::mem::take(&mut *pending);
     emit(&all)
@@ -89,5 +145,22 @@ pub fn try_flush() {
     if let Ok(mut pending) = buffer().try_lock() {
         let all = std::mem::take(&mut *pending);
         let _ = emit(&all);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #339: inside to_stderr nothing reaches the standard output buffer, and
+    /// the buffer is used again afterwards.
+    #[test]
+    fn to_stderr_keeps_program_output_out_of_stdout() {
+        let before = pending().len();
+        to_stderr(|| write(b"diverted\n").unwrap());
+        assert_eq!(pending().len(), before);
+        assert!(!TO_STDERR.with(std::cell::Cell::get));
+        let (_, captured) = capture(|| to_stderr(|| write(b"captured").unwrap()));
+        assert_eq!(captured, b"captured");
     }
 }

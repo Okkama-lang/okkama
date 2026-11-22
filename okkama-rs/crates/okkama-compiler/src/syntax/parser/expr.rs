@@ -7,7 +7,7 @@
 //!
 //! | level          | operators                       |
 //! |----------------|---------------------------------|
-//! | choice/fallback | `?? … !!`, `else`              |
+//! | fallback        | `else`                         |
 //! | logic_or       | `\|\|`                          |
 //! | logic_and      | `&&`                            |
 //! | stream_write   | `<-`                            |
@@ -27,12 +27,12 @@ use super::{PResult, Parser};
 use crate::source::Span;
 use crate::syntax::ast::{
     ActionResult, Argument, BinaryOp, Block, CatchClause, Expr, ExprKind, FunctionalOp, Literal, MapEntry,
-    Name, ResultSpec, Stmt, StmtKind, TryBody, UnaryOp,
+    Name, ResultSpec, Stmt, StmtKind, TryBody, TypeExpr, TypeKind, UnaryOp,
 };
 use crate::syntax::token::{StrLiteral, StringForm, TokenKind, TokenValue, is_lower_word, is_type_word};
 
 impl Parser<'_> {
-    /// `expr = logic_or optional_else? compact_choice?`.
+    /// `expr = logic_or optional_else?`.
     ///
     /// The functional suffix `-> bindings { }` is a postfix form of a member
     /// call (`receiver.map(args)`, see [`Self::finish_postfix`]), so it binds
@@ -44,11 +44,14 @@ impl Parser<'_> {
 
     pub(super) fn expression_with_fallback(&mut self, optional: bool) -> PResult<Expr> {
         let enclosing = std::mem::replace(&mut self.for_source, false);
+        // `optional == false` is the top level of a `confirm` condition (#521).
+        let enclosing_confirm = std::mem::replace(&mut self.confirm_condition, !optional);
         let result = self.nested(|parser| {
             let mut expr = parser.logic_or()?;
+            // `else {` belongs to a statement and `else:` to a compact `if` (#921): neither starts a fallback.
             if optional
                 && parser.check(TokenKind::Else)
-                && parser.nth(1).kind != TokenKind::LeftBrace
+                && !matches!(parser.nth(1).kind, TokenKind::LeftBrace | TokenKind::Colon)
             {
                 parser.advance();
                 let fallback = if parser.eat(TokenKind::Throw) {
@@ -69,12 +72,10 @@ impl Parser<'_> {
                     },
                 };
             }
-            if parser.eat(TokenKind::Choice) {
-                expr = parser.finish_choice(expr)?;
-            }
             Ok(expr)
         });
         self.for_source = enclosing;
+        self.confirm_condition = enclosing_confirm;
         result
     }
 
@@ -97,26 +98,8 @@ impl Parser<'_> {
         Ok(true)
     }
 
-    fn choice_separator(&self) -> bool {
-        self.check(TokenKind::Bang)
-            && self.nth(1).kind == TokenKind::Bang
-            && self.peek().span.end == self.nth(1).span.start
-    }
-
-    fn choice_value(&mut self) -> PResult<Expr> {
-        if self.eat(TokenKind::Throw) {
-            let start = self.previous().span;
-            let value = self.expression()?;
-            Ok(Expr {
-                span: start.to(value.span),
-                kind: ExprKind::Throw(Box::new(value)),
-            })
-        } else {
-            self.expression()
-        }
-    }
-
-    fn choice_block(value: Expr) -> crate::syntax::ast::Block {
+    /// A block holding `value` alone, spanning exactly it.
+    fn expression_block(value: Expr) -> crate::syntax::ast::Block {
         let span = value.span;
         crate::syntax::ast::Block {
             stmts: vec![crate::syntax::ast::Stmt {
@@ -128,109 +111,6 @@ impl Parser<'_> {
             }],
             span,
         }
-    }
-
-    fn finish_choice(&mut self, subject: Expr) -> PResult<Expr> {
-        use crate::syntax::ast::{MatchBody, MatchCase};
-        let start = subject.span;
-        let patterned = self.check(TokenKind::Dot)
-            || (self.lexeme(self.peek()) == "_" && self.nth(1).kind == TokenKind::Colon);
-        let kind = if patterned {
-            let mut cases = Vec::new();
-            let mut else_block = None;
-            loop {
-                let arm_start = self.peek().span;
-                let pattern = if self.lexeme(self.peek()) == "_" {
-                    self.advance();
-                    None
-                } else {
-                    self.consume(TokenKind::Dot, "Expect .variant or _ in compact match.")?;
-                    let name = self.consume_member_name("Expect enum variant after dot.")?;
-                    let owner = Expr {
-                        kind: ExprKind::Name(Name {
-                            text: "$choice".into(),
-                            span: arm_start,
-                        }),
-                        span: arm_start,
-                    };
-                    let mut pattern = Expr {
-                        span: arm_start.to(name.span),
-                        kind: ExprKind::Get {
-                            object: Box::new(owner),
-                            name,
-                        },
-                    };
-                    if self.eat(TokenKind::LeftParen) {
-                        pattern = self.finish_call(pattern)?;
-                    }
-                    Some(pattern)
-                };
-                self.consume(TokenKind::Colon, "Expect : after compact match pattern.")?;
-                let body = Self::choice_block(self.choice_value()?);
-                if let Some(pattern) = pattern {
-                    cases.push(MatchCase {
-                        span: arm_start.to(body.span),
-                        patterns: vec![pattern],
-                        body,
-                    });
-                } else {
-                    else_block = Some(body);
-                    if self.choice_separator() {
-                        return Err(
-                            self.error_here("Wildcard must be the last compact match branch.")
-                        );
-                    }
-                    break;
-                }
-                if !self.choice_separator() {
-                    break;
-                }
-                self.advance();
-                self.advance();
-            }
-            ExprKind::Match(Box::new(MatchBody {
-                subject,
-                cases,
-                else_block,
-                span: start.to(self.previous().span),
-            }))
-        } else {
-            let then_block = Self::choice_block(self.choice_value()?);
-            if !self.choice_separator() {
-                return Err(self.error_here("Boolean choice requires !! and a false branch."));
-            }
-            self.advance();
-            self.advance();
-            let else_block = Self::choice_block(self.choice_value()?);
-            if self.choice_separator() {
-                return Err(self.error_here("Boolean choice has exactly two branches."));
-            }
-            ExprKind::If {
-                condition: Box::new(subject),
-                then_block,
-                else_block,
-            }
-        };
-        let span = start.to(self.previous().span);
-        // Include the subject and every branch, even choices hidden in parentheses,
-        // calls or blocks. Sibling expressions outside this span remain independent.
-        let first = self.tokens.partition_point(|t| t.span.start < span.start);
-        if self.tokens[first..self.pos]
-            .iter()
-            .filter(|t| t.kind == TokenKind::Choice)
-            .take(2)
-            .count()
-            > 1
-        {
-            return Err(self.error_at_span(
-                span,
-                "Nested ?? / !! choices are not allowed; use a local variable or match.",
-            ));
-        }
-        Ok(Expr {
-            kind: ExprKind::Choice(Box::new(Expr { kind, span })),
-            span,
-        })
     }
 
     fn error_at_name(&self, name: &Name, message: &str) -> crate::diagnostics::Diagnostic {
@@ -551,6 +431,14 @@ impl Parser<'_> {
                 ));
             }
             if self.eat(TokenKind::Dot) {
+                if self.check(TokenKind::Case)
+                    && matches!(&expr.kind, ExprKind::Name(test) if test.text == "test")
+                    && self.check_next(TokenKind::LeftParen)
+                {
+                    self.advance();
+                    expr = self.test_case(expr.span)?;
+                    continue;
+                }
                 let name = self.consume_member_name("Expect property name after \".\".")?;
                 if name.text == "throws"
                     && matches!(&expr.kind, ExprKind::Name(test) if test.text == "test")
@@ -574,7 +462,13 @@ impl Parser<'_> {
                     TokenKind::RightBracket,
                     "Expect \"]\" after index expression.",
                 )?;
-                let fallback = if self.eat(TokenKind::Else) {
+                // In a `confirm` condition the `else` is the confirm's (#521).
+                // `else:` is a compact `if`'s (#921), never the index's fallback.
+                let fallback = if !self.confirm_condition
+                    && self.check(TokenKind::Else)
+                    && self.nth(1).kind != TokenKind::Colon
+                    && self.eat(TokenKind::Else)
+                {
                     Some(Box::new(self.expression()?))
                 } else {
                     None
@@ -641,6 +535,79 @@ impl Parser<'_> {
             span,
         };
         Ok(Expr { kind: ExprKind::Try(Box::new(TryBody { body, catches: vec![clause], span })), span })
+    }
+
+    /// `test.case(name) { … }` (#809): a named sub-case of the running test,
+    /// in the test API, as `test.throws` is. It reads as
+    ///
+    /// ```text
+    /// if test.case(name) {
+    ///     try { …; test.case#end(); }
+    ///     catch test.case#error is Error { test.fail(test.case#error.text()); test.case#end(); }
+    /// } else {}
+    /// ```
+    ///
+    /// `test.case` opens the sub-case and says whether to run it (a filter may
+    /// leave it out); an error the block throws fails the sub-case, and the
+    /// sub-cases after it still run.
+    fn test_case(&mut self, start: Span) -> PResult<Expr> {
+        self.consume(TokenKind::LeftParen, "Expect \"(\" after test.case.")?;
+        let label = self.expression()?;
+        self.consume(TokenKind::RightParen, "Expect \")\" after the name of test.case.")?;
+        if !self.check(TokenKind::LeftBrace) {
+            return Err(self.error_here("Expect a block after test.case(name): test.case(name) { … }"));
+        }
+        let mut body = self.block()?;
+        let span = start.to(body.span);
+        let test = || Expr { kind: ExprKind::Name(Name { text: "test".into(), span: start }), span: start };
+        let action = |name: &str, args: Vec<Expr>| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Get { object: Box::new(test()), name: Name { text: name.into(), span: start } },
+                    span: start,
+                }),
+                args: args.into_iter().map(|value| Argument { name: None, span: value.span, value }).collect(),
+            },
+            span,
+        };
+        let statement = |expr: Expr| Stmt { kind: StmtKind::Expr { expr, condition: None }, span };
+        body.stmts.push(statement(action("case#end", Vec::new())));
+        let caught = Name { text: "test.case#error".into(), span: start };
+        let text = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Get {
+                        object: Box::new(Expr { kind: ExprKind::Name(caught.clone()), span }),
+                        name: Name { text: "text".into(), span: start },
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+        let clause = CatchClause {
+            name: Some(caught),
+            types: vec![TypeExpr {
+                kind: TypeKind::Named { path: vec![Name { text: "Error".into(), span: start }], args: Vec::new() },
+                span: start,
+            }],
+            patterns: Vec::new(),
+            body: Block {
+                stmts: vec![statement(action("fail", vec![text])), statement(action("case#end", Vec::new()))],
+                span,
+            },
+            span,
+        };
+        let guarded = Stmt { kind: StmtKind::Try(TryBody { body, catches: vec![clause], span }), span };
+        Ok(Expr {
+            kind: ExprKind::If {
+                condition: Box::new(action("case", vec![label])),
+                then_block: Block { stmts: vec![guarded], span },
+                else_block: Block { stmts: Vec::new(), span },
+            },
+            span,
+        })
     }
 
     /// Arguments after `(` up to and including `)`.
@@ -831,7 +798,7 @@ impl Parser<'_> {
             TokenKind::False => Literal::Bool(false),
             _ => match token.value {
                 Some(TokenValue::Int(value)) => Literal::Int(value),
-                Some(TokenValue::Float(value)) => Literal::Float(value),
+                Some(TokenValue::Float(value)) => Literal::Float(*value),
                 Some(TokenValue::Str(value)) => Literal::String(value),
                 Some(TokenValue::Char(value)) => Literal::Char(value),
                 // Literal tokens always carry a value; stay total anyway.
@@ -855,7 +822,7 @@ impl Parser<'_> {
         if self.try_mark_follows() {
             self.advance();
             let force = self.advance().kind == TokenKind::Bang;
-            // The mark covers the whole operand to its right, up to `else`/`??`.
+            // The mark covers the whole operand to its right, up to `else`.
             let value = self.logic_or()?;
             return Ok(Expr {
                 span: start.to(value.span),
@@ -1044,17 +1011,22 @@ impl Parser<'_> {
 
     /// After `if` in expression position: `expr block "else" (if_expr |
     /// block)`. An `else if` link is an else block holding the nested `if`
-    /// alone and spanning exactly it, the shape of a choice branch; the
+    /// alone and spanning exactly it; the
     /// formatter prints it back as `else if`. Each link counts against the
     /// nesting limit.
     fn if_expression(&mut self, start: Span) -> PResult<Expr> {
         self.nested(|parser| {
             let condition = parser.expression()?;
+            parser.expect_if_body()?;
+            if parser.check(TokenKind::Colon) {
+                return parser.compact_if(start, condition);
+            }
             let then_block = parser.block()?;
             parser.consume(TokenKind::Else, "If expression requires else branch.")?;
+            parser.reject_compact_else()?;
             let else_block = if parser.eat(TokenKind::If) {
                 let nested_start = parser.previous().span;
-                Self::choice_block(parser.if_expression(nested_start)?)
+                Self::expression_block(parser.if_expression(nested_start)?)
             } else {
                 parser.block()?
             };
@@ -1067,6 +1039,73 @@ impl Parser<'_> {
                 },
             })
         })
+    }
+}
+
+impl Parser<'_> {
+    /// The compact form after `if condition` (#921): `":" expression "else" ":" expression`. It builds the same
+    /// `ExprKind::If` as the block form, each branch a block holding its expression alone and spanning exactly
+    /// it, which is how the formatter tells the forms apart. `else` is mandatory, a branch is one expression (no
+    /// block), and the forms do not mix. A branch's own fallback needs parentheses: `else:` never starts one.
+    pub(super) fn compact_if(&mut self, start: Span, condition: Expr) -> PResult<Expr> {
+        self.consume(TokenKind::Colon, "Expect \":\" after the condition of a compact if.")?;
+        let then_value = self.compact_branch("if condition:")?;
+        // `if c: a else b`: the branch swallowed a fallback; the other branch needs `else:`.
+        if let ExprKind::Coalesce { fallback, .. } = &then_value.kind
+            && !self.check(TokenKind::Else)
+        {
+            return Err(self.error_at_span(
+                fallback.span,
+                "A compact if writes \"else:\" before its other branch; a fallback inside a branch takes parentheses: `if c: (x else y) else: z`.",
+            ));
+        }
+        if !self.check(TokenKind::Else) {
+            return Err(self.error_here("A compact if needs an else branch: `if condition: value else: other`."));
+        }
+        self.advance();
+        if !self.check(TokenKind::Colon) {
+            return Err(self.error_here(
+                "Expect \":\" after \"else\" in a compact if; the forms do not mix: `if c: a else: b` or `if c { a; } else { b; }`.",
+            ));
+        }
+        self.advance();
+        let else_value = self.compact_branch("else:")?;
+        Ok(Expr {
+            span: start.to(else_value.span),
+            kind: ExprKind::If {
+                condition: Box::new(condition),
+                then_block: Self::expression_block(then_value),
+                else_block: Self::expression_block(else_value),
+            },
+        })
+    }
+
+    /// One branch of a compact `if`: an expression, never a block.
+    fn compact_branch(&mut self, after: &str) -> PResult<Expr> {
+        if self.check(TokenKind::LeftBrace) {
+            return Err(self.error_here(format!(
+                "A compact if takes an expression after \"{after}\", not a block; write blocks as `if c {{ a; }} else {{ b; }}`."
+            )));
+        }
+        self.expression()
+    }
+
+    /// After the condition of an `if`: a block or, compact, `:` (#921).
+    pub(super) fn expect_if_body(&self) -> PResult<()> {
+        if !matches!(self.peek().kind, TokenKind::LeftBrace | TokenKind::Colon) {
+            return Err(self.error_here("Expect \"{\" or \":\" after the if condition."));
+        }
+        Ok(())
+    }
+
+    /// After the `else` of a block-form `if`: `else:` belongs to the compact form only.
+    pub(super) fn reject_compact_else(&self) -> PResult<()> {
+        if self.check(TokenKind::Colon) {
+            return Err(self.error_here(
+                "A block if takes a block after \"else\"; the forms do not mix: `if c { a; } else { b; }` or `if c: a else: b`.",
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -66,3 +66,31 @@ fn a_shared_import_is_parsed_once() {
     check(&mut loader, &root);
     assert_eq!(loader.parsed["shared"], 8);
 }
+
+/// #472: inspecting an already parsed file gives what inspecting the text
+/// gives. The full parse of a file without test items stands in for its
+/// production parse; with test items it is the test pass's own parse.
+#[test]
+fn inspecting_a_parsed_file_matches_inspecting_its_text() {
+    let modules = HashMap::from([(
+        "shared".to_string(),
+        "module shared v1.0.0;\nobject Shared {\n    has n is int;\n    Shared(:n);\n}\n".to_string(),
+    )]);
+    let cases = [
+        ("module app v1.0.0;\nimport \"shared\" take Shared;\nmain() is int { let _s = Shared(n: 1); 0; }\n", false),
+        ("module app v1.0.0;\nmain() is int { let x is int = \"s\"; 0; }\n", false),
+        ("module app v1.0.0;\nmain() is int { 0; }\ntest \"t\" { let y is bool = 1; }\n", true),
+    ];
+    for (text, test_mode) in cases {
+        let source = SourceFile::new("/app/main.ok", text).unwrap();
+        let full = syntax::parse(&source, &ParseOptions::default()).expect("parses");
+        let mut loader = Counting { modules: modules.clone(), parsed: HashMap::new(), resolves: true };
+        let own = lowering::inspect(&source, &mut loader, test_mode);
+        let mut loader = Counting { modules: modules.clone(), parsed: HashMap::new(), resolves: true };
+        let given = lowering::inspect_parsed(&source, Some(full), &mut loader, test_mode);
+        assert_eq!(given.parsed, own.parsed, "{text}");
+        assert_eq!(given.diagnostics, own.diagnostics, "{text}");
+        assert_eq!(format!("{:?}", given.outline), format!("{:?}", own.outline), "{text}");
+        assert_eq!(own.diagnostics.is_empty(), text.contains("Shared(n: 1)"), "{text}: {:?}", own.diagnostics);
+    }
+}

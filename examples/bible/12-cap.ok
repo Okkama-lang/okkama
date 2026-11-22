@@ -1,0 +1,28 @@
+module bible/caps v1.0.0;
+
+// A cap is a named, read-only view of an object: a few computed fields,
+// acquired explicitly with `::`, and nothing else of the owner.
+import "io/stdout" take Stdout;
+
+object Customer {
+    has given, family is string;
+    has card_number is string;
+    Customer(:given, :family, :card_number);
+    cap BusinessCard {
+        full_name is string { given + " " + family; }
+        initials is string { given.slice(0, 1) + family.slice(0, 1); }
+    }
+    charge(amount is int) is string { "charged " + amount.string() + " to " + card_number.slice(card_number.length() - 4, card_number.length()); }
+}
+
+object Printer {
+    Printer();
+    print(card is Customer::BusinessCard) is string { card::full_name + " (" + card::initials + ")"; }
+}
+
+main() is int {
+    let customer = Customer(given: "Ada", family: "Lovelace", card_number: "4000123412341234");
+    Stdout().writeln(Printer().print(customer::BusinessCard));
+    Stdout().writeln(customer.charge(10));
+    0;
+}

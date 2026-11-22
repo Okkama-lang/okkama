@@ -1,0 +1,49 @@
+## native events
+=== RUN   events come in source order, names lowercased, references decoded
+--- PASS: events come in source order, names lowercased, references decoded
+=== RUN   script content stays raw; kinds tell the events apart
+--- PASS: script content stays raw; kinds tell the events apart
+=== RUN   an attribute without a value has none
+--- PASS: an attribute without a value has none
+=== RUN   HTML attributes retain duplicates boolean empties and slash boundaries
+--- PASS: HTML attributes retain duplicates boolean empties and slash boundaries
+=== RUN   HTML Unicode spaces separate names but only ASCII names change case
+--- PASS: HTML Unicode spaces separate names but only ASCII names change case
+=== RUN   HTML references distinguish text and attribute ambiguity
+--- PASS: HTML references distinguish text and attribute ambiguity
+=== RUN   HTML raw text ends only at a matching delimited name
+--- PASS: HTML raw text ends only at a matching delimited name
+=== RUN   HTML comments declarations and instructions recover at EOF
+--- PASS: HTML comments declarations and instructions recover at EOF
+=== RUN   HTML malformed markup and empty instructions merge adjacent text
+--- PASS: HTML malformed markup and empty instructions merge adjacent text
+=== RUN   HTML lexical declarations and ordinary title content
+--- PASS: HTML lexical declarations and ordinary title content
+=== RUN   HTML cursors repeat independently and reject exhausted observations
+--- PASS: HTML cursors repeat independently and reject exhausted observations
+=== RUN   HTML preserves NUL and non-whitespace controls in attribute values
+--- PASS: HTML preserves NUL and non-whitespace controls in attribute values
+=== RUN   HTML has no implicit nesting attribute or text budget
+--- PASS: HTML has no implicit nesting attribute or text budget
+=== RUN   HTML documents retain snapshot identity while repeated cursors agree
+--- PASS: HTML documents retain snapshot identity while repeated cursors agree
+PASS
+
+## native entities
+=== RUN   HTML reference decoding preserves markup and is not recursive
+--- PASS: HTML reference decoding preserves markup and is not recursive
+=== RUN   HTML named and numeric recovery
+--- PASS: HTML named and numeric recovery
+=== RUN   HTML decoding repeats and composes with escaping
+--- PASS: HTML decoding repeats and composes with escaping
+=== RUN   HTML text and quotation policies
+--- PASS: HTML text and quotation policies
+=== RUN   HTML escaping preserves empty text Unicode and whitespace
+--- PASS: HTML escaping preserves empty text Unicode and whitespace
+=== RUN   HTML references are ordinary source and queries repeat
+--- PASS: HTML references are ordinary source and queries repeat
+=== RUN   HTML numeric references recover scalar limits overflow and leading zeros
+--- PASS: HTML numeric references recover scalar limits overflow and leading zeros
+=== RUN   HTML named references use longest case sensitive spellings and multiple scalars
+--- PASS: HTML named references use longest case sensitive spellings and multiple scalars
+PASS

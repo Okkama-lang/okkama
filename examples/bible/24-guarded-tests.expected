@@ -1,0 +1,9 @@
+=== RUN   reading needs no token
+--- PASS: reading needs no token
+=== RUN   changing without the token is a 401
+--- PASS: changing without the token is a 401
+=== RUN   changing with the token works
+--- PASS: changing with the token works
+=== RUN   maintenance answers before any endpoint
+--- PASS: maintenance answers before any endpoint
+PASS

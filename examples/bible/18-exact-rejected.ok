@@ -1,0 +1,15 @@
+module bible/exact v1.0.0;
+
+role Shape { area() is int; }
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+main() is int {
+    let make = () is Square { Square(side: 2); };
+    let shapes is () is Shape = make;
+    0;
+}

@@ -43,12 +43,21 @@ impl Kind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionInfo {
     pub kinds: Vec<Kind>,
+    /// Proven pointer-free for every definition of this SPB register (#535).
+    pub(crate) pointer_free: Vec<bool>,
     pub result: Option<Kind>,
     /// See [`is_driver`].
     pub driver: bool,
+    /// Byte offset of the Future's inline ownership identity (serial, owner) in this function's frame, after the
+    /// retained arguments (#931). Only programs with resources (a type with `destroy`) have it; others keep 0.5.8's
+    /// frame size.
+    pub identity_at: Option<u64>,
+    /// Byte offset of the Future's ownership regions (OWNED, then INPUTS) in this function's frame, behind the
+    /// registers and the driver slot (#932). Only programs with resources have them.
+    pub held_at: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -78,9 +87,17 @@ fn add_workers(program: &mut Program) -> Vec<(Option<TypeRef>, usize)> {
                     }
         }
     }
+    // #588: a session's published program already holds the workers of earlier extensions; they keep their index.
+    let existing: Vec<(Option<TypeRef>, usize)> = program.functions.iter().enumerate()
+        .filter(|(_, f)| f.intrinsic.as_ref().is_some_and(|i| i.name == WORKER) && f.code.is_empty())
+        .map(|(index, f)| (f.result, index))
+        .collect();
     results
         .into_iter()
         .map(|result| {
+            if let Some(&(_, index)) = existing.iter().find(|(r, _)| *r == result) {
+                return (result, index);
+            }
             program.functions.push(okkama_sparrow::Function {
                 symbol: format!("$worker#{}", program.functions.len()),
                 is_async: true,
@@ -106,13 +123,35 @@ pub fn is_driver(function: &okkama_sparrow::Function) -> bool {
 impl Loaded {
     pub fn new(mut program: Program) -> Self {
         let workers = add_workers(&mut program);
+        // One switch for both JIT roots and suspended-frame layouts. Read it
+        // once at load time; never change a live runtime's tracing contract.
+        let pointer_free = std::env::var_os("SPARROW_CORE_POINTER_FREE").is_none_or(|value| value != "0");
+        let int_ranges = std::env::var_os("SPARROW_CORE_INT_RANGE").is_none_or(|value| value != "0");
+        let profile = std::env::var("SPARROW_CORE_PROFILE_COMPILE").is_ok_and(|value| !value.is_empty() && value != "0");
+        let resources = program.objects.iter().any(|o| o.destroy.is_some());
         let functions = program
             .functions
             .iter()
-            .map(|f| FunctionInfo {
-                kinds: f.registers.iter().map(|t| Kind::of(&program, *t)).collect(),
-                result: f.result.map(|t| Kind::of(&program, t)),
-                driver: is_driver(f),
+            .map(|f| {
+                let kinds: Vec<Kind> = f.registers.iter().map(|t| Kind::of(&program, *t)).collect();
+                // This work happens at load time, outside jit::compile's timer.
+                let started = profile.then(std::time::Instant::now);
+                let pointer_free = if !pointer_free {
+                    vec![false; kinds.len()]
+                } else if int_ranges {
+                    crate::pointer_free::analyze(f, &kinds, &program)
+                } else {
+                    crate::pointer_free::analyze_with_ranges(f, &kinds, &program, false)
+                };
+                if let Some(started) = started {
+                    eprintln!("; pointer-free analysis\t{}\t{} microseconds", f.symbol, started.elapsed().as_micros());
+                }
+                let driver = is_driver(f);
+                // header, fixed words, registers, the driver slot; then, with resources, the ownership regions,
+                // the retained arguments and the identity
+                let held_at = resources.then(|| (1 + crate::tasks::FIXED_WORDS + kinds.len() + usize::from(driver)) as u64 * 8);
+                let identity_at = held_at.map(|at| at + 16 + f.params.len() as u64 * 8);
+                FunctionInfo { kinds, pointer_free, result: f.result.map(|t| Kind::of(&program, t)), driver, identity_at, held_at }
             })
             .collect();
         // A cell is what its constructor intrinsic makes, whatever its name.
@@ -150,7 +189,8 @@ impl Loaded {
     }
 
     /// Field representations for the collector. Async frames keep every
-    /// register after the fixed frame words (see `tasks`).
+    /// register after the fixed frame words, an optional driver slot, and
+    /// retained arguments independent of reused registers (see `tasks`).
     pub fn layouts(&self) -> Layouts {
         let p = &self.program;
         Layouts {
@@ -182,7 +222,8 @@ impl Loaded {
             frames: self
                 .functions
                 .iter()
-                .map(|f| {
+                .zip(&p.functions)
+                .map(|(f, source)| {
                     // state, result, failure, waiter, awaiting, resume, flags
                     let mut layout = vec![
                         Repr::Raw,
@@ -193,13 +234,42 @@ impl Loaded {
                         Repr::Raw,
                         Repr::Raw,
                     ];
-                    layout.extend(f.kinds.iter().map(|k| k.repr()));
+                    layout.extend(f.kinds.iter().zip(&f.pointer_free).map(|(k, free)| if *free { Repr::Raw } else { k.repr() }));
                     if f.driver {
                         layout.push(Repr::Ref);
+                    }
+                    // The ownership regions, the retained arguments and the identity serve resources only: a
+                    // program without resources has none of them (#932).
+                    if f.identity_at.is_some() {
+                        layout.extend([Repr::Ref, Repr::Ref]); // owned, inputs (#932)
+                        layout.extend(source.params.iter().map(|param| f.kinds[param.0 as usize].repr()));
+                        layout.extend([Repr::Raw, Repr::Raw]); // identity serial and owner (#931)
                     }
                     layout
                 })
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    /// #588: a program that already holds the worker of a result type (a session's published program) keeps it at
+    /// its index; loading adds workers only for result types without one.
+    #[test]
+    fn loading_reuses_the_workers_a_program_already_has() {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
+             function f0 \"work\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
+             function f1 \"spawner\" async {\n registers [t1, t2]\n params []\n result t2\n 0: fn.closure r0, f0, []\n 1: worker.spawn r1, r0, [], false\n 2: ret r1\n}\n",
+        ).unwrap();
+        let first = Loaded::new(program);
+        assert_eq!(first.program.functions.len(), 3, "one worker added");
+        assert_eq!(first.workers.len(), 1);
+        let again = Loaded::new(first.program.clone());
+        assert_eq!(again.program.functions, first.program.functions, "the existing worker is reused");
+        assert_eq!(again.workers, first.workers);
     }
 }

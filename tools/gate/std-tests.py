@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Встроенные тесты всех модулей std на движках IR и Sparrow.
+"""Встроенные тесты всех модулей std на Sparrow.
 
 usage: std-tests.py [--jobs N]
 
 Модуль с тестами — файл std/ с объявлением теста: `test "` или
 `async test "`, в начале строки или внутри объекта (#490). Каждый
-запускается `okkama run --engine E -t`; провал — ненулевой код выхода.
+запускается `okkama run -t`; провал — ненулевой код выхода.
 Известные провалы перечислены в known-failures.txt рядом: они печатаются,
 но не роняют проверку; новый провал или исправленный известный — роняют.
 У нового провала печатается и хвост вывода модуля (#502): по одной
@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 OKKAMA = os.path.join(ROOT, "okkama-rs", "target", "release", "okkama")
 # A test declaration: async or not, at module scope or inside an object.
 TEST = re.compile(r'\s*(async\s+)?test "')
-ENGINES = ("ir", "sparrow")
+ENGINES = ("sparrow",)
 # Lines of a failing module's output kept for the report.
 TAIL = 60
 
@@ -47,7 +47,7 @@ def run(job):
     path, engine = job
     env = dict(os.environ, OKKAMA_STDLIB_DIR=os.path.join(ROOT, "std"))
     try:
-        result = subprocess.run([OKKAMA, "run", "--engine", engine, "-t", path], cwd=ROOT, env=env,
+        result = subprocess.run([OKKAMA, "run", "-t", path], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=600)
         return path, engine, result.returncode == 0, (result.stdout + result.stderr).strip().splitlines()[-TAIL:]
     except subprocess.TimeoutExpired:

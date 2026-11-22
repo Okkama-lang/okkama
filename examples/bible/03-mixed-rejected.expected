@@ -1,0 +1,1 @@
+03-mixed-rejected.ok:3:8: semantic error: Cannot compare int and float

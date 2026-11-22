@@ -1,0 +1,35 @@
+// #244: Проверка тела против fixed framing.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/http1_body_check" take Http1BodyCheck;
+import "http/body" take TextBody;
+import "http/http1_framing" take Http1BodyKind, Http1BodyPlan;
+import "http/http1_head" take Http1Limits;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let body = TextBody(x).opening();
+        let plan = Http1BodyPlan(Http1BodyKind.fixed,x.length(),true);
+        let contribution = Http1BodyCheck(body,plan,Http1Limits(),true).known()[0];
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -31,12 +31,14 @@ impl Parser<'_> {
                 // lacks its `}` (recovering parses only).
                 return Err(self.error_here("Expect \"}\" after block."));
             }
-            let (from, for_source, owner) = (self.pos, self.for_source, self.external_cap_owner.clone());
+            let (from, for_source, confirm_condition, owner) =
+                (self.pos, self.for_source, self.confirm_condition, self.external_cap_owner.clone());
             match self.statement() {
                 Ok(statement) => stmts.push(statement),
                 Err(error) => {
                     self.damaged = true;
-                    (self.for_source, self.external_cap_owner) = (for_source, owner);
+                    (self.for_source, self.confirm_condition, self.external_cap_owner) =
+                        (for_source, confirm_condition, owner);
                     if !self.recover(error) {
                         return Err(self.error_here("Too many syntax errors."));
                     }
@@ -79,9 +81,19 @@ impl Parser<'_> {
             TokenKind::LeftBrace => self.block_statement()?,
             TokenKind::If => {
                 self.advance();
-                let statement = self.if_statement(start)?;
-                self.eat(TokenKind::Semicolon);
-                StmtKind::If(statement)
+                match self.if_statement_or_compact(start)? {
+                    Ok(statement) => {
+                        self.eat(TokenKind::Semicolon);
+                        StmtKind::If(statement)
+                    }
+                    // A compact `if` (#921) is an expression: it stands as an expression statement.
+                    Err(expr) => {
+                        if !self.check(TokenKind::RightBrace) {
+                            self.consume(TokenKind::Semicolon, "Expect \";\" after expression.")?;
+                        }
+                        StmtKind::Expr { expr, condition: None }
+                    }
+                }
             }
             TokenKind::Match => {
                 self.advance();
@@ -389,53 +401,78 @@ impl Parser<'_> {
 
     /// After `if`: `expr block ("else" (if_stmt | block))?`. `else if`
     /// chains recurse, so each link counts against the nesting limit.
-    fn if_statement(&mut self, start: Span) -> PResult<IfStmt> {
+    /// `if` in statement position: the block form as a statement, or the compact form (#921) as the
+    /// expression it is.
+    fn if_statement_or_compact(&mut self, start: Span) -> PResult<Result<IfStmt, Expr>> {
         self.nested(|parser| {
             let condition = parser.expression()?;
-            let then_block = parser.block()?;
-            let mut else_branch = None;
-            if parser.eat(TokenKind::Else) {
-                if parser.eat(TokenKind::If) {
-                    let nested_start = parser.previous().span;
-                    else_branch =
-                        Some(ElseBranch::If(Box::new(parser.if_statement(nested_start)?)));
-                } else {
-                    else_branch = Some(ElseBranch::Block(parser.block()?));
-                }
+            parser.expect_if_body()?;
+            if parser.check(TokenKind::Colon) {
+                return parser.compact_if(start, condition).map(Err);
             }
-            let end = match &else_branch {
-                None => then_block.span,
-                Some(ElseBranch::Block(block)) => block.span,
-                Some(ElseBranch::If(nested)) => nested.span,
-            };
-            Ok(IfStmt {
-                condition,
-                then_block,
-                else_branch,
-                span: start.to(end),
-            })
+            parser.finish_if_statement(start, condition).map(Ok)
         })
     }
 
-    /// After `match`: `expr "{" ("case" exprs block | "else" block)* "}"`.
+    fn if_statement(&mut self, start: Span) -> PResult<IfStmt> {
+        self.nested(|parser| {
+            let condition = parser.expression()?;
+            parser.finish_if_statement(start, condition)
+        })
+    }
+
+    fn finish_if_statement(&mut self, start: Span, condition: Expr) -> PResult<IfStmt> {
+        let then_block = self.block()?;
+        let mut else_branch = None;
+        if self.eat(TokenKind::Else) {
+            self.reject_compact_else()?;
+            if self.eat(TokenKind::If) {
+                let nested_start = self.previous().span;
+                else_branch = Some(ElseBranch::If(Box::new(self.if_statement(nested_start)?)));
+            } else {
+                else_branch = Some(ElseBranch::Block(self.block()?));
+            }
+        }
+        let end = match &else_branch {
+            None => then_block.span,
+            Some(ElseBranch::Block(block)) => block.span,
+            Some(ElseBranch::If(nested)) => nested.span,
+        };
+        Ok(IfStmt { condition, then_block, else_branch, span: start.to(end) })
+    }
+
+    /// After `match`: `expr "{" ("case" patterns body | "else" body)* "}"`, where a body is a block or, in the
+    /// compact form (#893), `":" expression ";"`. `case _` is the remainder, another spelling of `else`.
     /// Shared by statements and expressions.
     pub(super) fn finish_match(&mut self, start: Span) -> PResult<MatchBody> {
         let subject = self.expression()?;
         self.consume(TokenKind::LeftBrace, "Expect \"{\" after match subject.")?;
         let mut cases = Vec::new();
         let mut else_block = None;
+        let mut else_compact = false;
         while !self.check(TokenKind::RightBrace) && !self.is_at_end() {
             if self.eat(TokenKind::Case) {
-                let keyword = self.previous().span;
+                let keyword = self.previous().clone();
+                if self.lexeme(self.peek()) == "_" && matches!(self.nth(1).kind, TokenKind::Colon | TokenKind::LeftBrace) {
+                    self.advance();
+                    if else_block.is_some() {
+                        return Err(self.error_at(&keyword, "Match cannot have multiple else branches."));
+                    }
+                    let (body, compact) = self.case_body()?;
+                    else_block = Some(body);
+                    else_compact = compact;
+                    continue;
+                }
                 let mut patterns = vec![self.expression()?];
                 while self.eat(TokenKind::Comma) {
                     patterns.push(self.expression()?);
                 }
-                let body = self.block()?;
+                let (body, compact) = self.case_body()?;
                 cases.push(MatchCase {
                     patterns,
-                    span: keyword.to(body.span),
+                    span: keyword.span.to(body.span),
                     body,
+                    compact,
                 });
                 continue;
             }
@@ -454,8 +491,33 @@ impl Parser<'_> {
             subject,
             cases,
             else_block,
+            else_compact,
             span: start.to(close.span),
         })
+    }
+
+    /// A match case body: a block, or `":" expression ";"` (#893), whose expression is the case's value
+    /// (`throw` allowed), normalized to a one-statement block.
+    fn case_body(&mut self) -> PResult<(crate::syntax::ast::Block, bool)> {
+        if !self.eat(TokenKind::Colon) {
+            return Ok((self.block()?, false));
+        }
+        let value = if self.eat(TokenKind::Throw) {
+            let start = self.previous().span;
+            let value = self.expression()?;
+            Expr { span: start.to(value.span), kind: ExprKind::Throw(Box::new(value)) }
+        } else {
+            self.expression()?
+        };
+        self.consume(TokenKind::Semicolon, "Expect \";\" after a compact match case.")?;
+        let span = value.span;
+        Ok((crate::syntax::ast::Block {
+            stmts: vec![crate::syntax::ast::Stmt {
+                kind: crate::syntax::ast::StmtKind::Expr { expr: value, condition: None },
+                span,
+            }],
+            span,
+        }, true))
     }
 
     /// `for source "->" binding ("," binding)* block`.

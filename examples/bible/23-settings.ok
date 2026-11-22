@@ -1,0 +1,31 @@
+module bible/tally_settings v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "cli/command" take CliCommand, Option;
+
+// The order of precedence: a flag, then the environment, then the default.
+// The environment is a value given to the object, never read behind its back.
+object TopSetting {
+    has command is CliCommand;
+    has environment is Environment;
+
+    TopSetting(:environment) {
+        command = CliCommand(name: "tally", options: [Option(name: "top", short: "n", value: "N")]);
+    }
+
+    top(arguments is @string) is int {
+        let call = command.invocation(arguments);
+        call.int("top") else (environment.maybe("TALLY_TOP").int() else 3);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let plain = TopSetting(environment: Environment(values: [:]));
+    let configured = TopSetting(environment: Environment(values: ["TALLY_TOP": "10"]));
+    out.writeln("default: " + plain.top([]).string());
+    out.writeln("environment: " + configured.top([]).string());
+    out.writeln("flag: " + configured.top(["-n", "2"]).string());
+    0;
+}

@@ -1,0 +1,163 @@
+[
+  {
+    "name": "default-delimiter",
+    "status": 1,
+    "failed": [
+      "--- FAIL: default grammar empty trailing quoted and multiline fields",
+      "--- FAIL: read budgets are scalar decoded and document bounded",
+      "    expected columns, got field",
+      "--- FAIL: records read their fields by column name",
+      "--- FAIL: CSV scalar spans preserve BOM controls escapes and quoted line endings",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "default-CR-requires-LF",
+    "status": 1,
+    "failed": [
+      "--- FAIL: default grammar empty trailing quoted and multiline fields",
+      "--- FAIL: read budgets are scalar decoded and document bounded",
+      "--- FAIL: records read their fields by column name",
+      "--- FAIL: records stream from an upload as they come",
+      "--- FAIL: CSV scalar spans preserve BOM controls escapes and quoted line endings",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "default-undoubling",
+    "status": 1,
+    "failed": [
+      "--- FAIL: default grammar empty trailing quoted and multiline fields",
+      "    expected [[], [a, , ], [a",
+      "    expected \"",
+      "--- FAIL: read budgets are scalar decoded and document bounded",
+      "    expected [\"], got [\"\"]",
+      "--- FAIL: CSV scalar spans preserve BOM controls escapes and quoted line endings",
+      "    expected [[\ufeff, \u00e9\ud83d\ude00\"\u0000",
+      "    expected [[\ufeff, \u00e9\ud83d\ude00\"\u0000",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "default-final-column-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: read budgets are scalar decoded and document bounded",
+      "--- FAIL: CSV default error precedence includes EOF and pending CR",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"CsvLimitExceeded.kind(CsvLimit.rows)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"CsvLimitExceeded.kind(CsvLimit.rows)\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-retain-UTF8-tail",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream accepts every byte cut through quotes CRLF and Unicode",
+      "--- FAIL: CSV stream error offsets survive split invalid UTF8 and repeated reads",
+      "--- FAIL: CSV stream exact byte scalar field and row budgets",
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.field)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.field)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"InvalidUtf8.at(1)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"InvalidUtf8.at(1)\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-CR-requires-LF",
+    "status": 1,
+    "failed": [
+      "--- FAIL: rows come one at a time, then the end, stable until close",
+      "--- FAIL: a quoted field may span reads and lines; a bad quote is an error",
+      "--- FAIL: a stream reads rows of text",
+      "--- FAIL: rows stream from an upload with for await",
+      "--- FAIL: CSV stream accepts every byte cut through quotes CRLF and Unicode",
+      "--- FAIL: CSV stream error offsets survive split invalid UTF8 and repeated reads",
+      "--- FAIL: CSV stream exact byte scalar field and row budgets",
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"InvalidCsv.at(7)\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"InvalidCsv.at(7)\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-byte-exact-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream exact byte scalar field and row budgets",
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"CsvByteLimitExceeded.exceeded\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"CsvByteLimitExceeded.exceeded\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"CsvByteLimitExceeded.exceeded\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"CsvByteLimitExceeded.exceeded\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-input-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"accepted\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.input)\", got \"EndOfCsv.reached\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-decoded-field-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.field)\", got \"accepted\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.field)\", got \"EndOfCsv.reached\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-row-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"accepted\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.rows)\", got \"EndOfCsv.reached\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-column-bound",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream each decoded limit rejects excess and remains stable",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"accepted\"",
+      "    expected \"CsvLimitExceeded.kind(CsvLimit.columns)\", got \"EndOfCsv.reached\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-syntax-offset",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream error offsets survive split invalid UTF8 and repeated reads",
+      "    expected \"InvalidCsv.at(2)\", got \"InvalidCsv.at(3)\"",
+      "    expected \"InvalidCsv.at(2)\", got \"InvalidCsv.at(3)\"",
+      "--- FAIL: CSV stream exact byte scalar field and row budgets",
+      "    expected \"InvalidCsv.at(2)\", got \"InvalidCsv.at(3)\"",
+      "FAIL"
+    ]
+  },
+  {
+    "name": "stream-surrogate-rejection",
+    "status": 1,
+    "failed": [
+      "--- FAIL: CSV stream error offsets survive split invalid UTF8 and repeated reads",
+      "    expected \"InvalidUtf8.at(4)\", got \"Bytes are not valid UTF-8\"",
+      "    expected \"InvalidUtf8.at(4)\", got \"accepted\"",
+      "FAIL"
+    ]
+  }
+]

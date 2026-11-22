@@ -1,0 +1,7 @@
+POST https://api.example.com/orders?shop=1&notify=a%26b
+  Accept: application/json
+  Content-Type: application/json
+  Content-Length: 24
+POST https://example.com/search
+  Content-Type: application/x-www-form-urlencoded
+  Content-Length: 11

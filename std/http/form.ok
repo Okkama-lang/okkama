@@ -21,7 +21,6 @@ import "http/header" take Headers, Header, HeaderName, HeaderLimits, HttpAsciiLo
 import "mime/media_type" take MediaType, MediaTypeLimits, MimeToken, MimeCharacter;
 import "encoding/single_byte" take Latin1Decoded, Latin1Encoded, AsciiDecoded;
 import "encoding/utf" take Utf8Decoded, Utf8Encoded;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "io/stream" take InvalidReadLimit;
@@ -37,30 +36,30 @@ import "fs/directory" take DirectoryLocating;
 // How much a form may hold.
 object FormLimits {
     has fields, files is int;
-    has field_bytes, file_bytes, total_bytes is BigInt;
+    has field_bytes, file_bytes, total_bytes is int;
 
     // 1000 fields, 100 files, 1 MiB per field, 64 MiB per file and 128 MiB in
     // all.
     FormLimits() {
         fields = 1000;
         files = 100;
-        field_bytes = BigInt(1048576);
-        file_bytes = BigInt(67108864);
-        total_bytes = BigInt(134217728);
+        field_bytes = 1048576;
+        file_bytes = 67108864;
+        total_bytes = 134217728;
     }
 
     // The limits as given; InvalidFormLimits for a negative one.
     FormLimits(
         fields is int,
         files is int,
-        field_bytes is BigInt,
-        file_bytes is BigInt,
-        total_bytes is BigInt
+        field_bytes is int,
+        file_bytes is int,
+        total_bytes is int
     ) {
         confirm fields >= 0 && fields <= 65535 && files >= 0 && files <= 65535
             else throw InvalidFormLimits.invalid;
         for [field_bytes, file_bytes, total_bytes] -> limit {
-            confirm limit.sign() >= 0 && limit.order(BigInt(9007199254740991)) != Order.greater
+            confirm limit.sign() >= 0 && limit.order((9007199254740991)) != Order.greater
                 else throw InvalidFormLimits.invalid;
         }
         self.fields = fields;
@@ -71,17 +70,17 @@ object FormLimits {
     }
 
     // Bytes per text field.
-    field_bytes() is BigInt {
+    field_bytes() is int {
         field_bytes;
     }
 
     // Bytes per file.
-    file_bytes() is BigInt {
+    file_bytes() is int {
         file_bytes;
     }
 
     // Bytes in all.
-    total_bytes() is BigInt {
+    total_bytes() is int {
         total_bytes;
     }
 
@@ -184,7 +183,7 @@ hidden object FormBoundary {
         confirm bytes.size() > 0
             && bytes.size() <= 70
             && bytes.size() == origin.length()
-            && origin.slice(origin.length() - 1, origin.length()) != " "
+            && !origin.ends_with(" ")
             else throw InvalidMultipartForm.because("boundary budget or ASCII grammar");
         for bytes -> octet {
             let code = octet.int();
@@ -192,7 +191,7 @@ hidden object FormBoundary {
                 || (code >= 97 && code <= 122)
                 || (code >= 48 && code <= 57);
             let scalar = AsciiDecoded([octet]).string();
-            confirm letter || " '()+_,-./:=?".split(scalar).size() > 1
+            confirm letter || " '()+_,-./:=?".contains(scalar)
                 else throw InvalidMultipartForm.because("invalid boundary character");
         }
         self.origin = origin;
@@ -257,7 +256,7 @@ hidden object FormBoundarySearch {
                 text.length();
             };
             let suffix = text.slice(after, end);
-            let closing = suffix.length() >= 2 && suffix.slice(0, 2) == "--";
+            let closing = suffix.starts_with("--");
             let position = Atomic(if closing {
                 2;
             }
@@ -354,9 +353,9 @@ hidden object MultipartState {
         self.boundary = boundary;
         marker = "\r\n--" + boundary;
         self.limits = limits;
-        field_limit = limits.field_bytes().int();
-        file_limit = limits.file_bytes().int();
-        total_limit = limits.total_bytes().int();
+        field_limit = limits.field_bytes();
+        file_limit = limits.file_bytes();
+        total_limit = limits.total_bytes();
         tail = Atomic("");
         wire = Atomic(0);
         fields = Atomic(0);
@@ -757,8 +756,8 @@ hidden object FormHeaders {
         let entries is @Header = lines.map() -> line {
             confirm line != ""
                 && line.length() <= 8192
-                && line.slice(0, 1) != " "
-                && line.slice(0, 1) != "\t"
+                && !line.starts_with(" ")
+                && !line.starts_with("\t")
                 else throw InvalidMultipartForm.because("part header line or folding");
             let pieces = line.split(":");
             confirm pieces.size() > 1 else throw InvalidMultipartForm.because("part header colon");
@@ -806,7 +805,7 @@ hidden object FormDispositionRules {
             }
             if !quoted.value() && code == 61 {
                 let name = Header(name: HeaderName("x"), value: origin.slice(start.value(), index)).value();
-                confirm name.split("*").size() == 1
+                confirm !name.contains("*")
                     else throw InvalidMultipartForm.because(
                         "extended disposition parameters are forbidden"
                     );
@@ -1207,7 +1206,7 @@ object ParsedUrlEncodedForm {
     // Reads the fields now; parameters() is the usual call.
     async read() is QueryParameters {
         defer origin.close();
-        let maximum = limits.total_bytes().int();
+        let maximum = limits.total_bytes();
         let cap = if maximum < 1048576 {
             maximum;
         }
@@ -1244,7 +1243,7 @@ object ParsedUrlEncodedForm {
             throw FormLimitExceeded.kind("fields");
         };
         let entries = parameters.entries();
-        let field_limit = limits.field_bytes().int();
+        let field_limit = limits.field_bytes();
         for (0..entries.size()) -> index {
             let entry = entries.item(index);
             confirm Utf8Encoded(entry.value()).bytes().size() <= field_limit

@@ -1,0 +1,32 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "encoding/pem" take PemEncoded, PemBlock;
+
+object Bench {
+    has texts is @string;
+    Bench() {
+        texts = (0..256).map() -> value {
+            let data is @byte = (0..40).map() -> k { byte((value + 7 * k) % 256); };
+            PemEncoded(kind: "TEST DATA", data: data).string();
+        };
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let block = PemBlock(origin: texts[i % 256]);
+        let bytes = block.bytes();
+        self.run(i + 1, n, acc + (bytes[0].int() + bytes.size() + block.kind().length()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -739,11 +739,13 @@
     "interaction": {
      "cases": [
       "L08.failure.spawned-task-observed",
-      "L08.spawn.event-barrier"
+      "L08.spawn.event-barrier",
+      "L08.spawn.unawaited-outcome-released"
      ],
      "mandatory_cases": [
       "L08.failure.spawned-task-observed",
-      "L08.spawn.event-barrier"
+      "L08.spawn.event-barrier",
+      "L08.spawn.unawaited-outcome-released"
      ],
      "requirement": "required"
     },
@@ -819,9 +821,21 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L08.cancel.after-await-settled",
+      "L08.cancel.final-async-destroy-shielded",
+      "L08.cancel.final-defer-await-interrupted",
+      "L08.cancel.final-exit-window",
+      "L08.cancel.late-after-last-await",
+      "L08.cancel.nested-frame-next-await",
       "L08.cancel.shared-awaited-survives"
      ],
      "mandatory_cases": [
+      "L08.cancel.after-await-settled",
+      "L08.cancel.final-async-destroy-shielded",
+      "L08.cancel.final-defer-await-interrupted",
+      "L08.cancel.final-exit-window",
+      "L08.cancel.late-after-last-await",
+      "L08.cancel.nested-frame-next-await",
       "L08.cancel.shared-awaited-survives"
      ],
      "requirement": "required"
@@ -2249,10 +2263,12 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "mandatory_cases": [
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
@@ -2276,12 +2292,14 @@
      "cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "mandatory_cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
@@ -3167,10 +3185,12 @@
     },
     "interaction": {
      "cases": [
-      "L07.confirm.else-panic"
+      "L07.confirm.else-panic",
+      "L07.confirm.index-else-panic"
      ],
      "mandatory_cases": [
-      "L07.confirm.else-panic"
+      "L07.confirm.else-panic",
+      "L07.confirm.index-else-panic"
      ],
      "requirement": "required"
     },
@@ -4194,13 +4214,21 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L01.gram.confirm.index-else"
+     ],
+     "mandatory_cases": [
+      "L01.gram.confirm.index-else"
+     ],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
     },
     "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L01.gram.confirm.index-else"
+     ],
+     "mandatory_cases": [
+      "L01.gram.confirm.index-else"
+     ],
      "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
     },
     "invalid": {
@@ -4328,8 +4356,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L01.gram.enum.case-trailing-comma"
+     ],
+     "mandatory_cases": [
+      "L01.gram.enum.case-trailing-comma"
+     ],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
     },
     "interaction": {
@@ -4584,22 +4616,26 @@
      "cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces"
+      "L01.gram.if.no-braces",
+      "L03.if.compact-without-else"
      ],
      "mandatory_cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces"
+      "L01.gram.if.no-braces",
+      "L03.if.compact-without-else"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if"
      ],
      "mandatory_cases": [
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if"
      ],
      "requirement": "required"
@@ -5370,11 +5406,13 @@
      "cases": [
       "L01.gram.action.param-trailing-comma",
       "L01.gram.collections.literals",
+      "L01.gram.enum.case-trailing-comma",
       "L01.gram.object.generic-trailing-comma"
      ],
      "mandatory_cases": [
       "L01.gram.action.param-trailing-comma",
       "L01.gram.collections.literals",
+      "L01.gram.enum.case-trailing-comma",
       "L01.gram.object.generic-trailing-comma"
      ],
      "requirement": "required"
@@ -6591,11 +6629,13 @@
     "interaction": {
      "cases": [
       "L07.destroy.async-on-cancel",
-      "L07.destroy.async-on-failure"
+      "L07.destroy.async-on-failure",
+      "L08.cancel.final-async-destroy-shielded"
      ],
      "mandatory_cases": [
       "L07.destroy.async-on-cancel",
-      "L07.destroy.async-on-failure"
+      "L07.destroy.async-on-failure",
+      "L08.cancel.final-async-destroy-shielded"
      ],
      "requirement": "required"
     },
@@ -8187,43 +8227,57 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.generic-std-instantiation"
      ],
      "mandatory_cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.generic-std-instantiation"
      ],
      "requirement": "required"
     },
     "interaction": {
      "cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.generic-std-instantiation",
+      "L04.once.keeps-plain-closure-and-role"
      ],
      "mandatory_cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.generic-std-instantiation",
+      "L04.once.keeps-plain-closure-and-role"
      ],
      "requirement": "required"
     },
     "invalid": {
      "cases": [
+      "L04.once.rejects-captured-resource",
       "L04.once.rejects-effect",
       "L04.once.rejects-nested",
       "L04.once.rejects-outside-action",
-      "L04.once.rejects-parameter"
+      "L04.once.rejects-parameter",
+      "L04.once.rejects-resource",
+      "L04.once.rejects-resource-role"
      ],
      "mandatory_cases": [
+      "L04.once.rejects-captured-resource",
       "L04.once.rejects-effect",
       "L04.once.rejects-nested",
       "L04.once.rejects-outside-action",
-      "L04.once.rejects-parameter"
+      "L04.once.rejects-parameter",
+      "L04.once.rejects-resource",
+      "L04.once.rejects-resource-role"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.keeps-plain-closure-and-role"
      ],
      "mandatory_cases": [
-      "L04.once.computed-once"
+      "L04.once.computed-once",
+      "L04.once.keeps-plain-closure-and-role"
      ],
      "requirement": "required"
     }
@@ -8509,10 +8563,10 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L04.fakes.storage-and-isolation"
+      "L04.fakes.typed-state"
      ],
      "mandatory_cases": [
-      "L04.fakes.storage-and-isolation"
+      "L04.fakes.typed-state"
      ],
      "requirement": "required"
     },
@@ -8538,10 +8592,10 @@
     },
     "normal": {
      "cases": [
-      "L04.fakes.storage-and-isolation"
+      "L04.fakes.typed-state"
      ],
      "mandatory_cases": [
-      "L04.fakes.storage-and-isolation"
+      "L04.fakes.typed-state"
      ],
      "requirement": "required"
     }
@@ -8553,7 +8607,7 @@
     "docs/okkama-spec-11072026.md#13"
    ],
    "status": "mandatory",
-   "title": "Role fakes are test-mode only, have defaulted fields, conform exactly and own isolated storage"
+   "title": "Role fakes are test-mode only, have defaulted fields, conform exactly and use ordinary typed state"
   },
   {
    "aspects": {
@@ -9169,16 +9223,26 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L08.collect.first-successful-and-completions"
+      "L08.collect.completions-consumers",
+      "L08.collect.first-successful-and-completions",
+      "L08.collect.settlement-order"
      ],
      "mandatory_cases": [
-      "L08.collect.first-successful-and-completions"
+      "L08.collect.completions-consumers",
+      "L08.collect.first-successful-and-completions",
+      "L08.collect.settlement-order"
      ],
      "requirement": "required"
     },
     "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L08.collect.completions-consumers",
+      "L08.collect.settlement-order"
+     ],
+     "mandatory_cases": [
+      "L08.collect.completions-consumers",
+      "L08.collect.settlement-order"
+     ],
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
@@ -9195,11 +9259,15 @@
     "normal": {
      "cases": [
       "L08.collect.all-futures-order",
-      "L08.collect.first-successful-and-completions"
+      "L08.collect.completions-consumers",
+      "L08.collect.first-successful-and-completions",
+      "L08.collect.settlement-order"
      ],
      "mandatory_cases": [
       "L08.collect.all-futures-order",
-      "L08.collect.first-successful-and-completions"
+      "L08.collect.completions-consumers",
+      "L08.collect.first-successful-and-completions",
+      "L08.collect.settlement-order"
      ],
      "requirement": "required"
     }
@@ -27056,13 +27124,13 @@
     },
     "normal": {
      "cases": [
-      "L04.fakes.storage-and-isolation",
+      "L04.fakes.typed-state",
       "L04.test.close-text-bytes-pass",
       "L07.test-runner.all-pass-async",
       "L07.test-runner.skip"
      ],
      "mandatory_cases": [
-      "L04.fakes.storage-and-isolation",
+      "L04.fakes.typed-state",
       "L04.test.close-text-bytes-pass",
       "L07.test-runner.all-pass-async",
       "L07.test-runner.skip"
@@ -27228,6 +27296,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "mandatory_cases": [
@@ -27235,6 +27306,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "requirement": "required"
@@ -27243,18 +27317,12 @@
      "cases": [
       "L05.choice.exhaustiveness",
       "L05.choice.mixed",
-      "L05.choice.nested-branch",
-      "L05.choice.nested-call",
-      "L05.choice.nested-subject",
       "L05.choice.scope",
       "L05.choice.types"
      ],
      "mandatory_cases": [
       "L05.choice.exhaustiveness",
       "L05.choice.mixed",
-      "L05.choice.nested-branch",
-      "L05.choice.nested-call",
-      "L05.choice.nested-subject",
       "L05.choice.scope",
       "L05.choice.types"
      ],
@@ -27266,6 +27334,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "mandatory_cases": [
@@ -27273,6 +27344,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "requirement": "required"
@@ -27285,7 +27359,7 @@
     "docs/okkama-spec-11072026.md#15"
    ],
    "status": "mandatory",
-   "title": "Non-nested lazy boolean and exhaustive enum choices with ?? and !!"
+   "title": "Compact match cases (case pattern: expression;), mixed with block cases; the removed ?? !! form is a syntax error"
   },
   {
    "aspects": {
@@ -28462,11 +28536,13 @@
     "boundary": {
      "cases": [
       "L02.byte.compare-and-index",
-      "L02.range.empty-and-single"
+      "L02.range.empty-and-single",
+      "L02.range.expansion-bounds"
      ],
      "mandatory_cases": [
       "L02.byte.compare-and-index",
-      "L02.range.empty-and-single"
+      "L02.range.empty-and-single",
+      "L02.range.expansion-bounds"
      ],
      "requirement": "required"
     },
@@ -28496,10 +28572,12 @@
     },
     "normal": {
      "cases": [
-      "L02.range.expansion"
+      "L02.range.expansion",
+      "L02.range.expansion-bounds"
      ],
      "mandatory_cases": [
-      "L02.range.expansion"
+      "L02.range.expansion",
+      "L02.range.expansion-bounds"
      ],
      "requirement": "required"
     }
@@ -28593,7 +28671,9 @@
     "invalid": {
      "cases": [
       "L02.byte.too-large",
+      "L02.cast.int-below-lower-bound",
       "L02.cast.int-out-of-range",
+      "L02.cast.int-upper-bound",
       "L02.cast.reject-int-from-bool",
       "L02.cast.reject-int-from-string",
       "L02.cast.reject-named-argument",
@@ -28601,7 +28681,9 @@
      ],
      "mandatory_cases": [
       "L02.byte.too-large",
+      "L02.cast.int-below-lower-bound",
       "L02.cast.int-out-of-range",
+      "L02.cast.int-upper-bound",
       "L02.cast.reject-int-from-bool",
       "L02.cast.reject-int-from-string",
       "L02.cast.reject-named-argument",
@@ -29471,20 +29553,26 @@
     },
     "invalid": {
      "cases": [
+      "L12.future-successor-bound-dropped",
       "L12.future-successor-dropped",
-      "L12.future-successor-obligation"
+      "L12.future-successor-obligation",
+      "L12.future-successor-typed-local-dropped"
      ],
      "mandatory_cases": [
+      "L12.future-successor-bound-dropped",
       "L12.future-successor-dropped",
-      "L12.future-successor-obligation"
+      "L12.future-successor-obligation",
+      "L12.future-successor-typed-local-dropped"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L12.future-successor-handoff",
       "L12.future-successor-obligation"
      ],
      "mandatory_cases": [
+      "L12.future-successor-handoff",
       "L12.future-successor-obligation"
      ],
      "requirement": "required"
@@ -31167,6 +31255,6 @@
   "unresolved": []
  },
  "results_from": [],
- "schema": "ocs-coverage/1",
- "suite_tree_sha256": "2247befff4dfd7f8dbacbdaa3439f26b403d151fa4475f799ff8c0ed9ca9cb25"
+ "schema": "ocs-coverage/2",
+ "suite_tree_sha256": "5b525ac966f2016a326f912b74c2f53b31243467b3824bab3ada4c2a037b1ba7"
 }

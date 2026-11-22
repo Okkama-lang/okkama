@@ -1,0 +1,1 @@
+04-mix-rejected.ok:9:23: semantic error: Operator * cannot be applied to int and float

@@ -1,0 +1,33 @@
+module bible/bound v1.0.0;
+
+// An object's action taken as a value: `retail.of` without a call is a bound
+// action. It goes wherever an action type is written, and it carries its
+// receiver with it.
+
+import "io/stdout" take Stdout;
+
+object Price {
+    has rate is int;
+    Price(:rate);
+    of(units is int) is int { units * rate; }
+}
+
+object Report {
+    has rule is (int) is int;
+    Report(:rule);
+    line(units is int) is string { units.string() + " -> " + rule(units).string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let retail = Price(rate: 12);
+    let wholesale = Price(rate: 9);
+    let pick is (int) is int = retail.of;
+    out.writeln(pick(3).string());
+    let rules is %string:(int) is int = ["retail": retail.of, "wholesale": wholesale.of];
+    out.writeln(Report(rule: rules["wholesale"] else retail.of).line(10));
+    let all = [3, 5, 8].map() -> n { pick(n); };
+    out.writeln(all.map() -> n { n.string(); }.join(" "));
+    out.writeln((pick == retail.of).string());
+    0;
+}

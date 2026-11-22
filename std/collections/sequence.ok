@@ -2,6 +2,12 @@ module collections/sequence v1.0.0;
 
 // A role for collections with a size and items by index.
 //
+// ```okkama
+// let names is Sequencing<string> = ["Ada", "Lin"];
+// let first = names.first();
+// let count = names.size();
+// ```
+//
 //     let names is Sequencing<string> = Sorted(origin: raw);
 //     names.size();
 //     names.item(0);
@@ -10,9 +16,13 @@ module collections/sequence v1.0.0;
 //     for names -> name { … }
 //
 // Arrays, Sorted, Repeated and many other collections play it, so code that
-// needs indexed access can take any of them.
+// needs indexed access can take any of them. The errors named below are the
+// contract: an array played as a Sequencing throws them (indexing an array
+// directly, `values[i]`, stays a program error), and other implementations are
+// expected to do the same.
 
 import "collections/iteration" take Cursor, Iterating;
+import "error" take OutOfRange;
 import "size" take Sizing;
 
 // A collection with a size and an item at each index.
@@ -30,4 +40,6 @@ role Sequencing<T> {
 }
 
 // first() or last() of an empty sequence.
+//
+// - `empty`: first() or last() was requested from a sequence with no items.
 enum EmptySequence is Error = (empty);

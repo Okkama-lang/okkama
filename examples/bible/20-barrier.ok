@@ -1,0 +1,28 @@
+module bible/barrier v1.0.0;
+
+// A Barrier releases its parties together once the last has arrived; each
+// arrival gets its index, and the last one is parties - 1.
+import "async/barrier" take Barrier;
+import "io/stdout" take Stdout;
+
+object Party {
+    has name is string;
+    has phase is Barrier;
+    Party(:name, :phase);
+    async step() is void {
+        Stdout().writeln(name + " arrives");
+        let arrival = await phase.wait();
+        Stdout().writeln(name + " goes" + (if arrival == 2 { " last"; } else { ""; }));
+    }
+}
+
+async main() is int {
+    let phase = Barrier(parties: 3);
+    let a = spawn Party(name: "a", phase: phase).step();
+    let b = spawn Party(name: "b", phase: phase).step();
+    let c = spawn Party(name: "c", phase: phase).step();
+    await a;
+    await b;
+    await c;
+    0;
+}

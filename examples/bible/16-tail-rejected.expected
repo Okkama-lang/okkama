@@ -1,0 +1,1 @@
+16-tail-rejected.ok:9:9: semantic error: match over enum `Priority` does not cover urgent, so it has no value here; add the cases or an `else` branch

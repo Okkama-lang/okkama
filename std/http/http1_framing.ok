@@ -19,7 +19,7 @@ import "http/header" take Headers, Header, HeaderName, HttpAsciiLowercase;
 import "http/token" take HttpToken, InvalidToken;
 import "http/version" take HttpVersion;
 import "http/body" take UnknownBodyLength;
-import "numbers/bigint" take BigInt, InvalidBigInt;
+import "strings/parse" take Number, InvalidInteger;
 import "compare" take Order;
 
 // How a body is delimited.
@@ -29,12 +29,12 @@ enum Http1BodyKind = (empty, fixed, chunked, close_delimited, tunnel, upgrade);
 // this value neither reads bytes nor grants a connection lease.
 object Http1BodyPlan {
     has kind is Http1BodyKind;
-    has count is BigInt;
+    has count is int;
     has reusable is bool;
 
     // A body of kind, count bytes long when fixed; reusable says whether the
     // connection may carry another message.
-    Http1BodyPlan(kind is Http1BodyKind, count is BigInt, reusable is bool) {
+    Http1BodyPlan(kind is Http1BodyKind, count is int, reusable is bool) {
         confirm count.sign() >= 0
             else throw InvalidHttpMessage.because("negative body plan length");
         confirm kind == Http1BodyKind.fixed || count.sign() == 0
@@ -48,7 +48,7 @@ object Http1BodyPlan {
     }
 
     // The length of a fixed body; UnknownBodyLength otherwise.
-    length() is BigInt {
+    length() is int {
         confirm kind == Http1BodyKind.empty || kind == Http1BodyKind.fixed
             else throw UnknownBodyLength.unknown;
         count;
@@ -97,12 +97,12 @@ object Http1RequestFraming {
             else throw InvalidHttpMessage.because("Transfer-Encoding with Content-Length");
         if codings.size() > 0 {
             fields.supported(codings);
-            return Http1BodyPlan(kind: Http1BodyKind.chunked, count: BigInt(0), reusable: reuse);
+            return Http1BodyPlan(kind: Http1BodyKind.chunked, count: 0, reusable: reuse);
         }
         if length.size() > 0 {
             return fields.fixed(length[0], reuse);
         }
-        Http1BodyPlan(kind: Http1BodyKind.empty, count: BigInt(0), reusable: reuse);
+        Http1BodyPlan(kind: Http1BodyKind.empty, count: 0, reusable: reuse);
     }
 }
 
@@ -131,7 +131,7 @@ object Http1ResponseFraming {
         let status = head::Head::status;
         let class = StatusCode(status).class();
         if method == Method.connect && class == StatusClass.successful {
-            return Http1BodyPlan(kind: Http1BodyKind.tunnel, count: BigInt(0), reusable: false);
+            return Http1BodyPlan(kind: Http1BodyKind.tunnel, count: 0, reusable: false);
         }
         let fields = Http1FramingFields(
             origin: head.headers(),
@@ -146,18 +146,18 @@ object Http1ResponseFraming {
             confirm length.size() == 0 && codings.size() == 0
                 else throw InvalidHttpMessage.because("framing field on body-forbidden status");
             if status == Status.switching_protocols {
-                return Http1BodyPlan(kind: Http1BodyKind.upgrade, count: BigInt(0), reusable: false);
+                return Http1BodyPlan(kind: Http1BodyKind.upgrade, count: 0, reusable: false);
             }
             return Http1BodyPlan(
                 kind: Http1BodyKind.empty,
-                count: BigInt(0),
+                count: 0,
                 reusable: fields.reusable()
             );
         }
         if method == Method.head || status == Status.not_modified {
             return Http1BodyPlan(
                 kind: Http1BodyKind.empty,
-                count: BigInt(0),
+                count: 0,
                 reusable: fields.reusable()
             );
         }
@@ -165,14 +165,14 @@ object Http1ResponseFraming {
             fields.supported(codings);
             return Http1BodyPlan(
                 kind: Http1BodyKind.chunked,
-                count: BigInt(0),
+                count: 0,
                 reusable: fields.reusable()
             );
         }
         if length.size() > 0 {
             return fields.fixed(length[0], fields.reusable());
         }
-        Http1BodyPlan(kind: Http1BodyKind.close_delimited, count: BigInt(0), reusable: false);
+        Http1BodyPlan(kind: Http1BodyKind.close_delimited, count: 0, reusable: false);
     }
 }
 
@@ -250,20 +250,20 @@ object Http1FramingFields {
     }
 
     // The Content-Length, if exactly one is given.
-    length() is @BigInt {
+    length() is @int {
         let values = self.members("content-length", "Content-Length");
         if values.size() == 0 {
-            let empty is @BigInt = [];
+            let empty is @int = [];
             return empty;
         }
         let original = values[0];
         confirm original.length() <= 1024 else throw Http1LimitExceeded.kind("length_digits");
-        confirm original.slice(0, 1) != "-"
+        confirm !original.starts_with("-")
             else throw InvalidHttpMessage.because("unsigned Content-Length required");
         let parsed = try {
-            BigInt(original);
+            Number(original).int();
         }
-        catch e is InvalidBigInt {
+        catch e is InvalidInteger {
             throw InvalidHttpMessage.because("decimal Content-Length required");
         };
         for values -> value {
@@ -306,8 +306,8 @@ object Http1FramingFields {
     }
 
     // A fixed plan of length.
-    fixed(length is BigInt, reuse is bool) is Http1BodyPlan {
-        confirm length.order(BigInt(limits::Limits::body_bytes)) != Order.greater
+    fixed(length is int, reuse is bool) is Http1BodyPlan {
+        confirm length.order((limits::Limits::body_bytes)) != Order.greater
             else throw Http1LimitExceeded.kind("body_bytes");
         Http1BodyPlan(kind: Http1BodyKind.fixed, count: length, reusable: reuse);
     }
@@ -324,12 +324,8 @@ object Http1FramingFields {
             };
             HttpAsciiLowercase(token).string();
         };
-        let closing = canonical.reduce(false) -> found, value {
-            found || value == "close";
-        };
-        let keeping = canonical.reduce(false) -> found, value {
-            found || value == "keep-alive";
-        };
+        let closing = canonical.contains("close");
+        let keeping = canonical.contains("keep-alive");
         !closing && (version == HttpVersion.http_1_1 || keeping);
     }
 }
@@ -341,4 +337,31 @@ test "request body boundaries are decided before reading" {
     let head = ParsedHttp1RequestHead("POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n").head();
     let plan = Http1RequestFraming(head).plan();
     test.ok(plan::Plan::kind == Http1BodyKind.fixed && plan.length().string() == "0");
+}
+
+test "511 HTTP lengths retain exact int values and reject invalid grammar" {
+    for ["0", "123456789012345678901234567890"] -> text {
+        let headers = Headers([Header(name: HeaderName("Content-Length"), value: text)]);
+        test.is(
+            Http1FramingFields(
+                origin: headers,
+                version: HttpVersion.http_1_1,
+                limits: Http1Limits()
+            ).length(),
+            [Number(text).int()]
+        );
+    }
+    for ["-1", "+1", "1.5", "1x"] -> invalid {
+        test.ok(try {
+            Http1FramingFields(
+                origin: Headers([Header(name: HeaderName("Content-Length"), value: invalid)]),
+                version: HttpVersion.http_1_1,
+                limits: Http1Limits()
+            ).length();
+            false;
+        }
+        catch error is InvalidHttpMessage {
+            true;
+        });
+    }
 }

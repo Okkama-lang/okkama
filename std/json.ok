@@ -1,7 +1,8 @@
 module json v1.0.0;
 
+import "numbers/bigint" take BoundedPower;
 import "math/decimal" take Decimal;
-import "numbers/bigint" take BigInt, BigPowerLimitExceeded;
+import "numbers/bigint" take BigPowerLimitExceeded;
 import "compare" take Order;
 import "cell" take Cell;
 import "runtime/number_text" take int_parse_valid, int_parse;
@@ -21,6 +22,15 @@ import "runtime/json" take JsonParseState, JsonNodeState, json_parse_state, json
 
 // JSON values: one immutable Json, parsed or built in code, read without
 // casts and written by the runtime in one call.
+//
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// let order = ParsedJson("{\"id\":4711}").root();
+// Stdout().writeln(order.int("id").string());
+// ```
+// ```output
+// 4711
+// ```
 //
 //     let order = ParsedJson(text).root();
 //     order.int("id");                                // 4711
@@ -44,11 +54,18 @@ import "runtime/json" take JsonParseState, JsonNodeState, json_parse_state, json
 // JsonError.invalid_number; each names the RFC 6901 pointer of the value
 // ("" is the root). Strict RFC 8259 parsing keeps member order, rejects
 // repeated names (JsonError.duplicate_member_at) and nests at most 128 values deep
-// unless told otherwise. Numbers are exact: Decimal, BigInt or int, never
+// unless told otherwise. Numbers are exact: Decimal, int or int, never
 // float. Text output writes numbers positionally while that stays short
 // (integers up to 21 digits, fractions down to 1e-6) and exactly otherwise.
 
 // Which of the six JSON kinds a value is.
+//
+// - `null_value`: JSON null.
+// - `boolean_value`: A JSON boolean.
+// - `number_value`: An exact JSON number.
+// - `string_value`: A Unicode JSON string.
+// - `array_value`: An ordered JSON array.
+// - `object_value`: A JSON object with unique member names.
 enum JsonKind = (null_value, boolean_value, number_value, string_value, array_value, object_value);
 
 // One JSON value, parsed or built: read it without casts, write it in one call.
@@ -58,6 +75,7 @@ object Json {
 
     // The runtime node of any Json, for building arrays and objects of them.
     cap Node {
+        // The immutable runtime node; it remains owned by this Json value.
         state is JsonNodeState {
             node;
         }
@@ -86,13 +104,6 @@ object Json {
 
     // A JSON number from an exact decimal.
     Json(value is Decimal) {
-        let made = json_number_node(value.string());
-        node = made;
-        root = made;
-    }
-
-    // A JSON number from a big integer.
-    Json(value is BigInt) {
         let made = json_number_node(value.string());
         node = made;
         root = made;
@@ -226,7 +237,7 @@ object Json {
 
     // The exact integer of any size; fractions and exponents beyond 4096 bits
     // are JsonError.invalid_number.
-    integer() is BigInt {
+    integer() is int {
         ExactJsonNumber(exact: self.number(), origin: self).integer();
     }
 
@@ -404,7 +415,7 @@ object Json {
     }
 
     // The member as an integer of any size.
-    integer(name is string) is BigInt {
+    integer(name is string) is int {
         self.get(name).integer();
     }
 
@@ -490,12 +501,6 @@ object JsonField {
         content = Json(value);
     }
 
-    // A number member from a big integer.
-    JsonField(name is string, value is BigInt) {
-        member = name;
-        content = Json(value);
-    }
-
     // A number member from a float, written as its shortest exact decimal.
     JsonField(name is string, value is float) {
         member = name;
@@ -504,10 +509,12 @@ object JsonField {
 
     // Read only by Json(fields), which writes the member.
     cap Member {
+        // The unescaped JSON member name.
         name is string {
             member;
         }
 
+        // The member's immutable JSON value.
         value is Json {
             content;
         }
@@ -741,7 +748,7 @@ object JsonPresenceReader {
     }
 
     // The member as an integer of any size, null, or absent.
-    integer() is Presence<BigInt> {
+    integer() is Presence<int> {
         match origin {
             case Presence.some(value) {
                 Presence.some(value.integer());
@@ -846,7 +853,7 @@ object JsonMaybeReader {
     }
 
     // The member as an integer of any size, or none.
-    integer() is Maybe<BigInt> {
+    integer() is Maybe<int> {
         origin.integer().fold();
     }
 
@@ -879,15 +886,61 @@ object JsonPointerToken {
     }
 }
 
-// The exact value of a JSON number as an integer: of any size up to 4096
-// bits, or a builtin int.
+test "511 exact int JSON preserves large values presence and bounded reads" {
+    let huge is int = 123456789012345678901234567890;
+    test.is(Json(huge).integer(), huge);
+    test.is(ParsedJson(Json(huge).string()).root().integer(), huge);
+    let doc = ParsedJson("{\"n\":123456789012345678901234567890,\"nil\":null}").root();
+    test.is(doc.integer("n"), huge);
+    test.is(doc.maybe("n").integer() else 0, huge);
+    test.is(
+        match doc.presence("n").integer() {
+            case Presence.some(n): n;
+            case _: 0;
+        },
+        huge
+    );
+    test.ok(match doc.presence("absent").integer() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    test.ok(match doc.presence("nil").integer() {
+        case Presence.none: true;
+        case _: false;
+    });
+    test.ok(match doc.maybe("nil").integer() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    for ["0.5", "-1.5", "1e1234"] -> invalid {
+        test.ok(try {
+            ParsedJson(invalid).root().integer();
+            false;
+        }
+        catch error is JsonError {
+            true;
+        });
+    }
+    test.ok(try {
+        Json(huge).int();
+        false;
+    }
+    catch error is JsonError {
+        true;
+    });
+    test.is(ParsedJson("1e1233").root().integer(), 10.pow(1233));
+    test.is(ParsedJson("-1200e2").root().integer(), -120000);
+}
+
+// An exact integer. Reconstructing a positive decimal exponent bounds the
+// power of ten to 4096 bits; this is not a limit on int itself.
 hidden object ExactJsonNumber {
     has exact is Decimal;
     has origin is Json;
 
     ExactJsonNumber(:exact, :origin);
 
-    integer() is BigInt {
+    integer() is int {
         confirm exact.exponent() >= 0
             else throw JsonError.invalid_number(
                 origin.pointer(),
@@ -899,7 +952,7 @@ hidden object ExactJsonNumber {
         }
         else {
             let scale = try {
-                BigInt(10).power(exact.exponent(), 4096);
+                BoundedPower(base: 10).int(exact.exponent(), 4096);
             }
             catch failure is BigPowerLimitExceeded {
                 throw JsonError.invalid_number(
@@ -915,14 +968,14 @@ hidden object ExactJsonNumber {
     // A builtin int: an integer in the signed 64-bit range.
     int() is int {
         let integer = self.integer();
-        confirm integer.order(BigInt("9223372036854775807")) != Order.greater
-            && integer.order(BigInt("-9223372036854775808")) != Order.less
+        confirm integer.order(9223372036854775807) != Order.greater
+            && integer.order(-9223372036854775808) != Order.less
             else throw JsonError.invalid_number(
                 origin.pointer(),
                 integer.string(),
                 "integer outside int range"
             );
-        integer.int();
+        integer;
     }
 }
 
@@ -981,19 +1034,35 @@ object JsonLocation {
 }
 
 // What goes wrong with JSON; reads name the RFC 6901 pointer of the value.
-enum JsonError is Error = (wrong_kind(pointer is string, expected is JsonKind, actual is JsonKind), missing(
-    pointer is string
-), invalid_number(pointer is string, spelling is string, reason is string), invalid(
-    offset is int,
-    line is int,
-    column is int,
-    message is string
-), duplicate_member(name is string), duplicate_member_at(
-    name is string,
-    offset is int,
-    line is int,
-    column is int
-), invalid_indentation(amount is int));
+//
+// - `wrong_kind`: The value at pointer has actual kind instead of expected.
+// - `missing`: No value exists at the RFC 6901 pointer.
+// - `invalid_number`: The number at pointer cannot represent the requested type; spelling and reason explain the refusal.
+// - `invalid`: Invalid JSON text, with zero-based byte offset and one-based line and column, plus a message.
+// - `duplicate_member`: Building an object supplied the same member name more than once.
+// - `duplicate_member_at`: Parsing found a repeated name, with its byte offset and one-based line and column.
+// - `invalid_indentation`: Pretty-print indentation must be nonnegative; amount was refused.
+enum JsonError is Error = (
+    wrong_kind(pointer is string, expected is JsonKind, actual is JsonKind),
+    missing(
+        pointer is string
+    ),
+    invalid_number(pointer is string, spelling is string, reason is string),
+    invalid(
+        offset is int,
+        line is int,
+        column is int,
+        message is string
+    ),
+    duplicate_member(name is string),
+    duplicate_member_at(
+        name is string,
+        offset is int,
+        line is int,
+        column is int
+    ),
+    invalid_indentation(amount is int)
+);
 
 test "values built in code are written compact and pretty" {
     let value = Json(
@@ -1009,7 +1078,7 @@ test "values built in code are written compact and pretty" {
         "{\"name\":\"Ada \\\"\\u0001\\\" é 🙂 /\",\"tags\":[\"a\",null,false],\"empty\":{},\"none\":[],\"n\":-0.5,\"i\":42}"
     );
     test.is(
-        Json(items: [Json(BigInt("123456789012345678901")), Json(1.5), Json(0.000000025)]).string(),
+        Json(items: [Json(123456789012345678901), Json(1.5), Json(0.000000025)]).string(),
         "[123456789012345678901,1.5,2.5e-8]"
     );
     test.is(
@@ -1250,13 +1319,55 @@ test "presence distinguishes missing null and non-null members" {
     let doc = ParsedJson(
         "{\"null\":null,\"empty\":\"\",\"zero\":0,\"false\":false,\"array\":[],\"object\":{},\"a/b\":{\"~\":\"Anton\"}}"
     ).root();
-    test.is(doc.presence("missing").node() ?? .missing: true !! _: false, true);
-    test.is(doc.presence("null").node() ?? .none: true !! _: false, true);
-    test.is(doc.presence("empty").node() ?? .some(value): value.text() !! _: "absent", "");
-    test.is(doc.presence("zero").node() ?? .some(value): value.int() !! _: -1, 0);
-    test.is(doc.presence("false").node() ?? .some(value): !value.boolean() !! _: false, true);
-    test.is(doc.presence("array").node() ?? .some(value): value.items().size() !! _: -1, 0);
-    test.is(doc.presence("object").node() ?? .some(value): value.names().size() !! _: -1, 0);
+    test.is(
+        match doc.presence("missing").node() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("null").node() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("empty").node() {
+            case Presence.some(value): value.text();
+            case _: "absent";
+        },
+        ""
+    );
+    test.is(
+        match doc.presence("zero").node() {
+            case Presence.some(value): value.int();
+            case _: -1;
+        },
+        0
+    );
+    test.is(
+        match doc.presence("false").node() {
+            case Presence.some(value): !value.boolean();
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("array").node() {
+            case Presence.some(value): value.items().size();
+            case _: -1;
+        },
+        0
+    );
+    test.is(
+        match doc.presence("object").node() {
+            case Presence.some(value): value.names().size();
+            case _: -1;
+        },
+        0
+    );
     let nested = doc.presence("a/b").node().fold() else panic "expected object";
     let name = nested.presence("~").node().fold() else panic "expected name";
     test.is(name.text(), "Anton");
@@ -1342,38 +1453,230 @@ test "typed member readers preserve absence and reject invalid values" {
     let doc = ParsedJson(
         "{\"nil\":null,\"empty\":\"\",\"zero\":0,\"flag\":false,\"decimal\":1.25,\"big\":9223372036854775808,\"items\":[],\"object\":{}}"
     ).root();
-    test.is(doc.presence("absent").node() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").node() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").node() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").node() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").object() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").object() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").object() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").object() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").text() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").text() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").text() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").text() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").int() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").int() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").int() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").int() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").boolean() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").boolean() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").boolean() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").boolean() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").number() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").number() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").number() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").number() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").integer() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").integer() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").integer() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").integer() ?? .none: true !! _: false, true);
-    test.is(doc.presence("absent").list() ?? .missing: true !! _: false, true);
-    test.is(doc.maybe("absent").list() ?? .none: true !! _: false, true);
-    test.is(doc.presence("nil").list() ?? .none: true !! _: false, true);
-    test.is(doc.maybe("nil").list() ?? .none: true !! _: false, true);
+    test.is(
+        match doc.presence("absent").node() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").node() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").node() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").node() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").object() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").object() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").object() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").object() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").text() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").text() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").text() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").text() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").int() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").int() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").int() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").int() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").boolean() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").boolean() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").boolean() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").boolean() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").number() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").number() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").number() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").number() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").integer() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").integer() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").integer() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").integer() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("absent").list() {
+            case Presence.missing: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("absent").list() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.presence("nil").list() {
+            case Presence.none: true;
+            case _: false;
+        },
+        true
+    );
+    test.is(
+        match doc.maybe("nil").list() {
+            case Maybe.none: true;
+            case _: false;
+        },
+        true
+    );
     test.is((doc.maybe("empty").text() else panic "unexpected absence"), "");
     test.is((doc.presence("empty").text().fold() else panic "unexpected absence"), "");
     test.is((doc.maybe("zero").int() else panic "unexpected absence"), 0);

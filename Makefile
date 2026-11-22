@@ -11,50 +11,41 @@
 #     make dist            # пакеты этой платформы в dist/ (tar.gz + .pkg/.deb)
 #     make vscode          # расширение VS Code (.vsix) и его установка в VS Code
 #
-# `build` сначала пересобирает Java-рантайм okkama.rt (если его исходники
-# новее классов и есть javac), затем cargo собирает okkama, okkama-native,
-# sparrow (VM байткода .spb) и blade (менеджер проектов).
-# Классы рантайма встраиваются в сам okkama.
+# `build` собирает okkama, sparrow и blade; криптография встроена в Sparrow.
 
 PREFIX ?= $(HOME)/.local
 CARGO  ?= cargo
+MAN_PAGES ?= 0
+DOC_OUTPUT ?= $(CURDIR)/reference
+# Optional source-derived man pages: make install MAN_PAGES=1.
+MAN_OPTION := $(if $(filter 1,$(MAN_PAGES)),--man-pages,)
 
 RS      := okkama-rs
-RUNTIME := $(RS)/crates/okkama-compiler/runtime/jvm
-STAMP   := $(RUNTIME)/classes/.built
-JAVA    := $(wildcard $(RUNTIME)/src/okkama/rt/*.java)
+DOC_BIN ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/$(RS)/target)/release/okkama
 VSIX    := vscode-okkama/okkama-vscode.vsix
 
-.PHONY: all build runtime pgo install install-pgo uninstall test gate gate-local dist vscode editor clean
+.PHONY: all build pgo install install-pgo uninstall test gate gate-local dist reference vscode editor clean
 
 all: build
 
-runtime: $(STAMP)
+# A release build compiles the development instrumentation (okkama-devtrace, OKKAMA_DEV) out;
+# `make build RELEASE_CFG=` keeps it.
+# RUSTFLAGS replaces okkama-rs/.cargo/config.toml, so a release build repeats its frame pointers (#930).
+RELEASE_CFG ?= --cfg okkama_release -C force-frame-pointers=yes
 
-$(STAMP): $(JAVA)
-	@if command -v javac >/dev/null 2>&1; then \
-		echo "==> rebuilding the JVM runtime (okkama.rt)"; \
-		log="$$(mktemp)"; \
-		bash $(RS)/tools/jvm-runtime/build.sh > "$$log" 2>&1 || { cat "$$log"; rm -f "$$log"; exit 1; }; \
-		rm -f "$$log"; \
-	else \
-		echo "==> javac not found: using the committed JVM runtime classes"; \
-	fi
-	@touch $@
-
-build: runtime
-	cd $(RS) && $(CARGO) build --release -p okkama-cli -p okkama-native -p sparrow-cli -p blade-cli
+build:
+	cd $(RS) && RUSTFLAGS="$$RUSTFLAGS $(RELEASE_CFG)" $(CARGO) build --release -p okkama-cli -p sparrow-cli -p blade-cli
 
 install: build
-	./install.sh --prefix "$(PREFIX)" --no-build
+	./install.sh --prefix "$(PREFIX)" --no-build $(MAN_OPTION)
 	@$(MAKE) --no-print-directory editor
 
 # Оптимизация по профилю (tools/pgo/build.sh): на 6–18% быстрее обычной сборки.
-pgo: runtime
+pgo:
 	sh $(RS)/tools/pgo/build.sh
 
 install-pgo: pgo
-	./install.sh --prefix "$(PREFIX)" --no-build
+	./install.sh --prefix "$(PREFIX)" --no-build $(MAN_OPTION)
 	@$(MAKE) --no-print-directory editor
 
 uninstall:
@@ -66,11 +57,15 @@ test:
 gate:
 	./tools/gate/docker.sh
 
-gate-local: runtime
+gate-local:
 	./tools/gate/gate.sh
 
-dist: runtime
-	./tools/package.sh --installer
+dist:
+	./tools/package.sh --installer $(MAN_OPTION)
+
+# Static reference for okkama-docs (all links are relative inside this directory).
+reference: build
+	OKKAMA_STDLIB_DIR="$(CURDIR)/std" "$(DOC_BIN)" man --all --format html --output "$(DOC_OUTPUT)"
 
 $(VSIX): vscode-okkama/package.json vscode-okkama/extension.js vscode-okkama/syntaxes/okkama.tmLanguage.json vscode-okkama/language-configuration.json
 	cd vscode-okkama && npm install --omit=dev --no-audit --no-fund
@@ -92,4 +87,4 @@ editor:
 
 clean:
 	cd $(RS) && $(CARGO) clean
-	rm -f $(STAMP) $(VSIX)
+	rm -f $(VSIX)

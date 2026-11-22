@@ -1,0 +1,71 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "fs/temp" take TemporaryDirectory;
+import "fs/file" take File, FileMode;
+import "fs/lock" take FileLockMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take DirectoryEntries;
+import "fs/glob" take MatchingPaths;
+import "fs/link" take SymbolicLink;
+import "fs/root" take FileRoot;
+import "fs/stat" take FileKind;
+import "os/environment" take Environment;
+import "cell" take Cell;
+
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-bench-");
+        let name = "data-" + i.string() + ".txt";
+        let path = scratch.path().child(name);
+        let file = File(path: path, mode: FileMode.writing);
+        file.text().write("hello " + i.string());
+        let held = match file.lock(FileLockMode.exclusive) {
+            case Maybe.some(lock) {
+                lock.close();
+                1;
+            }
+            else {
+                0;
+            }
+        };
+        file.close();
+        let stat = FileEntry(path).stat();
+        let link = SymbolicLink(scratch.path().child("link"));
+        link.create(target: path);
+        let entries = Cell(0);
+        for DirectoryEntries(scratch) -> entry {
+            entries.replace(entries.value() + 1);
+        }
+        let matched = Cell(0);
+        for MatchingPaths(root: scratch, pattern: "*.txt") -> found {
+            matched.replace(matched.value() + found.name().length());
+        }
+        let root = FileRoot(scratch);
+        let entry = root.entry([name]);
+        let head = entry.bytes_at(0, 5);
+        entry.close();
+        root.close();
+        let kind = if stat::Shape::kind == FileKind.file { 1; } else { 0; };
+        let linked = if link.existence() { 1; } else { 0; };
+        scratch.close();
+        self.run(i + 1, n, acc + (stat::Shape::size + kind + linked + entries.value() + matched.value() + head.size() + held) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

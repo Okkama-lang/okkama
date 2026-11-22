@@ -7,11 +7,17 @@ module template/model v1.0.0;
 //
 // A value is looked up by its exact path; MissingTemplateValue when absent.
 // Values are plain strings: no objects, no reflection.
+//
+// The bindings are one Json document (#178), the data model of
+// template/engine: `user.name` is member name of member user. A path that is
+// a value and also leads to others (`a` and `a.b`) has no such document and is
+// DuplicateTemplateValue, like a path given twice; both are found in one pass.
 
 import "template/path" take TemplatePath, TemplatePathFromString;
 
 import "collections/sequence" take Sequencing;
 import "compare" take Order;
+import "json" take Json, JsonField, JsonKind;
 
 // Something a text template takes its values from.
 role TemplateStrings {
@@ -81,16 +87,105 @@ object TemplateBindings does TemplateStrings {
 
     // The value at path; MissingTemplateValue when absent.
     string(path is TemplatePath) is string {
-        let found = (0..origin.size()).reduce(-1) -> previous, index {
-            if origin[index].path().order(path) == Order.equal {
-                index;
+        let found = path.segments().reduce(self.json()) -> current, name {
+            if current.kind() == JsonKind.object_value && current.has(name) {
+                current.get(name);
             }
             else {
-                previous;
+                Json();
             }
         };
-        confirm found >= 0 else throw MissingTemplateValue.path(path.string());
-        origin[found].string();
+        confirm found.kind() == JsonKind.string_value
+            else throw MissingTemplateValue.path(path.string());
+        found.text();
+    }
+
+    // The bindings as one Json document.
+    hidden json() is Json {
+        once let document = TemplateBindingsJson(origin.map() -> binding {
+            TemplateBindingEntry(segments: binding.path().segments(), value: binding.string());
+        }).json();
+        document;
+    }
+}
+
+// One binding as the rest of its path below some object, and its value.
+hidden object TemplateBindingEntry {
+    has segments is @string;
+    has value is string;
+
+    TemplateBindingEntry(segments is Sequencing<string>, value is string) {
+        self.segments = (0..segments.size()).map() -> index {
+            segments.item(index);
+        };
+        self.value = value;
+    }
+
+    first() is string {
+        segments[0];
+    }
+
+    leaf() is bool {
+        segments.size() == 1;
+    }
+
+    rest() is TemplateBindingEntry {
+        TemplateBindingEntry(segments: segments.slice(1, segments.size()), value: value);
+    }
+
+    value() is string {
+        value;
+    }
+}
+
+// Bindings below one object as that object: members in first-seen order.
+hidden object TemplateBindingsJson {
+    has entries is @TemplateBindingEntry;
+    has prefix is string = "";
+
+    TemplateBindingsJson(entries is @TemplateBindingEntry) {
+        self.entries = entries;
+    }
+
+    TemplateBindingsJson(entries is @TemplateBindingEntry, prefix is string) {
+        self.entries = entries;
+        self.prefix = prefix;
+    }
+
+    json() is Json {
+        let none_here is %string:@TemplateBindingEntry = [:];
+        let names is @string = [];
+        let grouped = entries.reduce(none_here) -> groups, entry {
+            groups + [entry.first(): (groups[entry.first()] else []) + [entry]];
+        };
+        let order = entries.reduce(names) -> seen, entry {
+            if seen.contains(entry.first()) {
+                seen;
+            }
+            else {
+                seen + [entry.first()];
+            }
+        };
+        let fields is @JsonField = order.map() -> name {
+            let group = grouped[name];
+            let leaves = group.filter() -> entry {
+                entry.leaf();
+            };
+            if leaves.size() > 0 {
+                confirm group.size() == 1 else throw DuplicateTemplateValue.path(prefix + name);
+                JsonField(name, Json(leaves[0].value()));
+            }
+            else {
+                let below is @TemplateBindingEntry = group.map() -> entry {
+                    entry.rest();
+                };
+                JsonField(
+                    name,
+                    TemplateBindingsJson(entries: below, prefix: prefix + name + ".").json()
+                );
+            }
+        };
+        Json(fields);
     }
 }
 
@@ -107,12 +202,15 @@ hidden object TemplateBindingSnapshot {
         let snapshot is @TemplateBinding = (0..size).map() -> index {
             source.item(index);
         };
-        for (0..size) -> index {
-            for (0..index) -> previous {
-                confirm snapshot[index].path().order(snapshot[previous].path()) != Order.equal
-                    else throw DuplicateTemplateValue.path((snapshot[index].path()).string());
-            }
-        }
+        let seen is %string:bool = [:];
+        snapshot.reduce(seen) -> paths, binding {
+            let parts = binding.path().segments();
+            let key = (0..parts.size()).map() -> index {
+                parts.item(index);
+            }.join("\u{0}");
+            confirm !paths.has(key) else throw DuplicateTemplateValue.path(binding.path().string());
+            paths + [key: true];
+        };
         origin = snapshot;
     }
 
@@ -187,6 +285,33 @@ test "template binding errors retain path and budget contracts" {
         },
         "x"
     );
+}
+
+test "bindings are one Json document: nested, literal-dot and conflicting paths (#178)" {
+    let data = TemplateBindings(
+        TemplateBinding(path: TemplatePath("user", "name"), value: "Ada"),
+        TemplateBinding(path: TemplatePath("user", "mail"), value: "a@x"),
+        TemplateBinding(path: TemplatePath("user.name"), value: "dot")
+    );
+    test.is(data.string(TemplatePath("user", "mail")), "a@x");
+    test.is(data.string(TemplatePath("user.name")), "dot");
+    test.throws(MissingTemplateValue) {
+        data.string(TemplatePath("user", "name", "first"));
+    };
+    test.is(
+        try {
+            TemplateBindings(["a": "1", "a.b": "2"]).string(TemplatePath("a"));
+            "";
+        }
+        catch DuplicateTemplateValue.path(path) {
+            path;
+        },
+        "a"
+    );
+    let many is @TemplateBinding = (0..1000).map() -> index {
+        TemplateBinding(path: TemplatePath("k" + index.string()), value: index.string());
+    };
+    test.is(TemplateBindings(many).string(TemplatePath("k999")), "999");
 }
 
 test "bindings read a map of dotted paths" {

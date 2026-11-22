@@ -3,7 +3,7 @@ use crate::host::{
     Error,
     handle::Handle,
     ProviderError,
-    native_file::{RawFile, big},
+    native_file::RawFile,
     native_fs::{fail, host},
     *,
 };
@@ -18,7 +18,7 @@ use std::{
 #[derive(Debug)]
 pub(crate) struct FileState {
     pub(crate) path: PathBuf,
-    /// A temporary file's path as the program spelled it, as the IR and JVM runtimes report it.
+    /// A temporary file's path as the program spelled it.
     pub(crate) shown: String,
     pub(crate) temporary: bool,
     pub(crate) delete_on_close: Option<PathBuf>,
@@ -154,6 +154,19 @@ impl FileState {
         }
         Ok(())
     }
+    /// Makes what was written durable: `sync_all`, which is fsync and
+    /// F_FULLFSYNC on macOS (#122). A file never written is opened first, as
+    /// a flush opens it.
+    pub(crate) fn sync(&mut self, n: Native, cwd: &Path) -> Result<(), ProviderError> {
+        if self.closed {
+            return Err(fail(n, "already_closed", "File is closed"));
+        }
+        if self.flags & 2 == 0 {
+            return Err(fail(n, "invalid_input", "File is not writable"));
+        }
+        let file = self.opened(n, cwd)?.open(n)?;
+        crate::host::native_fs::injected_fault("file_sync").and_then(|()| file.sync_all()).map_err(|e| host(n, e))
+    }
     pub(crate) fn close(&mut self, n: Native) -> Result<(), ProviderError> {
         if let Some(mut channel) = self.channel.take() {
             channel.close(n)?;
@@ -226,6 +239,7 @@ pub(crate) fn handles(n: Native) -> bool {
             | FsFileStateWrite
             | FsFileStateWriteText
             | FsFileStateFlush
+            | FsFileStateSync
             | FsFileStateClose
             | FsFileStateClosed
             | FsFileStatePosition
@@ -260,7 +274,7 @@ impl Heap {
             if bytes.is_empty() || bytes.contains(&0) {
                 return Err(fail(n, "invalid_input", "Invalid file path"));
             }
-            let flags = match self.integer(a[1])?.to_i64() {
+            let flags = match self.int64(a[1])? {
                 Some(0) => 1,
                 Some(1) => 2 | 4 | 8,
                 Some(2) => 2 | 4 | 16,
@@ -343,7 +357,7 @@ impl Heap {
         let cwd = self.working_directory()?;
         match n {
             FsFileStateRead => {
-                let limit = big(self.integer(a[1])?);
+                let limit = self.bigint(a[1])?.into_owned();
                 if limit <= 0.into() {
                     return Err(fail(n, "invalid_input", "Read limit must be positive"));
                 }
@@ -391,7 +405,7 @@ impl Heap {
             }
             FsFileStateReadLines => {
                 state.prepare(n, &cwd, true, false)?;
-                let target = self.integer(a[1])?.to_i64().map_or(1 << 26, |v| v.clamp(1, 1 << 26)) as usize;
+                let target = self.int64(a[1])?.map_or(1 << 26, |v| v.clamp(1, 1 << 26)) as usize;
                 let needle = encode(n, "\n", &state.encoding)?;
                 let unit = needle.len();
                 while state.buffer.len() - state.start < target && !state.eof {
@@ -443,13 +457,10 @@ impl Heap {
                 if append {
                     file.seek(SeekFrom::End(0)).map_err(|e| host(n, e))?;
                 }
-                let size = if textual {
-                    file.write_all(&bytes).map_err(|e| host(n, e))?;
-                    bytes.len()
-                } else {
-                    file.write(&bytes).map_err(|e| host(n, e))?
-                };
-                Ok(Slot::small(size as i64))
+                // A short write goes on with the rest, so the caller sees either
+                // every byte written or the host's own failure (#122).
+                crate::host::native_fs::write_all_or_fault(file, &bytes).map_err(|e| host(n, e))?;
+                Ok(Slot::small(bytes.len() as i64))
             }
             FsFileStateRewriteText => {
                 state.prepare(n, &cwd, true, true)?;
@@ -469,8 +480,7 @@ impl Heap {
             }
             FsFileStateLocked => {
                 let mode = self
-                    .integer(a[1])?
-                    .to_i64()
+                    .int64(a[1])?
                     .filter(|v| (0..=1).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid lock mode"))?;
                 let channel = state.opened(n, &cwd)?;
@@ -485,11 +495,17 @@ impl Heap {
                     Err(fail(n, "unsupported", "Record locks unavailable"))
                 }
             }
+            // Writes go straight to the host, so a flush only checks the mode;
+            // sync is the durable one: fsync, F_FULLFSYNC on macOS (#122).
             FsFileStateFlush => {
                 if state.flags & 2 == 0 {
                     return Err(fail(n, "invalid_input", "File is not writable"));
                 }
                 state.opened(n, &cwd)?;
+                Ok(yes)
+            }
+            FsFileStateSync => {
+                state.sync(n, &cwd)?;
                 Ok(yes)
             }
             FsFileStatePosition | FsFileStateSeek | FsFileStateTruncate => {
@@ -498,7 +514,7 @@ impl Heap {
                     if state.flags & 2 == 0 {
                         return Err(fail(n, "invalid_input", "File is not writable"));
                     }
-                    let size = big(self.integer(a[1])?);
+                    let size = self.bigint(a[1])?.into_owned();
                     if size.sign() == num_bigint::Sign::Minus {
                         return Err(fail(n, "invalid_input", "Negative truncate size"));
                     }
@@ -518,10 +534,9 @@ impl Heap {
                             .map_err(|e| host(n, e))? as i64,
                     ));
                 }
-                let offset = big(self.integer(a[1])?);
+                let offset = self.bigint(a[1])?.into_owned();
                 let origin = self
-                    .integer(a[2])?
-                    .to_i64()
+                    .int64(a[2])?
                     .filter(|v| (0..=2).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid seek origin"))?;
                 let file = state.opened(n, &cwd)?.open(n)?;
@@ -546,13 +561,11 @@ impl Heap {
                     return Err(fail(n, "invalid_input", "File already has a live lock"));
                 }
                 let mode = self
-                    .integer(a[1])?
-                    .to_i64()
+                    .int64(a[1])?
                     .filter(|v| (0..=1).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid lock mode"))?;
                 let wait = self
-                    .integer(a[2])?
-                    .to_i64()
+                    .int64(a[2])?
                     .filter(|v| (0..=1).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid lock waiting mode"))?;
                 if state.flags & if mode == 0 { 1 } else { 2 } == 0 {

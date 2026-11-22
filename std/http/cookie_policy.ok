@@ -86,7 +86,7 @@ object CookieOrigin {
         else {
             parts.host_address().string();
         };
-        let canonical = if dns && raw.slice(raw.length() - 1, raw.length()) == "." {
+        let canonical = if dns && raw.ends_with(".") {
             raw.slice(0, raw.length() - 1);
         }
         else {
@@ -94,7 +94,13 @@ object CookieOrigin {
         };
         let registrable = if dns {
             try {
-                PublicSuffixList().registrable(HostName(canonical)).ascii();
+                let host = if raw == canonical {
+                    parts.host_name();
+                }
+                else {
+                    HostName(canonical);
+                };
+                PublicSuffixList().registrable(host).ascii();
             }
             catch e is MissingRegistrableDomain {
                 canonical;
@@ -154,7 +160,7 @@ hidden object CookieDefaultPath {
     }
 
     string() is string {
-        if origin == "" || origin.slice(0, 1) != "/" {
+        if origin == "" || !origin.starts_with("/") {
             return "/";
         }
         let slash = (0..origin.length()).reduce(0) -> previous, index {
@@ -194,7 +200,7 @@ object CookiePathMatch {
             || request.slice(0, cookie.length()) != cookie {
                 return false;
             }
-        cookie.slice(cookie.length() - 1, cookie.length()) == "/"
+        cookie.ends_with("/")
             || request.slice(cookie.length(), cookie.length() + 1) == "/";
     }
 }
@@ -308,7 +314,7 @@ hidden object CookieAttributeReading {
             }
             case "path" {
                 if value.length() <= 1024 {
-                    ^path = if value != "" && value.slice(0, 1) == "/" {
+                    ^path = if value != "" && value.starts_with("/") {
                         value;
                     }
                     else {
@@ -378,9 +384,6 @@ hidden object CookieAttributeReading {
                 }
                 case CookieFlag.partitioned {
                     partitioned;
-                }
-                else {
-                    false;
                 }
             }
         };
@@ -460,7 +463,7 @@ hidden object CookieAgeSeconds {
     }
 
     values() is @int {
-        let negative = origin != "" && origin.slice(0, 1) == "-";
+        let negative = origin != "" && origin.starts_with("-");
         let digits = if negative {
             origin.slice(1, origin.length());
         }
@@ -554,4 +557,17 @@ test "Set-Cookie keeps explicit context and precedence" {
     ).cookie();
     test.ok(cookie.attributes()::Attributes::path == "/a");
     test.ok(cookie.attributes().expiry().instant().unix_duration()::Span::seconds == 10.rat());
+}
+
+test "cookie sites retain trailing dot and private suffix policy" {
+    for ["https://a.example.com", "https://a.example.com."] -> text {
+        let origin = CookieOrigin(ParsedUrl(text).parts());
+        test.is(origin::Origin::domain, "a.example.com");
+        test.is(origin::Origin::site, "https://example.com");
+    }
+    test.is(
+        CookieOrigin(ParsedUrl("https://a.github.io").parts())::Origin::site,
+        "https://a.github.io"
+    );
+    test.is(CookieOrigin(ParsedUrl("http://127.0.0.1").parts())::Origin::site, "http://127.0.0.1");
 }

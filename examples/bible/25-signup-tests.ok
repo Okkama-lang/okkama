@@ -1,0 +1,61 @@
+module bible/signup v1.0.0;
+
+// Pattern: every dependency is a role, every role ships a fake, and the
+// fake records what happened in its own fields, through successors.
+import "io/stdout" take Stdout;
+
+role Mailer {
+    sent(to is string) is ^Mailer;
+    count() is int;
+
+    fake {
+        has total is int = 0;
+        has latest is string = "";
+        sent(to is string) is ^Mailer {
+            ^total = total + 1;
+            ^latest = to;
+        }
+        count() is int { total; }
+    }
+}
+
+object PrintedMailer does Mailer {
+    has total is int = 0;
+    PrintedMailer();
+    sent(to is string) is ^PrintedMailer {
+        Stdout().writeln("mail to " + to);
+        ^total = total + 1;
+    }
+    count() is int { total; }
+}
+
+object Signup {
+    has mailer is Mailer;
+    has members is int = 0;
+    Signup(:mailer);
+
+    joined(name is string) is ^Signup {
+        ^members = members + 1;
+        ^mailer = mailer.sent(name);
+    }
+
+    mails() is int { mailer.count(); }
+}
+
+test "every member gets one welcome mail" {
+    let signup = Signup(mailer: Mailer.fake()).joined("ada").joined("grace");
+    test.is(signup.mails(), 2);
+}
+
+test "the first signup is untouched by its successors" {
+    let first = Signup(mailer: Mailer.fake());
+    let later = first.joined("ada");
+    test.is(first.mails(), 0);
+    test.is(later.mails(), 1);
+}
+
+main() is int {
+    let signup = Signup(mailer: PrintedMailer()).joined("ada");
+    Stdout().writeln(signup.mails().string() + " mail sent");
+    0;
+}

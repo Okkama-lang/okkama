@@ -12,8 +12,12 @@
 pub mod cfg;
 pub mod fold;
 pub mod hoist;
+pub mod ownership;
+pub mod param_adopts;
 pub mod regions;
-mod print;
+pub mod statics;
+pub mod linearity;
+pub mod print;
 pub mod recursion;
 pub mod verify;
 
@@ -78,7 +82,7 @@ pub enum Type {
 
 /// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std
 /// `async/*`, чьё состояние держит рантайм.
-pub const INTRINSICS: [&str; 92] = [
+pub const INTRINSICS: [&str; 90] = [
     "okkama.timeout.Within.outcome",
     "okkama.timeout.Before.outcome",
     "okkama.scope.FutureScope.outcome",
@@ -128,18 +132,16 @@ pub const INTRINSICS: [&str; 92] = [
     "okkama.int.clamp",
     "okkama.test.fail",
     "okkama.test.skip",
-    "okkama.fake.storage.set",
-    "okkama.fake.storage.get",
-    "okkama.fake.storage.has",
-    "okkama.fake.storage.remove",
-    "okkama.fake.storage.clear",
-    "okkama.fake.storage.size",
+    "okkama.test.case",
+    "okkama.test.case_end",
     "okkama.channel.Channel.new_capacity",
     "okkama.channel.Channel.sending",
     "okkama.channel.Channel.receiving",
     "okkama.channel.Sending.send",
     "okkama.channel.Sending.close",
     "okkama.channel.Receiving.item",
+    "okkama.channel.SelectedReceiving.new_receivers",
+    "okkama.channel.SelectedReceiving.item",
     "okkama.channel.Receiving.close",
     "okkama.event.Event.new",
     "okkama.event.Event.new_ready",
@@ -689,6 +691,47 @@ impl Function {
     }
 }
 
+/// #587 (OIR-2 §7.3): a channel's capabilities own the fresh messages it buffers, so `Channel<T>`, `Sending<T>`
+/// and `Receiving<T>` carry `T` as if it were a field. Pairs (object, carried type) read off the channel
+/// intrinsics' signatures; the runtime's `descriptor_flags` applies the same rule.
+pub(crate) fn channel_carriers(module: &Module) -> Vec<(usize, Type)> {
+    let mut carried = Vec::new();
+    for function in &module.functions {
+        let Some((name, _)) = function.intrinsic() else { continue };
+        let param = |index: usize| function.params.get(index).and_then(|value| function.values.get(value.0));
+        let result = match &function.result {
+            ResultType::Value(ty) => Some(ty),
+            ResultType::Void => None,
+        };
+        match (name, param(0)) {
+            ("okkama.channel.Sending.send", Some(Type::Object(holder))) => {
+                carried.extend(param(1).map(|message| (holder.0, message.clone())));
+            }
+            ("okkama.channel.Receiving.item", Some(Type::Object(holder))) => {
+                carried.extend(result.map(|message| (holder.0, message.clone())));
+            }
+            ("okkama.channel.SelectedReceiving.item", Some(Type::Object(selector))) => {
+                if let (Some(receivers), Some(Type::Object(item))) =
+                    (module.objects[selector.0].fields.first(), result)
+                    && let Type::Array(receiver) = &receivers.ty
+                    && let Type::Object(receiver) = receiver.as_ref()
+                    && let Some(payload) = module.objects[item.0].fields.get(1)
+                {
+                    carried.push((receiver.0, payload.ty.clone()));
+                }
+            }
+            ("okkama.channel.Channel.sending" | "okkama.channel.Channel.receiving", Some(Type::Object(channel))) => {
+                if let Some(Type::Object(endpoint)) = result {
+                    carried.push((channel.0, Type::Object(*endpoint)));
+                    carried.push((endpoint.0, Type::Object(*channel)));
+                }
+            }
+            _ => {}
+        }
+    }
+    carried
+}
+
 /// Базовый блок: параметры, инструкции и обязательный терминатор.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
@@ -1057,6 +1100,10 @@ pub enum InstKind {
     },
     /// Погасить обязательство `^C` и получить значение `C`.
     SuccTake(ValueId),
+    /// #790: hand a successor Future on: `Future<^C>` becomes `Future<C>` at an argument, field or result
+    /// boundary. The same Future object: its outcome is the `C` reference either way (`^C` and `C` share a
+    /// representation); the verifier admits only exactly this pair of types.
+    FutureHandoff(ValueId),
     /// Преобразование из таблицы §16.1; целевой тип — тип результата.
     Cvt(ValueId),
     /// Конкретный объект → ограниченная ссылка роли (роль — тип результата).
@@ -1084,6 +1131,8 @@ pub enum InstKind {
     },
     /// `await %fu` (§13.1): только в `[async]`; результат — `R` future<R>.
     Await(ValueId),
+    /// Unique temporary Future: consume its cache into the awaiting scope.
+    AwaitTake(ValueId),
     /// `fut.spawn %fu`: запустить сейчас; результат — тот же Future.
     FutSpawn(ValueId),
     /// `worker.spawn %f(%a…)` (§18.1): синхронный action в отдельном
@@ -1290,6 +1339,29 @@ pub enum InstKind {
         region: ValueId,
         failure: ValueId,
     },
+    /// #909 2b: a resource whose identity never leaves this scope (static): no region walk adopts it.
+    ResourcePin {
+        value: ValueId,
+    },
+    /// Destroy a pinned resource at its scope's exit, once; a destroy failure is raised.
+    ResourceLeave {
+        value: ValueId,
+    },
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceUnwind {
+        value: ValueId,
+        failure: ValueId,
+    },
+    /// #329: `resource.leave` of a static resource with an async destroy, in an async function: a suspension point
+    /// that awaits the destroy shielded, as `region.settle` does; a destroy failure is raised.
+    ResourceSettle {
+        value: ValueId,
+    },
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceSettleUnwind {
+        value: ValueId,
+        failure: ValueId,
+    },
     /// Отказ cleanup `cleanup` при идущем отказе `primary`: вторичный.
     FailSecondary {
         primary: ValueId,
@@ -1483,6 +1555,7 @@ impl InstKind {
             InstKind::IntUnary { operand, .. }
             | InstKind::BoolNot(operand)
             | InstKind::SuccTake(operand)
+            | InstKind::FutureHandoff(operand)
             | InstKind::Cvt(operand)
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)
@@ -1548,7 +1621,7 @@ impl InstKind {
             InstKind::RatSign(value) | InstKind::RatPart { value, .. } => vec![*value],
             InstKind::RangeNew { start, end, .. } => vec![*start, *end],
             InstKind::FnClosure { captures, .. } => captures.clone(),
-            InstKind::Await(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
+            InstKind::Await(future) | InstKind::AwaitTake(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
                 vec![*future]
             }
             InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![*owner],
@@ -1581,6 +1654,12 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![*region, *failure],
             InstKind::FailSecondary { primary, cleanup } => vec![*primary, *cleanup],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
+                vec![*value]
+            }
+            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
+                vec![*value, *failure]
+            }
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![*value],
             InstKind::Bits { value, count, .. } => std::iter::once(*value)
                 .chain(count.iter().copied())
@@ -1612,6 +1691,7 @@ impl InstKind {
             InstKind::IntUnary { operand, .. }
             | InstKind::BoolNot(operand)
             | InstKind::SuccTake(operand)
+            | InstKind::FutureHandoff(operand)
             | InstKind::Cvt(operand)
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)
@@ -1677,7 +1757,7 @@ impl InstKind {
             InstKind::RatSign(value) | InstKind::RatPart { value, .. } => vec![value],
             InstKind::RangeNew { start, end, .. } => vec![start, end],
             InstKind::FnClosure { captures, .. } => captures.iter_mut().collect(),
-            InstKind::Await(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
+            InstKind::Await(future) | InstKind::AwaitTake(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
                 vec![future]
             }
             InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![owner],
@@ -1708,6 +1788,12 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![region, failure],
             InstKind::FailSecondary { primary, cleanup } => vec![primary, cleanup],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
+                vec![value]
+            }
+            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
+                vec![value, failure]
+            }
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![value],
             InstKind::Bits { value, count, .. } => {
                 std::iter::once(value).chain(count.iter_mut()).collect()

@@ -1,0 +1,112 @@
+// Book 20.2, #915: channel messages pin what another owner keeps until delivery and the receiving scope's end.
+module ownership v1.0.0;
+
+import "tap" take Tap;
+import "async/atomic" take Atomic;
+import "async/channel" take Channel;
+import "async/event" take Event;
+
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+
+    label() is string {
+        name;
+    }
+
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+
+object Work {
+    Work();
+    async deliver(channel is Channel<Res>, value is Res) is void {
+        await channel.sending().send(value);
+    }
+
+    async receive(channel is Channel<Res>) is Res {
+        let received = await channel.receiving().item();
+        received;
+    }
+
+    async holdAfter(channel is Channel<Res>, log is Atomic<string>, gate is Event) is void {
+        let made = Res("K", log);
+        await channel.sending().send(made);
+        await gate.wait();
+        made.label();
+    }
+}
+
+async main() is int {
+    let t = Tap(7);
+    let log = Atomic("");
+    defer log.close();
+    {
+        let channel is Channel<Res> = Channel(capacity: 1);
+        await Work().deliver(channel, Res("H", log));
+        t.note("helper input survives the helper in the channel: " + log.value());
+        t = t.is(log.value(), "", "helper input survives the helper in the channel");
+        {
+            let received = await Work().receive(channel);
+            received.label();
+        }
+
+        t.note("receiving scope destroys the helper input once: " + log.value());
+        t = t.is(log.value(), "H", "receiving scope destroys the helper input once");
+    }
+
+    log.replace("");
+    {
+        let channel is Channel<Res> = Channel(capacity: 1);
+        let gate = Event();
+        let sender = spawn Work().holdAfter(channel, log, gate);
+        {
+            let received = await Work().receive(channel);
+            received.label();
+        }
+
+        t.note("receiver done first leaves the resource with its sender: " + log.value());
+        t = t.is(log.value(), "", "receiver done first leaves the resource with its sender");
+        gate.set();
+        await sender;
+        t.note("sender destroys its own resource after the receiver: " + log.value());
+        t = t.is(log.value(), "K", "sender destroys its own resource after the receiver");
+    }
+
+    log.replace("");
+    {
+        let channel is Channel<Res> = Channel(capacity: 1);
+        {
+            let owned = Res("E", log);
+            await channel.sending().send(owned);
+        }
+
+        t.note("closed owner hands the unread message to the channel: " + log.value());
+        t = t.is(log.value(), "", "closed owner hands the unread message to the channel");
+        {
+            let received = await channel.receiving().item();
+            received.label();
+        }
+
+        t.note("receiver destroys the handed-over message once: " + log.value());
+        t = t.is(log.value(), "E", "receiver destroys the handed-over message once");
+    }
+
+    log.replace("");
+    {
+        let owned = Res("U", log);
+        {
+            let channel is Channel<Res> = Channel(capacity: 1);
+            await channel.sending().send(owned);
+        }
+
+        t = t.is(log.value(), "", "unread pin ends with the channel, the owner keeps it");
+    }
+
+    t.done();
+}

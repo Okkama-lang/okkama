@@ -1,0 +1,48 @@
+// Extracted from new-late-old-identity; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+object Relay {
+    Relay();
+    inner(r is Res) is Res {
+        r;
+    }
+    middle(r is Res) is Res {
+        self.inner(r);
+    }
+    outer(r is Res) is Res {
+        return self.middle(r);
+    }
+    consume(r is Res) is void {
+        self.middle(r).label();
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let old = Res("A", log);
+        let newer = Res("B", log);
+        let alias = Relay().outer(old);
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+        alias.label();
+    }
+    confirm log.value() == "BA";
+    Stdout().writeln(log.value());
+    0;
+}

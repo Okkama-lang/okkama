@@ -1,0 +1,75 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/atomic" take Atomic;
+import "collections/iteration" take Cursor;
+import "collections/views" take Reversed;
+import "collections/repetition" take Cycled;
+import "collections/combining" take StrictlyZipped;
+
+hidden object Sum {
+    has cursor is Cursor<int>;
+    Sum(cursor is Cursor<int>) { self.cursor = cursor; }
+    total() is int {
+        let at = Atomic(cursor);
+        let n = Atomic(0);
+        loop {
+            last if !at.value().available();
+            n.replace(n.value() + at.value().item());
+            at.replace(at.value().successor());
+        }
+        n.value();
+    }
+    // The first count items only.
+    first(count is int) is int {
+        let at = Atomic(cursor);
+        let n = Atomic(0);
+        for 0..count -> step {
+            n.replace(n.value() + at.value().item());
+            at.replace(at.value().successor());
+        }
+        n.value();
+    }
+}
+
+hidden object Walk<T> {
+    has cursor is Cursor<T>;
+    Walk(cursor is Cursor<T>) { self.cursor = cursor; }
+    count() is int {
+        let at = Atomic(cursor);
+        let n = Atomic(0);
+        loop {
+            last if !at.value().available();
+            n.replace(n.value() + 1);
+            at.replace(at.value().successor());
+        }
+        n.value();
+    }
+}
+
+// 1..=v reversed (walked and indexed), cycled twice round and zipped with itself.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 5 + 3;
+        let xs is @int = (1..(v + 1)).map() -> x { x; };
+        let back = Reversed(origin: xs);
+        let total = Sum(back.cursor()).total() + back.first() + back.last() + back.item(1)
+            + Sum(Cycled(origin: xs).cursor()).first(2 * v)
+            + Walk(StrictlyZipped(left: xs, right: xs).cursor()).count();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

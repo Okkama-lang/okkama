@@ -1,0 +1,10 @@
+module trade/parties v1.0.0;
+
+// The contracts both sides need: no objects, no imports.
+role Buyer {
+    name() is string;
+}
+
+role Purchase {
+    total() is int;
+}

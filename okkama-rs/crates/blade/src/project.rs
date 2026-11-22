@@ -4,11 +4,9 @@
 //! ```toml
 //! [build]
 //! entry = "src/main.ok"      # or a list: the files of the root module
-//! target = "sparrow"         # sparrow | jvm
-//! output = "target/app.spb"  # default target/<name>.spb or .jar
+//! output = "target/app.spb"  # default target/<name>.spb
 //!
 //! [run]
-//! engine = "sparrow"         # sparrow | ir | jvm; default: the build target
 //! args = []                  # `blade run -- a b` appends
 //! env = {}
 //! ```
@@ -20,24 +18,6 @@ use std::process::Command;
 use crate::lock::{LOCK, Lock};
 use crate::manifest::{MANIFEST, Manifest, PKG};
 
-/// Backend of `okkama build`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Target {
-    Sparrow,
-    Jvm,
-}
-
-/// What `blade run` runs the program on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Engine {
-    /// The built `.spb` (`okkama exec`).
-    Sparrow,
-    /// The sources on the IR interpreter (`okkama run --engine ir`); no build.
-    Ir,
-    /// The built JAR (`java -jar`).
-    Jvm,
-}
-
 /// A project with its build and run settings resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
@@ -45,10 +25,8 @@ pub struct Project {
     pub name: String,
     /// Files of the root module, relative to `root`.
     pub entry: Vec<String>,
-    pub target: Target,
     /// The built file, relative to `root`.
     pub output: String,
-    pub engine: Engine,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
 }
@@ -68,13 +46,18 @@ impl Project {
         let section = |name: &str, keys: &[&str]| -> Result<toml::Table, String> {
             let Some(value) = table.get(name) else { return Ok(toml::Table::new()) };
             let section = value.as_table().ok_or(format!("[{name}] must be a table"))?.clone();
+            // One engine, one target (owner, 2026-11-20): Sparrow bytecode, run with `okkama exec`.
+            let gone = |key: &&String| matches!((name, key.as_str()), ("build", "target") | ("run", "engine"));
+            if let Some(key) = section.keys().find(gone) {
+                return Err(format!("[{name}] {key} is gone: Sparrow is the only engine; remove the key"));
+            }
             if let Some(key) = section.keys().find(|key| !keys.contains(&key.as_str())) {
                 return Err(format!("unknown key \"{key}\" in [{name}] (known: {})", keys.join(", ")));
             }
             Ok(section)
         };
-        let build = section("build", &["entry", "target", "output"])?;
-        let run = section("run", &["engine", "args", "env"])?;
+        let build = section("build", &["entry", "output"])?;
+        let run = section("run", &["args", "env"])?;
         let name = manifest.name.clone().unwrap_or_else(|| "app".to_string());
         let entry = match build.get("entry") {
             None => vec!["src/main.ok".to_string()],
@@ -82,35 +65,10 @@ impl Project {
             Some(toml::Value::Array(files)) if !files.is_empty() => strings(files, "[build] entry")?,
             Some(_) => return Err("[build] entry must be a file or a non-empty list of files".into()),
         };
-        let target = match text_of(&build, "build", "target")?.as_deref() {
-            None | Some("sparrow") => Target::Sparrow,
-            Some("jvm") => Target::Jvm,
-            Some(other) => return Err(format!("[build] target \"{other}\" is not sparrow or jvm")),
-        };
         let output = text_of(&build, "build", "output")?.unwrap_or_else(|| {
             let leaf = name.rsplit('/').next().unwrap_or(&name);
-            format!("target/{leaf}.{}", if target == Target::Jvm { "jar" } else { "spb" })
+            format!("target/{leaf}.spb")
         });
-        let engine = match text_of(&run, "run", "engine")?.as_deref() {
-            None => match target {
-                Target::Sparrow => Engine::Sparrow,
-                Target::Jvm => Engine::Jvm,
-            },
-            Some("sparrow") => Engine::Sparrow,
-            Some("ir") => Engine::Ir,
-            Some("jvm") => Engine::Jvm,
-            Some(other) => return Err(format!("[run] engine \"{other}\" is not sparrow, ir or jvm")),
-        };
-        match (engine, target) {
-            (Engine::Sparrow, Target::Jvm) | (Engine::Jvm, Target::Sparrow) => {
-                return Err(format!(
-                    "[run] engine \"{}\" needs [build] target \"{}\"",
-                    if engine == Engine::Jvm { "jvm" } else { "sparrow" },
-                    if engine == Engine::Jvm { "jvm" } else { "sparrow" },
-                ));
-            }
-            _ => {}
-        }
         let args = match run.get("args") {
             None => Vec::new(),
             Some(toml::Value::Array(args)) => strings(args, "[run] args")?,
@@ -127,7 +85,7 @@ impl Project {
                 .collect::<Result<_, _>>()?,
             Some(_) => return Err("[run] env must be a table of strings".into()),
         };
-        Ok(Project { root: root.to_path_buf(), name, entry, target, output, engine, args, env })
+        Ok(Project { root: root.to_path_buf(), name, entry, output, args, env })
     }
 
     fn output_path(&self) -> PathBuf {
@@ -228,15 +186,11 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
     if let Some(dir) = output.parent() {
         std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     }
-    let target = match project.target {
-        Target::Sparrow => "sparrow",
-        Target::Jvm => "jvm",
-    };
     let status = Command::new(okkama())
         .current_dir(&project.root)
         .arg("build")
         .args(&project.entry)
-        .args(["--target", target, "-o"])
+        .arg("-o")
         .arg(&project.output)
         .status()
         .map_err(|error| format!("cannot run {}: {error}", okkama().display()))?;
@@ -249,38 +203,16 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
 
 /// The command `blade run` executes, after `extra` arguments.
 pub fn run_command(project: &Project, extra: &[String]) -> Command {
-    let mut command = match project.engine {
-        Engine::Sparrow => {
-            let mut command = Command::new(okkama());
-            command.arg("exec").arg(project.output_path());
-            command
-        }
-        Engine::Ir => {
-            let mut command = Command::new(okkama());
-            command.args(["run", "--engine", "ir"]).args(&project.entry);
-            command
-        }
-        Engine::Jvm => {
-            let java = std::env::var_os("JAVA_HOME")
-                .map(|home| PathBuf::from(home).join("bin").join("java"))
-                .filter(|java| java.is_file())
-                .unwrap_or_else(|| PathBuf::from("java"));
-            let mut command = Command::new(java);
-            command.arg("-jar").arg(project.output_path());
-            command
-        }
-    };
+    // The built `.spb` runs with `okkama exec`.
+    let mut command = Command::new(okkama());
+    command.arg("exec").arg(project.output_path());
     command.current_dir(&project.root).args(&project.args).args(extra).envs(&project.env);
     command
 }
 
-/// Build when needed (not for `ir`), run, and return the program's exit status.
+/// Build when needed, run, and return the program's exit status.
 pub fn run(project: &Project, extra: &[String]) -> Result<i32, String> {
-    if project.engine == Engine::Ir {
-        check_installed(project)?;
-    } else {
-        build(project, false)?;
-    }
+    build(project, false)?;
     let mut command = run_command(project, extra);
     let status = command
         .status()
@@ -293,18 +225,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_follow_the_module_and_the_target() {
+    fn defaults_follow_the_module() {
         let root = Path::new("/p");
         let project = Project::parse(root, "[module]\nname = \"acme/web\"\n").unwrap();
         assert_eq!(project.entry, ["src/main.ok"]);
-        assert_eq!((project.target, project.engine), (Target::Sparrow, Engine::Sparrow));
         assert_eq!(project.output, "target/web.spb");
         assert!(project.args.is_empty() && project.env.is_empty());
-
-        let project = Project::parse(root, "[build]\ntarget = \"jvm\"\n").unwrap();
-        assert_eq!((project.output.as_str(), project.engine), ("target/app.jar", Engine::Jvm));
-        let project = Project::parse(root, "[build]\ntarget = \"jvm\"\n[run]\nengine = \"ir\"\n").unwrap();
-        assert_eq!(project.engine, Engine::Ir);
     }
 
     #[test]
@@ -313,7 +239,8 @@ mod tests {
         for (text, expected) in [
             ("[build]\nentry = []\n", "non-empty list"),
             ("[build]\nentry = 3\n", "[build] entry"),
-            ("[build]\ntarget = \"wasm\"\n", "not sparrow or jvm"),
+            ("[build]\ntarget = \"sparrow\"\n", "[build] target is gone"),
+            ("[run]\nengine = \"sparrow\"\n", "[run] engine is gone"),
             ("[run]\nargs = \"a\"\n", "[run] args must be a list"),
             ("[run]\nargs = [1]\n", "[run] args must be strings"),
             ("[run]\nenv = { A = 1 }\n", "[run] env \"A\" must be a string"),

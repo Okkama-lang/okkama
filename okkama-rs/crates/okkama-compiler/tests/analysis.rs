@@ -397,6 +397,124 @@ fn successor_obligations_are_checked_before_lowering() {
     }
 }
 
+const ASYNC_COUNTER: &str =
+    "object C { has n is int = 0; C(); async inc() is ^C { ^n = n + 1; } value() is int { n; } }";
+
+/// The obligation of an async successor moves into its `Future<^C>`, which
+/// must be awaited or handed on (Book, consumption; Bible §13.14; #754).
+#[test]
+fn successor_futures_carry_the_obligation_until_awaited() {
+    let leaked = |name: &str| {
+        format!("Successor action result must be used; binding \"{name}\" can leave scope without consumption")
+    };
+    let dropped = || "Successor action result must be used".to_string();
+    for (body, expected) in [
+        // Bound and dropped.
+        ("let pending = C().inc(); 0;", leaked("pending")),
+        // Bound and only read for `done()`/`cancelled()`.
+        ("let pending = C().inc(); if pending.done() { 1; } else { 0; }", leaked("pending")),
+        ("let pending = C().inc(); let gone = pending.cancelled(); 0;", leaked("pending")),
+        // An alias shares the obligation; the latest binding is named.
+        ("let pending = C().inc(); let alias = pending; 0;", leaked("alias")),
+        // Awaited on one branch only.
+        (
+            "let pending = C().inc(); if 1 > 0 { let c = await pending; c.value(); } else { 0; }",
+            leaked("pending"),
+        ),
+        // A spawned task carries the Future's obligation.
+        ("let task = spawn C().inc(); 0;", leaked("task")),
+        // A dropped call, and `done()` on a temporary, lose it at once.
+        ("C().inc(); 0;", dropped()),
+        ("if C().inc().done() { 1; } else { 0; }", dropped()),
+    ] {
+        assert_eq!(
+            messages(&format!("{ASYNC_COUNTER} async main() is int {{ {body} }}")),
+            [expected],
+            "{body}"
+        );
+    }
+    for body in [
+        // Awaited later, also after reading `done()`.
+        "let pending = C().inc(); let ready = pending.done(); let c = await pending; c.value();",
+        // Awaited through an alias.
+        "let pending = C().inc(); let alias = pending; let c = await alias; c.value();",
+        // Returned from its scope as the value of an `if`.
+        "let f = if 1 > 0 { let inner = C().inc(); inner; } else { C().inc(); }; let c = await f; c.value();",
+        // Passed on into an aggregate, and stored there.
+        "let pending = C().inc(); let all = [pending]; 0;",
+        "let pending = C().inc(); let all = [pending]; let c = await all[0]; c.value();",
+        // Awaited on one branch and passed on on the other.
+        "let pending = C().inc(); if 1 > 0 { let c = await pending; c.value(); } else { let all = [pending]; 0; }",
+        // Spawned and awaited.
+        "let task = spawn C().inc(); let c = await task; c.value();",
+        // An explicit cancel decides the transition.
+        "let pending = C().inc(); pending.cancel(); 0;",
+    ] {
+        assert!(
+            messages(&format!("{ASYNC_COUNTER} async main() is int {{ {body} }}")).is_empty(),
+            "{body}"
+        );
+    }
+}
+
+/// #790 (owner's decision of 2026-11-21): a successor Future is handed on where its plain `Future<C>` is
+/// expected (argument, field, declared result, generic holder), and that handoff consumes the obligation. A typed
+/// local is not a handoff, the conversion goes one way only, and a wrong handoff reports one error.
+#[test]
+fn successor_futures_hand_off_as_plain_futures() {
+    let objects = format!(
+        "{ASYNC_COUNTER} object D {{ D(); }} \
+         object Waiter {{ Waiter(); async take(f is Future<C>) is int {{ let c = await f; c.value(); }} \
+           async other(f is Future<D>) is int {{ 0; }} async number(f is Future<int>) is int {{ await f; }} }} \
+         object Holder {{ has f is Future<C>; Holder(:f); }} \
+         object Keep<T> {{ has f is Future<T>; Keep(:f); future() is Future<T> {{ f; }} }} \
+         object Pair<T> {{ has f is Future<T>; has x is T; Pair(:f, :x); }} \
+         object Maker {{ Maker(); make() is Future<C> {{ C().inc(); }} named() is Future<C> {{ let f = C().inc(); return f; }} }}"
+    );
+    let leaked = |name: &str| {
+        format!("Successor action result must be used; binding \"{name}\" can leave scope without consumption")
+    };
+    for body in [
+        // An argument, a field, a declared result and a generic holder (T = C).
+        "let pending = C().inc(); await Waiter().take(pending);",
+        "let pending = C().inc(); let held = Holder(f: pending); 0;",
+        "let f = Maker().make(); let c = await f; c.value();",
+        "let f = Maker().named(); let c = await f; c.value();",
+        "let pending = C().inc(); let kept = Keep(f: pending); let c = await kept.future(); c.value();",
+        // A typed local keeps the obligation until it is awaited.
+        "let pending is Future<C> = C().inc(); let c = await pending; c.value();",
+        "let pending is Future<C> = C().inc(); await Waiter().take(pending);",
+        // An alias, a block value and a temporary hand it on too.
+        "let pending = C().inc(); let alias = pending; await Waiter().take(alias);",
+        "await Waiter().take(if 1 > 0 { C().inc(); } else { C().inc(); });",
+        "await Waiter().take(C().inc());",
+    ] {
+        assert!(messages(&format!("{objects} async main() is int {{ {body} }}")).is_empty(), "{body}");
+    }
+    for (body, expected) in [
+        // A typed local alone does not discharge.
+        ("let pending is Future<C> = C().inc(); 0;", vec![leaked("pending")]),
+        // Awaited, then the successor result is dropped.
+        ("let pending = C().inc(); await pending; 0;", vec!["Successor action result must be used".to_string()]),
+        // Handed on only on one branch.
+        ("let pending = C().inc(); if 1 > 0 { await Waiter().take(pending); } else { 0; }", vec![leaked("pending")]),
+    ] {
+        assert_eq!(messages(&format!("{objects} async main() is int {{ {body} }}")), expected, "{body}");
+    }
+    for (body, wanted) in [
+        // A wrong result type, an unrelated Future, `any`, and a generic that would need another conversion:
+        // each reports its own error once, with no must-use cascade.
+        ("let pending = C().inc(); await Waiter().other(pending);", "No action \"other\""),
+        ("let pending = C().inc(); await Waiter().number(pending);", "No action \"number\""),
+        ("let pending = C().inc(); let boxed is any = pending; 0;", "Cannot initialize variable \"boxed\""),
+        ("let pending = C().inc(); let pair = Pair(f: pending, x: 5); 0;", "Pair"),
+    ] {
+        let found = messages(&format!("{objects} async main() is int {{ {body} }}"));
+        assert_eq!(found.len(), 1, "{body}: {found:?}");
+        assert!(found[0].contains(wanted), "{body}: {found:?}");
+    }
+}
+
 /// Замыкание несёт обязательства захваченных successor (#322).
 #[test]
 fn closures_carry_successor_obligations() {
@@ -777,18 +895,18 @@ fn a_match_that_leaves_enum_cases_out_names_them_at_the_match() {
         located(&action(&format!("let n = {inner};\nn;"))),
         [(inner.to_string(), missing("normal, urgent", "an `else` branch"))]
     );
-    // A compact choice: one error, with its own fallback branch.
-    let choice = "p ?? .urgent: 1 !! .low: 2";
+    // Compact cases (#893): the same match, the same one error.
+    let compact = "match p { case Priority.urgent: 1; case Priority.low: 2; }";
     assert_eq!(
-        located(&action(&format!("let f = {choice};\nf;"))),
-        [(choice.to_string(), missing("normal", "a `_:` branch"))]
+        located(&action(&format!("let f = {compact};\nf;"))),
+        [(compact.to_string(), missing("normal", "an `else` branch"))]
     );
     // Complete matches, an `else`, a `_:` and a statement are fine.
     for body in [
         "match p { case Priority.low { 1; } case Priority.normal { 2; } case Priority.urgent { 3; } }",
         "match p { case Priority.low { 1; } else { 2; } }",
-        "p ?? .urgent: 1 !! .low: 2 !! .normal: 3;",
-        "p ?? .urgent: 1 !! _: 2;",
+        "match p { case Priority.urgent: 1; case Priority.low: 2; case Priority.normal: 3; }",
+        "match p { case Priority.urgent: 1; case _: 2; }",
         "match p { case Priority.low { 1; } }\n0;",
     ] {
         assert_eq!(located(&action(body)), [], "{body}");
@@ -800,12 +918,11 @@ fn a_match_that_leaves_enum_cases_out_names_them_at_the_match() {
     );
     assert_eq!(messages(&action("match missing { case Priority.low { 1; } }")), ["Undefined variable \"missing\""]);
     assert_eq!(messages(&action("\"x\";")), ["Action result must be int, got string"]);
-    assert_eq!(messages(&action("p ?? .urgent: 1 !! .missing: 2 !! .low: 3 !! .normal: 4")), ["Unknown enum variant"]);
     // Variants with payloads keep their own message, once.
     let shapes = |body: &str| {
         format!("enum Shape = (dot, circle(r is int), square(side is int));\nobject Q {{\n Q();\n f(s is Shape) is int {{\n{body}\n }}\n}}\nmain() is int {{ 0; }}")
     };
-    for body in ["match s { case Shape.dot { 1; } case Shape.circle(r) { r; } }", "s ?? .dot: 1 !! .circle(r): r"] {
+    for body in ["match s { case Shape.dot { 1; } case Shape.circle(r) { r; } }", "match s { case Shape.dot: 1; case Shape.circle(r): r; }"] {
         assert_eq!(messages(&shapes(body)), ["Non-exhaustive match: missing square"], "{body}");
     }
 }
@@ -1090,7 +1207,7 @@ fn try_optional_keeps_its_type_when_operand_paths_throw() {
         "let m is Maybe<int> = try? (if c { throw E.a; } else { throw E.b; });",
         "let m = try? (if c { throw E.a; } else { throw E.b; }) else 8; let n is int = m;",
         "let m = try? loop { throw E.a; } else 9;",
-        "let m = try? (true ?? throw E.a !! 2) else 5;",
+        "let m = try? (match true { case true: throw E.a; case false: 2; }) else 5;",
         "let m = try! (if true { throw E.a; } else { 2; }); let n is int = m;",
     ] {
         assert!(check(body).is_empty(), "{body}: {:?}", check(body));
@@ -1229,4 +1346,52 @@ fn an_ambiguous_call_names_the_argument_types_and_the_tied_candidates() {
         messages(&format!("{boxes} main() is int {{ let b = Box(1, 2); 0; }}")),
         ["Ambiguous construction of \"Box\" with (int, int): Box(int, any) and Box(any, int) fit equally well"]
     );
+}
+
+/// #286: a repeated enum case or literal value, and an `else` after cases that cover every value, can never run.
+#[test]
+fn unreachable_match_cases_are_errors() {
+    let status = "enum Status = (ready, failed, done); enum Reading = (value(n is int), empty);";
+    for (body, expected) in [
+        ("let s = Status.ready; match s { case Status.ready, Status.done { 1; } case Status.failed { 2; } case Status.ready { 3; } }", "Duplicate variant pattern"),
+        ("let s = Status.ready; match s { case Status.ready, Status.ready { 1; } else { 2; } }", "Duplicate variant pattern"),
+        ("let n = 3; match n { case 1 { 1; } case 1 { 2; } else { 0; } }", "Duplicate case pattern"),
+        ("let t = \"a\"; match t { case \"a\" { 1; } case \"b\", \"a\" { 2; } else { 0; } }", "Duplicate case pattern"),
+        ("let b = true; match b { case true { 1; } case false { 2; } else { 3; } }", "Unreachable else: the cases already cover every value"),
+        ("let s = Status.ready; match s { case Status.ready, Status.failed, Status.done { 1; } else { 2; } }", "Unreachable else: the cases already cover every value"),
+        ("let r = Reading.empty; match r { case Reading.value(n) { n; } case Reading.empty { 0; } else { 1; } }", "Unreachable else: the cases already cover every value"),
+    ] {
+        assert_eq!(messages(&format!("{status} main() is int {{ {body} }}")), [expected.to_string()], "{body}");
+    }
+    for body in [
+        "let s = Status.ready; match s { case Status.ready { 1; } case Status.failed { 2; } else { 3; } }",
+        "let s = Status.ready; match s { case Status.ready { 1; } case Status.failed { 2; } case Status.done { 3; } }",
+        "let n = 3; match n { case 1 { 1; } case 2 { 2; } else { 0; } }",
+        "let x = 0.5; match x { case 0.5 { 1; } else { 0; } }",
+    ] {
+        assert!(messages(&format!("{status} main() is int {{ {body} }}")).is_empty(), "{body}");
+    }
+}
+
+
+/// #475: every repeated enum case is reported once per repetition, in source
+/// order, at the repetition; the first declaration keeps the case, so the
+/// enum stays usable and a wide unique enum has no errors.
+#[test]
+fn repeated_enum_cases_are_reported_in_order_at_the_repetition() {
+    let text = "module app v1.0.0; enum E = (a, b, a, c, b, a); main() is int { let e = E.c; 0; }";
+    let found = errors(text);
+    let reported: Vec<&str> = found.iter().map(|error| error.message.as_str()).collect();
+    assert_eq!(reported, [
+        "Enum \"E\" already has case \"a\"",
+        "Enum \"E\" already has case \"b\"",
+        "Enum \"E\" already has case \"a\"",
+    ]);
+    let starts: Vec<usize> = found.iter().map(|error| error.span.start as usize).collect();
+    let at = |nth: usize, name: &str| text.match_indices(name).filter(|(i, _)| {
+        text[..*i].ends_with(", ") || text[..*i].ends_with('(')
+    }).nth(nth).map(|(i, _)| i).unwrap();
+    assert_eq!(starts, [at(1, "a"), at(1, "b"), at(2, "a")]);
+    let wide: Vec<String> = (0..3000).map(|i| format!("c{i}")).collect();
+    assert!(messages(&format!("enum W = ({}); main() is int {{ let w = W.c2999; 0; }}", wide.join(", "))).is_empty());
 }

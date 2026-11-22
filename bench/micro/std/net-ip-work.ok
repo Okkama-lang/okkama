@@ -1,0 +1,51 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "net/ip" take IpAddress, IpNetwork, IpProperty;
+import "compare" take Order;
+
+object Bench {
+    Bench();
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let x = v.string();
+        let a = IpAddress("10.0.0." + x);
+        let b = IpAddress("10.0.0.255");
+        let network = IpNetwork(a, 24);
+        let result = network.size() + network.broadcast().bytes()[3].int() + (if network.membership(
+            a
+        ) {
+            v;
+        }
+        else {
+            0;
+        }) + (if a.order(b) == Order.less {
+            1;
+        }
+        else {
+            0;
+        }) + (if a.properties().membership(IpProperty.private_network) {
+            1;
+        }
+        else {
+            0;
+        });
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

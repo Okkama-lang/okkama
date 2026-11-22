@@ -153,9 +153,7 @@ hidden object RedirectState {
     }
 
     known(key is string) is bool {
-        visited.reduce(false) -> present, value {
-            present || value == key;
-        };
+        visited.contains(key);
     }
 
     following(request is Request, history is @ExchangeHop, key is string) is ^RedirectState {

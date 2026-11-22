@@ -1,0 +1,42 @@
+module diff_native_bench v1.0.0;
+import "runtime/diff" take diff_script;
+import "diff" take Diff;
+import "runtime/time" take monotonic_clock;
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+object Bench {
+    Bench();
+    sample(label is string, left is @string, right is @string, n is int) is void {
+        let out = Stdout();
+        let check = Cell(0);
+        for 0..20 -> i { check.replace(check.value() + diff_script(left, right).size()); }
+        for 0..5 -> trial {
+            let before = monotonic_clock();
+            for 0..n -> i { check.replace(check.value() + diff_script(left, right).size()); }
+            let elapsed = monotonic_clock() - before;
+            out.writeln(label, " raw ", trial, " ", elapsed, " ", n, " ", check.value());
+        }
+        for 0..20 -> i { check.replace(check.value() + Diff(left: left, right: right).edits().size()); }
+        for 0..5 -> trial {
+            let before = monotonic_clock();
+            for 0..n -> i { check.replace(check.value() + Diff(left: left, right: right).edits().size()); }
+            let elapsed = monotonic_clock() - before;
+            out.writeln(label, " api ", trial, " ", elapsed, " ", n, " ", check.value());
+        }
+    }
+}
+main() is int {
+    let bench = Bench();
+    bench.sample("small", ["a", "b", "c", "d"], ["a", "x", "c", "d", "e"], 2000);
+    for [128, 512] -> size {
+        let left is @string = (0..size).map() -> i { "line " + i.string(); };
+        let sparse is @string = (0..size).map() -> i { if i == (size / 2).int() { "changed"; } else { left[i]; } };
+        let disjoint is @string = (0..size).map() -> i { "other " + i.string(); };
+        let repeated is @string = (0..size).map() -> i { (i % 4).string(); };
+        let shifted is @string = (0..size).map() -> i { ((i + 1) % 4).string(); };
+        bench.sample(size.string() + " sparse", left, sparse, 100);
+        bench.sample(size.string() + " disjoint", left, disjoint, 100);
+        bench.sample(size.string() + " repeated", repeated, shifted, 10);
+    }
+    0;
+}

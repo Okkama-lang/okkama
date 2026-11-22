@@ -14,7 +14,6 @@ import "mail/imap_uid" take ImapUid, ImapUidValidity, ImapSequence, ImapUidSet, 
     ImapUidLimitExceeded;
 import "mail/imap_command_reading" take ImapTag;
 import "mail/mailbox" take MailFlag, MailFlags, SystemFlag, SystemMailFlag, KeywordFlag;
-import "numbers/bigint" take BigInt;
 import "collections/sequence" take Sequencing;
 import "collections/set" take Set, OrderedSet;
 import "mime/media_type" take MimeItems, MimePosition;
@@ -170,7 +169,7 @@ object ImapUnsigned {
         confirm origin.length() > 0 && origin.length() <= 10
             else throw InvalidImapData.because("unsigned number length outside 1..10");
         if nonzero {
-            confirm origin.slice(0, 1) != "0"
+            confirm !origin.starts_with("0")
                 else throw InvalidImapData.because("nonzero number starts with zero");
         }
         let count = MimePosition(0);
@@ -259,7 +258,7 @@ object ImapFlagsValue {
                     SystemFlag(SystemMailFlag.recent);
                 }
                 else {
-                    confirm raw.length() > 0 && raw.slice(0, 1) != "\\"
+                    confirm !raw.starts_with("\\")
                         else throw InvalidImapData.because("unsupported system flag");
                     KeywordFlag(raw);
                 }
@@ -315,7 +314,7 @@ object ImapUidRanges {
             };
             for (0..size) -> offset {
                 let number = lowest + offset;
-                items = items.following(ImapUid(BigInt(number)));
+                items = items.following(ImapUid((number)));
             }
             count = count.following(count.index() + size);
         }
@@ -348,7 +347,7 @@ object ImapSearchResult {
                 let entry = values.item(index);
                 confirm entry.kind() == ImapValueKind.atom
                     else throw InvalidImapData.because("SEARCH UID is not an atom");
-                ImapUid(BigInt(ImapUnsigned(origin: entry.string(), nonzero: true).int().string()));
+                ImapUid((ImapUnsigned(origin: entry.string(), nonzero: true).int()));
             };
             value = ImapUidSet(origin: ids, limits: limits);
         }

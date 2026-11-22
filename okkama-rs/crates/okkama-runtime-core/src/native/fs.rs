@@ -1,5 +1,5 @@
 //! `runtime/fs`: лексические пути (File::Spec Unix/Win32), файлы, каталоги,
-//! блокировки, временные файлы, glob и наблюдение — перенос `FsNatives` JVM.
+//! блокировки, временные файлы, glob и наблюдение.
 //! Пути — байты UTF-8; относительные разрешаются от виртуального cwd
 //! (`crate::host`). Тексты и коды отказов — как у Perl-provider.
 #![allow(unsafe_code)]
@@ -379,9 +379,19 @@ pub fn rename_noreplace(source: &std::path::Path, target: &std::path::Path) -> s
     let (from, to) = (c_path(source)?, c_path(target)?);
     #[cfg(target_os = "linux")]
     {
+        // The system call, not glibc's wrapper: the Linux packages are linked
+        // against glibc 2.17, which has no renameat2 (2.28; #545). Kernels
+        // before 3.15 answer ENOSYS and the fallback below takes over.
         // SAFETY: both paths are NUL-terminated strings that outlive the call.
         let result = unsafe {
-            libc::renameat2(libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD, to.as_ptr(), libc::RENAME_NOREPLACE)
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
         };
         if result == 0 {
             return Ok(());
@@ -449,7 +459,7 @@ fn child(path: &str, name: &str) -> String {
     Spec::Unix.catfile(&[path.to_string(), name.to_string()])
 }
 
-// ---- блокировки: таблица процесса, как FileLockTable JVM ----
+// ---- блокировки: таблица процесса ----
 
 type FileKey = (u64, u64);
 
@@ -1247,7 +1257,6 @@ fn native_failure(error: Error) -> Rc<crate::failure::Failure> {
             crate::failure::Failure::new(crate::failure::Kind::Program(message))
         }
         // File watching writes no standard output; a budget cannot run out here.
-        Error::Exhausted(exhausted) => crate::failure::Failure::new(crate::failure::Kind::Program(exhausted.message().into())),
     }
 }
 

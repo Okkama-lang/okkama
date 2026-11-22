@@ -1,0 +1,11 @@
+[package]
+name = "okkama-devtrace"
+description = "Development instrumentation: events, counters, timers and dumps; compiled out of release builds"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

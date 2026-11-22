@@ -1,0 +1,38 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/process" take Process, ExitKind, Signal;
+import "os/command" take InheritedCommand;
+import "fs/path" take Path;
+import "encoding/utf" take Utf8Encoded;
+import "os/run" take Run;
+
+// A cat process handing out its stream set; echo run for bytes and for its completion.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let child = Process(InheritedCommand(program: Path("/bin/cat"), arguments: []));
+        let streams = child.streams();
+        streams.input().close();
+        let empty = await streams.output().bytes(10);
+        await child.exit();
+        let bytes = await Run("echo", ["r" + v.string()]).bytes();
+        let completed = await Run("echo", ["c"]).completion();
+        let total = empty.size() + 10 * bytes.size() + (if completed.exit().success() { 100; } else { 0; });
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -5,6 +5,7 @@
 #     tools/package.sh                                  # платформа этой машины
 #     tools/package.sh --target x86_64-apple-darwin     # кросс-сборка cargo
 #     tools/package.sh --no-build --out dist --version 0.1.0-nightly.20261029
+#     tools/package.sh --man-pages                      # добавить страницы std(3ok)
 #     tools/package.sh --installer                      # ещё .pkg (macOS) или .deb и .rpm (Linux)
 #
 # Версия по умолчанию — из okkama-rs/Cargo.toml. Результат —
@@ -17,7 +18,6 @@
 #     okkama-<версия>-<платформа>/
 #         bin/okkama bin/sparrow bin/blade
 #         lib/okkama/std/
-#         lib/okkama/native/<os>-<arch>/libokkama_native.{dylib,so}
 #         install.sh README.md LICENSE
 
 set -euo pipefail
@@ -29,6 +29,7 @@ TARGET=""
 OUT="$ROOT/dist"
 BUILD=1
 INSTALLER=0
+MAN_PAGES=0
 VERSION=""
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
         --out) OUT="$2"; shift 2 ;;
         --no-build) BUILD=0; shift ;;
         --installer) INSTALLER=1; shift ;;
+        --man-pages) MAN_PAGES=1; shift ;;
         --version) VERSION="$2"; shift 2 ;;
         -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "package.sh: unknown option $1" >&2; exit 2 ;;
@@ -46,24 +48,25 @@ done
 # Платформа архива: из тройки cargo или с этой машины.
 triple="${TARGET:-$(rustc -vV | sed -n 's/^host: //p')}"
 case "$triple" in
-    aarch64-apple-darwin) PLATFORM=macos-aarch64; NATIVE=libokkama_native.dylib ;;
-    x86_64-apple-darwin) PLATFORM=macos-x86_64; NATIVE=libokkama_native.dylib ;;
-    x86_64-unknown-linux-gnu) PLATFORM=linux-x86_64; NATIVE=libokkama_native.so ;;
-    aarch64-unknown-linux-gnu) PLATFORM=linux-aarch64; NATIVE=libokkama_native.so ;;
+    aarch64-apple-darwin) PLATFORM=macos-aarch64 ;;
+    x86_64-apple-darwin) PLATFORM=macos-x86_64 ;;
+    x86_64-unknown-linux-gnu) PLATFORM=linux-x86_64 ;;
+    aarch64-unknown-linux-gnu) PLATFORM=linux-aarch64 ;;
     *) echo "package.sh: unsupported target $triple" >&2; exit 1 ;;
 esac
 
 if [[ -n "$TARGET" ]]; then
-    RELEASE="$ROOT/okkama-rs/target/$TARGET/release"
+    RELEASE="${CARGO_TARGET_DIR:-$ROOT/okkama-rs/target}/$TARGET/release"
     CARGO_TARGET=(--target "$TARGET")
 else
-    RELEASE="$ROOT/okkama-rs/target/release"
+    RELEASE="${CARGO_TARGET_DIR:-$ROOT/okkama-rs/target}/release"
     CARGO_TARGET=()
 fi
 
 if [[ $BUILD -eq 1 ]]; then
-    (cd "$ROOT/okkama-rs" && cargo build --release --locked "${CARGO_TARGET[@]}" \
-        -p okkama-cli -p okkama-native -p sparrow-cli -p blade-cli)
+    # Release builds compile the development instrumentation out (okkama-devtrace).
+    (cd "$ROOT/okkama-rs" && RUSTFLAGS="${RUSTFLAGS:-} --cfg okkama_release -C force-frame-pointers=yes" cargo build --release --locked \
+        "${CARGO_TARGET[@]}" -p okkama-cli -p sparrow-cli -p blade-cli)
 fi
 
 VERSION="${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/okkama-rs/Cargo.toml" | head -1)}"
@@ -72,12 +75,17 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 DEST="$STAGE/$NAME"
 
-mkdir -p "$DEST/bin" "$DEST/lib/okkama/native/$PLATFORM"
+mkdir -p "$DEST/bin" "$DEST/lib/okkama"
 for tool in okkama sparrow blade; do
     install -m 755 "$RELEASE/$tool" "$DEST/bin/$tool"
 done
-install -m 644 "$RELEASE/$NATIVE" "$DEST/lib/okkama/native/$PLATFORM/$NATIVE"
 cp -R "$ROOT/std" "$DEST/lib/okkama/std"
+if [[ $MAN_PAGES -eq 1 ]]; then
+    # A cross package needs a matching host compiler; never execute target code
+    # implicitly through a shell or assume emulation is installed.
+    GENERATOR="${OKKAMA_DOC_GENERATOR:-$RELEASE/okkama}"
+    bash "$ROOT/tools/install-man.sh" "$GENERATOR" "$ROOT/std" "$DEST"
+fi
 printf '%s\n' "$VERSION" > "$DEST/lib/okkama/VERSION"
 # The compiler the binaries were built with (#41).
 (cd "$ROOT/okkama-rs" && rustc -Vv) > "$DEST/lib/okkama/TOOLCHAIN"
@@ -99,6 +107,9 @@ case "${1:-}" in
 esac
 PREFIX="${PREFIX%/}"
 mkdir -p "$PREFIX/bin" "$PREFIX/lib"
+if [[ -f "$PREFIX/lib/okkama/man-pages.txt" ]]; then
+    while IFS= read -r page; do rm -f "$PREFIX/share/man/man3/$page"; done < "$PREFIX/lib/okkama/man-pages.txt"
+fi
 rm -rf "$PREFIX/lib/okkama"
 cp -R "$HERE/lib/okkama" "$PREFIX/lib/okkama"
 for tool in okkama sparrow blade; do
@@ -106,9 +117,18 @@ for tool in okkama sparrow blade; do
     cp "$HERE/bin/$tool" "$PREFIX/bin/.$tool.tmp"
     mv -f "$PREFIX/bin/.$tool.tmp" "$PREFIX/bin/$tool"
 done
+if [[ -d "$HERE/share/man/man3" ]]; then
+    mkdir -p "$PREFIX/share/man/man3"
+    while IFS= read -r page; do
+        install -m 644 "$HERE/share/man/man3/$page" "$PREFIX/share/man/man3/$page"
+    done < "$HERE/lib/okkama/man-pages.txt"
+fi
 cat > "$PREFIX/lib/okkama/uninstall.sh" <<UNINSTALL
 #!/usr/bin/env bash
 rm -f "$PREFIX/bin/okkama" "$PREFIX/bin/sparrow" "$PREFIX/bin/blade"
+if [[ -f "$PREFIX/lib/okkama/man-pages.txt" ]]; then
+    while IFS= read -r page; do rm -f "$PREFIX/share/man/man3/\$page"; done < "$PREFIX/lib/okkama/man-pages.txt"
+fi
 rm -rf "$PREFIX/lib/okkama"
 echo "Okkama removed from $PREFIX"
 UNINSTALL
@@ -138,6 +158,7 @@ if [[ $INSTALLER -eq 1 ]]; then
             ROOTFS="$STAGE/pkgroot"
             mkdir -p "$ROOTFS/usr/local"
             cp -R "$DEST/bin" "$DEST/lib" "$ROOTFS/usr/local/"
+            if [[ -d "$DEST/share" ]]; then cp -R "$DEST/share" "$ROOTFS/usr/local/"; fi
             # Версия pkg — только цифры и точки.
             PKG_VERSION="$(printf '%s' "$VERSION" | sed 's/[^0-9.].*//')"
             pkgbuild --quiet --root "$ROOTFS" --identifier dev.okkama.okkama \
@@ -152,6 +173,7 @@ if [[ $INSTALLER -eq 1 ]]; then
             ROOTFS="$STAGE/debroot"
             mkdir -p "$ROOTFS/usr" "$ROOTFS/DEBIAN"
             cp -R "$DEST/bin" "$DEST/lib" "$ROOTFS/usr/"
+            if [[ -d "$DEST/share" ]]; then cp -R "$DEST/share" "$ROOTFS/usr/"; fi
             mkdir -p "$ROOTFS/usr/share/doc/okkama"
             cp "$ROOT/LICENSE" "$ROOTFS/usr/share/doc/okkama/copyright"
             # Debian: `-` в версии — разделитель ревизии, пре-релиз — через `~`.
@@ -164,11 +186,10 @@ Maintainer: Alexander Ponomarev <shootnix@users.noreply.github.com>
 Section: devel
 Priority: optional
 Depends: libc6 (>= 2.17)
-Suggests: libsqlite3-0 (>= 3.41), openjdk-21-jdk-headless
-Homepage: https://github.com/shootnix/okkama
+Suggests: libsqlite3-0 (>= 3.41)
+Homepage: https://github.com/Okkama-lang/okkama
 Description: Okkama programming language
- Compiler and runner for Okkama (IR interpreter, Sparrow VM with JIT,
- JVM backend), the standard library, the language server, the formatter
+ Compiler and runner for Okkama (Sparrow VM with JIT), the standard library, the language server, the formatter
  and the blade project tool.
 CONTROL
             # xz, not the zstd Ubuntu's dpkg-deb picks by default: dpkg before
@@ -185,6 +206,8 @@ CONTROL
                 esac
                 # RPM: no `-` in a version; `~` sorts a pre-release first.
                 RPM_VERSION="$(printf '%s' "$VERSION" | sed 's/-/~/')"
+                MAN_RPM_FILES=""
+                if [[ $MAN_PAGES -eq 1 ]]; then MAN_RPM_FILES='/usr/share/man/man3/*.3ok'; fi
                 TOPDIR="$STAGE/rpmbuild"
                 mkdir -p "$TOPDIR/SPECS"
                 cat > "$TOPDIR/SPECS/okkama.spec" <<SPEC
@@ -193,19 +216,17 @@ Version: $RPM_VERSION
 Release: 1
 Summary: Okkama programming language
 License: GPL-3.0-only
-URL: https://github.com/shootnix/okkama
+URL: https://github.com/Okkama-lang/okkama
 BuildArch: $RPM_ARCH
 Requires: glibc >= 2.17
 Recommends: sqlite-libs
-Suggests: java-21-openjdk-headless
 AutoReqProv: no
 %global debug_package %{nil}
 %global __os_install_post %{nil}
 %global _build_id_links none
 
 %description
-Compiler and runner for Okkama (IR interpreter, Sparrow VM with JIT,
-JVM backend), the standard library, the language server, the formatter
+Compiler and runner for Okkama (Sparrow VM with JIT), the standard library, the language server, the formatter
 and the blade project tool.
 
 %install
@@ -217,6 +238,7 @@ cp -a $ROOTFS/usr %{buildroot}/
 /usr/bin/sparrow
 /usr/bin/blade
 /usr/lib/okkama
+$MAN_RPM_FILES
 %doc /usr/share/doc/okkama/copyright
 SPEC
                 rpmbuild --quiet --define "_topdir $TOPDIR" -bb "$TOPDIR/SPECS/okkama.spec"

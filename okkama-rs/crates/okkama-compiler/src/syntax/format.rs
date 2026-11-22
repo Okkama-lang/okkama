@@ -398,17 +398,24 @@ impl<'s> Printer<'s> {
                     self.word(" is ");
                     self.word(&role.text);
                 }
-                self.word(" = (");
-                for (index, case) in decl.cases.iter().enumerate() {
-                    if index > 0 {
-                        self.word(", ");
-                    }
-                    self.word(&case.text);
-                    if !decl.payloads[index].is_empty() {
-                        self.params(&decl.payloads[index], case.span.end);
-                    }
-                }
-                self.word(");");
+                // Cases are a list like any other (#594): one per line when the
+                // author broke them, wrote a trailing comma, or they do not fit.
+                let cases: Vec<usize> = (0..decl.cases.len()).collect();
+                self.word(" = ");
+                self.list(
+                    "(",
+                    ")",
+                    &cases,
+                    decl.span.end,
+                    |p, &index| {
+                        p.word(&decl.cases[index].text);
+                        if !decl.payloads[index].is_empty() {
+                            p.params(&decl.payloads[index], decl.case_spans[index].end);
+                        }
+                    },
+                    |&index| decl.case_spans[index],
+                );
+                self.word(";");
             }
             Item::Test(test) => self.test(test),
             Item::NativeAction(decl) => {
@@ -1087,16 +1094,30 @@ impl<'s> Printer<'s> {
                     }
                     p.expr(pattern);
                 }
-                p.word(" ");
-                p.block(&case.body);
+                if case.compact {
+                    p.word(": ");
+                    p.compact_value(&case.body);
+                    p.word(";");
+                } else {
+                    p.word(" ");
+                    p.block(&case.body);
+                }
             });
         }
         if let Some(block) = &body.else_block {
-            let span = Span::new(self.else_keyword(block.span.start), block.span.end);
-            self.line(span, body.cases.is_empty(), false, |p| {
-                p.word("else ");
-                p.block(block);
-            });
+            if body.else_compact {
+                self.line(block.span, body.cases.is_empty(), false, |p| {
+                    p.word("case _: ");
+                    p.compact_value(block);
+                    p.word(";");
+                });
+            } else {
+                let span = Span::new(self.else_keyword(block.span.start), block.span.end);
+                self.line(span, body.cases.is_empty(), false, |p| {
+                    p.word("else ");
+                    p.block(block);
+                });
+            }
         }
         self.leading_comments(body.span.end.saturating_sub(1), false);
         self.newline();
@@ -1156,70 +1177,15 @@ impl<'s> Printer<'s> {
 
     // ---- выражения ----
 
-    fn choice_result(&mut self, block: &Block) {
+    /// The value of a compact match case (#893): its one expression statement.
+    fn compact_value(&mut self, block: &Block) {
         if let StmtKind::Expr { expr, .. } = &block.stmts[0].kind {
             self.expr(expr);
         }
     }
 
-    fn choice(&mut self, inner: &Expr) {
-        match &inner.kind {
-            ExprKind::If {
-                condition,
-                then_block,
-                else_block,
-            } => {
-                self.expr(condition);
-                self.word(" ?? ");
-                self.choice_result(then_block);
-                self.word(" !! ");
-                self.choice_result(else_block);
-            }
-            ExprKind::Match(body) => {
-                self.expr(&body.subject);
-                let mut separator = " ?? ";
-                for arm in &body.cases {
-                    self.word(separator);
-                    separator = " !! ";
-                    let pattern = &arm.patterns[0];
-                    let (callee, args) = match &pattern.kind {
-                        ExprKind::Call { callee, args } => (&**callee, &args[..]),
-                        _ => (pattern, &[][..]),
-                    };
-                    if let ExprKind::Get { name, .. } = &callee.kind {
-                        self.word(".");
-                        self.word(&name.text);
-                    }
-                    if !args.is_empty() {
-                        self.word("(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 {
-                                self.word(", ");
-                            }
-                            if let Some(name) = &arg.name {
-                                self.word(&name.text);
-                                self.word(": ");
-                            }
-                            self.expr(&arg.value);
-                        }
-                        self.word(")");
-                    }
-                    self.word(": ");
-                    self.choice_result(&arm.body);
-                }
-                if let Some(block) = &body.else_block {
-                    self.word(separator);
-                    self.word("_: ");
-                    self.choice_result(block);
-                }
-            }
-            _ => unreachable!("compact choice is an if or match"),
-        }
-    }
-
     fn expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Choice(inner) => self.choice(inner),
             ExprKind::Throw(value) => {
                 self.word("throw ");
                 self.expr(value);
@@ -1408,6 +1374,16 @@ impl<'s> Printer<'s> {
                 then_block,
                 else_block,
             } => {
+                // The compact form (#921) keeps its spelling: `if c: a else: b`.
+                if let (Some(then_value), Some(else_value)) = (sole_expression(then_block), sole_expression(else_block)) {
+                    self.word("if ");
+                    self.expr(condition);
+                    self.word(": ");
+                    self.expr(then_value);
+                    self.word(" else: ");
+                    self.expr(else_value);
+                    return;
+                }
                 self.word("if ");
                 self.expr(condition);
                 self.word(" ");
@@ -1496,6 +1472,15 @@ impl<'s> Printer<'s> {
             }
             self.expr(operand);
         }
+    }
+}
+
+/// The expression of a branch the parser built from one (a compact `if`, #921): a block holding that expression
+/// alone and spanning exactly it. A written block also spans its braces.
+fn sole_expression(block: &Block) -> Option<&Expr> {
+    match block.stmts.as_slice() {
+        [Stmt { kind: StmtKind::Expr { expr, condition: None }, span }] if *span == block.span => Some(expr),
+        _ => None,
     }
 }
 

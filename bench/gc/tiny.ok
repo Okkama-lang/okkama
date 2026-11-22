@@ -1,0 +1,59 @@
+module bench/gc v1.0.0;
+
+// A tiny live heap under heavy allocation: a million short-lived objects, every tenth one a resource with a
+// destroy of its own, nothing kept between steps.
+import "io/stdout" take Stdout, Stderr;
+import "runtime/process" take process_arguments;
+import "runtime/time" take monotonic_clock;
+
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    sum() is int { x + y; }
+}
+
+object Handle {
+    has id is int;
+    Handle(:id);
+    id() is int { id; }
+    destroy {}
+}
+
+object Work {
+    Work();
+    // A loop, not recursion: a call made while a resource is alive is not a tail call (its destroy runs
+    // after it), so recursion would grow the stack and measure the root scan of deep stacks instead.
+    run(n is int) is int {
+        (0..n).reduce(0) -> acc, i {
+            let point = Point(x: i, y: 1);
+            if i % 10 == 0 {
+                let handle = Handle(id: i);
+                acc + point.sum() % 7 + handle.id() % 3;
+            } else {
+                acc + point.sum() % 7;
+            };
+        };
+    }
+}
+
+// #236 protocol, as bench/ownership/ownership.ok: an argument N repeats the work N times and prints
+// "iteration <nanoseconds>" to stderr per run; stdout gets the result once.
+object Repeat {
+    Repeat();
+    run(work is () is string) is string {
+        let arguments = process_arguments();
+        if arguments.size() == 0 { return work(); }
+        let count = arguments[0].reduce(0) -> number, digit { number * 10 + digit.int() - 48; };
+        (0..count).reduce("") -> previous, index {
+            let started = monotonic_clock();
+            let result = work();
+            Stderr().writeln("iteration " + (monotonic_clock() - started).string());
+            result;
+        };
+    }
+}
+
+main() is int {
+    Stdout().writeln(Repeat().run(() is string { Work().run(1000000).string(); }));
+    0;
+}

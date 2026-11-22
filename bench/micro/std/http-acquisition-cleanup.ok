@@ -1,0 +1,44 @@
+// #244: http-acquisition-cleanup; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;
+import "http/connection" take HttpAcquisitionCleanup;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object Acquisition { has n is int; has released is Atomic<int>; Acquisition(n is int) { self.n=n; released=Atomic(0); } async value() is int { n; } release(n is int) is void { released.replace(n); } result() is int { released.value(); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let group is FutureGroup<int> = FutureGroup();
+            let helper = Acquisition(v);
+            let pending = helper.value();
+            group.start(pending); await pending; await group.wait();
+            let futures is @Future<int> = [pending];
+            let slots = Atomic(futures);
+            let cleanup = HttpAcquisitionCleanup(group,slots,Event(),helper.release);
+            await cleanup.close();
+            let contribution = helper.result();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

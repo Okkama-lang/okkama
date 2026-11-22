@@ -1,0 +1,11 @@
+module bible/cap_self v1.0.0;
+
+// A cap body has no `self` and cannot call the owner's actions.
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    norm() is int { x * x + y * y; }
+    cap Shown { norm is int { self.norm(); } }
+}
+
+main() is int { Point(x: 1, y: 2)::Shown::norm; }

@@ -1,149 +1,564 @@
 module app v1.0.0;
+
 import "conformance/check" take Checks;
-import "db/row" take Row,Column,DbColumns,InvalidRow,MissingColumn,AmbiguousColumn;
+import "db/row" take Row, Column, DbColumns, InvalidRow, MissingColumn, AmbiguousColumn;
 import "db/read" take RowValueFailure;
-import "db/value" take DbValue,DbValueKind,DbValueWriting,DbValueCapture,ObservedDbValue,InvalidDbValue,DbNull,DbText,DbInteger,DbBoolean,DbDecimal,DbFloating,DbBytes;
-import "numbers/bigint" take BigInt;
+import "db/value" take DbValue, DbValueKind, DbValueWriting, DbValueCapture, ObservedDbValue,
+    InvalidDbValue, DbNull, DbText, DbInteger, DbBoolean, DbDecimal, DbFloating, DbBytes;
 import "math/decimal" take Decimal;
 import "async/atomic" take Atomic;
-import "db/statement" take DbLimits,DbBoundaryLimit;
+import "db/statement" take DbLimits, DbBoundaryLimit;
 
 object ChangingText does DbValue {
     has calls is Atomic<int>;
-    ChangingText() { calls=Atomic(0); }
-    kind() is DbValueKind { DbValueKind.text; }
-    print(output is DbValueWriting) is void { calls.replace(calls.value()+1);output.text(calls.value().string()); }
-    calls() is int { calls.value(); }
+
+    ChangingText() {
+        calls = Atomic(0);
+    }
+
+    kind() is DbValueKind {
+        DbValueKind.text;
+    }
+
+    print(output is DbValueWriting) is void {
+        calls.replace(calls.value() + 1);
+        output.text(calls.value().string());
+    }
+
+    calls() is int {
+        calls.value();
+    }
 }
+
 object BrokenPrinter does DbValue {
     has mode is int;
-    BrokenPrinter(mode is int) { self.mode=mode; }
-    kind() is DbValueKind { DbValueKind.text; }
+
+    BrokenPrinter(mode is int) {
+        self.mode = mode;
+    }
+
+    kind() is DbValueKind {
+        DbValueKind.text;
+    }
+
     print(output is DbValueWriting) is void {
-        if mode==1 { output.text("first");output.text("second"); }
-        if mode==2 { output.null_value(); }
+        if mode == 1 {
+            output.text("first");
+            output.text("second");
+        }
+        if mode == 2 {
+            output.null_value();
+        }
     }
 }
+
 object EscapedSchemaRow {
     EscapedSchemaRow();
+
     value() is Row {
-        let columns=[Column(index: 0,name: "saved",declaration: "INTEGER")];
-        Row(columns: columns,values: [DbInteger(BigInt("7"))]);
+        let columns = [Column(index: 0, name: "saved", declaration: "INTEGER")];
+        Row(columns: columns, values: [DbInteger(7)]);
     }
 }
+
 main() is int {
     let c = Checks();
-    let row = Row(columns: [Column(0,"nil",""), Column(1,"empty",""), Column(2,"zero",""), Column(3,"one",""), Column(4,"two",""), Column(5,"flag",""), Column(6,"amount",""), Column(7,"ratio",""), Column(8,"data",""), Column(9,"big",""), Column(10,"min",""), Column(11,"max","")], values: [DbNull(), DbText(""), DbInteger(BigInt("0")), DbInteger(BigInt("1")), DbInteger(BigInt("2")), DbBoolean(false), DbDecimal(Decimal("1.25")), DbFloating(1.5), DbBytes([]), DbInteger(BigInt("9223372036854775808")), DbInteger(BigInt("-9223372036854775808")), DbInteger(BigInt("9223372036854775807"))]);
-    let duplicate = Row(columns: [Column(0,"x",""),Column(1,"x","")], values: [DbNull(),DbNull()]);
-    c = c.ok("value NULL", row.maybe("nil").cell() ?? .none: true !! _: false);
-    c = c.ok("value missing", row.presence("absent").cell() ?? .missing: true !! _: false);
-    c = c.ok("value presence NULL", row.presence("nil").cell() ?? .none: true !! _: false);
-    c = c.ok("int NULL", row.maybe("nil").int() ?? .none: true !! _: false);
-    c = c.ok("int missing", row.presence("absent").int() ?? .missing: true !! _: false);
-    c = c.ok("int presence NULL", row.presence("nil").int() ?? .none: true !! _: false);
-    c = c.ok("integer NULL", row.maybe("nil").integer() ?? .none: true !! _: false);
-    c = c.ok("integer missing", row.presence("absent").integer() ?? .missing: true !! _: false);
-    c = c.ok("integer presence NULL", row.presence("nil").integer() ?? .none: true !! _: false);
-    c = c.ok("decimal NULL", row.maybe("nil").decimal() ?? .none: true !! _: false);
-    c = c.ok("decimal missing", row.presence("absent").decimal() ?? .missing: true !! _: false);
-    c = c.ok("decimal presence NULL", row.presence("nil").decimal() ?? .none: true !! _: false);
-    c = c.ok("floating NULL", row.maybe("nil").floating() ?? .none: true !! _: false);
-    c = c.ok("floating missing", row.presence("absent").floating() ?? .missing: true !! _: false);
-    c = c.ok("floating presence NULL", row.presence("nil").floating() ?? .none: true !! _: false);
-    c = c.ok("boolean NULL", row.maybe("nil").boolean() ?? .none: true !! _: false);
-    c = c.ok("boolean missing", row.presence("absent").boolean() ?? .missing: true !! _: false);
-    c = c.ok("boolean presence NULL", row.presence("nil").boolean() ?? .none: true !! _: false);
-    c = c.ok("flag NULL", row.maybe("nil").flag() ?? .none: true !! _: false);
-    c = c.ok("flag missing", row.presence("absent").flag() ?? .missing: true !! _: false);
-    c = c.ok("flag presence NULL", row.presence("nil").flag() ?? .none: true !! _: false);
-    c = c.ok("text NULL", row.maybe("nil").text() ?? .none: true !! _: false);
-    c = c.ok("text missing", row.presence("absent").text() ?? .missing: true !! _: false);
-    c = c.ok("text presence NULL", row.presence("nil").text() ?? .none: true !! _: false);
-    c = c.ok("bytes NULL", row.maybe("nil").bytes() ?? .none: true !! _: false);
-    c = c.ok("bytes missing", row.presence("absent").bytes() ?? .missing: true !! _: false);
-    c = c.ok("bytes presence NULL", row.presence("nil").bytes() ?? .none: true !! _: false);
+    let row = Row(
+        columns: [
+            Column(0, "nil", ""),
+            Column(1, "empty", ""),
+            Column(2, "zero", ""),
+            Column(3, "one", ""),
+            Column(4, "two", ""),
+            Column(5, "flag", ""),
+            Column(6, "amount", ""),
+            Column(7, "ratio", ""),
+            Column(8, "data", ""),
+            Column(9, "big", ""),
+            Column(10, "min", ""),
+            Column(11, "max", "")
+        ],
+        values: [
+            DbNull(),
+            DbText(""),
+            DbInteger(0),
+            DbInteger(1),
+            DbInteger(2),
+            DbBoolean(false),
+            DbDecimal(Decimal("1.25")),
+            DbFloating(1.5),
+            DbBytes([]),
+            DbInteger(9223372036854775808),
+            DbInteger(-9223372036854775808),
+            DbInteger(9223372036854775807)
+        ]
+    );
+    let duplicate = Row(
+        columns: [Column(0, "x", ""), Column(1, "x", "")],
+        values: [DbNull(), DbNull()]
+    );
+    c = c.ok("value NULL", match row.maybe("nil").cell() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("value missing", match row.presence("absent").cell() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("value presence NULL", match row.presence("nil").cell() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("int NULL", match row.maybe("nil").int() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("int missing", match row.presence("absent").int() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("int presence NULL", match row.presence("nil").int() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("integer NULL", match row.maybe("nil").integer() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("integer missing", match row.presence("absent").integer() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("integer presence NULL", match row.presence("nil").integer() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("decimal NULL", match row.maybe("nil").decimal() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("decimal missing", match row.presence("absent").decimal() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("decimal presence NULL", match row.presence("nil").decimal() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("floating NULL", match row.maybe("nil").floating() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("floating missing", match row.presence("absent").floating() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("floating presence NULL", match row.presence("nil").floating() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("boolean NULL", match row.maybe("nil").boolean() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("boolean missing", match row.presence("absent").boolean() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("boolean presence NULL", match row.presence("nil").boolean() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("flag NULL", match row.maybe("nil").flag() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("flag missing", match row.presence("absent").flag() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("flag presence NULL", match row.presence("nil").flag() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("text NULL", match row.maybe("nil").text() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("text missing", match row.presence("absent").text() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("text presence NULL", match row.presence("nil").text() {
+        case Presence.none: true;
+        case _: false;
+    });
+    c = c.ok("bytes NULL", match row.maybe("nil").bytes() {
+        case Maybe.none: true;
+        case _: false;
+    });
+    c = c.ok("bytes missing", match row.presence("absent").bytes() {
+        case Presence.missing: true;
+        case _: false;
+    });
+    c = c.ok("bytes presence NULL", match row.presence("nil").bytes() {
+        case Presence.none: true;
+        case _: false;
+    });
     c = c.ok("strict empty", row.text("empty") == "");
     c = c.ok("maybe empty", (row.maybe("empty").text() else panic "unexpected NULL") == "");
-    c = c.ok("presence empty", (row.presence("empty").text().fold() else panic "unexpected absence") == "");
+    c = c.ok(
+        "presence empty",
+        (row.presence("empty").text().fold() else panic "unexpected absence") == ""
+    );
     c = c.ok("strict zero", row.int("zero") == 0);
     c = c.ok("maybe zero", (row.maybe("zero").int() else panic "unexpected NULL") == 0);
-    c = c.ok("presence zero", (row.presence("zero").int().fold() else panic "unexpected absence") == 0);
+    c = c.ok(
+        "presence zero",
+        (row.presence("zero").int().fold() else panic "unexpected absence") == 0
+    );
     c = c.ok("strict flag", row.boolean("flag") == false);
     c = c.ok("maybe flag", (row.maybe("flag").boolean() else panic "unexpected NULL") == false);
-    c = c.ok("presence flag", (row.presence("flag").boolean().fold() else panic "unexpected absence") == false);
+    c = c.ok(
+        "presence flag",
+        (row.presence("flag").boolean().fold() else panic "unexpected absence") == false
+    );
     c = c.ok("strict zero", row.flag("zero") == false);
     c = c.ok("maybe zero", (row.maybe("zero").flag() else panic "unexpected NULL") == false);
-    c = c.ok("presence zero", (row.presence("zero").flag().fold() else panic "unexpected absence") == false);
+    c = c.ok(
+        "presence zero",
+        (row.presence("zero").flag().fold() else panic "unexpected absence") == false
+    );
     c = c.ok("strict one", row.flag("one") == true);
     c = c.ok("maybe one", (row.maybe("one").flag() else panic "unexpected NULL") == true);
-    c = c.ok("presence one", (row.presence("one").flag().fold() else panic "unexpected absence") == true);
-    c = c.ok("strict amount", row.decimal("amount") .string() == "1.25");
-    c = c.ok("maybe amount", (row.maybe("amount").decimal() else panic "unexpected NULL") .string() == "1.25");
-    c = c.ok("presence amount", (row.presence("amount").decimal().fold() else panic "unexpected absence") .string() == "1.25");
+    c = c.ok(
+        "presence one",
+        (row.presence("one").flag().fold() else panic "unexpected absence") == true
+    );
+    c = c.ok("strict amount", row.decimal("amount").string() == "1.25");
+    c = c.ok(
+        "maybe amount",
+        (row.maybe("amount").decimal() else panic "unexpected NULL").string() == "1.25"
+    );
+    c = c.ok(
+        "presence amount",
+        (row.presence("amount").decimal().fold() else panic "unexpected absence").string() == "1.25"
+    );
     c = c.ok("strict ratio", row.floating("ratio") == 1.5);
     c = c.ok("maybe ratio", (row.maybe("ratio").floating() else panic "unexpected NULL") == 1.5);
-    c = c.ok("presence ratio", (row.presence("ratio").floating().fold() else panic "unexpected absence") == 1.5);
-    c = c.ok("strict data", row.bytes("data") .size() == 0);
-    c = c.ok("maybe data", (row.maybe("data").bytes() else panic "unexpected NULL") .size() == 0);
-    c = c.ok("presence data", (row.presence("data").bytes().fold() else panic "unexpected absence") .size() == 0);
-    c = c.ok("strict big", row.integer("big") .string() == "9223372036854775808");
-    c = c.ok("maybe big", (row.maybe("big").integer() else panic "unexpected NULL") .string() == "9223372036854775808");
-    c = c.ok("presence big", (row.presence("big").integer().fold() else panic "unexpected absence") .string() == "9223372036854775808");
-    c = c.ok("strict min", row.int("min") .string() == "-9223372036854775808");
-    c = c.ok("maybe min", (row.maybe("min").int() else panic "unexpected NULL") .string() == "-9223372036854775808");
-    c = c.ok("presence min", (row.presence("min").int().fold() else panic "unexpected absence") .string() == "-9223372036854775808");
-    c = c.ok("strict max", row.int("max") .string() == "9223372036854775807");
-    c = c.ok("maybe max", (row.maybe("max").int() else panic "unexpected NULL") .string() == "9223372036854775807");
-    c = c.ok("presence max", (row.presence("max").int().fold() else panic "unexpected absence") .string() == "9223372036854775807");
-    c = c.ok("missing stays error", try { row.maybe("absent").text() else "fallback"; false; } catch MissingColumn.name(name) { name == "absent"; });
-    c = c.ok("strict rejects nil text", try { row.text("nil"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "nil" && expected == "text"; });
-    c = c.ok("strict rejects empty int", try { row.int("empty"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "empty" && expected == "int"; });
-    c = c.ok("maybe rejects empty int", try { row.maybe("empty").int(); false; } catch RowValueFailure.located(column, _, _, _) { column == "empty"; });
-    c = c.ok("strict rejects two flag", try { row.flag("two"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "two" && expected == "flag"; });
-    c = c.ok("maybe rejects two flag", try { row.maybe("two").flag(); false; } catch RowValueFailure.located(column, _, _, _) { column == "two"; });
-    c = c.ok("strict rejects flag flag", try { row.flag("flag"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "flag" && expected == "flag"; });
-    c = c.ok("maybe rejects flag flag", try { row.maybe("flag").flag(); false; } catch RowValueFailure.located(column, _, _, _) { column == "flag"; });
-    c = c.ok("strict rejects one boolean", try { row.boolean("one"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "one" && expected == "boolean"; });
-    c = c.ok("maybe rejects one boolean", try { row.maybe("one").boolean(); false; } catch RowValueFailure.located(column, _, _, _) { column == "one"; });
-    c = c.ok("strict rejects big int", try { row.int("big"); false; } catch RowValueFailure.located(column, expected, _, _) { column == "big" && expected == "int"; });
-    c = c.ok("maybe rejects big int", try { row.maybe("big").int(); false; } catch RowValueFailure.located(column, _, _, _) { column == "big"; });
-    c = c.ok("ambiguous duplicate.text(\"x\")", try { duplicate.text("x"); false; } catch AmbiguousColumn.name(name) { name == "x"; });
-    c = c.ok("ambiguous duplicate.maybe(\"x\").text()", try { duplicate.maybe("x").text(); false; } catch AmbiguousColumn.name(name) { name == "x"; });
-    c = c.ok("ambiguous duplicate.presence(\"x\").text()", try { duplicate.presence("x").text(); false; } catch AmbiguousColumn.name(name) { name == "x"; });
+    c = c.ok(
+        "presence ratio",
+        (row.presence("ratio").floating().fold() else panic "unexpected absence") == 1.5
+    );
+    c = c.ok("strict data", row.bytes("data").size() == 0);
+    c = c.ok("maybe data", (row.maybe("data").bytes() else panic "unexpected NULL").size() == 0);
+    c = c.ok(
+        "presence data",
+        (row.presence("data").bytes().fold() else panic "unexpected absence").size() == 0
+    );
+    c = c.ok("strict big", row.integer("big").string() == "9223372036854775808");
+    c = c.ok(
+        "maybe big",
+        (row.maybe("big").integer() else panic "unexpected NULL").string() == "9223372036854775808"
+    );
+    c = c.ok(
+        "presence big",
+        (row.presence("big").integer().fold() else panic "unexpected absence").string() == "9223372036854775808"
+    );
+    c = c.ok("strict min", row.int("min").string() == "-9223372036854775808");
+    c = c.ok(
+        "maybe min",
+        (row.maybe("min").int() else panic "unexpected NULL").string() == "-9223372036854775808"
+    );
+    c = c.ok(
+        "presence min",
+        (row.presence("min").int().fold() else panic "unexpected absence").string() == "-9223372036854775808"
+    );
+    c = c.ok("strict max", row.int("max").string() == "9223372036854775807");
+    c = c.ok(
+        "maybe max",
+        (row.maybe("max").int() else panic "unexpected NULL").string() == "9223372036854775807"
+    );
+    c = c.ok(
+        "presence max",
+        (row.presence("max").int().fold() else panic "unexpected absence").string() == "9223372036854775807"
+    );
+    c = c.ok("missing stays error", try {
+        row.maybe("absent").text() else "fallback";
+        false;
+    }
+    catch MissingColumn.name(name) {
+        name == "absent";
+    });
+    c = c.ok("strict rejects nil text", try {
+        row.text("nil");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "nil" && expected == "text";
+    });
+    c = c.ok("strict rejects empty int", try {
+        row.int("empty");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "empty" && expected == "int";
+    });
+    c = c.ok("maybe rejects empty int", try {
+        row.maybe("empty").int();
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, _) {
+        column == "empty";
+    });
+    c = c.ok("strict rejects two flag", try {
+        row.flag("two");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "two" && expected == "flag";
+    });
+    c = c.ok("maybe rejects two flag", try {
+        row.maybe("two").flag();
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, _) {
+        column == "two";
+    });
+    c = c.ok("strict rejects flag flag", try {
+        row.flag("flag");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "flag" && expected == "flag";
+    });
+    c = c.ok("maybe rejects flag flag", try {
+        row.maybe("flag").flag();
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, _) {
+        column == "flag";
+    });
+    c = c.ok("strict rejects one boolean", try {
+        row.boolean("one");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "one" && expected == "boolean";
+    });
+    c = c.ok("maybe rejects one boolean", try {
+        row.maybe("one").boolean();
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, _) {
+        column == "one";
+    });
+    c = c.ok("strict rejects big int", try {
+        row.int("big");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, _, _) {
+        column == "big" && expected == "int";
+    });
+    c = c.ok("maybe rejects big int", try {
+        row.maybe("big").int();
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, _) {
+        column == "big";
+    });
+    c = c.ok("ambiguous duplicate.text(\"x\")", try {
+        duplicate.text("x");
+        false;
+    }
+    catch AmbiguousColumn.name(name) {
+        name == "x";
+    });
+    c = c.ok("ambiguous duplicate.maybe(\"x\").text()", try {
+        duplicate.maybe("x").text();
+        false;
+    }
+    catch AmbiguousColumn.name(name) {
+        name == "x";
+    });
+    c = c.ok("ambiguous duplicate.presence(\"x\").text()", try {
+        duplicate.presence("x").text();
+        false;
+    }
+    catch AmbiguousColumn.name(name) {
+        name == "x";
+    });
     c = c.ok("NULL fallback", (row.maybe("nil").text() else "guest") == "guest");
     c = c.ok("row text", row.text("empty") == "");
-    let underflow = Row(columns: [Column(0,"n","")],values: [DbInteger(BigInt("-9223372036854775809"))]);
-    c = c.ok("int underflow retains cause",try { underflow.int("n");false; } catch RowValueFailure.located(column, _, _, cause) { column=="n" && cause=="InvalidDbValue.because(\"integer outside int range\")"; });
-    c = c.ok("maybe int underflow remains error",try { underflow.maybe("n").int();false; } catch RowValueFailure.located(_, expected, _, _) { expected=="int"; });
-    let canonical = Row(columns: [Column(0,"n","")],values: [DbInteger(BigInt("0007"))]);
-    c = c.ok("canonical integer parsing",canonical.int("n")==7);
-    let source=ChangingText();
-    let snapshot=Row(columns: [Column(0,"v","")],values: [source]);
-    let capture=DbValueCapture(DbValueKind.text);capture.text("saved");capture.finish();
-    c=c.ok("external printer observed once",source.calls()==1);
-    c=c.ok("native reads preserve snapshot",snapshot.text("v")=="1" && snapshot.text("v")=="1");
-    c=c.ok("compatibility value preserves snapshot",ObservedDbValue(snapshot.value("v")).text()=="1" && source.calls()==1);
-    c=c.ok("omitted printer rejected",try { Row(columns: [Column(0,"v","")],values: [BrokenPrinter(0)]);false; } catch e is InvalidDbValue { true; });
-    c=c.ok("duplicate printer rejected",try { Row(columns: [Column(0,"v","")],values: [BrokenPrinter(1)]);false; } catch e is InvalidDbValue { true; });
-    c=c.ok("wrong printer kind rejected",try { Row(columns: [Column(0,"v","")],values: [BrokenPrinter(2)]);false; } catch e is InvalidDbValue { true; });
-    c=c.ok("sealed printer rejected",try { capture.text("late");false; } catch e is InvalidDbValue { true; });
-    c=c.ok("sealed snapshot survives attempt",capture.text_value()=="saved");
-    c=c.ok("UTF8 byte limit preserved",try { Row(columns: [Column(0,"v","")],values: [DbText("я")],limits: DbLimits(1,1,10));false; } catch e is DbBoundaryLimit { true; });
-    c=c.ok("direct int preserves wrong-kind details",try { row.int("empty");false; } catch RowValueFailure.located(column, expected, actual_kind, cause) { column=="empty" && expected=="int" && actual_kind==DbValueKind.text && cause=="WrongDbValue.detailed(DbValueKind.integer, DbValueKind.text)"; });
-    c=c.ok("direct text preserves wrong-kind details",try { row.text("zero");false; } catch RowValueFailure.located(column, expected, actual_kind, cause) { column=="zero" && expected=="text" && actual_kind==DbValueKind.integer && cause=="WrongDbValue.detailed(DbValueKind.text, DbValueKind.integer)"; });
-    c=c.ok("direct int rejects NULL",try { row.int("nil");false; } catch RowValueFailure.located(_, _, actual_kind, cause) { actual_kind==DbValueKind.null_value && cause=="WrongDbValue.detailed(DbValueKind.integer, DbValueKind.null_value)"; });
-    c=c.ok("direct int rejects boolean coercion",try { row.int("flag");false; } catch RowValueFailure.located(_, _, actual_kind, _) { actual_kind==DbValueKind.boolean; });
-    c=c.ok("direct int missing column stays unwrapped",try { row.int("absent");false; } catch MissingColumn.name(name) { name=="absent"; });
-    c=c.ok("direct text missing column stays unwrapped",try { row.text("absent");false; } catch MissingColumn.name(name) { name=="absent"; });
-    c=c.ok("direct int ambiguous column stays unwrapped",try { duplicate.int("x");false; } catch AmbiguousColumn.name(name) { name=="x"; });
-    c=c.ok("direct text preserves Unicode",Row(columns: [Column(0,"s","")],values: [DbText("Ж猫")]).text("s")=="Ж猫");
-    let escaped=EscapedSchemaRow().value();
-    let wide=Atomic("я");for 0..11 -> index { wide.replace(wide.value()+wide.value()); }
-    c=c.ok("schema still rejects reordered indices",try { DbColumns(values: [Column(1,"bad","")],limits: DbLimits());false; } catch e is InvalidRow { true; });
-    c=c.ok("schema still enforces column count limit",try { DbColumns(values: [Column(0,"n","")],limits: DbLimits(0,8388608,1048576));false; } catch DbBoundaryLimit.kind(kind) { kind=="column count"; });
-    c=c.ok("schema survives local columns scope",escaped.int("saved")==7 && escaped.columns().item(0)::Parts::name=="saved" && escaped.columns().item(0)::Parts::declaration=="INTEGER");
-    c=c.ok("column accepts UTF8 byte boundary",Column(index: 0,name: wide.value(),declaration: "")::Parts::name==wide.value());
-    c=c.ok("column rejects excess UTF8 name bytes",try { Column(index: 0,name: wide.value()+"x",declaration: "");false; } catch e is InvalidRow { true; });
-    c=c.ok("column rejects excess declaration bytes",try { Column(index: 0,name: "n",declaration: wide.value()+"x");false; } catch e is InvalidRow { true; });
+    let underflow = Row(columns: [Column(0, "n", "")], values: [DbInteger(-9223372036854775809)]);
+    c = c.ok("int underflow retains cause", try {
+        underflow.int("n");
+        false;
+    }
+    catch RowValueFailure.located(column, _, _, cause) {
+        column == "n" && cause == "InvalidDbValue.because(\"integer outside int range\")";
+    });
+    c = c.ok("maybe int underflow remains error", try {
+        underflow.maybe("n").int();
+        false;
+    }
+    catch RowValueFailure.located(_, expected, _, _) {
+        expected == "int";
+    });
+    let canonical = Row(columns: [Column(0, "n", "")], values: [DbInteger(0007)]);
+    c = c.ok("canonical integer parsing", canonical.int("n") == 7);
+    let source = ChangingText();
+    let snapshot = Row(columns: [Column(0, "v", "")], values: [source]);
+    let capture = DbValueCapture(DbValueKind.text);
+    capture.text("saved");
+    capture.finish();
+    c = c.ok("external printer observed once", source.calls() == 1);
+    c = c.ok(
+        "native reads preserve snapshot",
+        snapshot.text("v") == "1" && snapshot.text("v") == "1"
+    );
+    c = c.ok(
+        "compatibility value preserves snapshot",
+        ObservedDbValue(snapshot.value("v")).text() == "1" && source.calls() == 1
+    );
+    c = c.ok("omitted printer rejected", try {
+        Row(columns: [Column(0, "v", "")], values: [BrokenPrinter(0)]);
+        false;
+    }
+    catch e is InvalidDbValue {
+        true;
+    });
+    c = c.ok("duplicate printer rejected", try {
+        Row(columns: [Column(0, "v", "")], values: [BrokenPrinter(1)]);
+        false;
+    }
+    catch e is InvalidDbValue {
+        true;
+    });
+    c = c.ok("wrong printer kind rejected", try {
+        Row(columns: [Column(0, "v", "")], values: [BrokenPrinter(2)]);
+        false;
+    }
+    catch e is InvalidDbValue {
+        true;
+    });
+    c = c.ok("sealed printer rejected", try {
+        capture.text("late");
+        false;
+    }
+    catch e is InvalidDbValue {
+        true;
+    });
+    c = c.ok("sealed snapshot survives attempt", capture.text_value() == "saved");
+    c = c.ok("UTF8 byte limit preserved", try {
+        Row(columns: [Column(0, "v", "")], values: [DbText("я")], limits: DbLimits(1, 1, 10));
+        false;
+    }
+    catch e is DbBoundaryLimit {
+        true;
+    });
+    c = c.ok("direct int preserves wrong-kind details", try {
+        row.int("empty");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, actual_kind, cause) {
+        column == "empty"
+            && expected == "int"
+            && actual_kind == DbValueKind.text
+            && cause == "WrongDbValue.detailed(DbValueKind.integer, DbValueKind.text)";
+    });
+    c = c.ok("direct text preserves wrong-kind details", try {
+        row.text("zero");
+        false;
+    }
+    catch RowValueFailure.located(column, expected, actual_kind, cause) {
+        column == "zero"
+            && expected == "text"
+            && actual_kind == DbValueKind.integer
+            && cause == "WrongDbValue.detailed(DbValueKind.text, DbValueKind.integer)";
+    });
+    c = c.ok("direct int rejects NULL", try {
+        row.int("nil");
+        false;
+    }
+    catch RowValueFailure.located(_, _, actual_kind, cause) {
+        actual_kind == DbValueKind.null_value
+            && cause == "WrongDbValue.detailed(DbValueKind.integer, DbValueKind.null_value)";
+    });
+    c = c.ok("direct int rejects boolean coercion", try {
+        row.int("flag");
+        false;
+    }
+    catch RowValueFailure.located(_, _, actual_kind, _) {
+        actual_kind == DbValueKind.boolean;
+    });
+    c = c.ok("direct int missing column stays unwrapped", try {
+        row.int("absent");
+        false;
+    }
+    catch MissingColumn.name(name) {
+        name == "absent";
+    });
+    c = c.ok("direct text missing column stays unwrapped", try {
+        row.text("absent");
+        false;
+    }
+    catch MissingColumn.name(name) {
+        name == "absent";
+    });
+    c = c.ok("direct int ambiguous column stays unwrapped", try {
+        duplicate.int("x");
+        false;
+    }
+    catch AmbiguousColumn.name(name) {
+        name == "x";
+    });
+    c = c.ok(
+        "direct text preserves Unicode",
+        Row(columns: [Column(0, "s", "")], values: [DbText("Ж猫")]).text("s") == "Ж猫"
+    );
+    let escaped = EscapedSchemaRow().value();
+    let wide = Atomic("я");
+    for 0..11 -> index {
+        wide.replace(wide.value() + wide.value());
+    }
+    c = c.ok("schema still rejects reordered indices", try {
+        DbColumns(values: [Column(1, "bad", "")], limits: DbLimits());
+        false;
+    }
+    catch e is InvalidRow {
+        true;
+    });
+    c = c.ok("schema still enforces column count limit", try {
+        DbColumns(values: [Column(0, "n", "")], limits: DbLimits(0, 8388608, 1048576));
+        false;
+    }
+    catch DbBoundaryLimit.kind(kind) {
+        kind == "column count";
+    });
+    c = c.ok(
+        "schema survives local columns scope",
+        escaped.int("saved") == 7
+            && escaped.columns().item(0)::Parts::name == "saved"
+            && escaped.columns().item(0)::Parts::declaration == "INTEGER"
+    );
+    c = c.ok(
+        "column accepts UTF8 byte boundary",
+        Column(index: 0, name: wide.value(), declaration: "")::Parts::name == wide.value()
+    );
+    c = c.ok("column rejects excess UTF8 name bytes", try {
+        Column(index: 0, name: wide.value() + "x", declaration: "");
+        false;
+    }
+    catch e is InvalidRow {
+        true;
+    });
+    c = c.ok("column rejects excess declaration bytes", try {
+        Column(index: 0, name: "n", declaration: wide.value() + "x");
+        false;
+    }
+    catch e is InvalidRow {
+        true;
+    });
     c.done();
 }

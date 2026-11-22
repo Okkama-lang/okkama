@@ -1,0 +1,33 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteMemory;
+import "db/value" take DbInteger;
+
+// An in-memory database opened, a table made, rows inserted and updated through bound statements.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let db = await SqliteMemory().connection();
+        await db.execution("CREATE TABLE t(x INTEGER)");
+        let added = await db.execution("INSERT INTO t(x) VALUES (?), (?)", DbInteger(v), DbInteger(2));
+        let changed = await db.execution("UPDATE t SET x = x + 1 WHERE x > ?", DbInteger(i % 3));
+        db.close();
+        let total = added.affected_rows() + 10 * changed.affected_rows() + v;
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

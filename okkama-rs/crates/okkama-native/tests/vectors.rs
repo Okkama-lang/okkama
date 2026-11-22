@@ -295,6 +295,107 @@ fn ecdsa_signs_and_verifies_on_both_curves() {
     }
 }
 
+/// DER `SEQUENCE { INTEGER r, INTEGER s }` of big-endian magnitudes.
+fn ecdsa_der(r: &[u8], s: &[u8]) -> Vec<u8> {
+    let integer = |value: &[u8]| {
+        let mut digits: Vec<u8> = value.iter().copied().skip_while(|byte| *byte == 0).collect();
+        if digits.first().is_some_and(|byte| byte & 0x80 != 0) {
+            digits.insert(0, 0);
+        }
+        let mut out = vec![0x02, digits.len() as u8];
+        out.extend(digits);
+        out
+    };
+    let body = [integer(r), integer(s)].concat();
+    let mut out = vec![0x30];
+    if body.len() >= 0x80 {
+        out.push(0x81);
+    }
+    out.push(body.len() as u8);
+    out.extend(body);
+    out
+}
+
+/// `order - value` for equal-length big-endian numbers below the order.
+fn negated(order: &[u8], value: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; order.len()];
+    let mut borrow = 0i16;
+    for index in (0..order.len()).rev() {
+        let mut digit = i16::from(order[index]) - i16::from(value[index]) - borrow;
+        borrow = i16::from(digit < 0);
+        if digit < 0 {
+            digit += 256;
+        }
+        out[index] = digit as u8;
+    }
+    out
+}
+
+/// #943: signing follows RFC 6979 exactly (its A.2.5 and A.2.6 vectors for
+/// "sample"), and verification takes those signatures, their high-S twins
+/// (neither curve normalizes S) and refuses tampering.
+#[test]
+fn ecdsa_matches_the_rfc_6979_vectors() {
+    let vectors = [
+        (
+            "p256",
+            "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
+            "EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716",
+            "F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8",
+            "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+        ),
+        (
+            "p384",
+            "6B9D3DAD2E1B8C1C05B19875B6659F4DE23C3B667BF297BA9AA47740787137D896D5724E4C70A825F872C9EA60D2EDF5",
+            "94EDBB92A5ECB8AAD4736E56C691916B3F88140666CE9FA73D64C4EA95AD133C81A648152E44ACF96E36DD1E80FABE46",
+            "99EF4AEB15F178CEA1FE40DB2603138F130E740A19624526203B6351D0A3A94FA329C145786E679E7B82C71A38628AC8",
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973",
+        ),
+    ];
+    for (curve, scalar, r, s, order) in vectors {
+        let private = call(&format!("ecdsa-{curve}-from-scalar"), &[&hex(scalar)]).unwrap();
+        let public = call(&format!("ecdsa-{curve}-public"), &[&private]).unwrap();
+        let expected = ecdsa_der(&hex(r), &hex(s));
+        assert_eq!(call(&format!("ecdsa-{curve}-sign"), &[&private, b"sample"]).unwrap(), expected, "{curve}");
+        let verify = |message: &[u8], signature: &[u8]| {
+            call(&format!("ecdsa-{curve}-verify"), &[&public, message, signature]).unwrap()
+        };
+        assert_eq!(verify(b"sample", &expected), [1], "{curve}");
+        let high = ecdsa_der(&hex(r), &negated(&hex(order), &hex(s)));
+        assert_eq!(verify(b"sample", &high), [1], "{curve}: high S");
+        assert_eq!(verify(b"test", &expected), [0], "{curve}");
+        let mut flipped = expected.clone();
+        let last = flipped.len() - 1;
+        flipped[last] ^= 1;
+        assert_eq!(verify(b"sample", &flipped), [0], "{curve}");
+        let zero = ecdsa_der(&hex(r), &[0]);
+        assert_eq!(verify(b"sample", &zero), [0], "{curve}: s = 0");
+    }
+}
+
+/// #943: X.509 verifies ECDSA signatures of the usual curve and hash pairs
+/// (on aws-lc) and of the others (on RustCrypto) alike.
+#[test]
+fn x509_verifies_ecdsa_signatures_on_both_paths() {
+    let sha256 = hex("300a06082a8648ce3d040302");
+    let sha384 = hex("300a06082a8648ce3d040303");
+    let sha512 = hex("300a06082a8648ce3d040304");
+    for (curve, width, own, other) in [("p256", 32, &sha256, &sha384), ("p384", 48, &sha384, &sha256)] {
+        let private = call(&format!("ecdsa-{curve}-from-scalar"), &[&vec![0x37; width]]).unwrap();
+        let public = call(&format!("ecdsa-{curve}-public"), &[&private]).unwrap();
+        let signature = call(&format!("ecdsa-{curve}-sign"), &[&private, b"tbs"]).unwrap();
+        let verified = |algorithm: &[u8], message: &[u8], signature: &[u8]| {
+            call("x509-verify", &[&public, algorithm, message, signature]).unwrap() == [1]
+        };
+        assert!(verified(own, b"tbs", &signature), "{curve}");
+        assert!(!verified(own, b"tbS", &signature), "{curve}");
+        assert!(!verified(own, b"tbs", b"junk"), "{curve}");
+        // The other usual hash and SHA-512 (RustCrypto) refuse it: wrong digest.
+        assert!(!verified(other, b"tbs", &signature), "{curve}");
+        assert!(!verified(&sha512, b"tbs", &signature), "{curve}");
+    }
+}
+
 #[test]
 fn rsa_signatures_and_oaep_round_trip() {
     let private = call("rsa-generate", &[b"2048", &[1; 32]]).unwrap();

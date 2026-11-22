@@ -18,7 +18,6 @@ import "mail/mailbox" take StoredMail, MailFlag, MailFlags, MissingStoredMail, I
 import "collections/sequence" take Sequencing;
 import "fs/path" take Path;
 import "fs/file" take File, FileMode;
-import "fs/entry" take FileEntry;
 import "fs/error" take FileError;
 import "fs/directory" take Directory, DirectoryEntry;
 import "fs/stat" take FileKind;
@@ -367,8 +366,8 @@ hidden object MboxReplacement {
         let temporary = TemporaryFile(directory: Directory(path.parent()), prefix: ".okkama-mbox-");
         try {
             temporary.write(wire);
-            temporary.flush();
-            FileEntry(temporary.path()).move(destination: path, overwrite: true);
+            // Synchronized, renamed over the mailbox, directory synchronized (#934).
+            temporary.replace(path);
         }
         catch failure is Error {
             try {

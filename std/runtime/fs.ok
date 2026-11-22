@@ -106,8 +106,13 @@ native file_state_write(state is FileState, value is @byte) is int;
 // Writes values as text, and a newline when newline; how many bytes.
 native file_state_write_text(state is FileState, values is @string, newline is bool) is int;
 
-// Flushes state's buffers.
+// Checks that state is open for writing; writes reach the host unbuffered, so
+// nothing is held back, but nothing is durable yet either.
 native file_state_flush(state is FileState) is bool;
+
+// Makes what was written to state durable: fsync, F_FULLFSYNC on macOS
+// (#122).
+native file_state_sync(state is FileState) is bool;
 
 // Closes state.
 native file_state_close(state is FileState) is bool;
@@ -146,6 +151,10 @@ native directory_entries(path is @byte) is @string;
 // Removes the directory at path and everything in it, without following links.
 native directory_remove_tree(path is @byte) is bool;
 
+// fsync of the directory at path, so that names made or replaced in it survive
+// a crash (#122).
+native directory_sync(path is @byte) is bool;
+
 // The paths below root matching the glob pattern.
 native matching_paths(root is @byte, pattern is string) is @string;
 
@@ -172,6 +181,11 @@ native temporary_file_path(state is FileState) is @byte;
 
 // Keeps the temporary file as destination instead of removing it.
 native temporary_file_preserve(state is FileState, destination is @byte) is bool;
+
+// Closes the temporary file and renames it over destination in one step,
+// replacing what is there; never copied. On failure it stays to be removed on
+// close (#122).
+native temporary_file_replace(state is FileState, destination is @byte) is bool;
 
 // A new temporary directory in directory, named with prefix.
 native temporary_directory_create(directory is @byte, prefix is string) is TemporaryDirectoryState;

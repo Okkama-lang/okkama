@@ -151,6 +151,9 @@ struct BodyLowerer<'c, 'r, 'a> {
     tries: Vec<TryCtx>,
     /// Очистка каждой области `scopes` (регион, defer, цели отказа).
     cleanups: Vec<scopes::Cleanup<'r>>,
+    /// While an early exit runs the defers of scope `n`, the scopes deeper than `n` are already closed: fresh values
+    /// are tracked no deeper than `n` (#910 found them tracked in a closed region).
+    exiting: Option<usize>,
     /// Значения, которые следующая блочная область примет при открытии
     /// (пойманный Error для тела `catch`).
     pending_adopt: Vec<Typed>,
@@ -300,6 +303,7 @@ fn lowerer_for<'c, 'r, 'a>(
         params: Vec::new(),
         tries: Vec::new(),
         cleanups: vec![scopes::Cleanup::default()],
+        exiting: None,
         pending_adopt: Vec::new(),
         taken_from: HashMap::new(),
         field_flags: Vec::new(),
@@ -332,9 +336,16 @@ fn finish(
         lowerer.b.drop_unused(&[yes, no]);
     }
     let result = lowerer.result.clone();
-    let (values, blocks, params) = lowerer.b.finish(&lowerer.params).map_err(|message| {
+    let ((values, blocks, params), remap) = lowerer.b.finish_mapped(&lowerer.params).map_err(|message| {
         LoweringError::invalid(span, format!("internal compiler error: {message}"))
     })?;
+    if let Some(sites) = lowerer.ctx.current.and_then(|task| lowerer.ctx.await_regions.get_mut(task)) {
+        for (future, (region, bound)) in std::mem::take(sites) {
+            if remap[future.0].0 != usize::MAX && remap[region.0].0 != usize::MAX {
+                sites.insert(remap[future.0], (remap[region.0], bound));
+            }
+        }
+    }
     Ok(ir::Function {
         symbol,
         params,
@@ -405,14 +416,19 @@ fn lower_witness(
             "internal compiler error: a void witness",
         ));
     };
+    // An async action's witness is async: it awaits the action's Future and wraps its result (#790).
+    let call_ty = if info.is_async { Type::Future(Box::new(ResultType::Value(own.clone()))) } else { own.clone() };
     let mut value = b.emit(
         InstKind::Call {
             func,
             args: params.clone(),
         },
-        own.clone(),
+        call_ty,
         span,
     );
+    if info.is_async {
+        value = b.emit(InstKind::AwaitTake(value), own.clone(), span);
+    }
     if let Type::Successor(taken) = own {
         value = b.emit(InstKind::SuccTake(value), Type::Object(taken), span);
     }
@@ -421,11 +437,15 @@ fn lower_witness(
     let (values, blocks, params) = b.finish(&params).map_err(|message| {
         LoweringError::invalid(span, format!("internal compiler error: {message}"))
     })?;
+    let mut attrs = vec![ir::Attr::Method(object)];
+    if info.is_async {
+        attrs.push(ir::Attr::Async);
+    }
     Ok(ir::Function {
         symbol,
         params,
         result: ResultType::Value(result),
-        attrs: vec![ir::Attr::Method(object)],
+        attrs,
         values,
         blocks,
         span,
@@ -1281,16 +1301,44 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     }
 
     fn emit(&mut self, kind: InstKind, ty: Type, span: Span) -> Typed {
-        let call = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. });
+        let result = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. } | InstKind::AwaitTake(_));
         let value = Typed {
             value: self.b.emit(kind, ty.clone(), span),
             ty,
         };
-        // Результат вызова — свежие идентичности вызывающего (§7).
-        if call {
+        // A call or unique temporary await result belongs to this scope,
+        // including an unnamed expression whose value is discarded.
+        if result {
             self.track(&value, span);
         }
         value
+    }
+
+    /// Only an async invocation allocates a new Future by construction. A
+    /// synchronous call returning Future may return an alias (e.g. a collector
+    /// input), so syntactic temporariness alone is insufficient. The subsequent
+    /// OIR proof also recognizes plain factories and exclusive local bindings;
+    /// projections, collection items and unknown joins remain conservative.
+    fn unique_temporary_future(&self, expr: &thir::Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Call { callee, .. } => match callee {
+                thir::Callee::Method { object, method, .. } => self.ctx.reg.objects[object.0].methods[*method].is_async,
+                thir::Callee::Role { role, slot, .. } => self.ctx.reg.roles[role.0].methods[*slot].is_async,
+                thir::Callee::Native(native) => self.ctx.reg.natives[*native].is_async,
+                _ => false,
+            },
+            ExprKind::CallValue { callee, .. } => matches!(&callee.ty, Some(Ty::Action(action)) if action.is_async),
+            ExprKind::Spawn(value) => self.unique_temporary_future(value),
+            _ => false,
+        }
+    }
+
+    fn bound_future_source(expr: &thir::Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Spawn(inner) | ExprKind::Await(inner) => Self::bound_future_source(inner),
+            ExprKind::Call { .. } | ExprKind::CallValue { .. } => false,
+            _ => true,
+        }
     }
 
     fn constant(&mut self, constant: Constant, span: Span) -> Typed {
@@ -1300,6 +1348,14 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
     /// Погасить обязательство `^C`; у остальных типов значение не меняется.
     /// Алиасы разделяют одно обязательство: их значение тоже становится `C`.
+    /// #790: a successor Future handed on as its plain Future. A role successor is the role in OIR already.
+    pub(super) fn handoff(&mut self, value: Typed, target: Type, span: Span) -> Typed {
+        if value.ty == target {
+            return value;
+        }
+        self.emit(InstKind::FutureHandoff(value.value), target, span)
+    }
+
     fn take(&mut self, value: Typed, span: Span) -> Typed {
         let Type::Successor(object) = value.ty else {
             return value;
@@ -1373,10 +1429,19 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let slot_ty = self.ctx.objects[object.0].fields[field].1.clone();
         let ty = self.local_type(local, span)?;
         if !self.ctx.is_plain(&ty) {
-            return Err(LoweringError::invalid(
-                span,
-                "once let cannot keep a resource: its value would outlive the scope that releases it",
-            ));
+            // A type that reaches an object with `destroy` directly is refused
+            // now. One that may reach a resource only through a function
+            // value or a role is judged when the whole program is lowered,
+            // with its closures and specializations (#520).
+            if !self.ctx.plain_but_for_values(&ty) {
+                return Err(LoweringError::invalid(
+                    span,
+                    "once let cannot keep a resource: its value would outlive the scope that releases it",
+                ));
+            }
+            let module = self.ctx.current.map(|task| self.ctx.task_module(task)).unwrap_or(0);
+            let site = self.ctx.objects[object.0].name.clone();
+            self.ctx.once_checks.push((ty.clone(), site, span, module));
         }
         let slot = self.b.emit(InstKind::OnceLoad { object: receiver, field }, slot_ty.clone(), span);
         let tag = self.b.emit(InstKind::VariantTag(slot), Type::Int, span);
@@ -1442,7 +1507,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             Type::Object(object),
             span,
         );
-        // `^C` на JVM — тот же объект; payload — новая идентичность.
+        // `^C` сохраняет объект case; payload — новая идентичность.
         self.ret(
             Some(Typed {
                 value: next,
@@ -2440,18 +2505,38 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     return Ok(Out::Diverged);
                 };
                 let future = self.take(future, inner.span);
+                if let (Some(task), Some(region)) = (self.ctx.current, self.tracking_region_at(self.cleanups.len() - 1)) {
+                    let bound = Self::bound_future_source(inner);
+                    // The earliest still-visible binding owns the cache. An
+                    // inner binding may already have escaped a closed block;
+                    // recording its old region would resurrect that region.
+                    let home = if bound {
+                        self.visible_vars().filter(|&var| self.vars[var].value.as_ref()
+                            .is_some_and(|value| value.value == future.value))
+                            .map(|var| self.vars[var].scope).min().and_then(|scope| self.region_at(scope))
+                            .unwrap_or(region)
+                    } else { region };
+                    self.ctx.await_regions.resize_with(task + 1, HashMap::new);
+                    self.ctx.await_regions[task].insert(future.value, (home, bound));
+                }
+                let kind = if self.unique_temporary_future(inner) {
+                    InstKind::AwaitTake(future.value)
+                } else {
+                    InstKind::Await(future.value)
+                };
                 match &expr.ty {
                     None => {
-                        self.b.emit_void(InstKind::Await(future.value), span);
+                        self.b.emit_void(kind, span);
                         Ok(Out::Unit)
                     }
                     Some(_) => {
                         let ty = self.expr_type(expr)?;
-                        Ok(Out::Value(self.emit(
-                            InstKind::Await(future.value),
+                        let value = self.emit(
+                            kind,
                             ty,
                             span,
-                        )))
+                        );
+                        Ok(Out::Value(value))
                     }
                 }
             }
@@ -2545,6 +2630,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let target = self.expr_type(expr)?;
         Ok(Out::Value(match coercion {
             Coercion::Take => self.take(typed, span),
+            Coercion::Handoff => self.handoff(typed, target, span),
             Coercion::Retag => match &target {
                 Type::Map(..) => self.emit(InstKind::MapRetag(typed.value), target, span),
                 _ => self.emit(InstKind::Retag(typed.value), target, span),

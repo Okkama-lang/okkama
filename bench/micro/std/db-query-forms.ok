@@ -1,0 +1,51 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteMemory;
+import "db/value" take DbInteger;
+import "db/query" take Query, QueryRows;
+import "db/statement" take Statement;
+
+// One query read as one row, as a maybe (present and absent) and row by row; a reader wrapped by hand and closed early.
+object Bench {
+    Bench();
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let db = await SqliteMemory().connection();
+        await db.execution("CREATE TABLE t(x INTEGER)");
+        await db.execution("INSERT INTO t(x) VALUES (?), (?), (?)", DbInteger(v), DbInteger(2 * v), DbInteger(3 * v));
+        let one = await db.query("SELECT MAX(x) AS m FROM t").one();
+        let found = await db.query("SELECT x FROM t WHERE x = ?", DbInteger(2 * v)).maybe();
+        let absent = await db.query("SELECT x FROM t WHERE x = ?", DbInteger(0)).maybe();
+        let rows = await Query(origin: db, statement: Statement("SELECT x FROM t ORDER BY x")).rows();
+        let a = await rows.next();
+        let b = await rows.next();
+        let c = await rows.next();
+        let d = await rows.next();
+        let ended = if rows.closed() { 1; } else { 0; };
+        let early = QueryRows(await db.rows(Statement("SELECT x FROM t")));
+        let e = await early.next();
+        early.close();
+        let shut = if early.closed() { 2; } else { 0; };
+        db.close();
+        let read = (match a { case Maybe.some(row) { row.int("x"); } else { 0; } }) + (match b { case Maybe.some(row) { row.int("x"); } else { 0; } })
+            + (match c { case Maybe.some(row) { row.int("x"); } else { 0; } }) + (match d { case Maybe.some(row) { 1000; } else { 0; } });
+        let total = one.int("m") + (match found { case Maybe.some(row) { row.int("x"); } else { 0; } })
+            + (if absent == Maybe.none { 100; } else { 0; }) + read + 10 * ended
+            + (match e { case Maybe.some(row) { row.int("x"); } else { 0; } }) + shut;
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,5 +1,8 @@
 module plist/parse v1.0.0;
 
+import "strings/parse" take Number;
+import "numbers/bigint" take BoundedPower;
+import "plist/write" take EncodedPlist, PlistFormat;
 // Property lists read from XML or binary bytes.
 //
 //     let info = ParsedPlist(bytes).dictionary();
@@ -13,7 +16,6 @@ import "plist/value" take PlistValue, PlistBoolean, PlistInteger, PlistReal, Pli
     PlistDate, PlistUid, PlistArray, PlistDictionary, PlistMember, PlistKindMismatch, PlistKind,
     MissingPlistMember;
 import "collections/list" take List, EmptyList;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal, InvalidDecimal;
 import "compare" take Order;
 import "encoding/utf" take Utf8Decoded, Utf8Encoded, Utf16Decoded, Utf32Decoded, ByteOrder,
@@ -21,8 +23,7 @@ import "encoding/utf" take Utf8Decoded, Utf8Encoded, Utf16Decoded, Utf32Decoded,
 import "encoding/binary" take IntegerBytes, Binary, Signedness, FloatWidth;
 import "encoding/base64" take Base64Decoded, InvalidBase64;
 import "time/rfc3339" take Rfc3339;
-import "runtime/xml" take XmlEventsState, xml_events, xml_events_error, xml_events_offset,
-    xml_event_count, xml_event_kind, xml_event_name, xml_event_text, xml_event_offset;
+import "xml/internal/events" take XmlTokens, XmlEvents;
 import "time/clock" take Instant;
 import "time/duration" take Duration, DurationUnit;
 
@@ -202,23 +203,11 @@ object PlistXmlSource {
 
     // Where delimiter next occurs from start.
     until(start is int, delimiter is string) is int {
-        let symbols = self.symbols();
-        let wanted = delimiter.characters();
-        for (start..symbols.size()) -> index {
-            if self.matching(symbols, wanted, index) {
-                return index;
-            }
-        }
-        throw self.failure(start, "unterminated XML token");
-    }
-
-    hidden matching(symbols is @char, wanted is @char, index is int) is bool {
-        if index + wanted.size() > symbols.size() {
-            return false;
-        }
-        (0..wanted.size()).reduce(true) -> same, offset {
-            same && symbols[index + offset].code() == wanted[offset].code();
-        };
+        // One substring search instead of a code comparison per position (#948).
+        confirm start <= origin.length() else throw self.failure(start, "unterminated XML token");
+        let found = origin.slice(start, origin.length()).find(delimiter) else -1;
+        confirm found >= 0 else throw self.failure(start, "unterminated XML token");
+        start + found;
     }
 
     // Where character data ends.
@@ -244,8 +233,8 @@ object PlistXmlSource {
         if at + 4 <= origin.length() && origin.slice(at, at + 4) == "<!--" {
             let end = self.until(at + 4, "-->");
             let content = origin.slice(at + 4, end);
-            confirm content.split("--").size() == 1
-                && (content == "" || content.slice(content.length() - 1, content.length()) != "-")
+            confirm !content.contains("--")
+                && (content == "" || !content.ends_with("-"))
                 else throw self.failure(at, "invalid comment");
             return PlistXmlToken(kind: "skip", text: "", start: at, end: end + 3);
         }
@@ -263,7 +252,7 @@ object PlistXmlSource {
         let body = PlistXmlText(raw).stripped();
         confirm body != "" && raw.slice(0, 1) == body.slice(0, 1)
             else throw self.failure(at, "whitespace before tag name");
-        if body.length() >= 1 && body.slice(0, 1) == "?" {
+        if body.starts_with("?") {
             let compact = PlistXmlText(body).compact();
             confirm at == 0
                 && (compact == "?xml version=\"1.0\"?"
@@ -273,17 +262,17 @@ object PlistXmlSource {
                 else throw self.failure(at, "unsupported XML declaration");
             return PlistXmlToken(kind: "declaration", text: "", start: at, end: end + 1);
         }
-        if body.length() >= 1 && body.slice(0, 1) == "!" {
+        if body.starts_with("!") {
             let compact = PlistXmlText(body).compact();
             confirm compact == "!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
                 || compact == "!DOCTYPE plist SYSTEM \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
                 else throw self.failure(at, "unsupported DTD or declaration");
             return PlistXmlToken(kind: "doctype", text: "", start: at, end: end + 1);
         }
-        let closing = body.length() > 0 && body.slice(0, 1) == "/";
-        let empty = body.length() > 0 && body.slice(body.length() - 1, body.length()) == "/";
+        let closing = body.starts_with("/");
+        let empty = body.ends_with("/");
         confirm !(closing && empty) else throw self.failure(at, "invalid closing tag");
-        confirm !empty || raw.slice(raw.length() - 1, raw.length()) == "/"
+        confirm !empty || raw.ends_with("/")
             else throw self.failure(at, "invalid empty tag close");
         confirm !closing || (body.length() > 1 && !PlistXmlText(body).whitespace(1))
             else throw self.failure(at, "invalid closing tag name");
@@ -405,7 +394,7 @@ object PlistXmlSource {
                         "'";
                     }
                     else {
-                        confirm entity.length() > 1 && entity.slice(0, 1) == "#"
+                        confirm entity.length() > 1 && entity.starts_with("#")
                             else throw self.failure(at + index, "unknown entity");
                         let hex = entity.slice(1, 2) == "x";
                         let start = if hex {
@@ -568,7 +557,7 @@ object PlistXmlToken {
 hidden object PlistXmlEvents {
     has source is string;
     has base is int;
-    has state is XmlEventsState;
+    has state is XmlEvents;
     has count, maximum_nodes, maximum_depth is int;
 
     PlistXmlEvents(source is string, base is int, maximum_nodes is int, maximum_depth is int) {
@@ -576,13 +565,17 @@ hidden object PlistXmlEvents {
         self.base = base;
         self.maximum_nodes = maximum_nodes;
         self.maximum_depth = maximum_depth;
-        let events = xml_events(source, maximum_depth + 2, (maximum_nodes + 2) * 8 + 16);
+        let events = XmlTokens(
+            origin: source,
+            maximum_depth: maximum_depth + 2,
+            maximum_events: (maximum_nodes + 2) * 8 + 16
+        ).events();
         state = events;
-        count = xml_event_count(events);
+        count = events.count();
     }
 
     root() is PlistValue {
-        let error = xml_events_error(state);
+        let error = state.error();
         // The tokenizer's bounds are the plist's node and depth budgets.
         let reason = if error.starts_with("elements nested deeper")
             || error.starts_with("more than") {
@@ -591,15 +584,15 @@ hidden object PlistXmlEvents {
             else {
                 error;
             };
-        confirm error == "" else throw self.located(xml_events_offset(state), reason);
+        confirm error == "" else throw self.located(state.offset(), reason);
         let wrapper = self.significant(0);
         confirm wrapper < count
-            && xml_event_kind(state, wrapper) == 0
-            && xml_event_name(state, wrapper) == "plist"
+            && state.kind(wrapper) == 0
+            && state.name(wrapper) == "plist"
             else throw self.failure(wrapper, "expected plist wrapper");
         let value = self.element(wrapper + 1, 1, maximum_nodes);
         let close = self.significant(value.end());
-        confirm close < count && xml_event_kind(state, close) == 1
+        confirm close < count && state.kind(close) == 1
             else throw self.failure(close, "expected plist closing tag");
         value.plist();
     }
@@ -608,23 +601,23 @@ hidden object PlistXmlEvents {
         let token = self.significant(at);
         confirm depth <= maximum_depth && remaining > 0
             else throw self.failure(token, "node or depth budget exceeded");
-        confirm token < count && xml_event_kind(state, token) == 0
+        confirm token < count && state.kind(token) == 0
             else throw self.failure(token, "expected plist value");
-        let name = xml_event_name(state, token);
+        let name = state.name(token);
         if name == "array" || name == "dict" {
             let cursor = PlistParsePosition(token + 1);
             let values is PlistParsedItems<PlistValue> = PlistParsedItems();
             let members is PlistParsedItems<PlistMember> = PlistParsedItems();
             loop {
                 let item = self.significant(cursor.at());
-                if item < count && xml_event_kind(state, item) == 1 {
+                if item < count && state.kind(item) == 1 {
                     cursor = cursor.following(item + 1, 0);
                     last;
                 }
                 if name == "dict" {
                     confirm item < count
-                        && xml_event_kind(state, item) == 0
-                        && xml_event_name(state, item) == "key"
+                        && state.kind(item) == 0
+                        && state.name(item) == "key"
                         else throw self.failure(item, "expected dictionary key");
                     confirm remaining - cursor.used() > 1 && depth < maximum_depth
                         else throw self.failure(item, "key budget exceeded");
@@ -688,14 +681,14 @@ hidden object PlistXmlEvents {
                 case "integer" {
                     confirm scalar.length() <= 4096
                         else throw self.failure(token, "numeric spelling limit exceeded");
-                    confirm scalar.length() < 2 || scalar.slice(0, 2) != "+-"
+                    confirm scalar.length() < 2 || !scalar.starts_with("+-")
                         else throw self.failure(token, "invalid integer sign");
-                    PlistInteger(BigInt(if scalar.length() > 0 && scalar.slice(0, 1) == "+" {
+                    PlistInteger(Number((if scalar.starts_with("+") {
                         scalar.slice(1, scalar.length());
                     }
                     else {
                         scalar;
-                    }));
+                    })).int());
                 }
                 case "real" {
                     PlistReal(PlistDecimalReal(scalar).float());
@@ -712,7 +705,7 @@ hidden object PlistXmlEvents {
                 }
                 case "date" {
                     confirm scalar.length() >= 20
-                        && scalar.slice(scalar.length() - 1, scalar.length()) == "Z"
+                        && scalar.ends_with("Z")
                         else throw self.failure(token, "UTC date required");
                     PlistDate(Rfc3339(scalar).instant());
                 }
@@ -737,7 +730,7 @@ hidden object PlistXmlEvents {
         loop {
             let at = cursor.at();
             confirm at < count else throw self.failure(at, "unterminated scalar");
-            let kind = xml_event_kind(state, at);
+            let kind = state.kind(at);
             if kind == 1 {
                 let reversed is @string = pieces.reversed();
                 let ordered is @string = (0..reversed.size()).map() -> index {
@@ -747,7 +740,7 @@ hidden object PlistXmlEvents {
             }
             confirm kind != 0 else throw self.failure(at, "invalid scalar content");
             if kind == 2 {
-                pieces = pieces.following(xml_event_text(state, at));
+                pieces = pieces.following(state.text(at));
             }
             cursor = cursor.following(at + 1, 0);
         }
@@ -757,10 +750,10 @@ hidden object PlistXmlEvents {
     // or whitespace; count when there is none.
     hidden significant(index is int) is int {
         for (index..count) -> at {
-            let kind = xml_event_kind(state, at);
+            let kind = state.kind(at);
             let ignorable = kind == 3
                 || kind == 4
-                || (kind == 2 && PlistXmlText(xml_event_text(state, at)).stripped() == "");
+                || (kind == 2 && PlistXmlText(state.text(at)).stripped() == "");
             if !ignorable {
                 confirm kind != 2 else throw self.failure(at, "unexpected text");
                 return at;
@@ -772,7 +765,7 @@ hidden object PlistXmlEvents {
     failure(index is int, reason is string) is InvalidPlist {
         self.located(
             if index < count {
-                xml_event_offset(state, index);
+                state.event_offset(index);
             }
             else {
                 source.length();
@@ -817,9 +810,9 @@ hidden object PlistDecimalReal {
     float() is float {
         confirm origin.length() > 0 && origin.length() <= 4096
             else throw InvalidPlist.located(0, "real spelling limit exceeded");
-        confirm origin.length() < 2 || origin.slice(0, 2) != "+-"
+        confirm origin.length() < 2 || !origin.starts_with("+-")
             else throw InvalidPlist.located(0, "invalid real sign");
-        let raw = if origin.slice(0, 1) == "+" {
+        let raw = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
@@ -831,7 +824,7 @@ hidden object PlistDecimalReal {
         if parts.size() == 2 {
             let written = parts[1];
             let start = if written.length() > 0
-                && (written.slice(0, 1) == "+" || written.slice(0, 1) == "-") {
+                && (written.starts_with("+") || written.starts_with("-")) {
                     1;
                 }
                 else {
@@ -840,10 +833,10 @@ hidden object PlistDecimalReal {
             confirm written.length() > start
                 else throw InvalidPlist.located(0, "empty real exponent");
             (start..written.length()).reduce(0) -> value, index {
-                let digit = "0123456789".split(written.slice(index, index + 1));
-                confirm digit.size() == 2 && value <= 4096
+                let digit = "0123456789".find(written.slice(index, index + 1));
+                confirm digit != Maybe<int>.none && value <= 4096
                     else throw InvalidPlist.located(0, "invalid real exponent");
-                let following = value * 10 + digit[0].length();
+                let following = value * 10 + (digit else 0);
                 confirm following <= 4096
                     else throw InvalidPlist.located(0, "real exponent limit exceeded");
                 following;
@@ -854,7 +847,7 @@ hidden object PlistDecimalReal {
         confirm exponent >= -4096 && exponent <= 4096
             else throw InvalidPlist.located(0, "real exponent limit exceeded");
         let spelling = decimal.coefficient().string();
-        let negative = spelling.slice(0, 1) == "-";
+        let negative = spelling.starts_with("-");
         let digits = if negative {
             spelling.slice(1, spelling.length());
         }
@@ -862,7 +855,7 @@ hidden object PlistDecimalReal {
             spelling;
         };
         let coefficient = (0..digits.length()).reduce(0.rat()) -> value, index {
-            value * 10.rat() + "0123456789".split(digits.slice(index, index + 1))[0].length().rat();
+            value * 10.rat() + ("0123456789".find(digits.slice(index, index + 1)) else 0).rat();
         };
         let factor = (0..(if exponent < 0 {
             -exponent;
@@ -879,7 +872,7 @@ hidden object PlistDecimalReal {
             coefficient * factor;
         };
         // Exact largest finite binary64, (2^53-1)*2^971, as decimal text.
-        let absolute = if raw.slice(0, 1) == "-" {
+        let absolute = if raw.starts_with("-") {
             raw.slice(1, raw.length());
         }
         else {
@@ -1075,12 +1068,12 @@ hidden object PlistBinaryDocument {
         }
     }
 
-    hidden integer(payload is @byte, signed is bool) is BigInt {
-        let value = payload.reduce(BigInt(0)) -> number, part {
-            ((number * BigInt(256)) + BigInt(part.int().string()));
+    hidden integer(payload is @byte, signed is bool) is int {
+        let value = payload.reduce((0)) -> number, part {
+            ((number * 256) + (part.int()));
         };
         if signed && payload[0].int() >= 128 {
-            (value - BigInt(256).power(payload.size(), 129));
+            (value - BoundedPower(base: 256).int(payload.size(), 129));
         }
         else {
             value;
@@ -1394,6 +1387,24 @@ test "XML plist text decodes references and line breaks and scans for delimiters
     test.is(source.decoded("plain чай", 0), "plain чай");
     test.is(source.until(0, "</"), 6);
     test.is(source.until(10, "-->"), 17);
+    // #948: positions in code points at the start, in the middle and at the end; an empty delimiter is found
+    // where the search starts; a missing one is refused at the start of the search.
+    test.is(source.until(0, "<a>"), 0);
+    test.is(source.until(4, "</a>"), 6);
+    test.is(source.until(17, "-->"), 17);
+    test.is(source.until(5, ""), 5);
+    let starts = [0, 18, 20];
+    let markers = ["<b>", "-->", ">"];
+    for (0..starts.size()) -> index {
+        let refused = try {
+            source.until(starts[index], markers[index]);
+            false;
+        }
+        catch e is InvalidPlist {
+            true;
+        };
+        test.ok(refused);
+    }
     test.is(source.text_end(3), 6);
     test.is(source.checked("ok чай", 0), "ok чай");
     test.ok(
@@ -1426,7 +1437,7 @@ test "a plist dictionary reads like json (#141)" {
     test.is(info.float("Scale"), 1.5);
     test.is(info.boolean("LSUIElement"), true);
     test.is(info.data("Icon"), [byte(1), byte(2), byte(3)]);
-    test.is(info.date("Built").unix_duration().nanoseconds().int(), 1794564000000000000);
+    test.is(info.date("Built").unix_duration().nanoseconds(), 1794564000000000000);
     test.is(info.texts("Tags"), ["a", "b"]);
     test.is(info.get("Window").int("Width"), 800);
     let names is @string = info.dictionaries("Documents").map() -> document {
@@ -1452,4 +1463,26 @@ test "a plist dictionary reads like json (#141)" {
     test.throws(PlistKindMismatch) {
         ParsedPlist(Utf8Encoded("<plist><true/></plist>").bytes()).dictionary();
     };
+}
+
+test "an XML real's exponent takes only digits, and its value reads digit by digit (#260)" {
+    test.is(PlistDecimalReal("15e-1").float(), 1.5);
+    test.is(PlistDecimalReal("+2.25E2").float(), 225.0);
+    test.throws(InvalidPlist) {
+        let letter = PlistDecimalReal("1e1x").float();
+    };
+    test.throws(InvalidPlist) {
+        let empty = PlistDecimalReal("1e+").float();
+    };
+}
+
+test "511 plist int round trips preserve large signed values in both formats" {
+    for [0, -1, 123456789012345678901234567890, -170141183460469231731687303715884105728] -> n {
+        let origin = PlistDictionary(PlistMember(name: "n", value: PlistInteger(n)));
+        for [PlistFormat.xml, PlistFormat.binary] -> format {
+            let bytes = EncodedPlist(origin: origin, format: format).bytes();
+            let value is int = ParsedPlist(bytes).dictionary().int("n");
+            test.is(value, n);
+        }
+    }
 }

@@ -54,7 +54,29 @@ pub(crate) fn handles(n: Native) -> bool {
             | FsDirectoryEntries
             | FsDirectoryRemoveTree
             | FsFileContent
+            | FsDirectorySync
     )
+}
+/// fsync of the directory at `path`, so that a name made or replaced in it
+/// survives a crash (#122). The directory is opened with O_DIRECTORY, so a
+/// file is refused; `sync_all` is F_FULLFSYNC on macOS. Hosts without POSIX
+/// directories answer `Unsupported`.
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    crate::host::native_fs::injected_fault("directory_sync")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY)
+            .open(path)?
+            .sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
 }
 impl Heap {
     fn directory(&mut self, v: Slot) -> Result<&mut Directory, Error> {
@@ -118,8 +140,7 @@ impl Heap {
             }
             FsMkdir | FsMkdirAll | FsChmod => {
                 let mode = self
-                    .integer(a[1])?
-                    .to_i64()
+                    .int64(a[1])?
                     .filter(|v| (0..=0o777).contains(v))
                     .ok_or_else(|| fail(n, "invalid_input", "Invalid permission mode"))?
                     as u32;
@@ -186,8 +207,8 @@ impl Heap {
             }
             FsChown => {
                 use num_traits::ToPrimitive;
-                let owner = crate::host::native_file::big(self.integer(a[1])?);
-                let group = crate::host::native_file::big(self.integer(a[2])?);
+                let owner = self.bigint(a[1])?.into_owned();
+                let group = self.bigint(a[2])?.into_owned();
                 if owner < (-1).into() || group < (-1).into() {
                     return Err(fail(n, "invalid_input", "Invalid owner or group"));
                 }
@@ -226,6 +247,7 @@ impl Heap {
                 }
                 fs::remove_dir_all(path).map_err(|e| host(n, e))?;
             }
+            FsDirectorySync => sync_directory(&path).map_err(|e| host(n, e))?,
             FsFileContent => {
                 return Ok(self.native_byte_array(fs::read(path).map_err(|e| host(n, e))?)?);
             }
@@ -234,12 +256,12 @@ impl Heap {
                 if n == FsOpendir {
                     return Ok(Slot {
                         tag: HANDLE,
-                        bits: self.handles.allocate(Handle::Directory(Directory {
+                        bits: self.handles.allocate(Handle::Directory(Box::new(Directory {
                             path,
                             names,
                             index: 0,
                             closed: false,
-                        }))?,
+                        })))?,
                     });
                 }
                 let values = names
@@ -293,5 +315,26 @@ impl Heap {
             _ => return Err(Error("unsupported directory native".into()).into()),
         }
         Ok(yes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #122: a directory is synchronized; a file or a missing path is
+    /// refused with the host's failure.
+    #[test]
+    fn sync_directory_takes_a_directory_only() {
+        let root = std::env::temp_dir().join(format!("sparrow-directory-sync-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file"), b"x").unwrap();
+        sync_directory(&root).unwrap();
+        let file = sync_directory(&root.join("file")).unwrap_err();
+        assert_eq!(file.kind(), std::io::ErrorKind::NotADirectory);
+        let missing = sync_directory(&root.join("missing")).unwrap_err();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

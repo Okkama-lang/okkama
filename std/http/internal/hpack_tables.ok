@@ -83,17 +83,15 @@ hidden object HpackOctetText {
 
 // The static table.
 object HpackStaticTable {
-    has entries is @HpackField;
+    has names, values is @string;
 
     // The table.
     HpackStaticTable() {
         let fixed = HpackStaticEntries();
         let names = fixed.names();
         let values = fixed.values();
-        let rows is @HpackField = (0..61).map() -> index {
-            HpackField(name: names[index], value: values[index]);
-        };
-        entries = rows;
+        self.names = names;
+        self.values = values;
     }
 
     // 61.
@@ -105,13 +103,14 @@ object HpackStaticTable {
     field(index is int) is HpackField {
         confirm index >= 1 && index <= 61
             else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "invalid static index");
-        entries[index - 1];
+        // Materialize only the requested row, not all 61 on each connection (#943).
+        HpackField(name: names[index - 1], value: values[index - 1]);
     }
 
     // The first index with that name, or 0.
     named(name is string) is int {
         for (0..61) -> index {
-            if entries[index].name() == name {
+            if names[index] == name {
                 return index + 1;
             }
         }
@@ -121,8 +120,7 @@ object HpackStaticTable {
     // The index of that name and value, or 0.
     exact(field is HpackField) is int {
         for (0..61) -> index {
-            let entry = entries[index];
-            if entry.name() == field.name() && entry.value() == field.value() {
+            if names[index] == field.name() && values[index] == field.value() {
                 return index + 1;
             }
         }
@@ -286,4 +284,22 @@ test "static lookups, dynamic insertion with eviction, and combined indexes" {
         HpackDynamicTable(1048577);
     };
     test.is(HpackField(name: "authorization", value: "x", sensitive: true).sensitive(), true);
+}
+
+test "static lookup preserves first indexes and exact values" {
+    let table = HpackStaticTable();
+    test.is(table.size(), 61);
+    test.is(table.named(":method"), 2);
+    test.is(table.exact(HpackField(":method", "POST")), 3);
+    test.is(table.exact(HpackField(":method", "PUT")), 0);
+    test.is(table.named("X-Unknown"), 0);
+    test.is(table.field(61).name(), "www-authenticate");
+    test.is(table.field(61).value(), "");
+    test.ok(!table.field(61).sensitive());
+    test.throws(Http2Fault) {
+        table.field(0);
+    };
+    test.throws(Http2Fault) {
+        table.field(62);
+    };
 }

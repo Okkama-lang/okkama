@@ -1,0 +1,33 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "html/events" take HtmlEvents, HtmlEventKind;
+import "cell" take Cell;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let line = if i % 2 == 0 { "<br/>"; } else { ""; };
+        let text = "<p class=x>Hello <b>" + i.string() + "</b>" + line + "</p><!-- c -->";
+        let events = Cell(0);
+        let starts = Cell(0);
+        for HtmlEvents(text) -> event {
+            events.replace(events.value() + 1);
+            if event.kind() == HtmlEventKind.start_tag { starts.replace(starts.value() + 1); }
+        }
+        self.run(i + 1, n, acc + (events.value() + 3 * starts.value()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

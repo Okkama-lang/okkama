@@ -8,6 +8,6 @@ object Reader {
 }
 main() is int {
     let r = Reader();
-    let answer = r.get() ?? .some(v): r.selected(v) !! .none: r.unused() !! .missing: r.unused();
-    answer == 42 ?? 0 !! 1;
+    let answer = match r.get() { case Presence.some(v): r.selected(v); case Presence.none: r.unused(); case Presence.missing: r.unused(); };
+    if answer == 42 { 0; } else { 1; };
 }

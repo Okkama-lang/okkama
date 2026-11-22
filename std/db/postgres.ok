@@ -1,5 +1,6 @@
 module db/postgres v1.0.0;
 
+import "strings/parse" take Number;
 // PostgreSQL driver over the frontend/backend protocol 3.0, written in
 // Okkama: framing (db/postgres/wire), SCRAM-SHA-256 and MD5 (db/postgres/auth)
 // and the conversation below. The host supplies only TCP, TLS and crypto.
@@ -72,7 +73,6 @@ import "collections/list" take List, EmptyList;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/base64" take Base64Encoded;
 import "io/stream" take AsyncReading, AsyncWriting, Closing;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
@@ -2041,7 +2041,7 @@ hidden object PgCommandTag {
             || command == "DELETE"
             || command == "MERGE"
             || command == "COPY") {
-                return Execution(BigInt(words[words.size() - 1]));
+                return Execution(Number(words[words.size() - 1]).int());
             }
         Execution();
     }
@@ -2304,9 +2304,6 @@ hidden object PgParameter {
             }
             case DbValueKind.bytes {
                 value.bytes();
-            }
-            else {
-                throw InvalidPostgresOptions.because("unknown value kind");
             }
         };
     }

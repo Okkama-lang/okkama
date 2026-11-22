@@ -1,0 +1,20 @@
+module bible/unbound_rejected v1.0.0;
+
+// A field that no path of the constructor binds is rejected at compile time.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has route is string;
+    has seat is int;
+
+    Ticket(route is string) {
+        self.route = route;
+    }
+
+    shown() is string { route + ", seat " + seat.string(); }
+}
+
+main() is int {
+    Stdout().writeln(Ticket("Kostanay - Astana").shown());
+    0;
+}

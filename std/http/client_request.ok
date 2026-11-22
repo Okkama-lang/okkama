@@ -1,7 +1,9 @@
 module http/client_request v1.0.0;
 
 // A request checked before it leaves: an absolute http or https URL and at most
-// one Host, matching it. HttpClient uses it.
+// one Host, matching it. HttpClient uses it. A body its fields do not frame is
+// framed for HTTP/1.1 here: Content-Length when its length is known and not 0,
+// Transfer-Encoding: chunked when it is not known; it is never read for that.
 
 import "http/message" take Request;
 import "http/target" take RequestTargetKind, OriginTarget;
@@ -12,6 +14,8 @@ import "url/value" take ParsedUrl;
 import "http/target" take AbsoluteTarget;
 import "http/method" take Method;
 import "http/header" take Headers;
+import "http/body" take BodyOpening, UnknownBodyLength, ByteBody, OneShotBody, StreamBodyReading,
+    ByteBodyInput;
 
 // Prepare an ordinary direct request before DNS or socket effects. CONNECT and
 // OPTIONS * require separate explicitly routed consumers.
@@ -40,6 +44,7 @@ object HttpDirectRequest {
         else {
             origin::Head::headers.addition(Header(name: HeaderName("Host"), value: authority));
         };
+        let framed = Http1OutgoingFraming(origin: fields, body: origin.body()).headers();
         let path = if parts::Parts::path == "" {
             "/";
         }
@@ -50,7 +55,7 @@ object HttpDirectRequest {
         request = Request(
             method: origin::Head::method,
             target: target,
-            headers: fields,
+            headers: framed,
             body: origin.body(),
             version: origin::Head::version
         );
@@ -69,6 +74,40 @@ object HttpDirectRequest {
     }
 }
 
+// The fields with framing for a body they leave unframed.
+hidden object Http1OutgoingFraming {
+    has origin is Headers;
+    has body is BodyOpening;
+
+    Http1OutgoingFraming(origin is Headers, body is BodyOpening) {
+        self.origin = origin;
+        self.body = body;
+    }
+
+    headers() is Headers {
+        if origin.membership(HeaderName("Content-Length"))
+            || origin.membership(HeaderName("Transfer-Encoding")) {
+                return origin;
+            }
+        let known is @int = try {
+            [body.length()];
+        }
+        catch e is UnknownBodyLength {
+            let unknown is @int = [];
+            unknown;
+        };
+        if known.size() == 0 {
+            origin.addition(Header(name: HeaderName("Transfer-Encoding"), value: "chunked"));
+        }
+        else if known[0].sign() == 0 {
+            origin;
+        }
+        else {
+            origin.addition(Header(name: HeaderName("Content-Length"), value: known[0].string()));
+        }
+    }
+}
+
 // A request a client cannot send; reason says why.
 enum InvalidClientRequest is Error = (because(reason is string));
 
@@ -83,4 +122,42 @@ test "direct route adds Host and a slash without adding optional client features
             && wire::Head::headers.first(HeaderName("Host")) == "example.test"
     );
     test.ok(!wire::Head::headers.membership(HeaderName("User-Agent")));
+}
+
+test "an unframed body is framed for HTTP/1.1: a known length, chunked when unknown, nothing when empty" {
+    let url = "http://example.test/upload";
+    let sized = HttpDirectRequest(
+        Request(url: url, method: Method.post, body: ByteBody([byte(1), byte(2), byte(3)]))
+    ).request();
+    test.is(sized::Head::headers.first(HeaderName("Content-Length")), "3");
+    test.ok(!sized::Head::headers.membership(HeaderName("Transfer-Encoding")));
+    let stream = ByteBodyInput([byte(1)]);
+    let unknown = HttpDirectRequest(
+        Request(
+            url: url,
+            method: Method.post,
+            body: OneShotBody(StreamBodyReading(input: stream, owner: stream, trailers: Headers()))
+        )
+    ).request();
+    test.is(unknown::Head::headers.first(HeaderName("Transfer-Encoding")), "chunked");
+    test.ok(!unknown::Head::headers.membership(HeaderName("Content-Length")));
+    let empty = HttpDirectRequest(Request(url: url)).request();
+    test.ok(
+        !empty::Head::headers.membership(HeaderName("Content-Length"))
+            && !empty::Head::headers.membership(HeaderName("Transfer-Encoding"))
+    );
+    let declared = HttpDirectRequest(
+        Request(
+            url: url,
+            method: Method.post,
+            headers: Headers(
+                Header(name: HeaderName("Transfer-Encoding"), value: "chunked"),
+                Header(name: HeaderName("Authorization"), value: "Bearer token")
+            ),
+            body: ByteBody([byte(1)])
+        )
+    ).request();
+    test.ok(!declared::Head::headers.membership(HeaderName("Content-Length")));
+    test.is(declared::Head::headers.values(HeaderName("Transfer-Encoding")).size(), 1);
+    test.is(declared::Head::headers.first(HeaderName("Authorization")), "Bearer token");
 }

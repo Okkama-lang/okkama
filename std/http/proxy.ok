@@ -96,7 +96,7 @@ hidden object ProxyWire {
             let chunk = await input.bytes(4096);
             last if chunk.size() == 0;
             received.replace(received.value() + Utf8Decoded(chunk).string());
-            last if received.value().split("\r\n\r\n").size() >= 2;
+            last if received.value().contains("\r\n\r\n");
         }
         received.value().split("\r\n\r\n")[0];
     }

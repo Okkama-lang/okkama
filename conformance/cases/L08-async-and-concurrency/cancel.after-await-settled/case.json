@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.after-await-settled",
+  "title": "a task cancelled after the future it awaits has settled keeps that outcome and is cancelled at its next await",
+  "purpose": "Accept the construct and observe its result.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "main observed 42\ncancel requested\nworker observed 42\nworker cleanup\n-1\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for OCS 0.6.0; issue #663 (semantics of #546)",
+    "expected_basis": "main and the worker await the child, main first; the child's settlement queues main, then the worker. main cancels the queued worker before it runs. Cancellation is cooperative: the worker's await already has its outcome, so it continues with 42, and the Cancelled is delivered at its next await, which unwinds through its defer."
+  },
+  "status": "mandatory"
+}

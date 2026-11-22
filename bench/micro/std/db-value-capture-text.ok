@@ -1,0 +1,42 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "math/decimal" take Decimal;
+import "db/value" take DbValueCapture, DbValueKind;
+
+// The print protocol fed a decimal, a text, bytes and NULL; values and native widths read back.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let d = DbValueCapture(DbValueKind.decimal);
+        d.decimal(Decimal(x + ".25"));
+        d.finish();
+        let t = DbValueCapture(DbValueKind.text);
+        t.text("\u{e9}" + x);
+        t.finish();
+        let y = DbValueCapture(DbValueKind.bytes);
+        y.bytes([byte(v), byte(2 * v), byte(3)]);
+        y.finish();
+        let z = DbValueCapture(DbValueKind.null_value);
+        z.null_value();
+        z.finish();
+        let total = d.decimal_value().string().length() + t.text_value().length() + 10 * t.width() + y.bytes_value()[1].int()
+            + 100 * y.width() + 1000 * z.width();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

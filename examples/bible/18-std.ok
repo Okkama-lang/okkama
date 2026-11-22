@@ -1,0 +1,55 @@
+module bible/std_closures v1.0.0;
+
+// Closures where the library asks for behaviour: a sort key written in place,
+// a key that captures a local limit, and an object's action passed as the key.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+import "collections/ordering" take SortedBy;
+import "collections/iteration" take Iterating;
+
+object Job {
+    has name is string;
+    has team is string;
+    has hours is int;
+    Job(:name, :team, :hours);
+    name() is string { name; }
+    team() is string { team; }
+    hours() is int { hours; }
+}
+
+// A ranking of teams; unknown teams go last.
+object Priorities {
+    has rank is %string:int;
+    Priorities(:rank);
+    of(job is Job) is int { rank[job.team()] else 99; }
+}
+
+object Listing {
+    Listing() {}
+    // The names in walking order, gathered in a Cell (synchronous code).
+    names(jobs is Iterating<Job>) is string {
+        let shown = Cell("");
+        for jobs -> job {
+            shown.replace(shown.value() + " " + job.name());
+        }
+        shown.value();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let list = Listing();
+    let jobs = [
+        Job(name: "deploy", team: "ops", hours: 2),
+        Job(name: "refund", team: "billing", hours: 1),
+        Job(name: "reindex", team: "search", hours: 5),
+        Job(name: "backup", team: "ops", hours: 3)
+    ];
+    out.writeln("by hours:" + list.names(SortedBy(origin: jobs, key: (job is Job) is int { job.hours(); })));
+    let limit = 2;
+    let quick = SortedBy(origin: jobs, key: (job is Job) is int { if job.hours() <= limit { 0; } else { 1; } });
+    out.writeln("quick first:" + list.names(quick));
+    let priorities = Priorities(rank: ["billing": 1, "ops": 2]);
+    out.writeln("by team:" + list.names(SortedBy(origin: jobs, key: priorities.of)));
+    0;
+}

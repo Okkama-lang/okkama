@@ -1,0 +1,19 @@
+module bible/url v1.0.0;
+
+// A URL taken apart through its cap, its query read by name, and a relative
+// reference resolved against it (RFC 3986).
+import "url/value" take ParsedUrl;
+import "url/query" take ParsedQuery;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let page = ParsedUrl("https://ada@example.org:8443/docs/guide/intro?lang=en&v=2#start").parts();
+    out.writeln(page::Parts::scheme + " " + (page::Parts::host else "-") + " " + (page::Parts::port else 443).string());
+    out.writeln(page::Parts::path);
+    let query = ParsedQuery(page::Parts::query else "").parameters();
+    out.writeln("lang " + query.text("lang") + ", v " + query.text("v"));
+    out.writeln(page.resolved(ParsedUrl("../api/ref").parts()).string());
+    out.writeln(page.resolved(ParsedUrl("/").parts()).string());
+    0;
+}

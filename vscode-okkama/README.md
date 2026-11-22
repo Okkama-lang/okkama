@@ -51,7 +51,7 @@ constructor shorthand, successor, async/await/spawn, test/fake capabilities,
 проекции, битовые операции и числовые литералы с разделителями.
 
 Подсвечиваются и новые формы: варианты enum (`Shape.circle`, `DbError.closed`,
-`Maybe<int>.none`, `.paid(amount):` в компактном выборе `?? !!`), встроенные
+`Maybe<int>.none`, короткие ветки `case Status.paid(amount): …;`), встроенные
 `Maybe`, `Presence` и `Error`, `try?` и `try!` (одиночный `?` по-прежнему
 ошибка), контекстный `hidden` перед `object`/`role`/`enum` (поле `hidden`
 остаётся обычным именем). `Role.fake()` не принимается за вариант.

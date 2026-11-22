@@ -1,0 +1,40 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "fs/stat" take FileTimes, PermissionMode, Permissions;
+
+// rwx as 4, 2, 1.
+hidden object Bits {
+    Bits();
+    of(p is Permissions) is int {
+        (if p::Access::readable { 4; } else { 0; }) + (if p::Access::writable { 2; } else { 0; }) + (if p::Access::executable { 1; } else { 0; });
+    }
+}
+
+// File times as instants and permission bits split into owner, group and others.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let times = FileTimes(access: 1000 + i, modification: 2000 + v, change: 3000, creation: 4000 + i % 5);
+        let mode = PermissionMode(bits: (i * 37) % 512);
+        let b = Bits();
+        let total = times.access().unix_duration()::Span::seconds.int() + times.modification().unix_duration()::Span::seconds.int()
+            + times.change().unix_duration()::Span::seconds.int() + times.creation().unix_duration()::Span::seconds.int()
+            + 10000 * b.of(mode.owner()) + 100000 * b.of(mode.group()) + 1000000 * b.of(mode.others());
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

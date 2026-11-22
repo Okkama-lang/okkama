@@ -7,7 +7,7 @@ const NESTED is @@int = [[]];
 object Make {
     Make();
     rows() is @@int { [[]]; }
-    table(c is bool) is %string:@int { c ?? ["a": [1], "b": []] !! [:]; }
+    table(c is bool) is %string:@int { if c { ["a": [1], "b": []]; } else { [:]; }; }
 }
 
 main() is int {

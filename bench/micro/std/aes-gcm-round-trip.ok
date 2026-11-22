@@ -1,0 +1,34 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/aes_gcm" take AesGcm;
+import "crypto/secret" take SecretBytes;
+
+
+object Bench {
+    has cipher is AesGcm;
+    has nonce is @byte;
+    Bench() {
+        cipher = AesGcm(SecretBytes([byte(0), byte(1), byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), byte(8), byte(9), byte(10), byte(11), byte(12), byte(13), byte(14), byte(15), byte(16), byte(17), byte(18), byte(19), byte(20), byte(21), byte(22), byte(23), byte(24), byte(25), byte(26), byte(27), byte(28), byte(29), byte(30), byte(31)]));
+        nonce = [byte(0), byte(1), byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), byte(8), byte(9), byte(10), byte(11)];
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let bytes = [byte(i % 256), byte(1), byte(2), byte(3), byte(4), byte(5), byte(6), byte(7)];
+        let aad is @byte = [];
+        let sealed = cipher.sealed(nonce, aad, bytes);
+        self.run(i + 1, n, acc + (cipher.opened(nonce, aad, sealed)[0].int()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

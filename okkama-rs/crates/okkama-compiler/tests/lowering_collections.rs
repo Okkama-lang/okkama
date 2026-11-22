@@ -206,18 +206,18 @@ fn constants_outside_loops_stay_in_their_branch() {
 }
 
 #[test]
-fn a_literal_choice_keeps_the_analyzed_collection_type() {
+fn a_literal_if_keeps_the_analyzed_collection_type() {
     // #298: only the selected `[]` is emitted, retagged to `@int`; no branch.
     for (body, retag) in [
-        ("let ok = (false ?? [1] !! []) == []; 0;", "array<int> = array.retag"),
-        ("let ok = (true ?? [] !! [1]) == []; 0;", "array<int> = array.retag"),
-        ("let ok = (false ?? [\"k\": 1] !! [:]) == [:]; 0;", "map<str,int> = map.retag"),
+        ("let ok = (if false { [1]; } else { []; }) == [3]; 0;", "array<int> = array.retag"),
+        ("let ok = (if true { []; } else { [1]; }) == [3]; 0;", "array<int> = array.retag"),
+        ("let ok = (if false { [\"k\": 1]; } else { [:]; }) == [\"j\": 2]; 0;", "map<str,int> = map.retag"),
     ] {
         let main = main_listing(body);
         assert!(main.contains(retag), "{body}\n{main}");
         assert!(!main.contains("cond "), "{body}\n{main}");
     }
     // A variable condition still branches and joins with the tagged type.
-    let main = main_listing("let c = true; let ok = (c ?? [1] !! []) == []; 0;");
+    let main = main_listing("let c = true; let ok = (if c { [1]; } else { []; }) == [3]; 0;");
     assert!(main.contains("cond "), "{main}");
 }

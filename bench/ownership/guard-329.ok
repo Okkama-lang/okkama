@@ -1,0 +1,65 @@
+module guard;
+
+import "cli/arguments" take ProcessArguments;
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+object DestroyGuard {
+    has count is Atomic<int>;
+
+    DestroyGuard(count is Atomic<int>) {
+        self.count = count;
+    }
+
+    async destroy {
+        count.replace(count.value() + 1);
+    }
+}
+
+object CloseGuard {
+    has count is Atomic<int>;
+
+    CloseGuard(count is Atomic<int>) {
+        self.count = count;
+    }
+
+    async close() is void {
+        count.replace(count.value() + 1);
+    }
+}
+
+object Work {
+    has count is Atomic<int>;
+
+    Work(count is Atomic<int>) {
+        self.count = count;
+    }
+
+    async destroyed() is int {
+        let guard = DestroyGuard(count);
+        1;
+    }
+
+    async closed_by_defer() is int {
+        let guard = CloseGuard(count);
+        defer await guard.close();
+        1;
+    }
+}
+
+async main() is int {
+    let destroying = ProcessArguments().strings()[0] == "destroy";
+    let n = 2000000;
+    let count = Atomic(0);
+    let work = Work(count);
+    for 0..n -> i {
+        if destroying {
+            await work.destroyed();
+        }
+        else {
+            await work.closed_by_defer();
+        }
+    }
+    Stdout().writeln(count.value().string());
+    0;
+}

@@ -79,6 +79,7 @@ impl Region {
             self.committed = needed;
         }
         self.top = end;
+        okkama_devtrace::count!("jit", "code memory: bytes requested", size);
         // SAFETY: inside the committed part of the reservation.
         Ok(unsafe { self.base.add(start) })
     }
@@ -88,6 +89,8 @@ impl Region {
         if end == self.finalized || self.protection == libc::PROT_READ | libc::PROT_WRITE {
             return Ok(());
         }
+        okkama_devtrace::count!("jit", "code memory: finalizations");
+        okkama_devtrace::count!("jit", "code memory: bytes finalized (whole pages)", end - self.finalized);
         // SAFETY: the pages written since the last finalization.
         unsafe {
             let start = self.base.add(self.finalized);

@@ -1,0 +1,62 @@
+module notes/postgres v1.0.0;
+
+// The same NoteStore over PostgreSQL, with this table:
+//
+//     CREATE TABLE notes (id bigserial PRIMARY KEY, title text NOT NULL UNIQUE);
+import "db/pool" take DbPool;
+import "db/error" take DbFailure;
+import "db/value" take DbInteger, DbText;
+import "db/row" take Row;
+import "api" take Note, NoteStore, StoreRefusal;
+
+object PostgresStore does NoteStore {
+    has pool is DbPool;
+
+    PostgresStore(:pool);
+
+    async after(id is int, count is int) is @Note {
+        let db = await pool.connection();
+        defer db.close();
+        let rows = await db.query("SELECT id, title FROM notes WHERE id > $1 ORDER BY id LIMIT $2",
+            DbInteger(id), DbInteger(count)).all(count);
+        rows.map() -> row { self.note(row); };
+    }
+
+    async find(id is int) is Maybe<Note> {
+        let db = await pool.connection();
+        defer db.close();
+        match await db.query("SELECT id, title FROM notes WHERE id = $1", DbInteger(id)).maybe() {
+            case Maybe.some(row) { Maybe.some(self.note(row)); }
+            case Maybe.none { Maybe.none; }
+        };
+    }
+
+    // The UNIQUE constraint decides, and SQLSTATE 23505 says it refused.
+    async added(title is string) is Note {
+        let db = await pool.connection();
+        defer db.close();
+        let row = try {
+            await db.query("INSERT INTO notes (title) VALUES ($1) RETURNING id, title", DbText(title)).one();
+        }
+        catch DbFailure.detailed(kind, operation, code, message) {
+            if code == "23505" {
+                throw StoreRefusal.duplicate(title);
+            }
+            throw;
+        };
+        self.note(row);
+    }
+
+    async removed(id is int) is bool {
+        let db = await pool.connection();
+        defer db.close();
+        match await db.query("DELETE FROM notes WHERE id = $1 RETURNING id", DbInteger(id)).maybe() {
+            case Maybe.some(row) { true; }
+            case Maybe.none { false; }
+        };
+    }
+
+    hidden note(row is Row) is Note {
+        Note(id: row.int("id"), title: row.text("title"));
+    }
+}

@@ -1,0 +1,68 @@
+// #244: imap-session-events; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;
+import "mail/imap_session" take ImapSession, ImapSessionReply, SelectedMailbox, ImapSelectionToken, ImapSelectedState, ImapAssignedUids, ImapCopiedUids, SearchedMail, FetchedMail, ChangedMailFlags, CopiedMail, MovedMail, ExpungedMail, CreatedImapMailbox, RenamedImapMailbox, ImapMailboxDeletion, ImapSubscription, AppendedMail, MailboxEvent, MailboxEventKind, MailboxEvents, MailboxEventsClosed, ImapIdleTask, ImapEventObservation;
+import "mail/imap_exchange" take ImapCommandChannel, ImapLiteralWriting, ImapIdleContinuation;
+import "mail/imap_command" take ImapCommand, ImapSimpleCommand;
+import "mail/imap_command_reading" take ImapCommandLimits;
+import "mail/imap" take ImapCapabilities;
+import "mail/imap_name" take ImapMailboxName;
+import "mail/imap_uid" take ImapUid, ImapUidSet, ImapUidValidity, MailboxUids;
+import "mail/imap_search" take AllMail;
+import "mail/imap_command" take ImapDatum, FlagChange;
+import "mail/mailbox" take MailFlags;
+import "mail/message" take MailMessage;
+import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
+import "mime/part" take TextBody;
+import "async/event" take Event;
+import "async/channel" take Channel;
+import "async/scope" take FutureGroup;
+import "mail/imap_response" take ParsedImapResponse;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let wire = "* FLAGS ()\r\n* "+x+" EXISTS\r\n* OK [UIDVALIDITY 1] valid\r\nO1 OK [READ-WRITE] selected\r\n";
+            let input = ByteBodyInput(Utf8Encoded(wire).bytes());
+            let sink = Sink();
+            let channel = ImapCommandChannel(input,sink,input,[],ImapCommandLimits());
+            let session = ImapSession(channel,ImapCapabilities(["IMAP4rev1","UIDPLUS","MOVE","IDLE"]),"account");
+            let name = ImapMailboxName("box"+x);
+
+            let selected = await session.select(name,false);
+            let state = await selected.state();
+            let response = ParsedImapResponse(Utf8Encoded("* 1 FETCH (UID "+x+" FLAGS (\\Seen))\r\n").bytes()).response();
+            state = state.observed(response);
+            let snapshot = ImapSelectedState(selected.context(),state);
+            snapshot = snapshot.observed(response);
+            let events is Channel<MailboxEvent> = Channel(2);
+            let observer = ImapEventObservation(state,events.sending());
+            let observed = await observer.observed(response);
+            let event = await events.receiving().item();
+            let contribution = snapshot.state().messages()+event.sequence().number()+event.uid().number()+event.flags().size()+observed+(if event.kind()==MailboxEventKind.fetch { 1; } else { 0; });
+            session.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

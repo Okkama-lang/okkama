@@ -8,8 +8,7 @@ itself, so it runs from any directory:
     okkama run examples/fs/file/read_lines.ok
 
 Next to each program, `NAME.expected` holds its output. `examples/check.py`
-runs every program on IR and Sparrow (or the engines given with `--engine`)
-and compares the output.
+runs every program on Sparrow and compares the output.
 
 ## fs/file
 
@@ -115,8 +114,7 @@ and compares the output.
 | `net/addresses.ok` | parse and classify IP addresses, networks, endpoints; resolve through a fixed DNS table |
 | `net/echo.ok` | a TCP echo over loopback (run it in a container, like the async tests) |
 
-On the JVM, the digest and crypto examples need the host crypto library. An
-installed Okkama finds it; a development build takes `OKKAMA_NATIVE_LIB`.
+The digest and crypto examples use host cryptography built into Sparrow.
 
 ## logging, config, template
 

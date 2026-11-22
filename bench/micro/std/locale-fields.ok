@@ -1,0 +1,35 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "compare" take Order;
+import "locale/tag" take Locale, MissingLocaleSubtag;
+import "locale/data" take LocaleDataKey, LocaleDataVersion;
+import "locale/match" take LanguagePrefixes;
+
+// Locales parsed from mixed-case tags: fields (script and region may be missing), base tag, order; a data key; the registry date; the prefixes of a tag.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let tags is @string = ["SR-latn-rs", "en-us", "zh-HANT-tw-x-p", "de", "pt-BR-u-nu-arab"];
+        let locale = Locale(tags[i % 5]);
+        let other = Locale(tags[(i + 1) % 5]);
+        let total = locale.language().length() + 10 * (try { locale.script().length(); } catch e is MissingLocaleSubtag { 0; })
+            + 100 * (try { locale.region().length(); } catch e is MissingLocaleSubtag { 0; }) + locale.base_tag().length()
+            + (if locale.order(other) == Order.less { 1000; } else { 2000; }) + LocaleDataKey(tags[(i + 2) % 5]).locale().string().length()
+            + LocaleDataVersion().registry().length() + 10000 * LanguagePrefixes(locale).values().size();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

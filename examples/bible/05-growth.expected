@@ -1,0 +1,9 @@
+H(10) = 7381/2520
+H(10): 9 characters, float off by 0
+H(20): 17 characters, float off by 0
+H(40): 32 characters, float off by 0
+H(80): 68 characters, float off by 0
+H(160): 136 characters, float off by 1.7763568394002505e-15
+exact after a year: 2820 characters, about 1051.2674964674625
+booked after a year: 8 characters, 1051.1
+difference in cents: 16.749646746255046

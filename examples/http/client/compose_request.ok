@@ -1,0 +1,46 @@
+module examples/http/client/compose_request v1.0.0;
+
+import "http/message" take Request, RequestHead;
+import "http/method" take Method, MethodName;
+import "http/header" take Headers, Header, HeaderName;
+import "http/body" take JsonBody, FormBody;
+import "json" take Json, JsonField;
+import "url/value" take ParsedUrl;
+import "url/query" take QueryParameters, QueryParameter;
+import "io/stdout" take Stdout;
+
+// A request is made from parts, without I/O: a head (method, URL, fields) and
+// a content (JSON, a form, text, bytes). The content gives Content-Type and,
+// when the body knows it, Content-Length; client.response(request) sends it,
+// and client.post(url, content) is the same request made shorter. Query
+// parameters go into the URL first.
+main() is int {
+    let out = Stdout();
+    let url = ParsedUrl("https://api.example.com/orders?shop=1").parts().query_appended(
+        QueryParameters(QueryParameter(name: "notify", value: "a&b"))
+    ).string();
+    let head = RequestHead(
+        method: Method.post,
+        url: url,
+        headers: Headers(Header(name: HeaderName("Accept"), value: "application/json"))
+    );
+    let order = Request(
+        head: head,
+        content: JsonBody(Json(JsonField("item", "tea"), JsonField("count", 2)))
+    );
+    out.writeln(MethodName(order::Head::method), " ", order::Head::target.string());
+    for order::Head::headers.entries() -> field {
+        out.writeln("  ", field.name().string(), ": ", field.value());
+    }
+
+    let search = Request(
+        url: "https://example.com/search",
+        method: Method.post,
+        content: FormBody(QueryParameters(QueryParameter(name: "q", value: "green tea")))
+    );
+    out.writeln(MethodName(search::Head::method), " ", search::Head::target.string());
+    for search::Head::headers.entries() -> field {
+        out.writeln("  ", field.name().string(), ": ", field.value());
+    }
+    0;
+}

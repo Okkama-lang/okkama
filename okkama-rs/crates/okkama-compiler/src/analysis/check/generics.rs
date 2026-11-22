@@ -330,6 +330,10 @@ impl Checker<'_, '_> {
                 self.unify(inference, value, actual_value);
             }
             (Ty::Successor(inner), Ty::Successor(other)) => self.unify(inference, inner, other),
+            // #790: `Future<T>` from `Future<^C>` infers `T = C`: the handoff gives a plain Future.
+            (Ty::Future(Some(inner)), Ty::Future(Some(other))) if !inner.is_successor() && other.is_successor() => {
+                self.unify(inference, inner, &other.taken())
+            }
             (Ty::Future(Some(inner)), Ty::Future(Some(other))) => {
                 self.unify(inference, inner, other)
             }

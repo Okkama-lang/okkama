@@ -1,0 +1,21 @@
+module bible/closure_compose v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Compose {
+    Compose();
+    // An action that takes two actions and returns a third.
+    then(first is (int) is int, second is (int) is int) is (int) is int {
+        (value is int) is int { second(first(value)); };
+    }
+}
+
+main() is int {
+    let increment = (value is int) is int { value + 1; };
+    let square = (value is int) is int { value * value; };
+    let compose = Compose();
+    let up_then_square = compose.then(increment, square);
+    let square_then_up = compose.then(square, increment);
+    Stdout().writeln(up_then_square(4).string() + " " + square_then_up(4).string());
+    0;
+}

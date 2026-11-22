@@ -1,0 +1,38 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "digest/sha2" take Sha224, Sha256;
+
+// The first hex digit of a digest.
+hidden object First {
+    First();
+    digit(hex is string) is int {
+        "0123456789abcdef".find(hex.slice(0, 1)) else 99;
+    }
+}
+
+// SHA-224 and SHA-256 of "a<x>" continued by "b".
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let x = (i % 251 + 1).string();
+        let text = "a" + x;
+        let f = First();
+        let total = f.digit(Sha224(text).state("b").hex()) + f.digit(Sha256(text).state("b").hex())
+            + f.digit(Sha224().state(text).hex());
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

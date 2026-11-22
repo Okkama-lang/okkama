@@ -274,6 +274,11 @@ pub struct Standard {
     pub writing: Option<RoleId>,
     /// `cell::Cell`: stays in synchronous code (#152).
     pub cell: Option<ObjectId>,
+    /// The errors the builtin array adapters throw (#769): `collections/iteration.IterationEnded`,
+    /// `collections/sequence.EmptySequence`, `error.OutOfRange`.
+    pub iteration_ended: Option<EnumId>,
+    pub empty_sequence: Option<EnumId>,
+    pub out_of_range: Option<EnumId>,
     /// Operator roles of module `operators` (#215), by operator.
     pub operators: Operators,
 }
@@ -340,6 +345,9 @@ const RUNTIME_CONSTRUCTED: [(&str, &str); 3] = [
     ("async/semaphore", "Permit"),
     ("async/barrier", "BarrierState"),
 ];
+
+/// The actions of the system `NativeFailure`, in method order: field getters, and `text()` (its message).
+pub const NATIVE_FAILURE_METHODS: [&str; 5] = ["domain", "code", "operation", "message", "text"];
 
 impl<'a> Registry<'a> {
     pub fn build(sources: Vec<SourceModule<'a>>) -> Registry<'a> {
@@ -750,10 +758,7 @@ impl<'a> Registry<'a> {
             decl: None,
         };
         for (name, methods) in [
-            (
-                "NativeFailure",
-                vec!["domain", "code", "operation", "message", "text"],
-            ),
+            ("NativeFailure", NATIVE_FAILURE_METHODS.to_vec()),
             ("Cancelled", vec!["text"]),
         ] {
             self.objects.push(ObjectInfo {
@@ -917,9 +922,11 @@ impl<'a> Registry<'a> {
                         );
                         continue;
                     }
-                    let mut cases: Vec<String> = Vec::new();
+                    // Ordinals follow `cases`; `seen` answers "declared already?" (#475).
+                    let mut cases: Vec<String> = Vec::with_capacity(decl.cases.len());
+                    let mut seen: HashSet<&str> = HashSet::with_capacity(decl.cases.len());
                     for case in &decl.cases {
-                        if cases.contains(&case.text) {
+                        if !seen.insert(case.text.as_str()) {
                             self.error(
                                 case.span,
                                 format!("Enum \"{name}\" already has case \"{}\"", case.text),
@@ -2740,6 +2747,10 @@ impl<'a> Registry<'a> {
             Some(TypeRef::Role(id)) => Some(id),
             _ => None,
         };
+        let error_enum = |found: Option<TypeRef>| match found {
+            Some(TypeRef::Enum(id)) if self.enums[id.0].error && self.enums[id.0].variant => Some(id),
+            _ => None,
+        };
         self.standard = Standard {
             comparing: role(lookup(self, "compare", "Comparing")),
             order: match lookup(self, "compare", "Order") {
@@ -2757,6 +2768,9 @@ impl<'a> Registry<'a> {
                 Some(TypeRef::Object(id)) => Some(id),
                 _ => None,
             },
+            iteration_ended: error_enum(lookup(self, "collections/iteration", "IterationEnded")),
+            empty_sequence: error_enum(lookup(self, "collections/sequence", "EmptySequence")),
+            out_of_range: error_enum(lookup(self, "error", "OutOfRange")),
             operators: Operators {
                 adding: role(lookup(self, "operators", "Adding")),
                 subtracting: role(lookup(self, "operators", "Subtracting")),
@@ -2963,6 +2977,9 @@ impl<'a> Registry<'a> {
     /// `^C` → `C`, конкретный тип → роль, которую он делает, `[]`/`[:]` → коллекция.
     pub fn assignable(&self, from: &Ty, to: &Ty) -> bool {
         if from == to || from.is_error() || to.is_error() {
+            return true;
+        }
+        if from.future_handoff(to).is_some() {
             return true;
         }
         match (from, to) {

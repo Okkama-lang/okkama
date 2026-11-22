@@ -1,0 +1,1 @@
+13-cell-field-rejected.ok:6:9: semantic error: Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic

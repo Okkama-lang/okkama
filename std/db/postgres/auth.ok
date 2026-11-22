@@ -33,7 +33,7 @@ object ScramExchange {
 
     // For user with password, starting from the client nonce.
     ScramExchange(user is string, password is SecretBytes, nonce is string) {
-        confirm nonce.length() >= 18 && nonce.split(",").size() == 1
+        confirm nonce.length() >= 18 && !nonce.contains(",")
             else throw ScramFailure.because(
                 "client nonce must be 18+ printable characters without commas"
             );
@@ -74,7 +74,7 @@ object ScramExchange {
     // Whether server_final carries the right server signature.
     server_verified(server_first is string, server_final is string) is bool {
         let parsed = ScramServerFirst(origin: server_first, client: nonce);
-        confirm server_final.length() > 2 && server_final.slice(0, 2) == "v="
+        confirm server_final.length() > 2 && server_final.starts_with("v=")
             else throw ScramFailure.because("server final message has no verifier");
         let without = "c=biws,r=" + parsed.nonce();
         let message = Utf8Encoded(self.bare() + "," + server_first + "," + without).bytes();

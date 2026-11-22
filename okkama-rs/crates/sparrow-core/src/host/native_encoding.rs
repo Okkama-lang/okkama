@@ -53,15 +53,12 @@ impl Heap {
                     } else {
                         (base64_alphabet(native, self.text(args[1])?)?, 6, 4)
                     };
-                let source = points(self.text(args[0])?);
-                let (invalid, end) = shape(&source, alphabet, width, quantum);
-                if matches!(native, Base32InvalidOffset | Base64InvalidOffset) {
-                    Slot::small(invalid)
+                let decode = matches!(native, Base32Decode | Base64Decode);
+                let parsed = base_parsed(self.text(args[0])?, alphabet, width, quantum, decode);
+                if decode {
+                    self.native_byte_array(parsed.map_err(|_| failed(native))?)?
                 } else {
-                    if invalid != -1 {
-                        return Err(failed(native));
-                    }
-                    self.native_byte_array(decoded(&source, end, alphabet, width))?
+                    Slot::small(parsed.err().unwrap_or(-1))
                 }
             }
             Base85Encode => {
@@ -74,8 +71,12 @@ impl Heap {
                 let name = self.text(args[1])?;
                 let alphabet = base85_alphabet(native, name)?;
                 let mut bytes = Vec::new();
-                let invalid =
-                    base85_parsed(&points(self.text(args[0])?), name, &alphabet, &mut bytes);
+                let invalid = base85_parsed(
+                    self.text(args[0])?,
+                    name,
+                    &alphabet,
+                    (native == Base85Decode).then_some(&mut bytes),
+                );
                 if native == Base85InvalidOffset {
                     Slot::small(invalid)
                 } else {
@@ -91,7 +92,10 @@ impl Heap {
             }
             QuotedPrintableInvalidOffset | QuotedPrintableDecode => {
                 let mut bytes = Vec::new();
-                let invalid = qp_parsed(&self.native_bytes(args[0])?, &mut bytes);
+                let invalid = qp_parsed(
+                    &self.native_bytes(args[0])?,
+                    (native == QuotedPrintableDecode).then_some(&mut bytes),
+                );
                 if native == QuotedPrintableInvalidOffset {
                     Slot::small(invalid)
                 } else {
@@ -106,28 +110,18 @@ impl Heap {
         Ok(Outcome::Value(value))
     }
 }
-fn points(text: &str) -> Vec<u32> {
-    text.chars().map(u32::from).collect()
-}
-
 fn ascii85() -> String {
     (33u8..=117).map(char::from).collect()
 }
 
-/// Позиция символа в алфавите (ASCII-алфавиты: байт = символ).
-fn index(alphabet: &[u8], symbol: u32) -> i64 {
-    if symbol > 0x7f {
-        return -1;
-    }
-    alphabet
-        .iter()
-        .position(|candidate| u32::from(*candidate) == symbol)
-        .map_or(-1, |at| at as i64)
-}
-
 /// Символ на каждые `width` бит, затем `=` до кратности `quantum`.
 fn encoded(octets: &[u8], alphabet: &[u8], width: u32, quantum: usize) -> String {
-    let mut result = String::new();
+    let octets_per_quantum = quantum * width as usize / 8;
+    let capacity = octets
+        .len()
+        .div_ceil(octets_per_quantum)
+        .checked_mul(quantum);
+    let mut result = String::with_capacity(capacity.unwrap_or(0));
     let mut buffer: u64 = 0;
     let mut bits = 0u32;
     let mask = (1u64 << width) - 1;
@@ -170,65 +164,81 @@ fn expected_padding(width: u32, remainder: usize) -> i64 {
     }
 }
 
-/// `(первое неверное смещение или -1, конец данных)`, как `shape` JVM.
-fn shape(source: &[u32], alphabet: &[u8], width: u32, quantum: usize) -> (i64, usize) {
-    let size = source.len();
-    if size == 0 {
-        return (-1, 0);
+// Compile-time tables avoid per-symbol alphabet scans (#461).
+const fn reverse_alphabet(alphabet: &[u8]) -> [u8; 128] {
+    let mut reverse = [u8::MAX; 128];
+    let mut at = 0;
+    while at < alphabet.len() {
+        reverse[alphabet[at] as usize] = at as u8;
+        at += 1;
     }
-    let mut data_end = size;
-    let mut padding = 0i64;
-    let mut inside = false;
-    for (offset, symbol) in source.iter().enumerate() {
-        if *symbol == u32::from('=') {
-            if !inside {
-                inside = true;
-                data_end = offset;
-            }
+    reverse
+}
+
+const BASE32_REVERSE: [u8; 128] = reverse_alphabet(BASE32.as_bytes());
+const BASE64_STANDARD_REVERSE: [u8; 128] = reverse_alphabet(BASE64_STANDARD.as_bytes());
+const BASE64_URL_REVERSE: [u8; 128] = reverse_alphabet(BASE64_URL.as_bytes());
+
+// Borrow input until validation finishes; only successful parses return bytes (#461).
+fn base_parsed(
+    source: &str,
+    alphabet: &[u8],
+    width: u32,
+    quantum: usize,
+    decode: bool,
+) -> Result<Vec<u8>, i64> {
+    let reverse = if width == 5 {
+        &BASE32_REVERSE
+    } else if alphabet == BASE64_URL.as_bytes() {
+        &BASE64_URL_REVERSE
+    } else {
+        &BASE64_STANDARD_REVERSE
+    };
+    let mut octets = Vec::new();
+    if decode
+        && let Some(capacity) = (source.len() / quantum).checked_mul(quantum * width as usize / 8)
+    {
+        octets.reserve_exact(capacity);
+    }
+    let mut size = 0usize;
+    let mut data_end = 0usize;
+    let mut padding = 0usize;
+    let mut buffer = 0u64;
+    let mut bits = 0u32;
+    // Scalar enumeration preserves offsets for every non-ASCII error (#461).
+    for (offset, symbol) in source.chars().enumerate() {
+        size = offset + 1;
+        if symbol == '=' {
             padding += 1;
             continue;
         }
-        if inside || index(alphabet, *symbol) < 0 {
-            return (offset as i64, 0);
+        let value = reverse.get(symbol as usize).copied().unwrap_or(u8::MAX);
+        if padding != 0 || value == u8::MAX {
+            return Err(offset as i64);
         }
+        data_end += 1;
+        buffer = (buffer << width) | u64::from(value);
+        bits += width;
+        if bits >= 8 {
+            bits -= 8;
+            if decode {
+                octets.push(((buffer >> bits) & 255) as u8);
+            }
+        }
+        buffer &= (1u64 << bits) - 1;
     }
+    // Tail errors must not hide length or padding errors (#461).
     if !size.is_multiple_of(quantum) {
-        return (size as i64, 0);
+        return Err(size as i64);
     }
     let expected = expected_padding(width, data_end % quantum);
-    if expected < 0 || padding != expected {
-        return (data_end as i64, 0);
+    if expected < 0 || padding != expected as usize {
+        return Err(data_end as i64);
     }
-    let mut buffer: u64 = 0;
-    let mut bits = 0u32;
-    for symbol in &source[..data_end] {
-        buffer = (buffer << width) | index(alphabet, *symbol) as u64;
-        bits += width;
-        while bits >= 8 {
-            bits -= 8;
-        }
-        buffer &= (1u64 << bits) - 1;
+    if buffer != 0 {
+        return Err(data_end as i64 - 1);
     }
-    if bits > 0 && buffer & ((1u64 << bits) - 1) != 0 {
-        return (data_end as i64 - 1, 0);
-    }
-    (-1, data_end)
-}
-
-fn decoded(source: &[u32], data_end: usize, alphabet: &[u8], width: u32) -> Vec<u8> {
-    let mut octets = Vec::new();
-    let mut buffer: u64 = 0;
-    let mut bits = 0u32;
-    for symbol in &source[..data_end] {
-        buffer = (buffer << width) | index(alphabet, *symbol) as u64;
-        bits += width;
-        while bits >= 8 {
-            bits -= 8;
-            octets.push(((buffer >> bits) & 255) as u8);
-        }
-        buffer &= (1u64 << bits) - 1;
-    }
-    octets
+    Ok(octets)
 }
 
 fn base64_alphabet(native: Native, name: &str) -> Result<&'static [u8], Error> {
@@ -248,7 +258,8 @@ fn base85_alphabet(native: Native, name: &str) -> Result<Vec<u8>, Error> {
 }
 
 fn base85_encoded(octets: &[u8], name: &str, alphabet: &[u8]) -> String {
-    let mut result = String::new();
+    // Five characters per 4-octet group at most (`z` only shortens it).
+    let mut result = String::with_capacity(octets.len().div_ceil(4).checked_mul(5).unwrap_or(0));
     for chunk in octets.chunks(4) {
         let amount = chunk.len();
         let mut word: u64 = 0;
@@ -276,111 +287,139 @@ fn word_bytes(word: u64, out: &mut Vec<u8>, count: usize) {
     }
 }
 
-/// Первое неверное смещение или -1; `octets` — результат.
-fn base85_parsed(source: &[u32], name: &str, alphabet: &[u8], octets: &mut Vec<u8>) -> i64 {
-    let mut values: Vec<u64> = Vec::new();
-    let mut group_start = 0usize;
-    let size = source.len();
-    for (offset, symbol) in source.iter().enumerate() {
-        if name == "ascii85" && *symbol == u32::from('z') {
-            if !values.is_empty() {
+// Compile-time tables avoid per-symbol alphabet scans (#551).
+const ASCII85_REVERSE: [u8; 128] = {
+    let mut reverse = [u8::MAX; 128];
+    let mut value = 0;
+    while value < 85 {
+        reverse[value + 33] = value as u8;
+        value += 1;
+    }
+    reverse
+};
+const RFC1924_REVERSE: [u8; 128] = reverse_alphabet(RFC1924.as_bytes());
+
+// An optional borrowed sink preserves error order without collecting validation output (#459).
+fn base85_parsed(
+    source: &str,
+    name: &str,
+    alphabet: &[u8],
+    mut octets: Option<&mut Vec<u8>>,
+) -> i64 {
+    let reverse = if name == "ascii85" {
+        &ASCII85_REVERSE
+    } else {
+        &RFC1924_REVERSE
+    };
+    let mut word = 0u64;
+    let mut amount = 0usize;
+    let mut spelling = [0u8; 5];
+    let mut size = 0usize;
+    // Scalar enumeration preserves error offsets without materialising the input (#551).
+    for (offset, symbol) in source.chars().enumerate() {
+        size = offset + 1;
+        if name == "ascii85" && symbol == 'z' {
+            if amount != 0 {
                 return offset as i64;
             }
-            word_bytes(0, octets, 4);
-            group_start = offset + 1;
+            if let Some(octets) = octets.as_mut() {
+                word_bytes(0, octets, 4);
+            }
             continue;
         }
-        let value = index(alphabet, *symbol);
-        if value < 0 {
+        let value = reverse.get(symbol as usize).copied().unwrap_or(u8::MAX);
+        if value == u8::MAX {
             return offset as i64;
         }
-        if values.is_empty() {
-            group_start = offset;
-        }
-        values.push(value as u64);
-        if values.len() == 5 {
-            let word = values.iter().fold(0u64, |word, value| word * 85 + value);
+        spelling[amount] = symbol as u8;
+        amount += 1;
+        word = word * 85 + u64::from(value);
+        if amount == 5 {
             if word > 0xFFFF_FFFF {
                 return offset as i64;
             }
-            word_bytes(word, octets, 4);
-            values.clear();
-            group_start = offset + 1;
+            if let Some(octets) = octets.as_mut() {
+                word_bytes(word, octets, 4);
+            }
+            word = 0;
+            amount = 0;
         }
     }
-    if values.len() == 1 {
+    if amount == 1 {
         return size as i64;
     }
-    if !values.is_empty() {
-        let amount = values.len();
-        while values.len() < 5 {
-            values.push(84);
+    if amount != 0 {
+        for _ in amount..5 {
+            word = word * 85 + 84;
         }
-        let word = values.iter().fold(0u64, |word, value| word * 85 + value);
         if word > 0xFFFF_FFFF {
             return size as i64 - 1;
         }
-        let mut partial = Vec::new();
-        word_bytes(word, &mut partial, amount - 1);
-        let canonical = base85_encoded(&partial, name, alphabet);
-        let end = (group_start + amount).min(size);
-        let spelling: String = source[group_start..end]
-            .iter()
-            .filter_map(|symbol| char::from_u32(*symbol))
-            .collect();
-        if canonical != spelling {
+        // Fixed buffers keep the canonical tail check allocation-free (#551).
+        let partial = (word as u32).to_be_bytes();
+        let partial = &partial[..amount - 1];
+        let mut padded = [0u8; 4];
+        padded[..amount - 1].copy_from_slice(partial);
+        let mut word = u32::from_be_bytes(padded);
+        let mut canonical = [0u8; 5];
+        for digit in canonical.iter_mut().rev() {
+            *digit = alphabet[(word % 85) as usize];
+            word /= 85;
+        }
+        if canonical[..amount] != spelling[..amount] {
             return size as i64 - 1;
         }
-        octets.extend(partial);
+        if let Some(octets) = octets {
+            octets.extend_from_slice(partial);
+        }
     }
     -1
 }
 
-fn qp_token(octet: u8, trailing: bool) -> String {
+fn qp_token(octet: u8, trailing: bool) -> ([u8; 3], usize) {
     if octet == 61 || !(32..=126).contains(&octet) || ((octet == 9 || octet == 32) && trailing) {
-        format!("={octet:02X}")
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        (
+            [b'=', HEX[usize::from(octet >> 4)], HEX[usize::from(octet & 15)]],
+            3,
+        )
     } else {
-        char::from(octet).to_string()
+        ([octet, 0, 0], 1)
     }
 }
 
 /// Мягкие переносы `=\r\n`: строка не длиннее 76 (75, если токены ещё есть).
-fn qp_folded(result: &mut String, tokens: &mut Vec<String>, hard_break: bool) {
-    let mut line = String::new();
-    while !tokens.is_empty() {
-        let limit = if tokens.len() > 1 { 75 } else { 76 };
-        if line.len() + tokens[0].len() > limit {
-            result.push_str(&line);
-            result.push_str("=\r\n");
-            line.clear();
-            continue;
-        }
-        line.push_str(&tokens.remove(0));
+fn qp_folded(result: &mut Vec<u8>, column: &mut usize, octet: u8, trailing: bool) {
+    let (token, width) = qp_token(octet, trailing);
+    let limit = if trailing { 76 } else { 75 };
+    if *column + width > limit {
+        result.extend_from_slice(b"=\r\n");
+        *column = 0;
     }
-    result.push_str(&line);
-    if hard_break {
-        result.push_str("\r\n");
-    }
+    result.extend_from_slice(&token[..width]);
+    *column += width;
 }
 
 fn qp_encode(origin: &[u8]) -> Vec<u8> {
-    let mut result = String::new();
-    let mut tokens = Vec::new();
+    // Never shorter than the input: plain text needs no growth at all.
+    let mut result = Vec::with_capacity(origin.len());
+    let mut column = 0;
     let size = origin.len();
     let mut offset = 0;
     while offset < size {
         if origin[offset] == 13 && offset + 1 < size && origin[offset + 1] == 10 {
-            qp_folded(&mut result, &mut tokens, true);
+            result.extend_from_slice(b"\r\n");
+            column = 0;
             offset += 2;
             continue;
         }
+        // Lookahead preserves the final-token limit without buffering a line (#460).
         let trailing = offset + 1 == size
             || (offset + 2 < size && origin[offset + 1] == 13 && origin[offset + 2] == 10);
-        tokens.push(qp_token(origin[offset], trailing));
+        qp_folded(&mut result, &mut column, origin[offset], trailing);
         offset += 1;
     }
-    qp_folded(&mut result, &mut tokens, false);
-    result.into_bytes()
+    result
 }
 
 fn qp_hex(octet: u8) -> i64 {
@@ -392,7 +431,8 @@ fn qp_hex(octet: u8) -> i64 {
     }
 }
 
-fn qp_parsed(octets: &[u8], decoded: &mut Vec<u8>) -> i64 {
+// Validation borrows only the input; emission does not change rejection order (#459).
+fn qp_parsed(octets: &[u8], mut decoded: Option<&mut Vec<u8>>) -> i64 {
     let size = octets.len();
     let mut offset = 0usize;
     let mut column = 0usize;
@@ -402,7 +442,9 @@ fn qp_parsed(octets: &[u8], decoded: &mut Vec<u8>) -> i64 {
             if offset + 1 >= size || octets[offset + 1] != 10 {
                 return offset as i64;
             }
-            decoded.extend([13, 10]);
+            if let Some(decoded) = decoded.as_mut() {
+                decoded.extend([13, 10]);
+            }
             column = 0;
             offset += 2;
             continue;
@@ -429,7 +471,9 @@ fn qp_parsed(octets: &[u8], decoded: &mut Vec<u8>) -> i64 {
             if column + 3 > 76 {
                 return (offset + (76 - column)) as i64;
             }
-            decoded.push((high * 16 + low) as u8);
+            if let Some(decoded) = decoded.as_mut() {
+                decoded.push((high * 16 + low) as u8);
+            }
             column += 3;
             offset += 3;
             continue;
@@ -446,10 +490,417 @@ fn qp_parsed(octets: &[u8], decoded: &mut Vec<u8>) -> i64 {
         if column + 1 > 76 {
             return offset as i64;
         }
-        decoded.push(octet);
+        if let Some(decoded) = decoded.as_mut() {
+            decoded.push(octet);
+        }
         column += 1;
         offset += 1;
     }
     -1
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #467: the base85 reservation (five characters per started 4-octet
+    /// group) is an upper bound at every group boundary, so encoding never
+    /// grows the string; quoted-printable reserves the input size.
+    #[test]
+    fn base85_reservation_bounds_the_output() {
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Encode, name).unwrap();
+            for size in 0..=13usize {
+                for fill in [0u8, 0x41, 0xff] {
+                    let input = vec![fill; size];
+                    let encoded = base85_encoded(&input, name, &alphabet);
+                    assert!(encoded.len() <= size.div_ceil(4) * 5, "{name} {size} {fill}");
+                }
+            }
+        }
+        assert!(qp_encode(b"plain text").len() >= b"plain text".len());
+    }
+
+    fn base85_result(
+        source: &str,
+        name: &str,
+        alphabet: &[u8],
+        out: Option<&mut Vec<u8>>,
+    ) -> i64 {
+        let invalid = base85_parsed(source, name, alphabet, out);
+        assert_eq!(base85_parsed(source, name, alphabet, None), invalid);
+        invalid
+    }
+
+    fn qp_result(source: &[u8], out: Option<&mut Vec<u8>>) -> i64 {
+        let invalid = qp_parsed(source, out);
+        assert_eq!(qp_parsed(source, None), invalid);
+        invalid
+    }
+
+    #[test]
+    fn base85_551_alphabet_symbols_round_trip() {
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Decode, name).unwrap();
+            for (value, symbol) in alphabet.iter().enumerate() {
+                let mut digits = [alphabet[0]; 5];
+                digits[4] = *symbol;
+                let source = std::str::from_utf8(&digits).unwrap();
+                let mut out = Vec::new();
+                assert_eq!(base85_result(source, name, &alphabet, Some(&mut out)), -1);
+                assert_eq!(out, (value as u32).to_be_bytes());
+                let encoded = base85_encoded(&out, name, &alphabet);
+                if name == "ascii85" && value == 0 {
+                    assert_eq!(encoded, "z");
+                } else {
+                    assert_eq!(encoded, source);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn base85_551_error_order_and_offsets() {
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Decode, name).unwrap();
+            let zero = char::from(alphabet[0]);
+            let high = char::from(alphabet[84]);
+            for (source, expected) in [
+                (format!("{zero}{zero}{zero}{zero}{zero}😀"), 5),
+                (format!("{zero}{high}é"), 2),
+                (format!("{high}{high}é"), 2),
+                (format!("{zero}{zero}{zero}{zero}{zero}{zero}"), 6),
+                (format!("{zero}{zero}{zero}{zero}{zero}{high}{high}"), 6),
+            ] {
+                let mut out = Vec::new();
+                assert_eq!(
+                    base85_result(&source, name, &alphabet, Some(&mut out)),
+                    expected,
+                    "{name}: {source}"
+                );
+            }
+        }
+        let alphabet = base85_alphabet(Native::Base85Decode, "ascii85").unwrap();
+        for (source, expected) in [("zz!!😀", 4), ("z!!z", 3), ("zz!", 3), ("z!u", 2)] {
+            let mut out = Vec::new();
+            assert_eq!(
+                base85_result(source, "ascii85", &alphabet, Some(&mut out)),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn base85_551_large_round_trip() {
+        let input: Vec<u8> = (0..100_000).map(|n| (n * 19) as u8).collect();
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Decode, name).unwrap();
+            let encoded = base85_encoded(&input, name, &alphabet);
+            let mut out = Vec::new();
+            assert_eq!(base85_result(&encoded, name, &alphabet, Some(&mut out)), -1);
+            assert_eq!(out, input);
+        }
+    }
+
+    #[test]
+    fn validity_459_base85() {
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Decode, name).unwrap();
+            let zero = char::from(alphabet[0]);
+            let high = char::from(alphabet[84]);
+            for (source, expected) in [
+                (String::new(), -1),
+                (format!("{zero}"), 1),
+                (format!("{zero}é"), 1),
+                (format!("{zero}😀"), 1),
+                (format!("{high}{high}{high}{high}{high}é"), 4),
+                (format!("{high}{high}"), 1),
+                (format!("{zero}{high}"), 1),
+            ] {
+                let mut out = Vec::new();
+                assert_eq!(
+                    base85_result(&source, name, &alphabet, Some(&mut out)),
+                    expected,
+                    "{name}: {source}"
+                );
+            }
+            for size in 0..=12 {
+                let input: Vec<u8> = (0..size).map(|n| (n * 19) as u8).collect();
+                let spelling = base85_encoded(&input, name, &alphabet);
+                let mut out = Vec::new();
+                assert_eq!(
+                    base85_result(&spelling, name, &alphabet, Some(&mut out)),
+                    -1
+                );
+                assert_eq!(out, input);
+            }
+            for (source, expected) in if name == "ascii85" {
+                [("z", -1), ("y", 0), ("!z", 1), ("z!", 2)]
+            } else {
+                [("z", 1), ("y", 1), ("0000z", -1), ("0000y", -1)]
+            } {
+                let mut out = Vec::new();
+                assert_eq!(
+                    base85_result(source, name, &alphabet, Some(&mut out)),
+                    expected
+                );
+                if name == "ascii85" && source == "z" {
+                    assert_eq!(out, [0; 4]);
+                }
+            }
+        }
+        assert!(base85_alphabet(Native::Base85Decode, "z85").is_err());
+    }
+
+    #[test]
+    fn validity_459_quoted_printable() {
+        for (source, expected) in [
+            ("", -1),
+            ("a=Q0", 1),
+            ("a=", 1),
+            ("a=0", 1),
+            ("=ff", -1),
+            ("a\r", 1),
+            ("a\n", 1),
+            ("a ", 1),
+            ("a\t", 1),
+            ("a \r\n", 1),
+            ("a=\r\nb", -1),
+            ("a\r\nb", -1),
+        ] {
+            let mut out = Vec::new();
+            assert_eq!(
+                qp_result(source.as_bytes(), Some(&mut out)),
+                expected,
+                "{source:?}"
+            );
+            if source == "=ff" {
+                assert_eq!(out, [255]);
+            }
+        }
+        for (source, expected) in [
+            ("a".repeat(76), -1),
+            ("a".repeat(77), 76),
+            (format!("{}=FF", "a".repeat(74)), 76),
+            (format!("{}=Q0", "a".repeat(75)), 75),
+            (format!("{}=\r\n", "a".repeat(76)), 76),
+        ] {
+            assert_eq!(
+                qp_result(source.as_bytes(), Some(&mut Vec::new())),
+                expected
+            );
+        }
+        let input: Vec<u8> = (0..=255).collect();
+        let mut out = Vec::new();
+        assert_eq!(qp_result(&qp_encode(&input), Some(&mut out)), -1);
+        assert_eq!(out, input);
+    }
+
+    fn base_result(source: &str, alphabet: &[u8], width: u32, quantum: usize) -> Result<Vec<u8>, i64> {
+        let result = base_parsed(source, alphabet, width, quantum, true);
+        assert_eq!(
+            base_parsed(source, alphabet, width, quantum, false).map(|_| ()),
+            result.as_ref().map(|_| ()).map_err(|offset| *offset)
+        );
+        result
+    }
+
+    #[test]
+    fn base_codec_vectors() {
+        for (input, b64, b32) in [
+            ("", "", ""),
+            ("f", "Zg==", "MY======"),
+            ("fo", "Zm8=", "MZXQ===="),
+            ("foo", "Zm9v", "MZXW6==="),
+            ("foob", "Zm9vYg==", "MZXW6YQ="),
+            ("fooba", "Zm9vYmE=", "MZXW6YTB"),
+            ("foobar", "Zm9vYmFy", "MZXW6YTBOI======"),
+        ] {
+            for name in ["standard", "url"] {
+                let alphabet = base64_alphabet(Native::Base64Decode, name).unwrap();
+                assert_eq!(encoded(input.as_bytes(), alphabet, 6, 4), b64);
+                assert_eq!(base_result(b64, alphabet, 6, 4).unwrap(), input.as_bytes());
+            }
+            assert_eq!(encoded(input.as_bytes(), BASE32.as_bytes(), 5, 8), b32);
+            assert_eq!(
+                base_result(b32, BASE32.as_bytes(), 5, 8).unwrap(),
+                input.as_bytes()
+            );
+        }
+        for (name, spelling) in [("standard", "+/8="), ("url", "-_8=")] {
+            let alphabet = base64_alphabet(Native::Base64Decode, name).unwrap();
+            assert_eq!(encoded(&[251, 255], alphabet, 6, 4), spelling);
+            assert_eq!(base_result(spelling, alphabet, 6, 4).unwrap(), [251, 255]);
+        }
+        assert!(base64_alphabet(Native::Base64Decode, "base64url").is_err());
+    }
+
+    #[test]
+    fn base_codec_invalid_offsets() {
+        for name in ["standard", "url"] {
+            let alphabet = base64_alphabet(Native::Base64Decode, name).unwrap();
+            for (source, offset) in [
+                ("Zm!v", 2),
+                ("Zm é", 2),
+                ("Zm9vé", 4),
+                ("Zm9v😀", 4),
+                ("Z=g=", 2),
+                ("=AAA", 1),
+                ("====", 0),
+                ("Z===", 1),
+                ("Zg======", 2),
+                ("Zh==", 1),
+                ("Zm9=", 2),
+                ("Zh=", 3),
+                ("Zh==!", 4),
+                ("Z", 1),
+                ("Zg", 2),
+                ("Zm8", 3),
+                ("Zg==\n", 4),
+            ] {
+                assert_eq!(
+                    base_result(source, alphabet, 6, 4),
+                    Err(offset),
+                    "{name}: {source}"
+                );
+            }
+            let other = if name == "standard" { "-_8=" } else { "+/8=" };
+            assert_eq!(base_result(other, alphabet, 6, 4), Err(0));
+        }
+        for (source, offset) in [
+            ("M!======", 1),
+            ("MYé=====", 2),
+            ("MY😀=====", 2),
+            ("My======", 1),
+            ("M=Y=====", 2),
+            ("=AAAAAAA", 1),
+            ("========", 0),
+            ("M=======", 1),
+            ("MY==============", 2),
+            ("MZ======", 1),
+            ("MZXR====", 3),
+            ("MZXW7===", 4),
+            ("MZXW6YR=", 6),
+            ("MZ=====", 7),
+            ("MZ======!", 8),
+        ] {
+            assert_eq!(
+                base_result(source, BASE32.as_bytes(), 5, 8),
+                Err(offset),
+                "{source}"
+            );
+        }
+        for size in 1..8 {
+            assert_eq!(
+                base_result(&"A".repeat(size), BASE32.as_bytes(), 5, 8),
+                Err(size as i64)
+            );
+        }
+    }
+
+    #[test]
+    fn base_codec_long_round_trip() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(100_000).collect();
+        for (alphabet, width, quantum) in [
+            (BASE32.as_bytes(), 5, 8),
+            (BASE64_STANDARD.as_bytes(), 6, 4),
+            (BASE64_URL.as_bytes(), 6, 4),
+        ] {
+            let spelling = encoded(&input, alphabet, width, quantum);
+            assert_eq!(
+                base_result(&spelling, alphabet, width, quantum).unwrap(),
+                input
+            );
+            let invalid = format!("{spelling}é");
+            assert_eq!(
+                base_result(&invalid, alphabet, width, quantum),
+                Err(spelling.len() as i64)
+            );
+        }
+    }
+
+    #[test]
+    fn qp_empty() {
+        assert_eq!(qp_encode(b""), b"");
+    }
+
+    #[test]
+    fn qp_column_boundaries() {
+        for size in [75, 76] {
+            let input = vec![b'a'; size];
+            assert_eq!(qp_encode(&input), input);
+            let input = [input, b"\r\n".to_vec()].concat();
+            assert_eq!(qp_encode(&input), input);
+        }
+        assert_eq!(
+            qp_encode(&[b'a'; 77]),
+            format!("{}=\r\naa", "a".repeat(75)).as_bytes()
+        );
+        for (prefix, suffix, expected) in [
+            (73, "=", format!("{}=3D", "a".repeat(73))),
+            (73, "=b", format!("{}=\r\n=3Db", "a".repeat(73))),
+            (74, "=", format!("{}=\r\n=3D", "a".repeat(74))),
+            (75, "=", format!("{}=\r\n=3D", "a".repeat(75))),
+        ] {
+            let input = format!("{}{suffix}", "a".repeat(prefix));
+            assert_eq!(qp_encode(input.as_bytes()), expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn qp_whitespace_and_line_breaks() {
+        for (input, expected) in [
+            ("=", "=3D"),
+            ("a b\tc", "a b=09c"),
+            ("a  ", "a =20"),
+            ("a\t", "a=09"),
+            ("a \t", "a =09"),
+            ("a  \r\n", "a =20\r\n"),
+            ("a\t\r\n", "a=09\r\n"),
+            ("\r\na\r\n\r\nb", "\r\na\r\n\r\nb"),
+            ("a\nb\rc", "a=0Ab=0Dc"),
+            ("\r\r\n\n", "=0D\r\n=0A"),
+        ] {
+            assert_eq!(qp_encode(input.as_bytes()), expected.as_bytes());
+        }
+        let input = format!("{}  b", "a".repeat(74));
+        assert_eq!(
+            qp_encode(input.as_bytes()),
+            format!("{} =\r\n b", "a".repeat(74)).as_bytes()
+        );
+    }
+
+    #[test]
+    fn qp_arbitrary_octets() {
+        for octet in 0u8..=255 {
+            let expected = match octet {
+                33..=60 | 62..=126 => char::from(octet).to_string(),
+                _ => format!("={octet:02X}"),
+            };
+            assert_eq!(qp_encode(&[octet]), expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn qp_long_physical_line() {
+        let input: Vec<u8> = b"a= \t\x80\xff\rX\nZ"
+            .iter()
+            .copied()
+            .cycle()
+            .take(10_000)
+            .collect();
+        let encoded = qp_encode(&input);
+        let text = std::str::from_utf8(&encoded).unwrap();
+        let lines: Vec<_> = text.split("\r\n").collect();
+        assert!(lines.len() > 1);
+        for (index, line) in lines.iter().enumerate() {
+            assert!(line.len() <= 76);
+            if index + 1 < lines.len() {
+                assert!(line.ends_with('='));
+            }
+        }
+        let mut decoded = Vec::new();
+        assert_eq!(qp_parsed(&encoded, Some(&mut decoded)), -1);
+        assert_eq!(decoded, input);
+    }
+}

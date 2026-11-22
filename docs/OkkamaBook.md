@@ -18,21 +18,46 @@ book and the specification disagree, the specification and the test suite
 
 ```sh
 okkama run test.ok
-okkama build test.ok --target jvm -o out.class
-okkama build test.ok --target sparrow -o out.spb
+okkama build test.ok -o out.spb
 sparrow out.spb
 ```
 
-`run` executes source with the Rust interpreter. `build` emits the selected
-bytecode; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
-version is called Tomato). `--backend` remains an alias
-for `--target`. `sparrow check out.spb` verifies without execution.
+`run` executes source on Sparrow (JIT) by default, including inline tests
+with `run -t`. Sparrow is the only Okkama engine (#584); the IR interpreter
+was removed, and the JVM backend was removed in 0.6.0 (#585;
+0.5.8 is the last release with it).
+
+`okkama repl` is an interactive session (#588). Enter statements, expressions,
+declarations (`object`, `enum`, `role`) or imports; a trailing expression's
+value is printed:
+
+```text
+okkama> let total = 40
+okkama> total + 2
+42 (int)
+```
+
+- **One live session.** Variables keep their values between inputs, and only
+  the new input runs: earlier side effects never repeat.
+- **Real ownership lifetimes.** A variable that owns a resource keeps it alive.
+  The resource is destroyed once, by the usual rules, when the variable is
+  rebound or no longer kept, and on `:reset` or exit, in reverse creation order.
+- **Not kept between inputs:** closures and Futures.
+- **Rejected declarations.** A declaration that would change how earlier values
+  are owned (for example a new type with a `destroy` doing a role an existing
+  object holds) is rejected; `:reset` starts afresh.
+- **Commands:** `:vars`, `:decls`, `:reset`, `:help`, `:quit`.
+- **Terminal input:** the arrows move the cursor and walk the history
+  (`~/.okkama_history`), and Ctrl-R searches it. Without a terminal, stdin is
+  read line by line, so scripts can be piped in.
+`build` emits Sparrow
+bytecode, the only target; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
+version is called Tomato). `sparrow check out.spb` verifies without execution.
 See the [Rust implementation guide](../okkama-rs/README.md) for building the
 tools and current runtime coverage.
 
-Every engine can bound a run, for untrusted programs or services: Sparrow
-(`okkama exec`, `okkama run --engine sparrow`, `sparrow run`), the IR
-engine (`okkama run`) and the JVM (`okkama run --engine jvm`). Every budget is
+Sparrow can bound a run, for untrusted programs or services (`okkama exec`,
+`okkama run`, `sparrow run`). Every budget is
 off by default and costs nothing then:
 
 ```sh
@@ -56,14 +81,6 @@ timeout; another single native operation (a long BigInt division, an Argon2
 hash) finishes first, but with `--timeout` the command line ends the run at
 most a second after the time is up. A BigInt product that cannot fit is
 refused before it is computed.
-
-Steps are counted alike on every engine, so a limit that is enough on one is
-enough on the others. On the JVM the steps are counted by code generated only
-when `--max-steps` is given, and the memory budget is the Java heap (`-Xmx`,
-which includes the runtime's own objects) and the size of each thread stack.
-A JAR built with `okkama build --target jvm --budgeted` takes its step limit
-from `java -Dokkama.steps=N -jar app.jar`; `-Xmx` with `-Dokkama.memory=N`
-gives any JAR the memory report.
 
 ---
 
@@ -560,9 +577,8 @@ is converted (`1.rat()`, `(1 / 2).float()`).
 `rat.string()` returns canonical `n/d` text (or just `n` for denominator
 one), `.int()` truncates toward zero, `.byte()` truncates and checks `0..255`,
 and `.float()` is the explicit lossy boundary. `.numerator()` and
-`.denominator()` return exact decimal strings
-because their arbitrary-precision values can exceed the current `int`
-representation.
+`.denominator()` return the parts of the canonical form as `int`s (the
+denominator is positive); an `int` holds any of them exactly.
 
 `int.rat()` and `byte.rat()` are exact conversions from integer categories.
 `float.rat()` explicitly rationalizes the float's canonical decimal value
@@ -673,6 +689,10 @@ Portable builtin behaviors are available on every string (Chapter 10):
 "мир и мир".find_last("мир");        // Maybe.some(6): a code point index
 "Straße".upper();                    // "STRASSE": full Unicode case, no locale
 ```
+
+Case that depends on the language, such as the Turkish dotted and dotless i,
+is `LocalizedCase(text:, locale:)` from `locale/case`, with `lower()`,
+`upper()` and `title()`.
 
 A `char` is one code point. `"Жук".characters()` is the `@char` of a string,
 `letter.code()` its code point, `letter.string()` (or `string(letter)`) its
@@ -981,7 +1001,7 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 | `int`, `float` | `abs()`, `sign()`, `pow(exponent)`, `sqrt()` (a `float`) — `int.pow(int)` is the exact `int` (a negative exponent is an error), `float.pow(float)` a `float` |
 | `int`, `float` | `min(other)`, `max(other)` (the receiver when they are equal), `clamp(low, high)` (`low` above `high` is an error) — of the receiver's type |
 | `float` | `floor()`, `ceil()`, `round()` (half away from zero), `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `atan2(y)` (`x.atan2(y)` is the angle of the point (x, y)) — each a `float`, and a result that is not finite (`0.0.ln()`, `1000.0.exp()`) is an error, as for every float; `finite()`, `nan()` (a `bool`) |
-| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (decimal strings), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
+| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (`int`; the denominator is positive), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
 | numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` with the same category |
 | `char` | `order(other)`, `code()` (the code point, an `int`), `string()`; `char(code)` and `code.char()` make one from an `int` (a Unicode scalar value, else an error) |
 | `int`, `byte` | `bit_count()`, `leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`, `rotate_right(n)`, `reverse_bits()`, `swap_bytes()` |
@@ -999,7 +1019,6 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 In precedence order (loosest first), as parsed:
 
 ```text
-?? … !!                compact choice    (Chapter 24.3; never nested)
 else                   optional fallback (Maybe<T> else T, map[k] else v)
 ||                     boolean or        (bool operands only)
 &&                     boolean and       (bool operands only)
@@ -1018,7 +1037,7 @@ postfix                calls, member access, indexing, unpack `...`
 ```
 
 `try?` and `try!` (Chapter 14.5) are prefix forms written without a space
-after `try`; they cover the whole operand to their right up to `else` or `??`,
+after `try`; they cover the whole operand to their right up to `else`,
 so `try? f() + 1 else 0` is `(try? (f() + 1)) else 0`.
 
 Binary bitwise operators are left-associative. `flags & mask != 0` means
@@ -1101,6 +1120,27 @@ let size = if n > 5 { "large" } else if n > 2 { "medium" } else { "small" };
 
 An `else if` chain is an expression too: every link needs its `else`, and
 all branches produce one type.
+
+When each branch is a single expression, the compact form spells the same
+`if` with colons:
+
+```okkama
+let x = if ready: 1 else: 0;
+let label = if active: "Active" else: "Inactive";
+let size = if n > 5: "large" else: if n > 2: "medium" else: "small";
+let result = if condition:
+    calculate()
+else:
+    fallback();
+```
+
+Both branches are required, each is one expression (not a block), and the two
+forms do not mix (`if c: a else { b; }` is an error). An `else:` goes to the
+nearest `if`, so `if a: if b: 1 else: 2 else: 3` reads as written;
+parentheses group as anywhere else. `else:` never starts a fallback, so a
+branch's own fallback takes parentheses: `if ready: (cache else 0) else: 1`.
+Semantics are those of the block form: the condition is evaluated once and
+only the chosen branch runs.
 
 `match` may also be used in expression position with the same syntax as the
 match statement (Chapter 12).
@@ -1229,6 +1269,11 @@ match status {
   Branches of a value-producing `match` must produce the same type.
 - A `match` over a payload-free enum keeps the older rule: a statement match
   may omit cases; `okkama lint` reports it as `non-exhaustive-match`.
+- A case that can never be chosen is an error: an enum case listed twice
+  (`Duplicate variant pattern`), a literal value listed twice
+  (`Duplicate case pattern`), and an `else` after cases that already cover every
+  value of an enum or `bool` (`Unreachable else: the cases already cover every
+  value`).
 
 ### 12.5 `for`
 
@@ -1507,6 +1552,11 @@ confirm condition else panic "Invariant lost"; // uncatchable emergency
 form for internal invariants, `else throw` for failures a caller is expected
 to handle, and `else panic` for an emergency with a deterministic string.
 
+An `else` at the top level of the condition belongs to `confirm`, also when
+the condition ends in an index: `confirm size >= pair[1] else panic "short";`
+runs the panic (#521). An index or `Maybe` fallback inside the condition is
+written in parentheses: `confirm size >= (pair[5] else 0) else throw …;`.
+
 ### 14.2 Error enums, `Error`, `throw`, and `panic`
 
 The preferred way to declare errors is an **error enum**: an enum marked
@@ -1640,8 +1690,10 @@ catch e is DbError { throw InvoiceError.storage(e); }   // text(): InvoiceError.
 ```
 
 Plain cases have no such payload, so no null or sentinel is necessary. Host
-diagnostics also keep the runtime cause chain and render `Caused by:` entries
-with source stacks.
+diagnostics also keep the runtime cause chain and render `Caused by:` entries,
+each with the place and source stack of its own raise. Rethrowing the caught
+value itself (`throw e;`) is a rethrow: it keeps the failure's origin, stack and
+causes and is reported once, not as its own cause.
 Default CLI diagnostics show the concrete Error type, public message, optional
 application context, causes, source stacks and secondary cleanup failures.
 `-d` additionally shows the evaluator trace; it is not needed to see errors.
@@ -1654,9 +1706,10 @@ separate structured model through `Interpreter.diagnostic(failure)`.
 
 ```okkama
 let rows = try? db.query(sql) else 0;       // Maybe<int>, then a fallback
-let text = try? fetch(url)
-    ?? .some(body): body
-    !! .none: "offline";
+let text = match try? fetch(url) {
+    case Maybe.some(body): body;
+    case Maybe.none: "offline";
+};
 let config = try! Config.parse(source);     // "cannot fail" → panic if it does
 ```
 
@@ -1675,7 +1728,7 @@ let config = try! Config.parse(source);     // "cannot fail" → panic if it doe
   A thrown error becomes the panic `Unexpected error: <text()>` located at the
   `try!`.
 - Both are written without a space after `try` and cover the whole operand to
-  the right up to `else` or `??`. Both catch thrown errors only: panics and
+  the right up to `else`. Both catch thrown errors only: panics and
   programming errors pass through, and cleanup runs as for `try`.
 
 ## Chapter 15. `defer`
@@ -2347,9 +2400,9 @@ identity; it does not copy the object.
 
 An escaping action transfers ownership of captured local resources through the
 same rules as an object containing those resources. Unreferenced locals are
-not retained. A reference to `self`, or to the implicit receiver of
-`fake.storage`, retains that receiver. Access permissions from the declaring
-action remain in force even when the receiver is not captured.
+not retained. A reference to `self` or one of its fields or actions retains
+that receiver. Access permissions from the declaring action remain in force
+even when the receiver is not captured.
 
 Anonymous actions use ordinary lexical scope. A local binding becomes visible
 only after its initializer has been checked, so an anonymous action assigned to
@@ -2459,7 +2512,12 @@ The rules keep the stored value right for every later call:
   or a function value are trusted: that the input answers the same each time
   is part of the contract.
 - The value holds no resource (an object with `destroy`), because it would
-  outlive the scope that releases it.
+  outlive the scope that releases it. A function value or a role value
+  counts as a resource only if it can hold one in this program: a function
+  type when some closure of that type captures a resource, a role when some
+  object that does it is a resource. The compiler decides this over the
+  whole program, so a generic library may keep a closure or a role value in
+  a `once let` for every caller that passes plain ones (#520).
 
 A slot is not part of the object's value. `==`, map keys and `Dumper` ignore
 it, so an object compares equal before and after its first answer. A
@@ -2543,10 +2601,44 @@ a field transfers them. A transfer, like passing a successor value, does not
 prove that the receiver ever calls it. A bound action (`later.count` without a
 call) carries its successor receiver's obligation by the same rules, while a
 direct call `later.count()`, and a chain such as `bottle.opened().is_open()`,
-uses the receiver at once. Await transfers a successor future's
-obligation to its result. Runtime discard guards remain for dynamic cases.
+uses the receiver at once. An async successor's obligation moves into its
+future, which must be awaited or handed on: await transfers the obligation to
+its result; passing, returning or storing the future, or spawning it, transfers
+the future itself. A successor future is accepted where its plain future is
+expected, `Future<Counter>` for `Counter(n: 1).bumped()`: as an argument, a
+field or a declared result, and that boundary is the use (#790). A typed local
+(`let pending is Future<Counter> = …`) is not a handoff: the local keeps the
+obligation until it is awaited or handed on. The conversion goes one way, the
+result type stays the same, and there is no `Future<^C>` syntax or general
+future covariance. The receiver awaits an ordinary `Future<Counter>`: like
+passing a successor value, handing the future on does not prove the transition
+is used. Reading `done()` or `cancelled()` does not. An explicit
+`cancel()` discharges the obligation: the program decides, in its text, that
+the transition will not happen. Runtime discard guards remain for dynamic cases.
 These checks concern language-level consumption, not persistence or business
 usefulness; they do not forbid using an already consumed object again.
+
+```okkama
+object Counter {
+    has n is int;
+    Counter(:n);
+    async bumped() is ^Counter { ^n = n + 1; }
+    n() is int { n; }
+}
+
+object Waiter {
+    Waiter();
+    async take(f is Future<Counter>) is int {
+        let c = await f;
+        c.n();
+    }
+}
+
+async main() is int {
+    let pending = Counter(n: 1).bumped();
+    await Waiter().take(pending);   // the handoff uses `pending`
+}
+```
 
 A successor names a real domain transition or its resulting state, such as
 `opened()`, `advanced()`, or `enqueued(value)`. It is not a license to expose
@@ -2690,7 +2782,10 @@ A lazy ordinary async call retains its receiver and evaluated arguments in the
 ownership graph before it starts. An escaping Future transfers fresh owned
 dependencies; borrowed outer resources retain their existing owner. Cancelling
 before startup or never awaiting the Future still permits exactly-once cleanup
-at the owning scope's exit.
+at the owning scope's exit. Once the action completes, the inputs its result
+does not keep are destroyed before the Future publishes that result. Runtime
+operations (channel sends and receives, collectors) keep their inputs until the
+Future itself goes.
 
 Fresh identities in one acquired aggregate register in creation order, so map
 key sorting and closure capture enumeration cannot change reverse cleanup order.
@@ -2741,7 +2836,7 @@ that result. A valued `last resource;` transfers the reachable
 resource out of its loop; `last;` without a value keeps ordinary loop control.
 
 The runtime can omit ownership walks for a completed immutable object only when
-it has no destroy bodies, intrinsic state or fake storage, and every actual field
+it has no destroy bodies or intrinsic state, and every actual field
 is already proven resource-free. Its detached field table is frozen before that
 proof is retained. Declared types alone are insufficient. Futures, actions,
 capability-bearing fields and uncertified host objects keep conservative traversal.
@@ -2971,6 +3066,20 @@ total > Money(cents: 300);                           // order() == Order.greater
   `Duration` (`+ -`, `-a`, ordering), `Instant` and `MonotonicInstant`
   (`+ Duration`, `- Duration`, `- Instant`, ordering), `Decimal` (ordering).
 
+Ordinary std integer quantities use arbitrary-precision `int` (#511):
+`Json.integer()` and `Row.integer(name)` return `int`, their optional readers
+return `Maybe<int>` or `Presence<int>`, and `Duration.nanoseconds()` returns
+`int`. `Json.int()` and `Row.int(name)` still require the signed 64-bit range.
+`Decimal.coefficient()`, `BigRational.numerator()` / `denominator()`, HTTP body
+lengths, plist integers and UIDs, sizes and counters also use `int`. Domain
+objects and the explicit `BigInt` numeric wrapper remain available.
+
+Pass `7` where an ordinary API formerly needed `BigInt(7)`; use an integer
+result directly instead of appending `.int()`. Integer quotient is explicitly
+`(a / b).int()` (truncation toward zero); `%` keeps the dividend's sign.
+For untrusted exponents use `BoundedPower(base: 10).int(exponent, 4096)` from
+`numbers/bigint`; it checks the result-bit budget before an oversized product.
+
 ## Chapter 23. Role Fakes and Testing
 
 Elegant Objects argues that an interface should ship its own fake so tests
@@ -3000,44 +3109,13 @@ role Package {
   shape, parameter types, return type) and may read fields and stage
   successor updates through `^field`.
 
-### 23.1 Hidden fake storage
+For mutable test-local values, use `Cell` from `cell`: `value()` reads the
+value and `replace(value)` updates it. Use `Atomic` from `async/atomic` for
+async code or state kept in object and fake fields; `Cell` cannot be stored in
+fields. A fake field such as `has calls is Atomic<int> = Atomic(0);` gives each
+construction its own state. Ordinary test objects use the same containers.
 
-Fake actions may also use a small mutable KV store for test scenarios where a
-double must remember calls or emulate a repository:
-
-```okkama
-role Books {
-    remember(id is int, title is string) is void;
-    title(id is int) is string;
-
-    fake {
-        remember(id is int, title is string) is void {
-            fake.storage.set(id, title);
-        }
-
-        title(id is int) is string {
-            fake.storage.get(id);
-        }
-    }
-}
-```
-
-The complete positional-only API is `set(key, value)`, `get(key)`,
-`has(key)`, `remove(key)`, `clear()`, and `size()`. Missing `get` and `remove`
-keys are programming errors—there is no null or optional result. Keys follow
-ordinary map-key restrictions; `any`, `byte`, and composite keys are invalid.
-Values may include objects and opaque `any`.
-
-This is a test-runtime intrinsic, not a mutable Okkama map. It is available
-only as a direct `fake.storage.<operation>(...)` call inside that fake's action
-bodies. It cannot be stored, returned, passed, exposed as `self.storage`, or
-observed through fields, equality, debug output, conformance, or nominal type.
-
-Each `Role.fake()` call creates an isolated storage identity. A fake and all
-of its successors share one identity, so repository state survives an
-ordinary `is ^Role` transition without copying the KV contents.
-
-### 23.2 Test blocks
+### 23.1 Test blocks
 
 Test blocks are declared at module, object, or role level:
 
@@ -3087,6 +3165,32 @@ okkama run -t --filter parse path/to/module.ok
 
 `--filter TEXT` runs only the tests whose names contain TEXT, literally and
 case-sensitively; repeated, the tests that contain any of the texts.
+
+`--report human|json|junit` picks how the run is reported. `human`, the
+default, shows each test as it runs (`=== RUN`, then `--- PASS`, `--- FAIL`
+with its failed checks, or `--- SKIP` with its reason) and the verdict. `json`
+writes one JSON document and `junit` JUnit XML for CI; both own standard output,
+and what the tests print goes to standard error. Every report lists the tests in
+declaration order. `--seed N` (0 to 2^53 − 1) runs the selected tests in the
+order the seed shuffles them to, the same order for the same seed; the human
+report starts with `=== SEED  N`, and the JSON and JUnit reports name the seed
+and, in JSON, when each test ran. Without `--seed` the tests run in declaration
+order. The seed orders tests only: a property's generator keeps its own seed.
+The tests run in this process. The exit status is 0 when no test failed, 1 when
+one did (and, as before, when a filter selects none), 2 for a wrong command
+line, and 4 when the run reached no verdict: a source error, no test to run, or
+an engine error. TAP is not a report format yet.
+
+`--workers N` runs each selected test in a process of its own instead, at most
+N at a time. What a test prints is captured, each stream up to 64 KiB (more is
+cut and marked), and reported with the test: under a failed test in the human
+report, as `stdout`, `stderr` and `truncated` in JSON, as `system-out` and
+`system-err` in JUnit. `--test-timeout SECS` (with `--workers` only) stops a
+test's process after that many seconds of monotonic time and reports it as
+timed out; a worker that dies without a result is reported as crashed. Both
+fail the run. The report keeps declaration order whichever worker finishes
+first. Workers share the terminal's process group, so Ctrl-C stops them too;
+processes a test starts itself are not stopped with a timed-out worker.
 
 The runner retains test/fake AST across imports but executes only tests owned
 by the root file. It does not run or require `main`. Object/role test names are
@@ -3146,6 +3250,34 @@ test.is(refused, Refused.because("non-positive"));
 
 It means exactly `try { …; panic "test.throws: the block did not throw Refused"; }
 catch e is Refused { e; }`; another error still propagates and fails the test.
+
+`test.case(name) { … }` gives one row of a table of cases its own name in the
+report (#809):
+
+```okkama
+test "postage at every boundary" {
+    for cases -> row {
+        test.case(row.name()) {
+            test.is(row.got(tariff), row.wanted());
+        };
+    }
+}
+```
+
+Each sub-case is reported under its test as `Test/name`, with its own outcome:
+a failed check or an error the block throws fails that sub-case, the sub-cases
+after it still run, and the test fails when one of them failed. A name runs
+once per test (a repeated one fails the test and its block does not run), and
+sub-cases do not nest: `test.case` inside another ends the test with a failure
+of the outer one. `test.skip` inside a sub-case skips it and, as always, ends
+the test; sub-cases not reached have no result. A failure outside every
+sub-case is the test's own. `--filter Test/name` runs the tests whose names
+contain `Test`, and of their sub-cases only those whose names contain `name`;
+the test's code around them runs, the other blocks do not. A test the filter
+reaches but none of whose sub-cases match is skipped with that reason. The
+totals count sub-cases, and a test with sub-cases only when it failed or
+skipped outside them; JSON lists the sub-cases under their test with an `id`,
+and JUnit has one test case per sub-case. The test stays the unit that runs.
 
 Reusable assertions come from the bundled module:
 
@@ -3270,44 +3402,45 @@ A statement-level `if`, `loop`, `match` or `try … catch` may take one
 optional `;` (#302); two are an error, and the rule is not a general one for
 expressions. The formatter keeps the chosen spelling.
 
-### 24.3 Compact choices: `?? … !!`
+### 24.3 Compact match cases
 
-A boolean choice has exactly two branches — a typed ternary:
-
-```okkama
-let label = enabled ?? "enabled" !! "disabled";
-```
-
-The left side must be `bool`; the branch types must agree; only the selected
-branch is evaluated.
-
-On an enum, patterns and results follow `??` and `!!` separated by `:`:
+`match` is one construct with two forms of case body (#893). A block case runs
+statements; a compact case gives one expression as the case's value:
 
 ```okkama
-let description = patch.name()
-    ?? .some(value): "New name: " + value
-    !! .none: "Clear the name"
-    !! .missing: "Keep the current name";
+let message = match result {
+    case Result.success(value): value;
+    case Result.failure(code): "Error: " + code.string();
+    case Result.timeout: "Timeout";
+};
 
-let shown = order.status()
-    ?? .paid(amount): "paid " + amount.string()
-    !! _: "not paid";                          // `_` covers the remaining cases
+let value = match option { case Maybe.some(x): x; case Maybe.none: 0; };
 ```
 
-The subject is evaluated once, bindings exist only in their branch, coverage
-must be complete and repeats are rejected. Ordinary enums work too:
-`Status.ready ?? .ready: "go" !! .failed: "stop" !! .done: "done"`.
-
-**Nested `?? … !!` are forbidden**, including in the condition, in call
-arguments inside a branch and through parentheses. Use separate variables:
+Both forms mix in one `match`, and `case _` is the remainder, another spelling
+of `else` (`case _: value;` or `case _ { … }`):
 
 ```okkama
-let active_label = ready ?? "go" !! "wait";
-let label = enabled ?? active_label !! "off";
+let shown = match order.status() {
+    case Status.paid(amount): "paid " + amount.string();
+    case Status.refunded(amount) {
+        audit.note(amount);
+        "refunded";
+    }
+    case _: "not paid";
+};
 ```
 
-`if` and `match` remain for complex logic. Prefix `!!flag` keeps its meaning
-of double negation.
+A compact case body may `throw`: `case Presence.missing: throw Missing.key;`.
+Everything else is the ordinary `match`: the subject is evaluated once, only
+the chosen case runs, bindings exist only in their case, patterns are written in
+full (`Maybe.some(x)`, `Status.ready`), coverage and repeated cases are checked
+as in Chapter 12.4, and the case values must have one type. A compact match nests
+like any expression. For a two-way choice on a `bool`, use an `if` expression:
+`if enabled { "on"; } else { "off"; }`.
+
+The earlier `?? … !!` selection was removed; `??` is now a syntax error that
+points to the compact form. Prefix `!!flag` keeps its meaning of double negation.
 
 ### 24.4 Error enums and exhaustiveness
 
@@ -3530,19 +3663,15 @@ its dependencies, so a new release of a dependency changes nothing until some
 ```toml
 [build]
 entry = "src/main.ok"      # or a list: the files of the root module
-target = "sparrow"         # sparrow | jvm
-output = "target/app.spb"  # default target/<name>.spb or .jar
+output = "target/app.spb"  # default target/<name>.spb
 
 [run]
-engine = "sparrow"         # sparrow | ir | jvm; default: the build target
 args = []                  # `blade run -- a b` appends a and b
 env = {}                   # extra environment variables
 ```
 
 `blade run` builds first when a `.ok` file, `blade.toml` or `blade.lock` is
-newer than the output, then runs the `.spb` (`okkama exec`), the sources on
-the IR interpreter (`okkama run --engine ir`, no build) or the JAR
-(`java -jar`); the program's exit status is Blade's. Both commands refuse a
+newer than the output, then runs the `.spb` (`okkama exec`); the program's exit status is Blade's. Both commands refuse a
 project whose dependencies are not installed. Blade uses the `okkama` next to
 it, else the one on `PATH` (`BLADE_OKKAMA` names another).
 
@@ -3691,12 +3820,28 @@ that goes wrong is one `JsonError`, whose reading cases carry the RFC 6901
 pointer of the value: `catch JsonError.missing(pointer)`. The guide is
 `docs/std/json.md` in okkama-docs.
 
+`template/engine` is the one template engine, over `Json`:
+`Template(source:, escaping:, partials:, limits:)` compiles once and answers
+`string(data)` or `write(data, destination)`. The language is small:
+`{{path}}`, `{{.}}`, sections `{{#list}}…{{/list}}` and inverted ones,
+`{{>partial}}` from `TemplatePartials(["name": source])`, comments; no
+expressions. `TemplateEscaping.html` escapes each value for where it lands —
+HTML text, or a quoted ordinary attribute — and refuses every other place
+before anything is written, also across sections and partials, which must leave
+the HTML context as they found it. `TemplateLimits` bounds the source, nesting,
+iterations, partials and output. `TextTemplate`, `SectionTemplate` and
+`HtmlTemplate` remain as adapters; `examples/template/` renders an escaped list.
+
 `fs/file` makes a file a resource read through two symmetric views; the first
 one used picks the mode. `File(path: Path("notes.txt"))` opens for reading;
 `for file.text() -> line` walks the lines in batches, `lines()` and
 `content()` give the rest at once, and `writeln`, `write` and `rewrite`
 write. `file.binary()` gives bytes: `for`, `byte()`, `bytes(n)`, `bytes()`,
-`seek`, `truncate`. `file.lock(FileLockMode.exclusive)` is a `Maybe` — a lock
+`seek`, `truncate`. `replace(…)` on either view swaps the whole file in one
+step: a temporary file beside it is synchronized and renamed over it, so a
+reader or a crash finds the old file or the new one, never a part. `sync()`
+makes written data durable; `flush()` only hands it to the system.
+`file.lock(FileLockMode.exclusive)` is a `Maybe` — a lock
 in the way is `Maybe.none` — and `file.locked(mode)` tells what holds the
 file. Every fs failure is one `FileError` from `fs/error`; `FileEntry` (a
 path on disk) lives in `fs/entry`. `examples/fs/file/` shows each task as a
@@ -3751,7 +3896,7 @@ stays 60) and `offset::Offset::known` (`-00:00` is not UTC).
 `plist` reads and writes Apple property lists, XML or binary.
 `ParsedPlist(bytes).root()` is the root `PlistValue`, whose `kind()` tells
 which value it is: `PlistString(…).string()`, `PlistInteger.integer()`
-(a `BigInt`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
+(an `int`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
 `PlistDate.instant()`, `PlistUid.number()`, `PlistArray.values()` and
 `PlistDictionary.value(name)`. `EncodedPlist(origin:, format:).bytes()`
 writes one.
@@ -3834,6 +3979,17 @@ message)`. The `Invocation` answers by name:
 the help text and bash/zsh/fish completion. `call.settings()` layers the
 command line over configuration. `examples/cli/` shows a tool with
 subcommands.
+
+`os/signal` lets a program stop cleanly. Without it, Ctrl-C (SIGINT) or
+SIGTERM ends the process at once by the system's default action, and no
+`defer` or `destroy` runs. `Interruption()` takes SIGINT and SIGTERM from
+when it is made: `interruption.check()` throws `Interrupted.signal(signal)`
+once one came, so a loop that checks at each step unwinds through its
+cleanup like any failure, and `interruption.status()` is the conventional
+exit status, 130 or 143. An asynchronous program awaits
+`interruption.arrival()`. After the first signal a second one ends the
+process at once. Tests raise signals with `ManualSignals` (`testing/signal`):
+`Interruption(source: signals)`.
 
 `digest` and `crypto` work on bytes, through the host's vetted
 implementations.
@@ -3918,7 +4074,8 @@ with `TransactionOptions::Mode`, blobs, scripts and an online backup
   locale.
 - `LocalizedDecimal`, `LocalizedCurrency`, `LocalizedDate` and
   `LocalizedList` write numbers, money, dates and lists, and
-  `LocalizedDecimalFromString` reads a number back.
+  `LocalizedDecimalFromString` reads a number back. `LocalizedCase` changes
+  case by the language's rules (Turkish, Azeri, Lithuanian).
 - `PluralCategoryOf` picks the plural category. `MessageCatalog` answers
   messages by `MessageKey(context:, identity:)`, with plural forms, and
   `ParsedPo` reads gettext files.
@@ -3926,7 +4083,7 @@ with `TransactionOptions::Mode`, blobs, scripts and an online backup
 `examples/logging/`, `config/`, `template/`, `terminal/`, `db/`, `locale/` and
 `i18n/` show each area.
 
-`http/client` sends requests with `HttpClient()`. By default it uses the system's DNS and trusted roots, reaches public endpoints only and speaks HTTP/1.1. Every other part is a named argument: `endpoints`, `protocols`, `timeouts`, `redirects: Redirects(limit: 5)` and `cookies: MemoryCookieJar()`. Every REST method has a shortcut: `get(url)`, `head`, `options`, `delete`, and `post(url:, body:)`, `put`, `patch` with a `Content` such as `JsonBody(json)`. Anything else is `client.response(Request(url:, method:, headers:, body:))`. A reply shows its head through the cap `Head` (`page::Head::status`, `::class`, `::headers`) and reads its body with `await page.text()`, `bytes()`, `json()` or `reading()`. `Status` and `Method` are enums: `Status.ok`, `Status.not_found`, `Status.other(299)`, `Method.put`. `StatusCode` and `MethodName` turn them into wire numbers and tokens and back. `examples/http/client/` shows each task as a program.
+`http/client` sends requests with `HttpClient()`. By default it uses the system's DNS and trusted roots, reaches public endpoints only and speaks HTTP/1.1. Every other part is a named argument: `endpoints`, `protocols`, `timeouts`, `redirects: Redirects(limit: 5)` and `cookies: MemoryCookieJar()`. Every REST method has a shortcut: `get(url)`, `head`, `options`, `delete`, and `post(url:, body:)`, `put`, `patch` with a `Content` such as `JsonBody(json)`. Anything else is `client.response(request)`: a `Request` is a `RequestHead(method:, url:, headers:)` with a `Content` (`Request(head:, content:)`, which adds Content-Type and a known Content-Length) or any `BodyOpening` (`Request(head:, body:)`), or shorter `Request(url:, method:, content:)`; `FormBody(parameters)` sends a form, and `UrlParts.query_appended(parameters)` adds query parameters to the URL first. A reply shows its head through the cap `Head` (`page::Head::status`, `::class`, `::headers`) and reads its body with `await page.text()`, `bytes()`, `json()` or `reading()`. `Status` and `Method` are enums: `Status.ok`, `Status.not_found`, `Status.other(299)`, `Method.put`. `StatusCode` and `MethodName` turn them into wire numbers and tokens and back. `examples/http/client/` shows each task as a program.
 
 `http/server` serves HTTP/1.1, or HTTP/2 by prior knowledge, on a listener.
 A `Handling` object answers `handling(request, context)` with
@@ -3986,6 +4143,9 @@ requests in flight 10 seconds and returns; a second signal ends the
 process at once. In tests
 `await WebTestClient(routes).get("/notes/7")` sends a request through the
 routes without a network and answers the `ClientResponse` a real client gets.
+Every method takes `headers:`, and `WebTestClient(routes: routes, cookies:
+MemoryCookieJar())` keeps the cookies replies set and sends them back, so a
+login and the requests after it are tested end to end.
 
 `Caching(origin: client, cache: MemoryHttpCache(clock:, maximum:), clock:)`
 answers fresh responses from memory, and `Proxied(proxy: ProxyPolicy(…), …)`
@@ -3999,13 +4159,17 @@ service and a WebSocket echo.
 subject:, text:)` adds the Date, a fresh Message-ID and the Content-Type, and
 renders RFC 5322 bytes with `bytes()`. `ParsedMail(bytes).message()` reads them
 back. `Maildir(path).created()` and `Mbox(path)` keep messages on disk.
-SMTP has its wire pieces (`PreparedSmtpData`, `SmtpReply`,
-`SmtpCapabilities`) but no client yet. `ImapSession` selects mailboxes and
+`await SmtpConnecting(host:, credentials:).session()` opens an SMTP
+submission session (STARTTLS by default, `SmtpSecurity.implicit_tls` on 465),
+and `await session.submission(message:, sender:, recipients:)` sends: the
+envelope is given apart from the headers, and the result tells which
+recipients the server accepted. `ImapSession` selects mailboxes and
 searches with `UnseenMail()`, `SinceMail(date)`, `AndMail` and `OrMail`. A
 selected mailbox answers `await box.copied(uids, to:)`, `moved` and
 `expunged`, the session answers `created`, `renamed`, `deleted` and
 `appended`, and `MailboxEvents` follows changes. `PopSession().mailbox()`
-downloads. `examples/mail/` composes a message and keeps it in a Maildir.
+downloads. `examples/mail/` composes a message, keeps it in a Maildir and
+sends one.
 
 `strings/parse` reads text as the type asked for: `Number("42").int()`,
 `Number("ff").int(16)`, `Number("6/8").rat()`, `Number("3.0").float()`,
@@ -4041,7 +4205,10 @@ same float. `Crc32(bytes).checksum()`, `Adler32` and `Crc16Ccitt` checksum.
 90)` and `Duration(milliseconds: 250)` take whole amounts, and `Duration(value:,
 unit:)` any rational one; arithmetic is exact (`d.times(f)`). A date counts
 its own days: `date.shifted(days)`, `release.days_until(deadline)`,
-`date.day_number()` and `Date(day_number: n)`. Values write themselves:
+`date.day_number()` and `Date(day_number: n)`, and its months: `date.plus_months(n)` and
+`date.plus_years(n)` keep the day where the target month has it and take its last day otherwise
+(2024-01-31 plus one month is 2024-02-29). `Today(zone: berlin).date()` is the date there now, and
+`Now().instant()` the instant; both take `clock:` for tests. Values write themselves:
 `date.string()` and `local.string()` in ISO 8601, `instant.string()` in RFC
 3339 UTC. Readers answer with what they read, and each formatter reads its own
 text back: `IsoText(t).date()`, `Rfc3339(t).instant()`,
@@ -4093,6 +4260,53 @@ DNS or transport I/O.
 HostName uses bounded UTS46/IDNA; PublicSuffixList represents pinned ICANN+PRIVATE
 policy. Current URL contract (okkama-docs `docs/std/url-value.md`),
 executable example (okkama-docs `examples/std-v4/url-resolution.ok`).
+
+
+`UrlParts(scheme: "https", host: Maybe.some("api.example.org"))` constructs
+an absolute URL from components. Omitted components default to empty scheme/path
+and absent optional parts; `UrlParts()` is an empty relative reference.
+Transformations return a new validated `UrlParts`, preserving unrelated
+components and the original value. They reuse component validation without
+serializing and reparsing the complete URL. `Parts` remains the component API.
+
+```okkama
+let base = UrlParts(scheme: "https", host: Maybe.some("api.example.org"));
+let destination = base.joined("items", "tea/coffee").query_replaced(parameters:
+    QueryParameters(QueryParameter(name: "q", value: "a+b & café")));
+// https://api.example.org/items/tea%2Fcoffee?q=a%2Bb%20%26%20caf%C3%A9
+```
+
+Import `UrlParts` from `url/value`, and `QueryParameters` and `QueryParameter`
+from `url/query`. Pass `destination.string()` to an HTTP client shortcut.
+See [the executable construction example](../examples/http/client/build_url.ok).
+
+- `path_replaced(path: "/a%2Fb")` accepts an encoded URI/IRI path. Existing
+  escapes are canonicalized, not double-encoded; malformed escapes, literal
+  spaces and structural delimiters fail with `InvalidUrl`.
+- `joined("a", "b/c")` appends plain text segments. Slash, question mark and
+  hash within a segment are escaped. Percent is plain data: `%2F` becomes
+  `%252F`; escapes already in the base path stay intact. No arguments is an
+  identity operation. One trailing slash of the base is reused; other slashes
+  and empty segments are retained. An empty base path gains a leading slash
+  when it has an authority, otherwise it starts relative. A colon in the first
+  relative segment is escaped. Structural constraints still apply, including
+  rejection of a path that would introduce an undeclared `//authority`.
+- Neither path operation removes dot segments. Use `normalized()` explicitly;
+  `resolved()` retains RFC 3986 reference-resolution semantics.
+- `query_replaced(parameters: query)` uses ordered `QueryParameters` encoding,
+  retaining repeated names, empty assignments and unassigned flags. Data cannot
+  inject `&`, `=`, `#` or `+` semantics; `+` is encoded as `%2B`, never a space.
+  Parsed parameter values can be passed back without double-encoding. An empty
+  collection means a present empty query (`?`); `query_removed()` means no query.
+- `port_replaced(port: Maybe.some(8443))` accepts 0..65535 and requires an
+  authority. `Maybe<int>.none` removes the explicit port. Scheme defaults are
+  never inferred. Userinfo and IPv6 brackets are retained.
+
+All operations enforce the existing limits: 8192 source path characters,
+1024 slash-separated path segments (empty segments count), and 8192 canonical
+URL characters including encoded Unicode. Query construction keeps
+`QueryParameters`' parameter limit (10000 by default, explicitly configurable).
+Encoding URL paths does not provide filesystem traversal protection.
 
 Cookie values remain immutable. CookieExpiry() means session, never an epoch
 sentinel. Cookie/Attributes validate grammar, prefixes and Secure/SameSite/
@@ -4447,6 +4661,7 @@ what was meant:
 | `snake-case` | a local, parameter, field or action is not `snake_case` |
 | `non-exhaustive-match` | a `match` over a payload-free enum misses cases |
 | `hidden-error` | a public action throws a hidden error enum |
+| `missing-docs` | a public declaration has no documentation |
 
 ### 28.4 `okkama man`
 
@@ -4464,8 +4679,9 @@ okkama man --format markdown json   the page as Markdown
 
 A page has the sections NAME, VERSION, SYNOPSIS, DESCRIPTION, PUBLIC API,
 ERRORS, ENGINE NOTES and SEE ALSO, each only when there is something to say.
-Signatures come from the declarations themselves; hidden declarations, fields
-and tests never appear. Enums that are `Error` go under ERRORS.
+Signatures come from the declarations themselves; hidden declarations, stored
+fields and tests never appear. Public enum cases and computed cap fields are
+part of the reference. Enums that are `Error` go under ERRORS.
 
 Where a comment belongs:
 - The comment right after the `module` line documents the module. An older
@@ -4503,6 +4719,82 @@ A heading named Synopsis, Errors, Engine notes or See also in a module overview
 fills that section. Otherwise the first code block is the synopsis. On a
 terminal the page is wrapped to its width, headings are bold unless `NO_COLOR`
 is set, and `$PAGER` shows it when set. Through a pipe it is plain text.
+
+Publishing uses the same public documentation model (#515):
+
+```sh
+okkama man io/stdout --format man | man -l -
+okkama man io/stdout --format html > stdout.html
+okkama man io/stdout --format json > stdout.json
+okkama man --all --format html --output reference
+okkama man --all --format man --output man3
+okkama man --all --format json --output reference-json
+```
+
+HTML exports contain `index.html` and one flat module page (`io-stdout.html`),
+with relative links and stable `okkama-doc:` identities in `data-okkama-target`.
+They work offline and can be served below any site path; `make reference
+DOC_OUTPUT=reference` builds this directory for okkama-docs. Raw HTML in comments
+is escaped. JSON contains `schema_version: 1`, public declarations, source byte
+spans and resolved links; a full export also writes `schema-v1.json` (JSON Schema
+2020-12). No module version means JSON `null`, never an invented version.
+
+System man pages are optional: `make install MAN_PAGES=1`, or `install.sh
+--man-pages`, installs `io-stdout.3ok` and its peers into
+`PREFIX/share/man/man3`. `make dist MAN_PAGES=1` / `tools/package.sh --man-pages`
+includes them in archives and system packages. A cross package can use a matching
+host compiler via `OKKAMA_DOC_GENERATOR`. Pages are generated from std at build
+or install time; no second reference text is maintained.
+
+### 28.5 Documentation examples and coverage
+
+`okkama run -t FILE` checks examples in source doc comments before running
+inline tests. Fenced `okkama` or `okkama,compile` blocks compile by default;
+`okkama,ignore` marks illustrative code that is never checked. Indented,
+untagged and other-language blocks are illustrative too. Unknown Okkama
+metadata is an error, not a skipped check. A block containing `main()` does
+not run unless it has the explicit `okkama,run` tag.
+
+A runnable example needs an adjacent `output` fence with its exact stdout:
+
+````okkama
+module example;
+
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// Stdout().writeln("ready");
+// ```
+// ```output
+// ready
+// ```
+
+main() is int { 0; }
+````
+
+Run `okkama run -t ./example.ok`. Expected output includes the final LF; an
+empty `output` fence expects no stdout. Stderr must be empty and main must
+return 0. Statements are wrapped in a generated main; snippets inherit the
+source file's imports and the supplied module files' declarations. A complete
+example with its own `module` uses its own imports and declarations.
+
+Execution uses a temporary directory and a child with a cleared environment,
+no filesystem/network/process/environment capabilities, a 3-second deadline,
+64 MiB allocation-growth and 256 MiB RSS bounds, and a 64 KiB combined output
+limit. Examples needing external files are compile-only. When isolation is
+unavailable, including an unbounded inline-test profile, the result explicitly
+says `compile-only: isolation unavailable`; it never runs unrestricted.
+Test/fake bodies in compile-checked examples are checked in full. Failures
+point back to the original source comment. `--filter doctest` selects the
+example names, which contain `doctest FILE:LINE`.
+
+`missing-docs` warns about undocumented public API in user modules. For std,
+only completed migration waves are errors; there is no global error yet.
+Coverage counts actual declarations, overloads, enum cases and computed cap
+fields, excluding hidden API and implementation code. An inline enum case
+can be documented in its enum comment with a list entry such as
+``- `reading`: Opens an existing file for reading.``. The completed pilot wave
+is `io/stdout`, `collections/sequence`, `fs/file` and `json`; see the
+[Phase C record](std-docs-phase-c-514.md) for the baseline and policy details.
 
 ## Chapter 29. What Okkama Deliberately Leaves Out
 
@@ -4845,8 +5137,11 @@ awaiting — a lazy future its `await` started, a task it spawned, a native
 request — and the task resumes only once that future has settled, deferred
 cleanup included; then its own `await` throws `Cancelled`. A future that
 another task still awaits is left running: the cancelled awaiter only stops
-waiting for it. One awaited child therefore needs no group; `FutureGroup` and
-`FutureScope` are for real fan-out.
+waiting for it. A task whose `await` has already completed — its future
+settled and it is ready to run on — is not interrupted: it runs on with that
+result, and the cancellation reaches it at its next `await`, which throws
+`Cancelled` before it starts anything (#546). One awaited child therefore
+needs no group; `FutureGroup` and `FutureScope` are for real fan-out.
 
 Scheduling is cooperative (#340). One task runs at a time, until it suspends
 at an `await` of a future that has not settled, or until it ends. Waking a
@@ -4902,19 +5197,16 @@ settled result or failure leaves it unchanged. A worker cancelled before its
 process started never starts. Structured groups and root shutdown await that
 same completion. The kill is immediate (SIGKILL), so the worker's Okkama
 defers and `destroy` blocks do not run. A worker leads its own process group on
-Tomato and the IR engine, and the whole group is killed, so processes the
-worker started go with it; the JVM, which has no process groups, kills the
-worker and the descendants it has at that moment (#359).
+Sparrow, and the whole group is killed, so processes the
+worker started go with it (#359).
 
 The worker is the same program run again by the same engine: Tomato runs its
-`.spb` (one compiled in memory is written to a temporary file first), the IR
-engine its source files, multi-file programs included, and the JVM its
-classes. It gets an explicit working directory; source filenames are made
+`.spb` (one compiled in memory is written to a temporary file first). It gets an explicit working directory; source filenames are made
 absolute in the parent before the worker changes directory, so relative CLI
 source paths work too. An embedder that runs programs which `spawn` must pass
 Tomato the worker command, and a `spawn` without one fails with
 `process workers require an explicit worker command`. Arguments and results
-cross as binary `OKW1` frames, an implementation detail rather than part of the
+cross as binary `OKW2` frames, an implementation detail rather than part of the
 language. This is process isolation, not exposed POSIX `fork` semantics.
 
 ### 31.5.2 Bounded typed channels
@@ -5082,8 +5374,9 @@ null nil optional ?. isa super abstract protected with setters mutable var
 ```
 
 `none` is not a value: it exists only as the case `Maybe.none` /
-`Presence.none`. A single `?` is an error; `??` and `!!` form compact choices,
-and `try?` / `try!` are prefix forms written without a space.
+`Presence.none`. A single `?` is an error, `??` is a removed selection syntax
+(use a compact `match`, Chapter 24.3), and `try?` / `try!` are prefix forms
+written without a space.
 
 Keyword inventory in active use: `module`, `import`, `as`, `take`, `object`,
 `role`, `enum`, `has`, `is`, `does`, `self`, `let`, `if`, `else`, `match`,
@@ -5126,7 +5419,7 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
 - ownership by identity and automatic `destroy` on scope exit;
 - strict lexical scope boundaries;
 - enums, payload enums with exhaustive patterns, `Maybe` / `Presence` with
-  `else` and `fold()`, compact choices `?? … !!`;
+  `else` and `fold()`, compact `match` cases;
 - error enums (`enum E is Error`), catch patterns and type lists, `try?` /
   `try!`;
 - hidden successor actions; `hidden` declarations with the public-signature
@@ -5229,10 +5522,8 @@ main() is int {
 
     let n = try? risky() else 0;       // Maybe<int>, then fallback
     let nick = user.nickname() else "anon";   // Maybe<string>
-    let label = n > 0 ?? "some" !! "none";    // typed ternary
-    let area = Shape.circle(1.0)
-        ?? .circle(r): r * r
-        !! .point: 0.0;
+    let label = if n > 0 { "some"; } else { "none"; };
+    let area = match Shape.circle(1.0) { case Shape.circle(r): r * r; case Shape.point: 0.0; };
 
     prices["fig"] else 0;              // explicit fallback, no null
     return 0;
@@ -5269,7 +5560,7 @@ HttpLimits, ClientTimeouts and ClientPolicy collect bounded reusable inputs with
 
 ### A direct HTTP client owns response lifetimes
 
-HttpClient sends an absolute HTTP(S) Request through checked numeric endpoints and returns ClientResponse at final headers. HttpDirectRequest derives origin-form and Host without observing the body. Read a nonempty body to verified EOF to enable reuse; closing or dropping it discards transport. Empty responses release admission immediately. An explicit async owner retains idle sessions across caller scopes: borrowed Atomic storage alone cannot do this. Client close cancels queued requests before releasing permits. Independent deadlines cover connection acquisition, exchange through headers, and each body read; zero disables a stage. Contract and executable HTTPS example (okkama-docs `docs/std/http-client.md`), example (okkama-docs `examples/std-v4/http-client.ok`).
+HttpClient sends an absolute HTTP(S) Request through checked numeric endpoints and returns ClientResponse at final headers. HttpDirectRequest derives origin-form and Host, and frames a body its fields leave unframed (Content-Length when its length is known, chunked otherwise) without reading it. Read a nonempty body to verified EOF to enable reuse; closing or dropping it discards transport. Empty responses release admission immediately. An explicit async owner retains idle sessions across caller scopes: borrowed Atomic storage alone cannot do this. Client close cancels queued requests before releasing permits. Independent deadlines cover connection acquisition, exchange through headers, and each body read; zero disables a stage. Contract and executable HTTPS example (okkama-docs `docs/std/http-client.md`), example (okkama-docs `examples/std-v4/http-client.ok`).
 
 ### Redirects are an explicit exchange capability
 
@@ -5499,7 +5790,7 @@ Bind values with the typed objects from `db/value` (#188): `DbInteger(7)`,
 `db/query` accepts either `(origin: connection, statement: Statement(...))` or `(prepared:, values:)`;
 `one()`, `maybe()`, `all(limit)` and `rows()` share the same result contract.
 Read columns directly with `row.text(name)` or `row.maybe(name).text() else fallback`.
-`Execution.affected()` returns `Maybe<BigInt>`: unknown is distinct from zero.
+`Execution.affected()` returns `Maybe<int>`: unknown is distinct from zero.
 The query closes its cursor, while the caller owns preparation and the connection.
 
 
@@ -5594,7 +5885,7 @@ QueuedLogs keeps a bounded persistent FIFO and starts one worker in a supplied
 Supervising<int>. Capacity applies to waiting records, with one extra in flight.
 Call `await queue.drain(); queue.close();` before waiting for the scope. Close
 cancels only its pending delivery, not the scope or unrelated children. Overflow
-is reject/drop_newest/drop_oldest with a BigInt loss count. An eager scope/Event
+is reject/drop_newest/drop_oldest with an int loss count. An eager scope/Event
 can run formatting or synchronous I/O in write(); the queue promises no capacity
 wait, not a caller latency bound. SyslogLogs borrows a connected UDP owner and
 reuses this lifecycle. Successful drain is local send completion, not delivery
@@ -5668,7 +5959,7 @@ only when requested; use `Property<Sequencing<T>>` for sequence invariants.
 Contracts, result models and TAP/JSON reports (okkama-docs `docs/std/testing.md`).
 
 
-`JUnitTestReport(report,suite).string()` builds XML values and preserves exact
+`JUnitTestReport(report,suite).string()` writes JUnit XML and preserves exact
 nanosecond durations, case order, seed and byte captures (Base64). Timeout/crash
 are errors; failed assertions are failures. The documented JUnit dialect (okkama-docs `docs/std/testing.md`)
 uses suite/case properties. XML values (okkama-docs `docs/std/xml-values.md`) also preserve mixed

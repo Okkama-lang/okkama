@@ -1,11 +1,11 @@
-//! Natives форматов данных — перенос `DataNatives` JVM: `runtime/io_decorators`,
-//! `runtime/testing`, `runtime/csv_state`, `runtime/pem`, `runtime/template`
+//! Natives форматов данных: `runtime/io_decorators`,
+//! `runtime/testing`, `runtime/pem`, `runtime/template` (`runtime/csv_state` became Okkama in #13)
 //! (`runtime/ini` переписан на Okkama, #13). Смещения и длины — в символах (code points), тексты отказов
 //! — как у Perl-provider. Строки Rust всегда скалярны, поэтому проверки
-//! одиночных суррогатов JVM здесь не срабатывают никогда.
+//! одиночных суррогатов здесь не срабатывают никогда.
 use super::Error;
 use super::support::{
-    bytes, failed, failure, handle, int, int_value, new_handle, string, string_array, text,
+    failed, failure, handle, int, int_value, new_handle, string, string_array, text,
 };
 use crate::{IntValue, Value, abi::Native};
 use std::cell::{Cell, RefCell};
@@ -62,192 +62,20 @@ fn test_state(native: Native, value: &Value) -> Result<&TestState, Error> {
     Ok(state)
 }
 
-// ---- runtime/csv_state ----
-
-#[derive(Debug)]
-struct Csv {
-    limits: [i64; 5],
-    buffer: Vec<u8>,
-    fed: i64,
-    bytes: i64,
-    scalars: i64,
-    rows: i64,
-    field: String,
-    field_length: i64,
-    fields: Vec<String>,
-    mode: &'static str,
-    active: bool,
-    eof: bool,
-    status: &'static str,
-    offset: i64,
-}
-
-impl Csv {
-    fn request(&self) -> i64 {
-        let remaining = self.limits[0] - self.fed;
-        if remaining >= 4096 {
-            4096
-        } else if remaining >= 0 {
-            remaining + 1
-        } else {
-            1
-        }
-    }
-
-    fn error(&mut self, kind: &'static str, at: Option<i64>) -> &'static str {
-        self.status = kind;
-        self.offset = at.unwrap_or(self.scalars);
-        self.buffer.clear();
-        self.field.clear();
-        self.field_length = 0;
-        self.fields.clear();
-        kind
-    }
-
-    fn append(&mut self, point: char) -> bool {
-        if self.field_length >= self.limits[2] {
-            self.error("field", None);
-            return false;
-        }
-        self.field.push(point);
-        self.field_length += 1;
-        true
-    }
-
-    fn finish_field(&mut self) -> bool {
-        if self.fields.len() as i64 >= self.limits[4] {
-            self.error("columns", None);
-            return false;
-        }
-        self.fields.push(std::mem::take(&mut self.field));
-        self.field_length = 0;
-        true
-    }
-
-    fn record(&mut self) -> &'static str {
-        if self.rows >= self.limits[3] {
-            return self.error("rows", None);
-        }
-        self.rows += 1;
-        self.active = false;
-        self.mode = "start";
-        self.status = "row";
-        "row"
-    }
-
-    fn advance(&mut self) -> &'static str {
-        if self.status != "need" {
-            return self.status;
-        }
-        loop {
-            if self.buffer.is_empty() {
-                if !self.eof {
-                    return "need";
-                }
-                if self.mode == "quoted" || self.mode == "cr" {
-                    return self.error("syntax", None);
-                }
-                if self.active {
-                    if !self.finish_field() {
-                        return self.status;
-                    }
-                    return self.record();
-                }
-                self.status = "eof";
-                return "eof";
-            }
-            if self.bytes >= self.limits[0] {
-                return self.error("bytes", None);
-            }
-            let lead = self.buffer[0];
-            let size = match lead {
-                0x00..=0x7f => 1,
-                0xc2..=0xdf => 2,
-                0xe0..=0xef => 3,
-                0xf0..=0xf4 => 4,
-                _ => 0,
-            };
-            if size == 0 {
-                return self.error("utf8", Some(self.bytes));
-            }
-            if self.buffer.len() < size {
-                if self.fed > self.limits[0] {
-                    return self.error("bytes", None);
-                }
-                if self.eof {
-                    return self.error("utf8", Some(self.bytes));
-                }
-                return "need";
-            }
-            if size as i64 > self.limits[0] - self.bytes {
-                return self.error("bytes", None);
-            }
-            let Some(point) = std::str::from_utf8(&self.buffer[..size])
-                .ok()
-                .and_then(|text| text.chars().next())
-            else {
-                return self.error("utf8", Some(self.bytes));
-            };
-            if self.scalars >= self.limits[1] {
-                return self.error("input", None);
-            }
-            self.buffer.drain(..size);
-            self.bytes += size as i64;
-            if self.mode == "cr" {
-                if point != '\n' {
-                    return self.error("syntax", None);
-                }
-                self.scalars += 1;
-                return self.record();
-            }
-            if self.mode == "quoted" {
-                if point == '"' {
-                    self.mode = "closed";
-                } else if !self.append(point) {
-                    return self.status;
-                }
-            } else if self.mode == "closed" && point == '"' {
-                if !self.append(point) {
-                    return self.status;
-                }
-                self.mode = "quoted";
-            } else if point == ',' {
-                if self.fields.len() as i64 + 1 >= self.limits[4] {
-                    return self.error("columns", None);
-                }
-                if !self.finish_field() {
-                    return self.status;
-                }
-                self.mode = "start";
-                self.active = true;
-            } else if point == '\r' {
-                if !self.finish_field() {
-                    return self.status;
-                }
-                self.mode = "cr";
-            } else if point == '\n' || self.mode == "closed" {
-                return self.error("syntax", None);
-            } else if point == '"' {
-                if self.mode != "start" {
-                    return self.error("syntax", None);
-                }
-                self.mode = "quoted";
-                self.active = true;
-            } else {
-                if !self.append(point) {
-                    return self.status;
-                }
-                self.mode = "plain";
-                self.active = true;
-            }
-            self.scalars += 1;
-        }
-    }
-}
-
 // ---- runtime/pem ----
 
-const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// The value of a standard Base64 digit (`A-Z a-z 0-9 + /`).
+fn sextet(symbol: char) -> Option<u64> {
+    let value = match symbol {
+        'A'..='Z' => symbol as u32 - 'A' as u32,
+        'a'..='z' => symbol as u32 - 'a' as u32 + 26,
+        '0'..='9' => symbol as u32 - '0' as u32 + 52,
+        '+' => 62,
+        '/' => 63,
+        _ => return None,
+    };
+    Some(u64::from(value))
+}
 
 fn kind_invalid_offset(kind: &str) -> i64 {
     let text = chars_of(kind);
@@ -288,7 +116,7 @@ fn base64_invalid(source: &[char]) -> i64 {
             padding += 1;
             continue;
         }
-        if inside || !ALPHABET.contains(*symbol) {
+        if inside || sextet(*symbol).is_none() {
             return offset as i64;
         }
     }
@@ -307,7 +135,7 @@ fn base64_invalid(source: &[char]) -> i64 {
     let mut buffer: u64 = 0;
     let mut bits = 0;
     for symbol in &source[..data_end] {
-        let digit = ALPHABET.find(*symbol).expect("validated base64") as u64;
+        let digit = sextet(*symbol).expect("validated base64");
         buffer = ((buffer << 6) | digit) & 0xffff_ffff;
         bits += 6;
         while bits >= 8 {
@@ -458,175 +286,6 @@ fn pem_block(native: Native, origin: &str, index: &IntValue) -> Result<PemBlock,
     Ok(blocks.swap_remove(at))
 }
 
-// ---- runtime/template ----
-
-#[derive(Clone, Debug)]
-struct TemplateError {
-    offset: i64,
-    line: i64,
-    column: i64,
-    message: String,
-}
-
-fn template_error(source: &[char], offset: usize, message: &str) -> TemplateError {
-    let prefix: String = source[..offset.min(source.len())].iter().collect();
-    let prefix: Vec<char> = prefix.replace("\r\n", "\n").chars().collect();
-    let newlines = prefix.iter().filter(|c| **c == '\n').count() as i64;
-    let length = prefix.len() as i64;
-    let last = prefix.iter().rposition(|c| *c == '\n').map_or(-1, |at| at as i64);
-    TemplateError {
-        offset: offset as i64,
-        line: 1 + newlines,
-        column: length - last,
-        message: message.into(),
-    }
-}
-
-#[derive(Debug)]
-struct Template {
-    source: String,
-    input: IntValue,
-    maximum_nodes: IntValue,
-    compiled: RefCell<Option<Compiled>>,
-}
-
-/// Разобранный шаблон: части по позициям или отказ разбора.
-type Compiled = Result<Vec<(i64, String)>, TemplateError>;
-
-fn index_of(source: &[char], needle: &str, from: usize) -> Option<usize> {
-    let needle: Vec<char> = needle.chars().collect();
-    (from..=source.len().saturating_sub(needle.len()))
-        .find(|at| *at + needle.len() <= source.len() && source[*at..*at + needle.len()] == needle[..])
-}
-
-fn compile_template(state: &Template) -> Result<Vec<(i64, String)>, TemplateError> {
-    let source = chars_of(&state.source);
-    if state.input.is_negative() || state.maximum_nodes.is_negative() {
-        return Err(template_error(&source, 0, "negative template budget"));
-    }
-    if crate::integer::compare(&IntValue::from_u128(source.len() as u128), &state.input).is_gt() {
-        return Err(template_error(&source, 0, "template input limit exceeded"));
-    }
-    let mut nodes: Vec<(i64, String)> = Vec::new();
-    let mut literal = String::new();
-    let append = |nodes: &mut Vec<(i64, String)>, kind: i64, text: String, offset: usize| {
-        if crate::integer::compare(&IntValue::from_u128(nodes.len() as u128), &state.maximum_nodes)
-            .is_ge()
-        {
-            return Err(template_error(&source, offset, "template node limit exceeded"));
-        }
-        nodes.push((kind, text));
-        Ok(())
-    };
-    let flush = |nodes: &mut Vec<(i64, String)>, literal: &mut String, offset: usize| {
-        if !literal.is_empty() {
-            append(nodes, 0, std::mem::take(literal), offset)?;
-        }
-        Ok::<(), TemplateError>(())
-    };
-    let mut position = 0;
-    while position < source.len() {
-        let four = slice(&source, position, source.len().min(position + 4));
-        if four == "{{{{" || four == "}}}}" {
-            literal.push_str(&four[..2]);
-            position += 4;
-            continue;
-        }
-        let two = slice(&source, position, source.len().min(position + 2));
-        if two == "}}" {
-            return Err(template_error(
-                &source,
-                position,
-                "unexpected closing template delimiter",
-            ));
-        }
-        if two != "{{" {
-            let mut next = source.len();
-            for found in [index_of(&source, "{{", position), index_of(&source, "}}", position)]
-                .into_iter()
-                .flatten()
-            {
-                next = next.min(found);
-            }
-            literal.push_str(&slice(&source, position, next));
-            position = next;
-            continue;
-        }
-        let start = position;
-        let Some(end) = index_of(&source, "}}", start + 2) else {
-            return Err(template_error(&source, start, "unclosed template tag"));
-        };
-        let body = slice(&source, start + 2, end);
-        position = end + 2;
-        if body.starts_with('!') {
-            let line_start = source[..start]
-                .iter()
-                .rposition(|c| *c == '\n')
-                .map_or(0, |at| at + 1);
-            let prefix = slice(&source, line_start, start);
-            let rest = &source[position..];
-            let spaces = rest.iter().take_while(|c| **c == ' ' || **c == '\t').count();
-            let ending = match (rest.get(spaces), rest.get(spaces + 1)) {
-                (None, _) => Some(0),
-                (Some('\n'), _) => Some(1),
-                (Some('\r'), Some('\n')) => Some(2),
-                _ => None,
-            };
-            if prefix.chars().all(|c| c == ' ' || c == '\t')
-                && let Some(ending) = ending {
-                    if !prefix.is_empty() {
-                        let keep = literal.len() - prefix.len();
-                        literal.truncate(keep);
-                    }
-                    position += spaces + ending;
-                }
-            continue;
-        }
-        let body = body.trim_matches([' ', '\t']).to_string();
-        if body.is_empty()
-            || body.starts_with(['#', '^', '/', '>', '=', '&', '{'])
-            || body.contains(['{', '}', '\r', '\n'])
-        {
-            return Err(template_error(
-                &source,
-                start,
-                "unsupported or empty template tag",
-            ));
-        }
-        if body.chars().count() > 4096 {
-            return Err(template_error(&source, start, "template path length exceeded"));
-        }
-        let parts: Vec<&str> = body.split('.').collect();
-        if parts.len() > 64 || parts.iter().any(|part| part.is_empty()) {
-            return Err(template_error(&source, start, "invalid named template path"));
-        }
-        flush(&mut nodes, &mut literal, start)?;
-        append(&mut nodes, 1, body, start)?;
-    }
-    flush(&mut nodes, &mut literal, position)?;
-    Ok(nodes)
-}
-
-fn template(value: &Value) -> Result<Result<Vec<(i64, String)>, TemplateError>, Error> {
-    let state = handle::<Template>(value)?;
-    if state.compiled.borrow().is_none() {
-        let compiled = compile_template(state);
-        *state.compiled.borrow_mut() = Some(compiled);
-    }
-    Ok(state.compiled.borrow().clone().expect("compiled above"))
-}
-
-fn template_nodes(native: Native, value: &Value) -> Result<Vec<(i64, String)>, Error> {
-    template(value)?.map_err(|_| {
-        failure(
-            "core.template",
-            "invalid_data",
-            native,
-            "invalid template has no instructions",
-        )
-    })
-}
-
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let name = operation(native);
     match name {
@@ -711,85 +370,6 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             Ok(Value::Bool(true))
         }
         "test_context_active" => Ok(Value::Bool(crate::testing::active())),
-        // ---- csv_state ----
-        "csv_state_create" => {
-            let mut limits = [0i64; 5];
-            for (index, value) in args.iter().take(5).enumerate() {
-                let value = int(value)?;
-                if value.is_negative() {
-                    return Err(failure(
-                        "core.csv_state",
-                        "invalid_input",
-                        native,
-                        "CSV limits must be nonnegative",
-                    ));
-                }
-                limits[index] = value
-                    .to_i64()
-                    .filter(|value| *value < 1 << 62)
-                    .unwrap_or(i64::MAX / 2);
-            }
-            Ok(new_handle(RefCell::new(Csv {
-                limits,
-                buffer: Vec::new(),
-                fed: 0,
-                bytes: 0,
-                scalars: 0,
-                rows: 0,
-                field: String::new(),
-                field_length: 0,
-                fields: Vec::new(),
-                mode: "start",
-                active: false,
-                eof: false,
-                status: "need",
-                offset: 0,
-            })))
-        }
-        "csv_state_feed" => {
-            let mut state = handle::<RefCell<Csv>>(&args[0])?.borrow_mut();
-            let data = bytes(&args[1])?;
-            if state.status != "need" || data.len() as i64 > state.request() || state.eof {
-                return Err(failure(
-                    "core.csv_state",
-                    "invalid_state",
-                    native,
-                    "Invalid CSV state operation",
-                ));
-            }
-            state.fed += data.len() as i64;
-            if data.is_empty() {
-                state.eof = true;
-            }
-            state.buffer.extend(data);
-            Ok(Value::Bool(true))
-        }
-        "csv_state_advance" => Ok(text(handle::<RefCell<Csv>>(&args[0])?.borrow_mut().advance())),
-        "csv_state_row" => {
-            let mut state = handle::<RefCell<Csv>>(&args[0])?.borrow_mut();
-            if state.status != "row" {
-                return Err(failure(
-                    "core.csv_state",
-                    "invalid_state",
-                    native,
-                    "Invalid CSV state operation",
-                ));
-            }
-            let row = std::mem::take(&mut state.fields);
-            state.status = "need";
-            Ok(string_array(row))
-        }
-        "csv_state_offset" => Ok(int_value(handle::<RefCell<Csv>>(&args[0])?.borrow().offset)),
-        "csv_state_request" => Ok(int_value(handle::<RefCell<Csv>>(&args[0])?.borrow().request())),
-        "csv_state_closed" => Ok(Value::Bool(
-            handle::<RefCell<Csv>>(&args[0])?.borrow().status == "closed",
-        )),
-        "csv_state_close" => {
-            handle::<RefCell<Csv>>(&args[0])?
-                .borrow_mut()
-                .error("closed", Some(0));
-            Ok(Value::Bool(true))
-        }
         // ---- pem ----
         "pem_kind_invalid_offset" => Ok(int_value(kind_invalid_offset(string(&args[0])?))),
         "pem_encode" => {
@@ -821,45 +401,6 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "pem_block_kind" => Ok(text(pem_block(native, string(&args[0])?, int(&args[1])?)?.kind)),
         "pem_block_base64" => Ok(text(pem_block(native, string(&args[0])?, int(&args[1])?)?.base64)),
         // ---- template ----
-        "template_compile_state" => Ok(new_handle(Template {
-            source: string(&args[0])?.to_string(),
-            input: int(&args[1])?.clone(),
-            maximum_nodes: int(&args[2])?.clone(),
-            compiled: RefCell::new(None),
-        })),
-        "template_compile_valid" => Ok(Value::Bool(template(&args[0])?.is_ok())),
-        "template_compile_offset" | "template_compile_line" | "template_compile_column" => {
-            Ok(int_value(match template(&args[0])? {
-                Ok(_) => 0,
-                Err(error) => match name {
-                    "template_compile_offset" => error.offset,
-                    "template_compile_line" => error.line,
-                    _ => error.column,
-                },
-            }))
-        }
-        "template_compile_message" => Ok(text(match template(&args[0])? {
-            Ok(_) => String::new(),
-            Err(error) => error.message,
-        })),
-        "template_node_count" => Ok(int_value(template_nodes(native, &args[0])?.len() as i64)),
-        "template_node_kind" | "template_node_text" => {
-            let nodes = template_nodes(native, &args[0])?;
-            let at = super::support::small(int(&args[1])?, nodes.len()).ok_or_else(|| {
-                failure(
-                    "core.template",
-                    "invalid_input",
-                    native,
-                    "template instruction index outside program",
-                )
-            })?;
-            let (kind, value) = nodes[at].clone();
-            Ok(if name == "template_node_kind" {
-                int_value(kind)
-            } else {
-                text(value)
-            })
-        }
         "template_output_size" => {
             let maximum = int(&args[1])?;
             if maximum.is_negative() {
@@ -882,5 +423,36 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_invalid, chars_of, sextet};
+
+    #[test]
+    fn pem_sextet_is_the_standard_base64_alphabet() {
+        let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (value, symbol) in alphabet.chars().enumerate() {
+            assert_eq!(sextet(symbol), Some(value as u64));
+        }
+        for symbol in ['=', '-', '_', ' ', '\n', '\u{e9}', '\u{ff21}', '@', '[', '`', '{'] {
+            assert_eq!(sextet(symbol), None);
+        }
+    }
+
+    #[test]
+    fn pem_base64_invalid_reports_the_first_offending_offset() {
+        let offset = |text: &str| base64_invalid(&chars_of(text));
+        assert_eq!(offset(""), -1);
+        assert_eq!(offset("QUJD"), -1);
+        assert_eq!(offset("QUI="), -1);
+        assert_eq!(offset("QQ=="), -1);
+        assert_eq!(offset("QU-D"), 2);
+        assert_eq!(offset("QUJ"), 3);
+        assert_eq!(offset("QUJ="), 2);
+        assert_eq!(offset("QR=="), 1);
+        assert_eq!(offset("Q==="), 1);
+        assert_eq!(offset("QQ=A"), 3);
     }
 }

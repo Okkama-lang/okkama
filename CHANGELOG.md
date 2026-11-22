@@ -6,6 +6,2890 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-11-22
+
+0.6.2 moves the format parsers into Okkama, gives every std action that does real work a benchmark, makes an
+`async destroy` guard as cheap as a deferred close, and speeds up the std where those benchmarks pointed.
+- **Formats in Okkama (#13).** CSV, TOML, XML (with plist), HTML (with entities) and time patterns read and write
+  in Okkama at 0.7–1.3× the native time; 52 natives retired. Natives stay where the numbers say so.
+- **Benchmarks for the std (#244).** 2 773 of the 3 158 work actions measured by 709 programs with independent
+  oracles; the rest need a server, a socket, a terminal or host resources and are listed with their reasons.
+- **Cheap `async destroy` (#329).** A guard alone in its scope settles without a region; nine HTTP and TCP guards
+  use it.
+- **Faster std (#939, #943, #944, #948, #950).** Cookie dates ×17, PEM ×3, zstd ×9, ECDSA ×3, SQLite ×1.8,
+  HPACK ×8, locales ×5–8, JUnit reports ×7; no more `df` or `hostname` processes.
+- **Runtime and tools.** Ctrl-C and SIGTERM stop a program cleanly (#638); tests run in process workers with
+  captured output and deadlines (#938), named sub-cases (#809) and JSON/JUnit reports (#339); the std reference
+  as man pages, HTML and JSON (#515).
+- Release report: micro A/B 0.6.1 → 0.6.2 (Linux containers, both built as the packages, one session), Sparrow
+  −4.1% over 39 reliable pairs; nothing slower beyond the noise band.
+
+### Added
+
+- **Std micro-benchmarks (#244).** Every std action that does real work has a benchmark: `bench/micro/std` grows
+  from 11 to 709 programs, which measure 2 773 of the 3 158 work actions; the other 385 need a server, a socket,
+  a terminal, the test context or a host resource and are listed with their reasons in `bench/micro/excluded.json`.
+  Accessors, one-call wrappers and signatures without a body (3 512 targets) are covered through their callers.
+  Each program measures at most a few actions of one object and has an independent Python oracle.
+  `bench/micro/actions.py` classifies every public action from its AST, keeps STD-ACTIONS.md current (`--check`),
+  lists what is left (`--todo`) and writes a protocol-v2 skeleton for a missing action.
+- **Tests in process workers, with captured output and deadlines (#938).** `okkama run -t --workers N` runs each
+  test in its own process, at most N at a time; each test's stdout and stderr are captured up to 64 KiB (cut and
+  marked beyond) and reported with it (human, JSON `stdout`/`stderr`/`truncated`, JUnit `system-out`/
+  `system-err`). `--test-timeout SECS` (with `--workers`) stops a test past its monotonic deadline (`timed_out`); a
+  worker that dies without a result is `crashed`. Reports keep declaration order; plain `run -t` stays in-process.
+- **Filesystem faults can be injected in tests, and atomic replace is tested under them (#934).**
+  `SPARROW_CORE_FS_FAULTS=write:ENOSPC,file_sync:EIO,rename:EXDEV,directory_sync:EIO` makes those steps fail (a
+  failed write after half its bytes); `File.replace` is shown to keep the old file and leave no temporary file when
+  the write, the file fsync or the rename fails, and to report `not_durable` with the new content when only the
+  directory fsync fails. `bench/io/replace.ok` compares write, write + sync and replace on the machine at hand.
+- **The std reference as man pages, HTML and JSON (#515).** `okkama man --format man|html|json` renders a module from
+  the same documentation model as `okkama man`, the editor and doctests; `okkama man --all --format FORMAT --output
+  DIR` exports the whole std (section `3ok` man pages, a self-contained HTML site with relative links, versioned
+  JSON with schema 1). `make install MAN_PAGES=1` (or `install.sh --man-pages`) also installs the man pages, and
+  `make reference` builds the HTML site.
+- **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
+  from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
+  `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second
+  signal ends the process at once. Without an Interruption a signal ends the process by the system's default action
+  and no `defer` or `destroy` runs (now tested on real signals). `ManualSignals` (`testing/signal`) raises signals
+  in tests. `web/app` stops through an Interruption instead of the internal `runtime/signal`.
+- **Named sub-cases in tests (#809).** `test.case(name) { … }` inside a test runs one row of a table as its own
+  case, like `test.throws`: a failed check or a thrown error fails that sub-case and the next ones still run; a
+  repeated name, a nested sub-case and `test.skip` inside one are defined. `--filter "TEST/CASE"` runs only the
+  matching sub-cases (a test selected with none matching is skipped). Reports show them: indented in the human
+  stream, `cases` in JSON, one JUnit testcase each.
+- **Test reports and a seed for `okkama run -t` (#339, stage A).** `--report json` and `--report junit` write one
+  report of the run on stdout (tests in declaration order, totals, failures and skip reasons), the tests' own
+  output going to stderr; `--report human` is the familiar stream. `--seed N` runs the tests in a reproducible
+  shuffled order (Fisher-Yates on SplitMix64), printed and recorded. Exit 0 when nothing failed, 1 for failed
+  tests (and, as before, for a filter that selects none), 2 for a bad command line, 4 when the run reached no
+  verdict (a source error, nothing to run).
+- **Responses are composed like requests (#937).** `ResponseHead(status:, headers:, version:)` is a response's head;
+  `Response(head:, content:)` takes the content's Content-Type (or a compatible declared one;
+  `ConflictingContentType` otherwise) and known Content-Length, and `Response(head:, body:)` keeps the fields as
+  given. `Response::Head` shows the one head; the existing constructors keep their behaviour.
+- **Selecting across channels without losing a message (#509).** `SelectedReceiving(receivers: [a, b])` and
+  `await selected.item()` take one message from whichever receiver is ready, as a `SelectedItem` with `source()`
+  and `value()`. Exactly one receive commits per selection, in the runtime: the other registrations are withdrawn
+  without consuming anything, a cancellation before the commit withdraws them all, and a committed message wins
+  over a cancellation or a `Within`/`Before` timeout. Ready receivers take turns from after the last winner;
+  closed ones are drained, and `ChannelClosed` comes when all are exhausted. Duplicate receivers, an empty set
+  and a second concurrent `item()` are typed errors (`examples/async/channel_selection.ok`).
+- **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
+  `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
+  `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in
+  capitals, as Unicode's SpecialCasing.txt says; other languages take the default of `string.lower()` and
+  `upper()`. `title()` starts each word with its title case (`"ǆemal"` → `"ǅemal"`, `"ßa"` → `"Ssa"`,
+  Georgian unchanged), a word joined across an apostrophe or a full stop (`"don't"`).
+- **HTTP requests are composed from a head and a content (#120).** `RequestHead(url:, method:, headers:, version:)`
+  is the method, target, fields and version; `Request(head:, content:)` adds the content's Content-Type and known
+  Content-Length (a contradicting Content-Type is `ConflictingContentType`), `Request(head:, body:)` keeps the
+  fields as given, and `Request(url:, method:, content:)` is the short form. `FormBody(parameters)` sends a form,
+  `UrlParts.query_appended(parameters)` adds query parameters, and HTTP/1.1 frames an unframed body itself
+  (Content-Length or chunked). `post`, `put` and `patch` build the same `Request`. No fluent builder, as the
+  owner decided (`examples/http/client/compose_request.ok`).
+- **Sending e-mail: an SMTP submission client (#499).** `SmtpConnecting(host:, credentials:).session()` opens a
+  session (STARTTLS on 587 by default, implicit TLS or explicit plaintext, never a fallback; certificate checked
+  against the host; AUTH PLAIN only after TLS, the password in `SecretBytes`), and
+  `session.submission(message:, sender:, recipients:)` sends one message with an envelope separate from the
+  headers. Recipients are offered one by one; `complete()` and `refusals()` tell partial acceptance; a failure
+  after the data started is `SmtpFailure.uncertain`, never retried. Every step has a monotonic timeout
+  (`examples/mail/send.ok`).
+- **Asynchronous stream decorators (#131).** `io/decorators` gets `LimitedAsyncReading` (an allowance shared by
+  reads that take turns, so overlapping reads cannot pass it; a zero limit never reads), `CountingAsyncReading`
+  (delivered bytes only, once per read, into its own or a given `Atomic<int>`), `TimedAsyncReading` (a limit per
+  read from when it runs, or one shared monotonic deadline; time cancels the read and awaits its cleanup through
+  `Within`/`Before`, then `TimedOut`) and `BufferedAsyncWriting` (bounded, ordered, explicit `flush()`; a failed
+  or cancelled send breaks it with `BrokenAsyncWriting` and never resends). The HTTP server counts with
+  `CountingAsyncReading` and times bodies with `TimedAsyncReading`; `100 Continue` and the head deadlines stay
+  HTTP's own. A body pausing past the idle timeout is answered with 408, now under test.
+- **Doctests and the `missing-docs` lint (#514).** Fenced `okkama` examples in doc comments are compile-checked
+  with the file's imports and exact positions; `okkama,ignore` is illustrative; `okkama,run` with an `output` fence
+  runs in a bounded child (no host capabilities, 3 s, memory and output limits) and compares stdout. `run -t`
+  checks a file's doctests before its tests. `missing-docs` warns for user modules and fails for std modules of a
+  completed documentation wave; the pilots io/stdout, collections/sequence, fs/file and json are fully documented.
+- **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
+  where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
+  2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and
+  `Now().instant()` the current instant; both take `clock:` (a `Timing`), so tests can pass a `ManualClock`.
+- **URLs are built and changed without string concatenation (#133).** `UrlParts` gets immutable transformations,
+  each returning new validated parts: `path_replaced(path:)` (an encoded path, escapes canonicalized),
+  `joined("a", "b")` (plain segments, each encoded once: `/`, `?` and `#` stay data), `query_replaced(parameters:)`
+  (ordered `QueryParameters`, repeated names and empty values kept), `query_removed()`, and `port_replaced(port:)`
+  (add, replace or remove; no scheme default is invented). The structured `UrlParts(...)` constructor takes
+  defaults. The HTTP client examples build their URLs this way (`examples/http/client/build_url.ok`).
+- **XML-RPC values read themselves (#517).** Every `XmlRpcValue` answers `text()`, `int()`, `bool()`, `decimal()`,
+  `local_date_time()` and `bytes()` for its own kind, `item(index)` for an array and `member(name)` for a struct,
+  and throws `WrongXmlRpcValue` (`kind(expected, actual)`, `member(name)`, `position(position)`) otherwise;
+  `XmlRpcCall.parameter(position)` reads a call's parameters. A program no longer writes an `XmlRpcWriting` to
+  read a string: `call.parameter(0).text()`, `result.value().text()` (`examples/http/xmlrpc/greet.ok`).
+- **`WebTestClient` sends headers on every method and can keep cookies (#650).** `get`, `head`, `options` and
+  `delete` take `headers:` like `post`, `put` and `patch`. `WebTestClient(routes:, cookies: MemoryCookieJar())`
+  keeps the cookies replies set (site http://127.0.0.1) and sends them with later requests; a caller's own
+  `Cookie` field goes instead. A guarded `DELETE` with `Authorization`, a session login-to-logout flow and
+  `Accept` on `GET` are testable through the convenience methods.
+- **Files are replaced atomically and made durable (#122).** `file.text().replace(...)` and `file.binary().replace(bytes)`
+  write a temporary file beside the target, synchronize it, rename it over the old file and synchronize the
+  directory: a reader or a crash sees the whole old file or the whole new one. The new file keeps the old one's
+  permission bits (a new file is owner-only); a symbolic link at the path is itself replaced, a directory is
+  refused, and a rename whose directory could not be synchronized is `FileError.failed("not_durable", ...)`.
+  `sync()` on `FileText`, `FileBytes` and `TemporaryFile` is fsync (F_FULLFSYNC on macOS), and
+  `TemporaryFile.replace(destination)` is the pair of `preserve()`. A binary write now finishes a short write
+  instead of reporting it (`examples/fs/file/replace.ok`).
+- **Documentation links, hover from the doc model and `okkama man -k` (#513).** A doc comment links a declaration
+  as `[Stdout]`, `[Stdout.writeln]` or `[io/stream.Writing]`, resolved through the compiler's modules and scopes,
+  same-module and cross-module, with every public overload and without hidden declarations; code is never read
+  as a link. An unresolved link is an `unresolved-doc-link` warning in `man`, `lint` and the editor. LSP hover
+  and completion now come from the same model as `okkama man`, with the selected overload and unsaved buffers.
+  `okkama man -k QUERY` searches module paths, declaration names and summaries.
+
+### Fixed
+
+- **A mail text with a line over 998 octets is sent quoted-printable (#936).** Such ASCII text was left 7bit and
+  failed to render; a line of exactly 998 octets stays 7bit.
+- **A UTF-8 mail text is sent quoted-printable (#935).** `MailMessage(text:)` with characters beyond ASCII
+  failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
+  `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
+  stays 7bit.
+- **Five defects from the 0.6.2 runtime audit (#940).** A `Within` or `Before` cancelled while it waited for
+  its timer could lose a selection already taken from the channel; the taken message now wins. A signal that arrived while a
+  watch was being created was counted but never seen by that watch; the watch is now recorded under the same
+  lock that installs the handlers. A cancelled `signal_arrival` left a thread blocked until the signal came;
+  it now stops waiting. `okkama run -t --workers` no longer stalls the pool when a process the test started
+  holds the worker's output open: the parent reads for 500 ms more, then marks the stream cut. A parent test's
+  own skip next to a failing sub-case now survives the worker report, so totals keep the skip.
+- **Cookie dates parse 17 times faster, PEM blocks 3 times, a small zstd round trip 9 times (#939).** `ParsedCookieDate` compiled five regular
+  expressions per parse; it now scans tokens once (2.8 µs instead of 62 µs, the cost of `ParsedHttpDate`), with
+  the same results on a 20 008-line differential. `PemBlock` checks its text once for `kind()` and `bytes()`, and
+  the Base64 check no longer searches the alphabet per character (4.3 µs instead of 14 µs on 40 bytes).
+  `ZstdCompressed` tells zstd the size of its whole input, so the codec no longer prepares tables for an
+  unbounded stream: compressing and decompressing 8 bytes at level 3 takes 10 µs instead of 95 µs. The frame
+  now records its content size, as the zstd tool writes it.
+- **`LookedUpLocale` follows RFC 4647 Lookup (#941).** A truncated range now has to equal an available tag;
+  before, any tag extending it matched and won even over an exact one (`en` chose `en-US` where only the
+  fallback is right, `de` chose `de-DE` although `de` was available). `FilteredLocales` still matches by prefix.
+- **`Response(status:, content:)` frames its content like the other content overloads (#942).** It now adds
+  the known Content-Length and refuses a Content-Type that contradicts the content (`ConflictingContentType`),
+  as the documentation says and as `Response(head:, content:)` and `Request` already did; fields that frame the
+  body themselves are kept.
+
+- **`Storage.usage()` asks the file system instead of running `df` (#944).** It took about 1.2 ms per call and
+  failed with `unsupported` where no `df` was installed; it now calls `statvfs` and reports exact bytes.
+
+- **A TOML date-time with both `Z` and a numeric offset is refused (#947).** `1979-05-27T07:32:00Z12:30` was read as
+  +12:30; RFC 3339 allows one or the other, so it is now `InvalidToml` ("invalid fixed offset").
+
+- **Reading an XML plist no longer scans character by character for its delimiters (#948).**
+  `PlistXmlSource.until` compared codes at every position after building the text's character array; one
+  substring search replaces it (20 000 searches in 600 characters: 0.24 s → 0.03 s).
+
+- **An HTTP/2 server session ends cleanly when its input ends early (#949).** Input that stopped right after the
+  preface failed with `FinishedFutureGroup`: the reader reached the end and sealed the session's loops before the
+  writer joined them. The reader and the idle timer now wait until every loop is registered, the writer last, so
+  a queued GOAWAY is also delivered.
+
+- **`Host().name()` asks the system instead of running `hostname` (#950).** It took about 1.4 ms per call and
+  failed where no `hostname` tool was installed; it now calls `gethostname` (2 000 calls: 2.8 s → under 0.01 s).
+
+### Changed
+
+- **An `async destroy` guard costs what a deferred close costs (#329).** A guard with its own async destroy,
+  created and ending in one scope of an async action, is now destroyed directly at the scope's exits, awaited
+  shielded as before, without a cleanup region: 2 million guarded calls take 0.186 s instead of 0.333 s, against
+  0.181 s for `defer await guard.close()`. Cancellation, failure linking and destroys that suspend behave as
+  before; guards that share a scope keep the region. Nine cleanup guards of the HTTP client and server, HTTP/1
+  bodies and sessions, HTTP/2 serving and TCP connection attempts now use `async destroy` instead of a deferred
+  close (throughput unchanged within 1%); the TCP race guard keeps its deferred close, since it reaches the
+  connection its action returns. A region holding a single async-destroy object also closes on a faster path.
+- **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
+  secret scalar alone, still with RFC 6979 deterministic nonces: a P-256 signature plus two verifications takes
+  178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. Locale tags no longer
+  rebuild the IANA alias tables or change case through string splitting per call (`Locale("ru")` 7.1 → 1.3 µs,
+  `LikelyLocale` 47 → 5.6 µs, `LocaleFallbacks` 29 → 6.7 µs, `LocalizedDate` 73 → 33 µs); gettext tokenizes
+  plural formulas and lexes PO strings and directives without regex (`ParsedPo` 47 → 10 µs per entry,
+  `GettextCatalog` 131 → 48 µs in the benchmark); regex match cursors ask the runtime once per match; one-shot
+  DEFLATE, zlib and gzip reuse pooled miniz engines and small buffers (round trip of 8 bytes 26 → 8 µs); tar pads
+  and checks zero blocks in bulk (round trip 78 → 62 µs). `UrlParts` keeps the host it validated and its
+  canonical text, so cookies, proxies, WebSocket origins, HTTP/2 fields and redirects stop re-parsing it (cookie
+  jar store 110 → 46 µs, HTTP/2 request fields 31 → 17 µs); the HPACK static table builds only the row asked for
+  (28 → 3.7 µs per decoded block); XML-RPC, IMAP responses and X.509 names lose repeated scans and per-call
+  regexes. `LocalizedDate` reads the few CLDR fields a format uses instead of all 179 of its profile (35 → 27 µs).
+  `JUnitTestReport` writes its fixed XML directly instead of building and re-checking an XML tree
+  (250 → 33 µs for two cases). SQLite reuses idle worker threads for new connections, sets foreign keys in
+  one call, and its replies no longer make the waiting scheduler turn the event loop: an INSERT takes 7.5 µs
+  instead of 19.6 µs, opening and closing an in-memory database 27 µs instead of 41 µs.
+- **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs,
+  most of `uuid` (parsing, printing, version, variant, v4/v8 layout), text indentation, CSV reading (whole and
+  streaming; 0.7–1.3× the native time, 8 natives retired), TOML reading (0.7–1.2×, 16 natives retired), the
+  XML tokenizer under xml and plist (1.0–1.1×, 11 natives retired) , the HTML tokenizer with entity decoding
+  (0.7–1.3×, 12 natives retired) and time patterns (`FormattedDate`, `FormattedLocalDateTime`; 0.7–1.2×, 5 natives
+  retired) are now Okkama; the
+  native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
+  (template, json, bigint) are gone. `diff`, hex, base32/64/85, quoted-printable, `dedent`, `wrap`, `shorten` and
+  `uuid_named` stay native on measured evidence (2–30× slower in Okkama). `docs/format-natives-13.md` records every
+  module's disposition and numbers.
+- **std uses `contains` and `find` instead of reduce and split tricks (#260, part 2).** Equality membership through
+  `reduce` is `contains` in 16 modules; a digit's value read through `split(...)[0].length()` (plist) and a
+  position through `split(...)[0].length()` (server-sent events) are `find`; locale tags and mail check single
+  characters with `contains`.
+- **std checks text with the builtins (#260, part 1).** Containment written as `text.split(part).size() > 1` (or
+  `== 1` for absence) is `contains`, prefixes and suffixes compared through `slice` are `starts_with` and
+  `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
+  that a few unguarded checks of an empty text answer false instead of failing on the slice.
+- **Mailboxes and saved cookie jars are written atomically and durably (#934).** `mail/mbox_store` and
+  `SavedCookieJar` replace their files with `TemporaryFile.replace` / `File.replace` (fsync, rename, directory
+  fsync) instead of a temporary file moved without fsync.
+- **std speaks `int`, not `BigInt` (#511).** The language's `int` is arbitrary precision, so 125 std signatures that
+  took or returned `BigInt` (JSON and plist integers, database values, sizes, HTTP lengths, counters, durations, …)
+  take and return `int`. Quotients still truncate toward zero and remainders keep the dividend's sign; every
+  bounded power over untrusted input keeps its bit budget through `BoundedPower`. `BigInt` stays as a type.
+  Migration: `Json(BigInt(n))` → `Json(n)`, `DbInteger(BigInt(n))` → `DbInteger(n)`,
+  `duration.nanoseconds().int()` → `duration.nanoseconds()`; `docs/std-int-511/inventory.md` lists every change.
+- **std template: one engine over Json (#178).** `template/engine` adds `Template(source:, escaping:, partials:,
+  limits:)`, compiled once and reused (`string(data)`, `write(data:, destination:)`), with `TemplateEscaping` (text,
+  html), `TemplatePartials`, `TemplateLimits` and `TemplateError`. The language stays small (values, dotted paths,
+  `{{.}}`, sections, inverted sections, partials, comments; no expressions), and every JSON kind has defined value
+  and section semantics.
+  - **HTML fails closed.** Values are escaped in text and in quoted ordinary attributes (id, class, title, alt,
+    role, lang, dir, aria-*, data-*); every other place is refused before writing. Sections, inverted sections and
+    partials must leave the HTML context as they found it; partials are analysed in each context they are
+    included in. There is no raw-output bypass.
+  - **Partials.** Only reachable partials compile, each once; a missing or broken one fails before output;
+    recursion is bounded by partial depth, iterations and output.
+  - **Legacy types are adapters.** `SectionTemplate` and `HtmlTemplate` render through the engine with their API
+    and error types (`HtmlTemplate` now accepts sections and refuses partials). `TemplateBindings` keeps its values
+    in one Json document (no linear lookup, no quadratic duplicate check; a path that is both a value and a prefix
+    is `DuplicateTemplateValue`, found on first lookup); the libraries look names up through a map; `TextTemplate`
+    stays the flat loop over the shared scanner.
+  - **Speed.** Rendering is 3–9× faster than before (one-off release measurement).
+
+## [0.6.1] — 2026-11-22
+
+0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
+- **JIT.** Small static methods are inlined into their callers (#926, #927), and closure calls go straight to
+  the body (#928). Role devirtualization was measured and not adopted.
+- **Async ownership costs less** (#932): Futures join regions without graph walks, frames without resources are
+  0.5.8's size, and a temporary Future awaited at once belongs to the awaiting frame (owner's decisions).
+- **Collector.** It waits for 4 MB (#920), skips idle pages (#538), counts statistics without distorting (#918)
+  and caches return addresses in the root scan. A generational collector is no-go (#919).
+- **`okkama repl`** is back (#588): one live session with real ownership lifetimes and line editing.
+- **Language:** the compact `if c: a else: b` (#921).
+- **Speed.** Micro-benchmarks against 0.6.0: −10.8% by geometric mean over 35 reliable pairs (closure-call −50%,
+  closure-create −31%, method-call −30%, recursion −29%, role-call −23%); async-await, spawn and
+  cancel-async-cleanup −14…41%, inconclusive pairs. The ladder: 02-calls −26%, 09-closures 73 → 31 ms.
+- **Fixed before the release:** a callee with a loop is no longer inlined (micro `float` +55% on Linux).
+
+### Added
+
+- **The collector's benchmark set, `bench/gc` (#917).** Six workloads (a large long-lived heap, big-integer
+  churn, a tiny live heap with resources, the same by deep recursion, a burst and reuse, payload maps) and
+  `run.py`, which A/Bs builds on them: steady time (median and IQR over shuffled processes), peak RSS,
+  instructions, and from `OKKAMA_DEV=gc` collections with root, mark and sweep times. The v0.6.0 baseline is in
+  `okkama-docs/benchmarks/gc`; it shows the root scan growing with stack depth (65.7 of 108.6 ms collecting at
+  ~100 000 frames).
+
+- **Compact `if`: `if condition: a else: b` (#921).** The same `if` with one expression per branch, built by the
+  parser as the block form (each branch a block holding its expression), so analysis, lowering and the runtime
+  are unchanged. Both branches are required; a branch is an expression, never a block; the forms do not mix.
+  `else:` goes to the nearest `if`, and `else` followed by `:` never starts a fallback, so a branch's own
+  fallback takes parentheses: `if ready: (cache else 0) else: 1`. `okkama fmt` keeps the compact spelling. Book
+  11.6, spec 8.11 and the grammar, conformance `L03.if.compact`/`L03.if.compact-without-else`, VS Code 0.11.0.
+
+- **`okkama repl` is back, on Sparrow (#588).** One live session: statements, expressions, declarations and
+  imports.
+  - Variables keep their values in the heap, and only the new input runs.
+  - Resources follow their variables: destroyed once when a variable is rebound or dropped, and on `:reset` or
+    exit, in reverse creation order.
+  - Async cells work. Closures and Futures are not kept.
+  - A declaration that would change how earlier values are owned is rejected.
+  - On a terminal, input is line-edited: the arrows move the cursor and walk the history (`~/.okkama_history`),
+    and Ctrl-R searches it.
+  - Under it:
+    - `Runtime::session` and `Runtime::extend`: append-only growth of a live runtime, prepared and then committed
+      by steps that cannot fail;
+    - `okkama_sparrow::session::extend`: a recompiled session merged into the published numbering.
+
+### Changed
+
+- **The root scan resolves each return address once per collection (#916).** A deep stack repeats a few return
+  addresses; a 64-entry cache in the frame walk spares the two binary searches (code ranges, stack maps) per
+  frame. `bench/gc` deep: roots 14.6 → 6.0 ms, steady 10.3 → 9.3 ms.
+- **Small methods are compiled into their callers (#926, #927).** The JIT inlines a small static callee (a
+  synchronous Okkama function of up to 24 instructions, without handlers) into a synchronous caller, one level
+  deep, so a recursive function inlines itself once. The program cannot tell: an inlined entry is still a step,
+  and a failure in it has the callee's frame in its trace and reaches the caller's handler, as a call would.
+  `SPARROW_CORE_NO_INLINE=*` turns it off. Steady state: 02-calls −26%, 01-arith −7%, 10-app −5%; compile time
+  +1–2 ms, machine code +4–8%.
+- **Async ownership costs less (#932).** None of the ownership rules change.
+  - A Future whose retained inputs reach no free identity joins a region without the resource walk.
+  - A failure without cause or secondary skips the payload walk.
+  - An async body without inputs publishes its outcome as it completes.
+  - `await` and the consuming `await` share one runtime body.
+  - Programs without resources keep no retained-argument tail in their frames.
+  - A closing region sorts its slots in place and reuses its queues.
+  - Owner's decisions (2026-11-21):
+    - An async frame keeps its ownership regions behind the registers, and only in programs with resources: a frame
+      without resources is 0.5.8's size again (−25% heap per Future).
+    - A temporary Future awaited at once belongs to the awaiting frame, as in Rust, Kotlin and Swift. It joins the
+      scope's region only on the await's unwind edge, so the normal path tracks nothing (`t/lang/awaited.ok`).
+
+  Instructions per iteration against 0.6.0: cancel-async-cleanup 14234 → 9901 (0.5.8: 7130);
+  async-await 824 → 788, spawn 860 → 832, channel 1672 → 1651 (0.5.8: 716, 760, 1420).
+- **A closure call goes straight to its body (#928, part 1).** Every call of a function value went through the
+  runtime's helper (arguments spilled, a call into Rust, an arity trampoline). Machine code now reads the
+  function from the closure, and for a synchronous body with up to two captures calls it directly with the
+  captures from the closure's fields; async bodies, more captures, statistics and `SPARROW_CORE_PLAIN` keep the
+  helper. 09-closures in steady state 73.1 → 31.4 ms (Java: 8.6), closure-call 8.4 → 4.7 ns, closure-create
+  26.6 → 18.7 ns, filter-map −8%.
+- **The collector waits for 4 MB of allocation, not 1 MB (#920, owner's approval).** After a collection the next
+  one comes when max(live, 4 MB) has been allocated. `bench/gc`: steady time −11% on ownership, −17% on
+  payload, −28% on deep, −9% on burst, unchanged on bigint and tiny; peak RSS +1–4 MB (+12.6 MB on burst), the
+  same at 10 and at 100 iterations. An adaptive floor (by survival rate) was measured and rejected: never better,
+  more memory on burst.
+- **The sweep keeps idle empty pages without walking them (#538).** A page that held no live cell at the last
+  sweep, and whose free chain no allocation has taken since, is empty again by construction; the sweep keeps
+  its chain instead of visiting every cell. A page's chain taken by the allocator marks the page for the next
+  walk. `bench/gc` against release/061: sweep −8 to −12% on ownership, bigint, burst and payload; steady time
+  −3 to −4% on ownership, burst and payload.
+- **Statistics no longer slow the sweep (#918).** `SPARROW_CORE_STATS` counted every live cell into a sorted map
+  during the sweep (14.1 ms of sweep against 2.8 ms without, ownership.ok); it now adds into an array per kind and
+  object descriptor and builds the report once per collection. Sweep and mark times with and without statistics
+  agree within noise.
+
+## [0.6.0] — 2026-11-21
+
+0.6.0 is the rebuild ("Tweed"). Ownership is tracked per instance on Tomato's pipeline: a resource is destroyed
+by the scope that owns it, directly when it never leaves that scope (#909) and through a region otherwise, and its
+identity lives in the object (#528) or the Future's frame (#931). Futures own their fresh inputs and channels own
+the messages they buffer (#587, #915). Sparrow is the only engine: the IR interpreter (#584), the JVM backend (#585)
+and the experimental Champ runtime with OIR-2 (#911) are gone, and `okkama build`/`okkama run` take no target or
+engine.
+- **Language.** `match` gets compact cases (`case P: value;`) and the `?? … !!` selection is removed (#893); a case
+  that can never run is an error (#286); a successor Future can be handed on as a plain one (#790); `LockGuard` and
+  `Permit` are resources (#846); arrays played as `Sequencing`/`Cursor` throw the roles' errors (#769).
+- **Speed.** Micro-benchmarks against 0.5.8: −18.7% by geometric mean over 49 reliable pairs (destroy −81%,
+  float −72%, match −32%, try-catch −30%, rat −20…27%); the language ladder −15% (11-ownership −75%). Async code
+  pays for ownership: async-await +27%, channel +17% (#932, next release). The hardening audit's performance
+  tickets are done (#432): handles 184 → 48 bytes (#439), tokens 88 → 56 (#471), JSON parse and write without
+  extra copies (#468, #466), regex scratch and spans (#463, #464), field accessors inlined by the JIT (#541).
+- **Fixed before the release:** the collector's sweep loop (#922), frame pointers in Linux release builds (#930).
+- **Tooling.** The Wave CI runs every test target and fails on a failing conformance case; development
+  instrumentation (`OKKAMA_DEV`) is compiled out of release builds.
+
+### Changed
+
+- **A Future keeps its ownership identity in its frame (#931).** Since #581 every Future of a program with
+  resources got its serial and owner through two hash tables (the identity map and the collector's watch list),
+  and every ownership step on it hashed. They are two words at the end of the frame now, as #528 did for
+  objects; only a Future a group lists keeps a side entry for its groups. `cancel-async-cleanup` 17.9k → 14.1k
+  instructions per iteration (1056 → 730 ns); async-await, spawn and channel pay the two words (+1–1.5%).
+  Programs without resources keep 0.5.8's frame size.
+- **Linux release builds keep their frame pointers (#930).** The collector finds its roots by walking frame
+  records, so `okkama-rs/.cargo/config.toml` forces frame pointers on every non-Apple target; the release
+  builds' `RUSTFLAGS="--cfg okkama_release"` (packages, `tools/package.sh`, `make build`) replaced that
+  setting since the development instrumentation came in. Each of them now passes
+  `-C force-frame-pointers=yes` too.
+- **The collector's sweep is back to its 0.5.8 speed (#922).** The cell loop of #538 phase A (per-cell counters
+  and an extra kind test per cell) cost ~5% of all instructions on allocation-heavy programs; the ladder's
+  04-bigint and 07-objects ran 7% and 6% slower than 0.5.8. The loop has its old shape again, and the sweep
+  counters of `OKKAMA_DEV=gc` are per page (cells visited, in full pages, in empty pages). 04-bigint 2180M →
+  2075M instructions (225 → 210 ms), 07-objects 259M → 251M (20 → 17 ms).
+- **The JIT compiles a call of a field accessor as the load itself (#541).** A method whose whole body returns a
+  field (`x() is int { x; }`) costs no call; its entry still counts as a step, so step budgets see the same
+  program. Two accessor calls per loop round: 96 → 50 instructions, ~9.9 → ~6.0 ns. A general inliner (methods
+  that compute and can fail) is deferred until failures can name inlined frames; see `docs/inliner-541.md`.
+- **Worker values are serialized with one frame per open container (#452).** A map is read through its
+  iterator instead of a copied entry list, and an array's elements are not pushed onto a work list; the
+  traversal's scratch is bounded by depth. The wire format is unchanged.
+- **The language server shares document text and parses a file once per check (#472).** Open documents'
+  text and their last good inspection are shared (`Rc`) with the loaders' overlays instead of copied on every
+  check, and the full parse that decides test mode is the first pass's parse (without test items it is also
+  the production parse). Diagnostics unchanged.
+- **Tokens take 56 bytes instead of 88 (#471).** A token's literal payload was sized by the float literal
+  (three strings); it is boxed now. About 165 000 tokens per MiB of source: 14.6 → 9.3 MB of tokens per MiB;
+  parsing all of std (499 files, 5.3 MB) unchanged at ~73 ms.
+- **Native handles take 48 bytes instead of 184 (#439).** Every slot of the handle arena paid for the largest
+  provider state; the three large ones (an open rooted file, a directory listing, a temporary directory) now
+  live behind a box, allocated once per open. 100 000 live parsed JSON documents: peak RSS 92.6 → 71.0 MB,
+  time unchanged.
+- **Enum case duplicates are found with a set (#475).** Registration kept a growing list and searched it
+  for every case, quadratic in the number of cases; the ordered list still gives the ordinals, a set answers
+  "declared already?". Checking an enum of 16 000 cases: ~425 → ~115 ms (≈100 ms of it start-up); the same
+  diagnostics, in the same order.
+- **Base85 and quoted-printable encoders reserve their output (#467)**, as base32/base64 already did: five
+  characters per started 4-octet group, and the input size. Pre-sizing UTF-16/32 output was measured and
+  rejected: counting the units costs more than the reallocations it saves (UTF-16 +15–30%, UTF-32 even), and
+  the buffer is transient either way.
+- **JSON writing keeps scratch to the depth of the tree (#466).** `string()`, `pretty()` and `pointer()` walk
+  one frame per open container instead of queueing every child of a wide container, write escapes, numbers and
+  pointer tokens straight into the output (no `format!` per control character or per number) and copy unescaped
+  runs whole. A 2000-element document written compact and indented: about 19% faster; output is byte-identical.
+- **JSON parsing reads the UTF-8 text directly (#468).** The parser walks the source bytes instead of a
+  `Vec<char>` copy (4 bytes per character, kept alongside the text), so a parse state holds a quarter of the
+  memory for ASCII input, and a 100 KB document parses about 6% faster. Error offsets, lines and columns still
+  count characters.
+- **Regex results are shared, not copied (#464).** A query's spans and a parsed replacement template are cached
+  behind `Rc`: repeated readers and the match a query produces share them, and only the strings handed to the
+  program are copied.
+- **Regex search reuses its scratch (#463).** The NFA simulation keeps two state frontiers and swaps them, stamps
+  its visited marks with a generation (cleared in O(1)) and reuses one ε-traversal stack, instead of allocating
+  all three for every input character: a search over 900 characters is 24% faster without captures and 15% with
+  them (host, `\d+x` and `(\w)(\d+)x`).
+
+- **`match` gets compact cases; `?? … !!` is removed (#893).** A case body is a block or `case pattern: value;`, and
+  the two forms mix in one `match`; `case _` is the remainder (another spelling of `else`). Nothing else about
+  `match` changes: one evaluation of the subject, only the chosen case runs, bindings stay in their case, the
+  usual exhaustiveness, repeated-case and typing rules. The experimental `?? … !!` selection is gone from the
+  lexer, parser, AST, checker, formatter and the VS Code grammar (0.10.0); `??` is now a syntax error that points
+  to the compact form. A two-way choice on a `bool` is an `if` expression. 190 uses in std, examples, t/ and
+  conformance were migrated with the compiler's own spans and enum names; the t/ generator writes compact
+  cases and now also nests them. Book EN/RU 24.3 and spec §15.1 describe `match` as one construct with two case
+  forms.
+
+- **A `match` case that can never run is an error (#286).** A repeated enum case (`Duplicate variant pattern`), a
+  repeated literal (`Duplicate case pattern`) and an `else` after cases that cover every value of an enum or `bool`
+  (`Unreachable else: the cases already cover every value`). Thirteen dead `else` branches in std were removed.
+- **More resources are destroyed directly, without a region (#909).** The `statics` pass no longer follows the
+  unwind edge of a block that cannot fail (a deferred action's `fail.secondary`), which kept every resource of a
+  scope with a `defer` inside a `try` dynamic: static resources over the corpora 129 → 198. Its reach is now judged
+  from the code after the creation, not the creating block, whose own failure path never has the value.
+  `OKKAMA_DEV=lower` names each rejection reason in detail.
+
+- **A channel message never outlives the resource it carries (#915).** Book 20.2's pins: an accepted message pins
+  the resources another owner keeps until delivery and the end of the receiving scope. An owner that ends first
+  (an async helper's input, a sender's local, any outer scope) hands the resource to the channel, the receiving
+  Future or the scope that took it, instead of destroying it under the receiver. A receiver that is done first
+  leaves the resource with its owner, so source aliases keep working. New corpus program `channel-pins`.
+
+- **A successor Future can be handed on as a plain Future (#790).** `Future<^C>` (an async successor's Future)
+  is accepted where `Future<C>` is expected: an argument, a field, a declared result; a generic holder infers
+  `T = C`. That handoff uses the obligation. A typed local is not a handoff, the conversion goes one way only,
+  and there is no `Future<^C>` syntax. OIR gets `future.handoff`, verified for exactly that pair of types (a
+  Sparrow `move`). A failed call or initialization no longer adds a must-use error for what it was given.
+  Roles with async successor actions now lower: their witness awaits and wraps the result.
+
+- **Arrays played as `Sequencing` or `Cursor` throw the roles' typed errors (#769).** `Sequencing.item(index)`
+  outside `0..size()` throws `OutOfRange.because(...)`, `first()`/`last()` of an empty sequence throw
+  `EmptySequence.empty`, and `Cursor.item()`/`successor()` at the end throw `IterationEnded.ended`: catchable by
+  type or as `Error`, even when the program does not import them. They were program errors before. Indexing an
+  array directly (`values[i]`) and the array's own actions are unchanged; `collections/sequence` now imports
+  `error`.
+
+- **`LockGuard` and `Permit` are resources (#846).** A guard or permit nobody closed is released when its owner
+  goes: scope exit, early return or unwinding, like any object with a `destroy`. `close()` still releases it
+  earlier, and the capacity comes back once. A granted guard is an identity before its Future publishes it, so a
+  returned guard follows its taker and a cached one stays held across borrowed awaits.
+
+- **A Future owns its fresh inputs; an async action releases the unused ones when it completes (#587, OIR-2
+  §10.1).** Fresh call arguments belong to the Future (its INPUTS) instead of the caller's scope. When an async
+  body's action completes, what its result does not keep is destroyed before the Future publishes the result
+  (async destroys are awaited, shielded from cancellation; a destroy failure becomes the Future's failure).
+  Runtime drivers (collectors, channel operations) keep their inputs until the Future itself closes (#845).
+- **Channels own the messages they buffer (#587, OIR-2 §7.3).** An accepted fresh message belongs to the channel
+  until it is delivered, then to the receiving Future; a rendezvous hands it straight over. Unread messages are
+  destroyed when the channel's last capability (the channel or one of its endpoints) goes; a cancelled blocked
+  send destroys its own message. Before, the sender's scope destroyed a message even while it was still buffered.
+
+- **Ownership gate on 2026-11-21 (release/0.6.0 at 9f3740325).** In the container, 11-ownership takes 7.8 ms against
+  CPython's 27.5 and Go's 5.1; micro `destroy` takes 20.6 ns (Tomato 114.6, CPython 213.8). bench/ownership/README.md.
+- **Ownership on par with CPython, measured against Go too (#903).** The container gate (`bench/ownership/run.py`,
+  1 CPU, now with a Go 1.23 column) after #528 and #909 2b:
+
+  | | Tomato | Tweed | CPython | Go |
+  |---|---:|---:|---:|---:|
+  | 11-ownership, ms | 116.3 | 24.4 | 29.8 | 5.0 |
+  | micro `destroy`, ns | 118.5 | 47.1 | 212.2 | 3.2 |
+
+  The plain twin runs in 5.2 ms against Go's 5.0, so what separates Tweed from Go was the ownership tax, which
+  #529 then cut by more than half (11-ownership on the host: 21.7 → 9.5 ms).
+- **Fast paths and inherited summaries (#529).** Machine code decides `region.track`/`adopt` and the
+  per-instance identity of `obj.new` from the object header, and calls the runtime only when the value may
+  reach a free identity (per 11-ownership round: 604k region-add calls → 2.8k, 100.7k identity calls → 801). An
+  adopted big array is summarized at once, and slices, concatenations and map merges of summarized parts are
+  summarized at birth, so the versions of a map grown by `reduce` are not walked again (walk steps 111k → 15k).
+  `SPARROW_CORE_PLAIN` keeps the helper path. #526 (fusing track and adopt) is closed as not needed.
+- **Static resources (#909 2b).** A resource created, used and dying in one scope of one function is destroyed
+  directly at the scope's exits, with no region. The new pass `statics` (in `OKKAMA_IR_PASSES`) reuses the
+  ownership census (`ir/ownership.rs`) for the escape question and adds only type, region and dominance
+  conditions. New Sparrow instructions `resource.pin`, `resource.leave` and `resource.unwind` (opcodes 158–160,
+  SPB 16). micro `destroy`: 117 → 47 ns.
+- **Resource identity inside the object (#528, layout chosen by the owner: +16 bytes).** An object with a
+  destroy of its own keeps its serial and owner in two hidden words after its fields, instead of a hash map with
+  a watched entry per resource. Frames and objects without a destroy of their own keep the map. micro `destroy`
+  −24%, peak memory with 100 000 live resources 158 → 106 MB. The +8-byte packed layout was measured and
+  rejected (okkama-docs/runtime/identity-layout-528.md).
+- **Static resources reach further (#909 2b).**
+  - **Scope.** A resource from a factory (not only a constructor), in an async body, or as the oldest member of
+    a region whose newer members close first is static too.
+  - **Machine code.** It numbers inline identities, pins and calls a static resource's destroy directly. Stats,
+    devtrace and a destroy trace keep the runtime path.
+  - **Measured.** Static resources over t/, examples and bench: 13 → 35. micro `destroy` on the host: 50 → 31 ns.
+  - **Devtrace.** `OKKAMA_DEV=lower` counts why a value stays dynamic.
+- **Regions are made when they first hold something (#530).** Machine code enters a scope's region as nothing; the
+  first add with something to own, or a transfer into it, makes it. Most regions stay empty and cost nothing:
+  11-ownership allocates 20 MB instead of 51 MB per three rounds, collects 9 times instead of 24, and a round
+  takes 7.5 ms instead of 9.5 ms on the host.
+- **One ownership linearity check (#910).** After the IR passes, every region and static resource is opened once,
+  used only while open and closed exactly once on every path, failure paths included. It runs in debug builds and
+  with `OKKAMA_VERIFY_OWNERSHIP=1`, never in release.
+- **Big async bodies keep their registers in their frame (#552).** No copy per `await`: compiling an action with
+  300 awaits goes from 2.8 s to 0.22 s.
+- **Devtrace by site (#912).** `OKKAMA_DEV=runtime` counts identity requests and region adds by `function:pc`; the
+  lowering counts ownership operations per function. `OKKAMA_DEV=jit` reports machine-code memory: bytes requested
+  and pages finalized (#457).
+- **Late edges (#907).** Each value that gains a reference after it is built (`Atomic.replace`, a Future's
+  outcome, in-place payloads, `obj.init`, `once` slots) is accounted for, so a container summary stays true
+  (docs/map/ownership.md). An adopted array holding Futures is not summarized.
+
+### Fixed
+
+- **A fresh value made by a `defer` on an early return.** It was tracked in a nested scope the return had already
+  closed, so it was never destroyed. The linearity check (#910) found it.
+- **Futures that outlive their owners (#817).** A Future still running when its owner closes detaches to a root
+  region instead of being lost, and a member started into a group whose owner already closed settles on its
+  own: closed at the call if it finished, detached otherwise. After shutdown, a root closer destroys the
+  detached outcomes. Before, those outcomes were never destroyed.
+- **Futures a collector's sequence makes (#845).** The fresh Futures a user `Sequencing`'s `item` returns to
+  `Raced`, `Settled` and the other collectors belong to the collector's driver. Their outcomes are destroyed
+  once, newest first, when the awaiting scope ends; before, never.
+- **#797:** a driver's program failure reaching the caller through `await` passes a `catch e is Error`, as the
+  language spec says (9.5). It already did; a test now pins it.
+
+- **Tweed 2a, fast paths of the ownership runtime (#909).**
+  - **Identity bit.** An object with a resource identity carries a header bit (`IDENTITY`). Region adds,
+    resource walks and structure indexes test it before looking the identity up, so values that are not
+    resources (12 of every 13 region adds in `examples/`) skip the hash map.
+  - **Small closes.** A region that fits its inline slots sorts its entries on the stack.
+  - **Measured on the host, same build A/B:**
+
+    | Benchmark | Before | After |
+    |---|---|---|
+    | micro `destroy` | 130 ns | 112 ns |
+    | `destroy-observed` | 124 ns | 103 ns |
+    | 11-ownership | 26.1 ms | 24.7 ms |
+
+  - **What remains** is the identity map itself. Moving the identity into the object is #528 (OH-04), a
+    representation for the owner to approve.
+- **`okkama build` has no target selection, and Blade has no engine (owner, 2026-11-20).**
+  - **CLI.** `--target` and `--backend` are gone: `okkama build FILE -o OUT.spb` always writes Sparrow
+    bytecode, and either flag is now an unknown option.
+  - **Blade.** `blade.toml` loses `[build] target` and `[run] engine`. Blade answers an old key with
+    "[build] target is gone: Sparrow is the only engine; remove the key". `blade new` no longer writes them,
+    and `blade build` calls `okkama build … -o`.
+  - **Docs.** The README, LLM-GUIDE, the Book, the Sparrow Book and the Bible (ch. 23) follow.
+- **Champ is removed (#911, owner's decision).** Tweed is built on Tomato's pipeline, so the static-ownership
+  attempt goes, about 355k lines including fixtures:
+  - **OIR-2:** the `okkama-oir` crate, `lowering/oir2` and `codegen/sparrow_oir2`.
+  - **SPB 17:** the loader and its proofs, `okkama-sparrow/src/spb17`. The word representation it shared with
+    Tomato (`Repr`, `TraceSlot`, `OBJECT_KIND`) is now `okkama_sparrow::layout`.
+  - **The Champ runtime and JIT** (`sparrow-core/src/champ`, `jit/champ`), and the `champ-abi` feature with
+    every block it gated.
+  - **Tools and tests:** the Champ tests and harnesses; the conformance adapter's `champ` engine, its blocker
+    ranking and container script; the verifier differential; the P1 two-toolchain ownership oracle; the OIR-2
+    reference model. The corpus runners lose `--pipeline oir2` and the `champ` configuration.
+
+  The code maps now describe Tomato's pipeline. No rule is implemented in more than one ownership layer any more
+  (`docs/map/rules.md`).
+- **One engine, no `--engine` (owner, 2026-11-20).** Sparrow is the only engine: the IR interpreter (#584) and
+  the JVM backend (#585) are gone.
+  - **CLI.** `okkama run` no longer takes `--engine`, which is now an unknown option and a usage error.
+    `OKKAMA_ENGINE` and `OCS_RUST_ENGINE` are ignored; the OCS capabilities always report `sparrow`.
+  - **Callers.** The scripts (t/, the micro check, examples, the Bible's examples, std tests, okgen, PGO,
+    packages, the ownership oracle, persistence A/B), the tests and the docs no longer pass it.
+  - **Old toolchains.** `bench/micro/run.py` passes `--engine` only to a toolchain that still knows it: before
+    #584 its default was IR.
+- **Ownership gate against CPython (#908).** `bench/ownership/run.py` runs Linux builds of Okkama and CPython 3.13 in
+  the same container: the 11-ownership program and its plain twin, plus the micro pairs. On 2026-11-20:
+
+  | | 11-ownership |
+  |---|---|
+  | Tomato | 100.5 ms |
+  | Tweed after #905/#906 | 23.0 ms |
+  | CPython | 28.2 ms |
+
+  The owner's target (ownership on par with Python) is met on this program. A resource still costs ~100 ns per
+  call (micro destroy): phase 2, #909.
+- **Tweed: a resource walk goes through a container's structure index (#906).**
+  - **The index.** An immutable container (array version, closure, persistent map, box) keeps the children
+    that may hold an identity. It is found once and dropped when the collector reclaims the container.
+  - **No more resets.** Objects that are not identities stay leaves (#905), so the index is structure, not
+    ownership, and never goes stale. The ownership summary, by contrast, is reset whenever an old identity
+    becomes free.
+  - **Not indexed:** buffers past their frontier and mutable payloads.
+  - **11-ownership:** walk steps 1.7M → 111k, 29 → 26 ms on the host. Most of the remaining tax is rebuilding
+    the indexes of the intermediate maps of a `reduce` accumulator. Region tracking of those versions is
+    phase 2 (#909).
+- **Tweed, step 1: an object is tracked per instance, not per type (#905).** Tomato gave a resource identity
+  to every object whose *type* could reach a `destroy`. On 11-ownership that is all 100 000 `Record`s, through
+  a `Ledger`-role field that one implementation, `Vault`, closes. An object without a destroy of its own is
+  now an identity only when its fields, as built, may reach one: an identity, a container, or a reference
+  field not yet initialized. Objects are immutable, so a leaf stays a leaf.
+  - **11-ownership:** 84 ms → 27 ms (host, gate build; Python 30 ms). 99 900 identities are skipped, region
+    closes drop from 100k to 503, and walk steps from 2.9M to 1.7M.
+  - **Scope of the rule.** It applies only to objects the program builds (`obj.new`, `obj.next`,
+    `variant.new`) whose type is not a builtin, has no destroy and no `once let` slot. Runtime objects such as
+    groups and driver results, whose contents arrive later, stay per type. In the first version the Wave CI
+    caught a FutureGroup judged a leaf: the Bible's 20-keeps never closed its lent lamp.
+  - **Tests:** behaviour tests with a mutation check (`tests/tweed_ownership.rs`).
+- **Development instrumentation across the pipeline and the runtime (owner, 2026-11-20).** The new crate
+  `okkama-devtrace` adds events, counters, timers and dumps, switched on by `OKKAMA_DEV` (categories, function
+  filters, `dump`) and written to `OKKAMA_DEV_OUT`.
+  - **Compiler.** Every OIR-2 stage is timed and sized, with per-function dumps (a new
+    `text::print_one_function`). own records why each scope settles dynamically, the operations it emits and
+    the work and memory of each function's analysis, including budget exhaustion. Verifiers record their steps
+    and rejections. SPB 17 records codegen and each load check's time, plus the rejecting check with its
+    function and a listing.
+  - **Runtime.** The calls of every Champ helper and Tomato region helper, allocation, GC and JIT.
+  - **Release.** Release builds compile it out with `--cfg okkama_release`: make, PGO, packages.
+- **More code runs on Champ, in the Wave CI (#894, owner's decision).** The conformance job also runs, on the
+  binary it built: the t/ suite (50 668 checks; `tools/t/run.py` has a `champ` configuration, `--champ-okkama`), the
+  micro-benchmark programs against their oracles (moved from okkama-docs into `bench/micro`; `check.py` checks
+  N=17 and N=31 without timing), `examples/` and the Bible's 240 examples (copied into `examples/bible`, with
+  `check.py`). On Sparrow a failure fails the job; on Champ the failures are ranked by reason in the summary.
+- **`rat.numerator()` and `rat.denominator()` return `int` (#743, owner's
+  decision).** They returned decimal strings because a part could exceed the
+  old `int`; since `int` is exact and unbounded (#189) every part fits. The
+  denominator of the canonical form is positive. Migration: code that joined
+  a part as text writes `.string()` (`r.numerator().string() + "/" + ...`),
+  and a check such as `r.denominator() == "1"` becomes `r.denominator() == 1`.
+  The compiler, Tomato, Champ (OIR-2 `rat.numerator`/`rat.denominator` and
+  SPB 17 `rat.ext` now yield `int`), the IDE completion, the Book, the
+  standard library (ten call sites), `L02.rat.constructor` and `t/op` follow.
+
+### Fixed
+
+- **A child started into the caller's group as a temporary keeps what it borrows (#914).** `group.start(
+  Reader().later(lamp, gate))` closed `lamp` when the starting action returned, and the child read it after its
+  destroy; `let child = …; group.start(child)` was right. `FutureGroup.start` adopted a fresh Future into the
+  group, so the closing scope no longer handed the group the values the Future borrows. Now the group only lists
+  the Future, the scope that made it keeps it, and its close hands both to the group, as for a bound child. The
+  Bible's 20.9 states the rule for both forms.
+- **A scope's close envelope covers what settling the function's Futures may release (L13, #847).** On Champ,
+  `L13.migration-and-restart` (awaits in a branch, over SQLite) stopped at `D18_EXECUTOR: merge envelope omits
+  destroy failures`. A close that settles a Future's duty, or entries admitted at run time, may release the outcome
+  or the unstarted inputs of any Future the function creates; own now adds their destroy failures to every scope's
+  envelope of such a function, as the loader assumes.
+- **std's TCP race gets through B9 and codegen on Champ (#847).** B9 no longer carries a binding across an edge that
+  leaves the binding's scope (Fable's ruling), and codegen admits a static split of an object that holds a resource
+  without a destroy of its own; the loader reconstructs it. The TCP cases stop next at `SPB_SCHEDULE`.
+- **The Champ conformance adapter builds with the `gate` profile** (owner, 2026-11-20): release optimizations without
+  LTO, as the Wave CI's crate tests. A debug build compiled the SQLite cases in about 90 s, over their 60 s budget.
+- **Async tests run on Champ (#570).** A test profile with an `async test` stopped before lowering with
+  "async test … (#570)", although the async lowering already took test bodies as fixed roots. The gate is gone:
+  `L04.fakes.typed-state` and `L07.test-runner.all-pass-async` pass on Champ (Structural). A silent exit status 4
+  from `main` is no longer read by the Champ adapter as an unsupported program (`L01.gram.test.inner-grammar-not-parsed`).
+- **An array of Events, or of objects that hold one, compiles on Champ (#891).** Example: `has events is @Event`,
+  or std's `@TcpRaceAttempt`, whose attempts keep their gates. own keeps such an array as a
+  managed collection of capabilities (references with deps), the loader as closed plain data, and codegen refused it.
+  `L08.collect.completions-consumers` and `L08.collect.settlement-order` now print their expected output on Champ.
+- **Compiling large async bodies on Champ is about twice as fast (#889).** `L11.sqlite.round-trip` took about
+  180 s to compile in a debug build. Now: coro 55 → 4.7 s (one use index per repair series, worklists), low
+  52 → 17 s (a close's inventory finds only the blocks it asks for), codegen and the load check 104 → 52 s
+  (the composite table is built once for the sunk module, block and root indexes in the evidence pass, a running
+  union of failure masks). Register allocation and SPB 17 verification remain the largest parts.
+- **An async defer that awaits a method of a captured binding compiles on Champ (#890).** Example:
+  `defer await connection.settled()`, in every SQLite program. The defer call's summary kept the capture's
+  retention while the async entry's contract retains nothing, and the SPB 17 load check refused the program. With
+  this, #806, #888 and the low budget (#889), `L11.sqlite.round-trip` runs on Champ (Structural).
+- **An async method that returns a field of `self` compiles on Champ (#888).** Example:
+  `async view() is Res { inner; }`. After coro, the body's only parameter is its frame, and `verify_coro` checked
+  the summary's field against the frame type: T4 "summary field does not belong to its parameter type". It now reads
+  the language signature (continuation 0's slots). std's `Query.rows` and `DbPreparedTransaction.rows` have this
+  shape.
+- **coro no longer spends its budget on several loops that each suspend (#806).** The reaching-version fixed point
+  of SSA repair oscillated (`join` is not monotone), so a `main` with three suspending loops ended at
+  `coro: LimitExceeded("steps")`. A block that has merged now keeps its merge until the trivial merges are removed,
+  and the program prints Tomato's output (also under GC stress). The coro budget per module rises from 10 000 000
+  to 100 000 000 steps: repair scans a body once per value saved across a suspension, and the SQLite programs'
+  module needs about 15 000 000. Full on the loops program ends at its step limit (#887).
+- **A defer that reads only `self` survives a caught failure on Champ (#798).** Example: std's `QueryRows.next`,
+  `defer busy.replace(false)` with a `try` around `await origin.row()`. Closing the `try` scope on the failure path
+  kept only what the catch handler reads, so `self` was dropped and `own` stopped at "missing incoming SSA slot".
+  The close now also keeps what the enclosing scopes' registered defers capture. `L08.db.query-lifetime` passes on
+  Champ (Structural); the SQLite cases now stop at the coro step limit (#806).
+- **SQLite programs get past the native signatures and the timeout helpers on Champ (#824).**
+  - `runtime/database`'s natives take `@DbCellState`, which `runtime/db` declares. The compiler and the SPB 17
+    loader now resolve a table handle in the native's own module first, then as the only runtime module's handle
+    of that name, as Tomato matches it by name.
+  - A timeout over a clock role that no object implements (std's `SqliteConnection.backup`) synthesizes
+    unreachable helpers, as an ordinary role call does (#757). Before, its empty dispatch stopped `own`.
+  - The next blocker of the L11 SQLite cases is #798. Full still rejects the uninhabited clock role (#885).
+- **A Future that leaves an inner scope or its starter no longer reads a destroyed resource of an enclosing scope
+  (#882, Champ).** Example: `{ let f = Reader().read(r, gate); group.start(f); }` with `r` from the enclosing
+  scope, or a temporary `group.start(Reader().later(lamp, gate))`. #881 kept only what the closing owner owned, so
+  the enclosing scope destroyed `r` while `f` still ran. Changes:
+  - A Future detached at a close, or started into the group of another owner, is registered as a borrower of
+    every other open owner whose identities it reaches.
+  - That owner's close walks its borrowers like its own detached Futures, and keeps what they reach for the root,
+    which closes it at shutdown.
+
+  Tomato still destroys first; that is a separate defect of the reference.
+- **Full ownership verification no longer rebuilds the whole function's aliases on every edge (#883).**
+  An ordinary `main` with 40 calls ran out of the verifier's step budget (Incomplete), and 20 calls
+  took 47 s in a debug build. Changes:
+  - `define` takes a result's source from its members' current alias classes, so two results of one
+    operation share one class. The alias directory stays a partition, and no verdict changes.
+  - An edge renames only the classes of the target's parameters and of the forwarded values.
+  - `OKKAMA_803_EDGE_CHECK=1`, set by `tools/verifier-differential.sh`, checks the partition and
+    compares the class remap with the full remap on every edge.
+
+  Now 20 calls take 19 s and 40 calls complete in 81 s. Full stays quadratic; the remaining scan of
+  contained sets is #884, postponed by the owner because Full is a test and CI gate.
+- **A function that returns a Future over its own parameter no longer destroys that parameter
+  first (#862, #864).** For example, `start(r is Res) is Future<int> { Feeder().feed(r); }`.
+  Champ destroyed `r` when `start` returned, and the Future later read it, yet Full
+  verification accepted the program. Changes:
+  - A binding, whether a parameter or a `let`, is never moved into a Future. The Future borrows
+    it and depends on it.
+  - A Future now carries the dependencies its `fut.new` names. An await's managed outcome
+    inherits them, and its deps say so; a plain outcome inherits nothing.
+  - A parameter that a returned Future depends on leaves beside the Future in the result
+    packet. The exit's selection names it (ruling (a)), and the caller destroys it at its own
+    close.
+  - The verifier refuses a result that depends on a parameter declared taken into the result
+    while the callee closes that parameter's part (V2).
+  - A split's ExternalDeps keeps the selected values' requirements as references.
+
+  Both the ticket's program and two Futures over one parameter now print Tomato's order under
+  Structural and Full verification. A Future over a local binding that is returned (#865)
+  stays refused until its ruling.
+- **A direct creation after a call that returned a Future no longer stops at load (#862,
+  ruling (b)).** Example: `await Feeder().feed(Res(name: "direct"))` after
+  `let f = Starter().start(…)`, and also after an async role call. The returned duty made
+  `main`'s inventory unknown. The `own.split` that `create_future` made of the offered
+  packet only to compute its deps then stopped at
+  `SPB_STRUCTURE: unknown static packet inventory`. Changes:
+  - The operand of `fut.new` is now `deps.of` of each input, combined with `deps.join`, and
+    no packet is split. This also applies to a fresh input.
+  - An await's outcome does not inherit what the Future owns (its inputs). The body owns those inputs and
+    destroys them, and an outcome that refers to one takes it along.
+  - Two more partition fixes from the review (#862):
+    - a selection that names a Future no longer moves a bound duty;
+    - only an admissible selection leaves a returned Future entry behind without a check.
+- **A Future with a parameter beside it can be returned a second time (#871).** Example:
+  `pass(r is Res) is Future<int> { Starter().start(r); }`, where `start(r)` leaves `r` beside its Future. Structural
+  destroyed `r` at `pass`'s close before the Future read it, and since #865 both modes refused the escape.
+  - In the model the owner kept with #868, `r` is `pass`'s own parameter, so `pass` carries it beside the Future too,
+    as a creation over a bound parameter does (#862). Its caller settles it at its close.
+  - A creation or a local beside a returned Future still has no name in the caller and stays refused.
+- **A running Future detached at its owner's close keeps what it borrows (#881).** A Future that `go` starts in its
+  caller's group and that borrows `go`'s locals (a bound Future, a resource) kept running after `go` closed, while
+  that close destroyed what it borrowed, and the body read it afterwards. Tomato keeps them alive until shutdown.
+  - Following Fable's ruling, agreed by the owner, a running Future that detaches at its owner's close takes with it
+    to the root everything of that owner it can still reach. A cache detaches with it, and an identity goes to a
+    kept packet of the root. The root closer releases them at shutdown, in Tomato's order.
+  - A close releases its Futures' duties only once it knows which of them detach: before its dynamic step or its
+    first plan. The walk starts from the detached bodies' language slots and follows what the collector traces.
+  - Known limit: something a detached body reads later from a shared holder (an Atomic, a channel) is not kept.
+- **A function can return a new object that stores a FutureGroup it made (#820).** Champ refused it at load
+  (`FRESH_ORIGIN`). The group's entry was an identity of the constructor's family that no site of the function
+  showed, so the function looked like it returned one fresh identity. Its relation now says `several` (#879).
+  Also pinned: a timeout on a fresh temporary receiver (`await Within(…).outcome()`, #840) runs under Full.
+- **A function that takes a FutureGroup keeps its precise failures (#877).** Since #875, a function whose entry
+  can carry a Future assumes every destroy failure. Own counted a FutureGroup's members among those Futures, and the
+  loader did not. A group starts every member it registers and holds no cold Future, so own now skips its members
+  as the loader does. A Future stored in any other object, a collector's included, still counts.
+- **A function can return a Future over its bound local Future (#874).** Example:
+  `chain() is Future<int> { let g = M().make("x"); U().take(g); }`. Structural refused the caller
+  (`D18_EXECUTOR`) and Full refused `chain` (B51).
+  - Following Fable's ruling (§6.3d with a Future as the local), `g` goes back beside the returned Future by a
+    rehome of its own. The relation declares each of its creations beside, typed by what its site creates, so
+    what `g`'s cache holds reaches the caller's envelope too.
+  - Returning such a Future further stays refused, as for a local resource (#871).
+- **A function can return a call's fresh object that holds another fresh one (#879).** Example:
+  `relay() is Box { Mk().make(); }` where `make` returns `Box(r: Res(...))`. Champ refused it at load
+  (`FRESH_ORIGIN`): own collapses a callee's fresh family into the one site of the call, so `relay` looked like it
+  returned one fresh identity, and codegen marked it a fresh singleton.
+  - Following Fable's ruling, a result relation now says `several` when its one site stands for a family of more
+    than one identity. Codegen marks no fresh singleton then.
+  - The #876 example returned further (`relay` over a `Box` that stores a cold Future) now runs end to end.
+- **A Future returned by a call can be stored in an object the function returns (#880).** Example:
+  `wrap() is Box { Box(f: P().pass("x")); }`. The loader refused it (`SPB_REHOME`): own stored the Future in the
+  `Box`, which moves its entry into the `Box`'s packet, and then still rehomed it at the exit.
+  - Following Fable's analysis, own drops the rehome of a stored Future that a call returned, as it already did for
+    one created here (D25.2 revision). A bound Future is borrowed by the object and keeps its rehome (PR-B1).
+- **A function can return an object that stores a cold Future (#876).** Example:
+  `make() is Box { Box(f: U().use(Res(l: "boxed"))); }`. The loader refused the caller (`D18_EXECUTOR`): its close
+  may settle the Future's cache, but the envelope came from `Box` alone.
+  - Following Fable's ruling, the `held` entries of #873 describe the caches reachable from any result that can
+    hold a Future, not only a bare Future's. The admitting scope counts their types.
+  - The verifier checks them at the exit, by type, against what the result's caches hold.
+  - Found along the way, both refused before this change too: returning a call's fresh aggregate fails
+    `FRESH_ORIGIN` (#879), and storing a Future returned by a call into a returned object fails `SPB_REHOME` (#880).
+- **A function can bind the outcome of a bound Future and return it (#870).** Example:
+  `let f = Wrapper().wrap(…); let r = await f; r;`. Full refused it with B91.
+  - Following Fable's analysis, a shared await's outcome stays in the Future's cache, and the value is a view that
+    borrows it. Binding the view now takes nothing; before, a split extracted the cache's holder graph.
+  - A call that borrows the view is offered nothing.
+  - Returned, the view leaves with the cache's rehome to the caller, as `await f;` already did.
+  - The verifier no longer reads what a cache holds as an input of a call whose arguments cannot hold a Future.
+  - A callee that takes the view, such as a constructor storing it (`Box(r: r)`), borrows it too (#878, Fable's
+    ruling). Nothing leaves the cache, which destroys the outcome once, when its owner closes, and a later `await f`
+    stays legal. Own never offers a view, and the verifier lets an admissible selection of values that cannot hold
+    a Future reach a cache's holder graph without taking it, as a cache-owned duty piece already did. An explicit
+    selection through a view is still refused (B91).
+- **A Future that arrives in an entry packet no longer crashes Champ when its input fails to destroy (#875).**
+  A synchronous function given a cold Future over a resource, bare (`drop(f is Future<int>)`) or stored in an
+  aggregate (`drop(h is Holder)`), settles that Future's cache at its close. If the resource's destroy failed,
+  Champ stopped with "invalid machine outcome". Tomato reports the failure, and now Champ does too.
+  - Following Fable's ruling, the rule goes by route, not by type: a function whose entry packet can carry a Future
+    it neither created nor has a relation for assumes every destroy failure. Its scopes that own anything declare
+    them, and so does its summary.
+  - The loader demands the same by the same route (`entry_carries_future`). An async body's bare Future parameter
+    is borrowed (PR-N2), and a creation thunk forwards its entry, so neither widens.
+  - Not covered: a call that returns an aggregate storing a cold Future is refused at load (`D18_EXECUTOR`),
+    which is fail-closed (#876).
+- **A returned Future's relation types what its cache holds (#873).** A function that returned the Future of
+  an async role slot over a fresh resource was refused by the loader (`D18_EXECUTOR`): the caller's close may
+  settle that cache, but its envelope came from `Future<int>` and missed the resource's destroy failures.
+  - Following Fable's ruling, a bare Future result's relation lists each creation its cache holds with its type
+    (`held=[site(site=3, ty=app.Res)]`). A function that returns such a Future further brings the same types
+    through the one site of its call. A parameter the cache holds needs no entry.
+  - The scope that admits the Future counts the destroy effects of those types, as it does for what comes
+    beside the Future (#865).
+  - The verifier checks the entries at the exit, by type, against the pieces the Future holds. It refuses a
+    `held` entry on any other result.
+  - Not covered yet: a Future that reaches a callee inside its entry packet (a bare Future parameter, or an
+    aggregate that stores one) has no relation; #875 covers it.
+- **A function can return a Future over its Future parameter (#866).** Example:
+  `chain(f is Future<Res>) is Future<int> { U().take(f); }`. Full refused it with B31 and B94.
+  - Following Fable's ruling, this is §6.3c for a parameter that happens to be a Future: `f`
+    goes back to the caller beside the returned Future (`beside=[parameter(1)]`), and the exit
+    names it. The caller's model counts it as returned.
+  - The creation itself borrows the bare Future (PR-B2): a creation summary declares such a
+    parameter borrowed, with a dependency on it.
+  - With a fresh argument, the caller offers the entry, gets it back beside the Future, and
+    settles it at its own close, as Tomato does. Before, an intermediate fix made Structural
+    print `Cancelled`.
+- **The verifier checks the `beside` marker; a thunk's input travels with its Future (#872).**
+  At a returned bare Future's exit, what the packet exports and the Future does not hold must be
+  exactly what the relation declares beside it:
+  - creations, as a multiset of types;
+  - parameters, by key (a beside parameter is exported and not held);
+  - nothing undeclared.
+
+  On the caller's side, a parameter taken into such a Future without being marked beside (a
+  creation thunk forwards it) is held by the Future's cache. So it now travels with the Future
+  when that Future is passed on, where before Full refused that with B31.
+- **No more silent use of a destroyed resource when such a Future is passed on (#871,
+  fail-closed).** Example: `pass(r) { Starter().start(r); }`. It returns a Future whose callee
+  left a resource beside it (#865). The default build compiled it and destroyed `r` at `pass`'s
+  close, before the Future read it.
+
+  Own now refuses, in both modes, any escape of such a Future from the scope that owns what came
+  beside it: the call's scope for a creation, or the binding's scope for a bound argument. A
+  Future that moves only out of an inner block, while the binding lives in the enclosing scope,
+  is unaffected. Carrying the beside part along is #871.
+- **A function can return a Future over its local resource (#865).** Example:
+  `make() is Future<int> { let r = Res(…); U().use(r); }`. It stopped at load with
+  `D18_EXECUTOR`, and Full refused it with B101.
+
+  Following Fable's §6.3d, `r` is a binding. It stays beside the Future in the result packet,
+  and the caller destroys it at its own close, as Tomato does.
+  - A result relation gets a `beside` list: what a returned bare Future's packet holds without
+    the Future's cache holding it. An entry is a fresh site with its type, or a taken parameter.
+    Own infers the list from the bound inputs a creation borrows.
+  - The caller treats a beside entry as an ordinary piece of the admitted packet. The Future
+    depends on it, and the receiving scope's close envelope gets its destroy effects.
+  - The callee may carry a beside creation in the returned Future's exit selection.
+  - A `beside` entry on a result that is not a bare Future is refused.
+  - A caller that returns such a Future again has no name for what came beside it, so Full
+    refuses that (fail-closed).
+- **An async action can return the awaited outcome of a temporary Future (#867).** Examples:
+  - `async relay() is Res { await Wrapper().wrap(Res(…)); }`;
+  - the same through `let r = await …; r;`.
+
+  Full refused both with B92. Own rehomed the taken cache to the caller, which broke the
+  temporary's unique-cache proof. The verifier also treated the taken outcome as a view of the
+  cache.
+
+  Changes (Fable's ruling):
+  - A taken outcome belongs to the awaiting scope. Own does not rehome it.
+  - In the verifier, the outcome has an identity of its own, with a piece in the outcome packet.
+  - The outcome does not inherit what the Future owned. In coro that also covers the holder
+    graph saved across the suspension.
+
+  The bound form `let f = …; let r = await f; r;` is a view of a bound Future's outcome. It is
+  still refused (B91) and tracked separately.
+- **Full no longer refuses an async body that returns a resource after an await, or beside a
+  local resource (#869).** Two examples:
+  - `async relay() is Res { let n = await W().wait(); Res(…); }`;
+  - an async function that destroys a local resource and returns another.
+
+  Full stopped these in `verify_low` with B105 ("cleanup root map refers to an unavailable or
+  duplicate SSA holder"). Own carried the returned value through the final close as an SSA edge
+  value, though only `exit.commit` needs it. If a destroy in the close plan failed, the reserve
+  went into the plan and the value was destroyed, while a root of the next plan still named it.
+
+  Changes:
+  - The returned value is no longer carried through the action root's close. The commit's value
+    and deps come from the commit itself.
+  - The verifier defines all results of an instruction before it checks their facts.
+  - `cleanup.deliver_cancel` is modelled as the runtime does it: it delivers nothing (ruling
+    #601 K2).
+- **The verifier checks a Future's deps against its inputs (#864, first part).** Nothing
+  compared `fut.new`'s deps operand with its arguments, unlike a call, where B32 does. Now
+  the operand's full deps must cover two things. First, the external keys of what each argument
+  the target's creation summary takes, and a bare Future argument, refers to, except what the
+  Future's inputs packet owns. Second, those arguments' requirements, the dependencies they hold
+  without a key. A split's ExternalDeps now carries the selected values' requirements too. A
+  Future created from managed inputs beside a borrowed Future now also depends on that Future. A creation thunk takes its deps from exactly those
+  inputs. With none, the deps are the empty `deps.join []`, never those of a receiver that a
+  witness entry declares managed only for transport.
+- **An async role slot takes several fresh arguments (#863).** A creation thunk with more
+  than one owning input stopped with an unsupported-async error. Its Future now depends on the
+  union of their deps through a new read-only operation, `deps.join` (OIR) and opcode 89
+  `deps.join` (SPB 17). A thunk still never restructures its entry packet before `fut.new`
+  (ruling PR-N2, third amendment). The loader requires the union to retain every value it
+  joins. Two fresh resources passed through an async slot now print Tomato's order under
+  Structural and Full verification.
+- **An async role slot takes a fresh argument as a direct async call does (#860).** A call
+  through an async role slot (or a bound async action, or an async capability field) reaches
+  a creation thunk, which own and the verifier treated as an ordinary call. A fresh resource
+  argument failed Full verification, and a fresh Future argument was offered to the thunk. Now
+  such a call is a creation (ruling PR-N2): the thunk passes its entry packet whole to
+  `fut.new`, so the fresh resource leaves with the Future and is destroyed in the callee's
+  body, and a bare Future argument is borrowed and stays with the scope that created it, as on
+  a direct call. The verifier lets a creation thunk export its entry only when every owning
+  argument is taken whole into its result (B5.1), and refuses a call of an async callee that
+  consumes a bare Future or offers its duty in the call packet (B9.1). The loader reads a
+  thunk's entry as its created body's
+  (`entry_carries`) and checks what its callers give it (`SPB_CALL_INPUT`). Role methods in
+  OIR text carry `async`. A fresh Future argument keeps PR-B2's order on both paths: its
+  outcome is destroyed at the close of the scope that created it, where Tomato destroys it
+  when the callee ends (owner's decision on #861).
+- **A fresh Future started through a role is registered with the group (#818).** A Future
+  passed to `FutureGroup.start` through the `Supervising` role was retained by the role's
+  adapter and settled when the adapter returned, so a member's outcome was destroyed at the
+  call, or detached to the root, instead of at the group owner's close. A compiler-built
+  adapter now carries an `adapter` attribute, which the verifier checks against its body (one
+  call of its target), and an adapter whose call owns its inputs passes its entry packet to
+  that call as is (ruling PR-M). The destroy order matches Tomato under Structural and Full
+  verification. Source functions keep their rule: they accept their inputs.
+- **Coro makes a Future's duty a slot where it reaches a close on some paths only (#853, S3
+  #857).** A Future created in one branch of its owner, or a failure handler shared by a call
+  before and after a creation, no longer stops coro with "a cache duty that reaches its
+  owner's close on some paths only": the owner's duties become slots (`duty.empty` after each
+  `scope.begin` and each consumer, the slot operand at the creation), and each close settles
+  the version that reaches it, full or empty. Other scopes keep their output exactly. Three
+  new coro goldens run end to end on Champ with both branch outcomes.
+- **A loop that awaits a Future created outside it runs on Champ (#805).** The coro verifier
+  and Low kept the old name of a duty token that an edge passed into a loop header's
+  parameter, so Low saw "two tokens of one duty reach a close" and the Full verifier asked
+  the await to save the old name. Both now move an edge argument into the parameter. The
+  program of the issue prints Tomato's output under Structural and Full verification and
+  under collector stress.
+- **Duty slots in OIR-2, the verifier and Low (#853, S2 #856).** OIR-2 gains `duty.empty`
+  and the slot operands of `fut.new` and `fut.spawn` (coro and low only). The verifier
+  checks single occupancy (`d26-slot-occupied`), that no consumer moves an empty slot
+  (`d26-empty-duty-moved`) and that a close settles every slot; an empty slot adds no
+  effect to its close. Low settles every slot of a scope with slots at each close, by
+  schedule position. Hand-written coro bodies with branches, shared handlers, nested
+  scopes and a suspension run end to end on Champ with the slot full and empty. Nothing
+  emits the forms yet (S3).
+- **Duty slots, groundwork (#853, S1 #855).** SPB 17 gains `duty.empty` (opcode 88): the
+  empty version of a Future's duty slot. `fut.new` takes it as an optional last operand.
+  The load gate enforces single occupancy and that a duty leaves only a full slot
+  (`SPB_DUTY_SLOT`). It accepts a close that settles a slot that may be empty, or is
+  empty, and the Champ runtime settles a zero duty to nothing in schedule order. Nothing
+  emits the new forms yet: coro does from S3 on, which lifts the "on some paths only"
+  refusals (#805). Loader and runtime tests, each rule mutation-checked; the codecs
+  round-trip the new forms; ABI text D26.
+- **An async helper can bind and await a borrowed Future in a nested scope (#848).** A
+  helper whose parameter holds Futures (an array of them, a completion stream) was refused
+  at load (SPB_SCHEDULE) when it bound an element with `let` inside a block, an `if` or a
+  loop and awaited it. The load gate's carrier analysis now tells entries a scope admitted
+  from those it only accepted or bound: an admissible split never selects a bound entry
+  (Fable's ruling), so the nested scope that admits its selection need not settle entries
+  dynamically. Loader unit test with the three cases, mutation-checked; end-to-end tests
+  with Tomato's output (block and `if` under Full too; the stream drain Structural, #796).
+- **A Future whose outcome has a `destroy` runs on Champ in a loop body (#851).** The load
+  gate stopped such programs at D18_EXECUTOR ("merge envelope omits destroy failures"):
+  every close of a function that creates such a Future was taken to release its outcome,
+  and a scope state carried around a loop across an await could not be proved empty. Now
+  only a close that settles a duty (or the entries admitted at run time) releases an
+  outcome, and the emptiness proof follows a `frame.resume` back to what its `frame.save`
+  stored. A compiler-level load test on an own fixture, mutation-checked both ways, and
+  end-to-end tests with Tomato's output (`for` and `map` bodies, awaited, abandoned, and a
+  throw after the await).
+- **A Future in the body of a `map`, `reduce` or `filter` runs on Champ (#849).** OIR-2
+  coro refused such a body ("a cache duty that reaches its owner's close on some paths
+  only"): the builder's unwind cleanup was shared by every failing site of the body, so the
+  failure of a call before the Future and the failure of its await reached the body's close
+  through one block, with the duty on one path only. A cleanup made before a Future is no
+  longer reused after it. Two layers below needed the same shape: a builder that lives
+  across an await moves through the frame, which coro marks linear and SPB 17 stores as a
+  value slot, and the loader's builder rule now lets `frame.save` consume a builder and
+  `frame.resume` give it back. Coro goldens for an awaited and an abandoned Future in a
+  `map` body; lowering, codegen and loader unit tests, mutation-checked; end-to-end tests
+  with Tomato's output. Found on the way: #851 (a Future whose outcome has a `destroy`, in
+  any loop body, stops at D18_EXECUTOR).
+- **Champ: `FutureCompletions` (#810, G1 step 4).** `remaining_count` and `completion` now
+  run on Champ through Tomato's stream driver. The stream lives in the object's runtime
+  cell, after its source fields, and holds references only: the origins' duties stay with
+  their owners. It is made at the first `remaining_count` or at the first step of the
+  first request, and the origins are read through the sequence's own `size` and `item`. A
+  sequence whose `item` returns a Future with a duty of its own (a user sequence that makes
+  a fresh Future) is refused with a named program failure, after that Future is closed;
+  Tomato streams such Futures and never destroys them (#845). The loader ties a
+  completion's result to the origins' own Future type. A request that started the stream
+  keeps its receiver after its release: it is what hears the waiting origins settle, so a
+  stream first read inside a helper still hands its later origins to the next request. The
+  refusal closes the returned packet under its own failure, so a failing destroy is linked to
+  it and a stop during the close stays a stop (review of steps 3–4). `AllFutures` over byte
+  outcomes is covered by a test. The conformance cases that consume the stream in a `map`
+  body wait for #849; a helper that binds a completion with `let` inside a loop or a branch
+  waits for #848, and the same loop over a local stream in `main` for #805.
+- **Champ: `AllFutures` (#810, G1 step 3).** `AllFutures.results` now runs on Champ. Its
+  `Sequencing<T>` result is made by a helper that the compiler generates, `Wrap`. `Wrap`
+  turns the array of the members' outcomes into the role through the program's own array
+  adapter, which the compiler declares when no conversion in the program needed it. The
+  entry retains its receiver, since the elements are views into the members' outcomes. The
+  loader checks `Wrap`'s shape and ties its element to the origins' outcome. Conformance
+  `all-futures-order`, `wake.transitive` and `concurrent-cas-and-dedup` pass.
+- **Champ: `Raced` and `FirstSuccessful` (#810, G1 step 3).** Both collectors now run on
+  Champ through Tomato's driver. The driver reads the origins through their `Sequencing`
+  role, calling the sequence's own `size` and `item` through the driver call bridge, so a
+  Future that `item` makes fresh joins the driver's inputs. Losers are cancelled and waited
+  for. The new loader rule `HOLDER_ORIGINS` ties the origins' outcome type to the entry's
+  result. Conformance `race-empty` passes. The programs are checked under Structural
+  verification only: Full verification still refuses the array adapter over Futures (#796).
+  Found on the way: #845 (Tomato never destroys the outcomes of Futures that a user
+  sequence makes).
+- **Champ: persistent arrays (#826).** On Champ, `+`, `slice`, `removed_at` and
+  `replaced` copied the whole array, so building an array by appends in a loop was
+  quadratic. They now take Tomato's persistent forms: a chain of appends or prepends
+  shares a buffer, a large slice is a view, and a chain of replacements becomes a trie.
+  Machine code reads every form. 10⁴ appends allocate linearly.
+- **Champ: a `reduce` accumulator grows in place (#831).** Tomato's rule #243 now
+  applies to Champ. When a `reduce` block names its accumulator only as `acc` or as the
+  left end of `acc + parts`, the accumulator lives in a builder, and each step appends
+  what the block adds. A map accumulator from `[:]` grows by literal entries. An
+  accumulator the block reads in any other way is copied, as before. OIR-1 and OIR-2
+  share the analysis (`thir::linear_accumulator`).
+- **Champ: inline small-int arithmetic (#827).** Champ's machine code now computes
+  `+ - * %`, negation, the comparisons, `& | ^ << >>` and `~` of two inline integers
+  inline, as Tomato's does. A BigInt operand, an overflow, `%` by 0 or -1, or a shift
+  out of range takes the exact helper, whose failure or stop now always leaves the
+  function. Before, `+`, `-` and negation did not check the helper's status.
+- **Champ: string and scalar fast paths (#829).** Champ's machine code now reads the length
+  of an ASCII string from its header. For `==` and `!=` on strings, the same string or a
+  different byte length decides without comparing bytes. Scalars compare by word: floats
+  numerically, so NaN differs from itself, and ints by value, with a BigInt operand going
+  through the structural helper. All three match Tomato.
+- **Champ: Atomic without per-call name matching (#830).** Champ now resolves each Atomic
+  entry's operation once, when the program loads, instead of matching the entry's name on
+  every call. Machine code computes `value`, `closed` and `close` inline over the cell, as
+  Tomato does. A closed cell's `value` still throws `AtomicClosed`.
+- **Champ: inline object allocation (#828).** Champ's machine code now takes a new
+  object's cell from the free list of its size class inline, as Tomato's does. An empty
+  list, a large object, a collection or a refusal takes the `allocate` helper. Array
+  literals still go through the `array` helper on both engines.
+- **Champ: data helpers stop decoding per call (#832).** Champ's collection, lookup and
+  builder helpers read a site computed once when the program loads, instead of decoding the
+  verified instruction at `(function, pc)` and collecting its operand types on every call.
+  They also read their argument words in place, without copying them. This matches
+  Tomato's #449.
+- **Champ: role dispatch calls a compiled target directly (#838).** Calls through a role
+  slot and calls of anonymous actions, which Champ runs as role dispatch, now jump straight
+  to the selected implementation once it is compiled. They read its invocation record, as
+  a static call does. Before, every such call went through `rt_machine_external`. This is
+  the direct entry that #536's phase B left to Champ.
+
+- **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
+  - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
+  - A winning origin's outcome stays with its owner.
+  - A losing timer is cancelled.
+  - A deadline that has already passed counts as expired.
+
+  The timeout driver reads the clock and the limit through helper functions the compiler generates; the loader checks their shapes. The output matches Tomato built from the current tree, and conformance `timeout.before-and-within` passes. The sqlite cases now stop at #824.
+
+- **Champ: FutureGroup (#810, G1 step 1).** `async/scope`'s FutureGroup runs on Champ.
+  - `start` registers a fresh Future and only retains a bound one, then starts it.
+  - `wait`, `active` and `cancel` behave as on Tomato.
+  - The group travels with the value that holds it.
+  - When the group's owner closes, the group seals. Its members' outcomes are destroyed in the owner's cleanup, and a member that still runs is left to shutdown, as on Tomato built from the current tree.
+
+  Two compiler fixes came with it and apply to any program:
+  - A fresh Future passed from a nested scope (inside a `try`, say) together with a value from an enclosing scope no longer stops the build with SPB_SCHEDULE.
+  - An async action that waits on a group stored in one of its fields compiles.
+
+  Not yet supported:
+  - Futures whose inputs hold a resource (#735);
+  - a Future started through the `Supervising` role is settled when that call returns, not when the group's owner closes (#818);
+  - a few group shapes that the build refuses: #819–#822;
+  - the collectors, timeouts and FutureScope (the next G1 steps).
+
+- **Champ: an Atomic holds Futures as borrowed views (PR-A, D25 tail).** Std keeps
+  optional Futures in `Atomic<@Future<T>>` slots (sqlite, tcp, http, logging). The
+  Atomic never holds a Future's duty: writing one offers nothing, reading gives a
+  view to await or cancel, and the scope that owns the Future settles it once. A
+  new loader rule, `ATOMIC_BORROW`, keeps the Atomic's value word out of every
+  selection; `compare_and_replace` over Futures is refused by name (Futures do not
+  compare). The L11 sqlite and tcp cases now stop later, at slice G1 (#810).
+
+- **Champ: Futures in array literals of eight or more parts (#802).** A literal of
+  8+ parts is built through a builder, and fresh Futures in it stopped the build
+  ("a cache duty that reaches its owner's close on some paths only"). A pushed
+  fresh Future is now stored in the builder's journal, its owner settles entries at
+  run time, and a failed store moves the Future to that dynamic step too. The
+  literal, the same with a bound Future, the array returned by a synchronous
+  action, and a part that throws now run as on Tomato.
+
+- **Champ: resources lent to an async action (#732, #742).** An async action with a
+  resource receiver and a resource argument, a bound resource borrowed by an awaited
+  async action, and resources that keep the caller's Atomic now compile and run on
+  Champ with Tomato's output. SPB 17 codegen emitted a static relocation for every
+  resource a split names, while the split of a lent resource moves nothing; the
+  emitted proof is now the loader's own reconstruction.
+
+- **A result may keep a lent field of a parameter (PR-P, #749, #789).** A step or
+  a cursor that keeps its receiver's log (an object over an Atomic, or any value
+  that reaches no obligation and no Future) declares that field as an alias of its
+  result, and the Full ownership verifier admits it without taking it: the field is
+  lent, and the caller gets its dependencies through the alias. Own now infers
+  these declarations (also for a borrowed receiver and through branches), the
+  verifier's B5.1 admits a fresh result's own keys beside its take retention, and a
+  caller no longer ties a lent field to a temporary its callee settles. Under Full,
+  `L07.traversal.escaping` and the cursor-step program of #789 have no diagnostics
+  left (they still end Incomplete on the gate budget, #634).
+- **Wave CI: the verifier differential runs in two parallel parts on the gate
+  profile.** It ran unoptimized and sequentially, ~30 of a Wave run's minutes.
+
+- **Wave 18 review (Fable) follow-ups (#601).** The loader's refusal of a rehome
+  that names the task duty of another Future (#765 b) has its SPB negative. A
+  synchronous relay of a freshly created Future is checked end to end under the
+  Full verifier against Tomato's output (#801). A test that passed on the known
+  #732 gap is now an ignored test of the intended behaviour. `L08.collect.race-empty`
+  passed only because the std placeholder of `Raced.winner` throws `NoFutures`; it
+  waits for slice G1 (#810) like the other holder members (Q2: #811).
+
+- **A spawned Future's task and cache duties leave together (#765).** The
+  SPB 17 loader admitted a `cache.rehome` that took a spawned Future's cache
+  duty without its task duty, or with the task duty of another Future; the
+  runtime then stopped. `SPB_REHOME` now refuses both shapes, and the full
+  OIR-2 verifier refuses a rehome that leaves a spawned Future's task duty
+  behind (B94).
+
+- **A Future returned through a getter or a relay runs on Champ (#801).**
+  Own took every Future result of a call as one that brings its cache duty,
+  so a caller that let a getter's result escape emitted a `cache.rehome` of
+  an entry its state never held, which the SPB 17 loader refused
+  (`SPB_REHOME`). A result whose callee relation names only aliases of its
+  parameters is now a borrowed alias: no rehome takes it, and the exit's
+  selection names it, which takes its entry wherever the scope keeps it.
+  The full verifier still refuses the getter case from the storing scope
+  (#808).
+
+- **A Future stored on some paths only runs on Champ (#783).** Checked
+  after PR-B1: a bound Future stored on one path is an alias whose duty stays
+  with its binding, and a fresh Future reaches a store on some paths only
+  only as a branch's value, which leaves the branch scope by `cache.rehome`;
+  the store after the join then takes an admitted entry. Both programs are
+  now end-to-end tests with Tomato's output.
+
+- **A Future created in a `for` body runs on Champ, spawned or not (#759).**
+  OIR-2 coro refused such a body ("a cache duty that reaches its owner's
+  close on some paths only"): its duty token flowed along the loop's back
+  edge into the next iteration, where the unwind close before the creation
+  saw a token of an earlier iteration. The close of a duty's owner now
+  consumes its token, so each iteration settles its own Futures at its own
+  close, and spawn in a loop body (the server and worker pattern) compiles.
+  Two neighbouring defects found on the way are #805 (awaiting in a loop a
+  Future created outside it) and #806 (coro's step budget on three loops
+  that each suspend).
+
+- **The full OIR-2 verifier checks that a Future leaves with the Futures it
+  reads (#776).** A cold Future borrows the cache of each Future argument of
+  its creation. New rule `b9-borrowed-future-left`: a `cache.rehome` that
+  moves such a Future out of a scope which still keeps the cache duty of an
+  argument created there, and which closes before the destination, is
+  refused; that argument would be settled (a cold one Cancelled) before the
+  Future that awaits it runs. Own already rehomes the argument first, since
+  its analysis deps name every argument; the `deps` operand of `fut.new`
+  has no consumer, so leaving the Future argument out of it beside a managed
+  input admitted nothing.
+
+- **A synchronous action may pass a thrown Cancelled on Champ (#775, PR-F).**
+  An action that calls `check()` on a `Cancelling` throws `Cancelled` once
+  stopping is requested, and its caller catches it as on Tomato. OIR-2 low
+  and SPB 17 code generation refused every synchronous body or call whose
+  failures included Cancelled, confusing a thrown Cancelled with a delivered
+  cancellation. Now they refuse only a body or call that suspends or runs an
+  async destroy; delivery of a cancellation still needs a suspending
+  operation, which a synchronous body cannot hold.
+- **A covariant successor result of an async role slot is a named refusal
+  (#791 D1).** An async action that narrows its role slot's successor result
+  (`async step() is ^Walker` for `async step() is ^Stepping`) made the
+  producer wrap the creation thunk's Future in `role.wrap`, which the High
+  verifier refused with an internal error. A Future's outcome type is fixed
+  at its creation, so the producer now refuses it as `unsupported`
+  ("covariant successor result of an async role slot").
+
+- **SPB 17: `verify` types `fut.spawn.bound` itself (#791 N1).** Opcode 87
+  has the operand shape `l` and the Future check of `fut.cancel`, so the
+  structural verifier refuses a service operand (`SPB_STRUCTURE`) or a
+  register that is not a Future (`SPB_FUTURE_TYPES`) without the load check.
+
+- **SPB 17: a witness table never names an external (#791 N3, I-F2).** The
+  load check refuses an implementation table whose slot is a catalogue
+  external (`ROLE_IMPL`); the producer reaches an async action, an intrinsic
+  or a native through an adapter with code (rulings PR-D, #773), so every
+  dispatch target checks its own packet on entry, and the dispatch rule no
+  longer has a branch for external targets.
+
+- **A synchronous function that returns an async intrinsic's or native's
+  Future passes own's Full verifier (#791 W3).** Own's summary inference gave
+  the Future of an async body's call a fresh family (its cache duty), but not
+  the Future of an async intrinsic or native (D22). The creation thunk of
+  `CancellationToken.wait` for `Cancelling.wait` (ruling PR-D) was then
+  refused with `B51` ("body returns a fresh identity absent from its declared
+  summary") in every program that imports the cancellation token.
+
+- **Every SPB 17 catalogue row is pinned end to end (#799).** One test
+  compiles programs that reach every row of the std async primitives'
+  catalogue and loads them against the trusted catalogue, checking each
+  declaration's ABI, failures and deps against its row; a row that no
+  program reaches fails it. It replaces a test that compared the producer's
+  formula with itself. The cancellation token's rows stop in low on #775
+  until it lands.
+
+- **The producer's catalogue objects and native failures come from SPB 17
+  (#799).** The std objects whose members are runtime intrinsics are now the
+  declarations the SPB 17 rows name (`drivers::has_members`), and a native's
+  failure kinds are read from `p1::NATIVE_FAILURES` through one mask
+  conversion; the producer's own copies (`OBJECTS`, `[Program, Native]`) are
+  gone.
+
+- **A std member of channels, groups, collectors or timeouts is refused by
+  its catalogue row on Champ (#601 B3).** Members whose std body is a
+  placeholder that does not say "VM intrinsic" (`Raced.winner`,
+  `FirstSuccessful.outcome`, `FutureCompletions.completion`,
+  `Within`/`Before.outcome`, `FutureGroup.start`) and the holders'
+  constructors were lowered as ordinary code: `await Raced(origins:
+  [...]).winner()` threw `NoFutures` where Tomato returns the winner. The
+  producer now refuses each of them as `unsupported` with its row and slice
+  ("std async intrinsic okkama.collect.Raced.winner (P2.5 slice G1, D23)")
+  until the runtime slices land.
+
+- **An accepted holder of closures binds their dictionary (#786, part).** An
+  explicit entry that accepts a holder of action values (`Wrapped.value`)
+  now binds the function type's dictionary even when the closures can own
+  nothing: the full verifier counts the accepted input's cleanup through it
+  and no longer rejects the envelope (`B104`, `B112`). The `B51` summary
+  rejections of the same program remain open.
+
+- **A constructor that binds a role parameter passes the load check (#785).**
+  When a constructor binds a parameter whose role may reach a resource (the
+  parent of `TemporaryDirectory`), the binding's checked split asked for the
+  parameter's identity, which lies in the opaque accepted input run. The
+  loader then had no inventory for the scope and refused the fresh return
+  (`FRESH_PACKET`). A checked split selects only from the admission, and an
+  empty admission yields nothing whatever the selected values are; an
+  unchecked split of an entry parameter still proves nothing.
+
+- **Large functions compile and load faster on Champ (#779).** The SPB 17
+  load check computed dominance with bitsets of blocks² / 64 words per pass
+  and closed dependency sets by walking every record until nothing changed;
+  it now uses a dominator tree (Cooper, Harvey and Kennedy) and the
+  obligations table, as the codegen's root anchors do. The OIR-2 construction
+  check and codegen's dead-alias pruning propagate along a worklist instead
+  of repeated passes, and the pipeline no longer verifies the Low module a
+  second time inside codegen. In a debug build `L09.ini.native-equivalence`
+  takes about 11 s of CPU instead of 14 s (codegen and the load check 2.3 s
+  instead of 4.2 s), `L09.db.row-readers` 25 s, and
+  `L04.once.generic-std-instantiation` 18 s.
+
+- **A holder of a closure that captures a resource passes full verification
+  (#777).** Since #723 a holder's function type is resolved by the closures
+  the module creates, so its classification no longer carried the type's
+  dictionary, and own bound no `type.of` in the function that owns the
+  holder. The verifier cleans a `fn` value up only through a dictionary
+  bound in that function (P2.4 §5.1), took the unknown branch and rejected
+  the scope's envelope (`B104`, `B112`). The classification now keeps these
+  closure types with their dictionaries: own binds them where it owns the
+  holder, and the scope's envelope counts their cleanup effects.
+
+- **Large std instantiations and row readers build on Champ (#781).** An
+  observation entry that returned a managed value which cannot own from a
+  retained inner scope committed a reserve and returned its packet, beyond
+  its one declared result (`T2`); own now closes those scopes without a
+  reserve. The SPB 17 allocation checker kept every dead alias that edge
+  copies coalesced into a slot, so its stored states grew with PCs times
+  aliases (about 1 400 entries per PC in `main` of `L09.db.row-readers`, past
+  the 8 Mi bound); with the function's liveness it now forgets the
+  locations that are not live (22 entries per PC at most there, 60 611 in
+  all), which can only make it reject, never accept.
+  `L04.once.generic-std-instantiation` and `L09.db.row-readers` pass on
+  Champ.
+
+- **An early-self constructor that fails after handing out `self` builds on
+  Champ (#780).** A pending check, and the check that a valued `for` ran,
+  inside `try` continued from the trap block's carried locals instead of the
+  values that reached the check, which broke SSA (`SSA2`). An early self now
+  takes each field that is still unbound as an `undef` defined next to its
+  allocation, so own's split at a resource binding between the prologue and
+  the allocation no longer turns the later `obj.init` into a second binding
+  (`A2`). `L04.invariant.escaped-self-failed-constructor` and
+  `L04.invariant.escaped-self-in-block-failed-constructor` pass on Champ.
+
+- **A role call that reaches a std primitive's intrinsic member runs on
+  Champ (#773, ruling PR-D).** LockGuard and Permit do `Closing`, and the
+  cancellation token does `Cancelling`, with catalogue externals as their
+  members; a witness table named the external, whose trusted entry ABI is
+  not the slot's, so generation stopped ("dynamic call packet differs from
+  its ABI"). A slot now reaches a catalogue external through an adapter of
+  the slot's signature, as an async implementation does, and the catalogue
+  rule that gave such a member's receiver a deps proof (in the producer and
+  in SPB 17) is gone with it.
+- **SPB 17 generation takes an async body with descriptor bindings (#747).**
+  A generic async body keeps the descriptors of its inputs in continuation 0
+  and reloads them at each resume (async ABI C-2); a binding of plain data
+  needs nothing more, so the descriptor-start golden now compiles and loads.
+  A binding that manages values through its descriptor, or one in a
+  synchronous body, is still refused by name. The OIR-2 producer specializes
+  generic actions, so source programs did not reach this path.
+- **Async bodies with an unreachable handler load on Champ (#741, ruling
+  PR-M).** Codegen lowers some operations as total and drops their unwind
+  edge; it removed the handler behind such an edge only in synchronous
+  functions, so an async body's dead handler, which reads the frame, failed
+  the loader's dominance check (`SPB_STRUCTURE`). Async bodies are now pruned
+  too: the continuation sites of the D21 frame layout follow the code, and a
+  continuation whose suspension was unreachable goes with it. The loader stays
+  strict. A `try` with a payload `catch` over a throwing constructor in
+  `async main` runs as on Tomato. With the loader's successor rule fixed for
+  `cleanup.deliver_cancel` (it gives the cleanup state back with the
+  successor it holds), `L12.future-successor-obligation` runs too.
+- **A successor Future must be awaited or handed on (#754).** The checker
+  rejected only an awaited successor whose result was dropped. Now a call of
+  an async successor gives its `Future<^C>` the successor's obligation, as the
+  Book says: a binding that can leave its scope without awaiting it, or reads
+  it only for `done()`, gets the synchronous must-use error at the binding; a
+  dropped call and `spawn` of one are rejected too. Awaiting it, aliasing it,
+  storing it in an aggregate, giving it as a block value, spawning and
+  awaiting the task, or cancelling it explicitly consumes or transfers it.
+  New case `L12.future-successor-bound-dropped`. Handing it on through a typed
+  parameter, field or result is not expressible yet (#790).
+- **`buffer_state_append` is documented as returning the bytes appended
+  (#674).** Its doc comment in `std/runtime/buffer` said "the new size";
+  Tomato, the reference, returns how many bytes were appended, and
+  `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
+  test now checks the returned count too.
+- **A failed `test.is` shows objects by value (#756).** Unequal objects in
+  a test report printed heap identities (`Duration@52e44f14340`). Tomato and
+  Champ now show an object as its source writes it: `Duration(origin: 2)`,
+  `Point(x: 1, label: "a\"b")`, a variant case as `Shape.rect(1, 2)` or
+  `Maybe.none`, an Error as `Down.unavailable(3)`, nested values and arrays
+  of objects likewise; `once let` slots stay out, as in `==`. Both engines
+  give the same text: type names drop their module and the engines'
+  internal spellings (`okkama_runtime_core::testing::display_name`).
+  Showing an object by its `string()` needs compiler support (#793); Champ's
+  case texts of generic variant instances are wrong (#792).
+- **The outcome of a spawned task that nobody awaits is released at its
+  owner's close, on both engines (#768).** 0.5.8's Tomato never destroyed it;
+  since #581 (a Future owns its cached outcome) Tomato releases it when the
+  scope that owns the Future closes, once, in reverse creation order, which
+  is Champ's moment (ABI D24.2). New case
+  `L08.spawn.unawaited-outcome-released` and a Tomato test pin it.
+- **`tally --help` reads on a command with subcommands (#637).** A branch
+  command refused every invocation without a child ("child command
+  required"), so its own `--help` could not be asked for. Now a branch stops
+  at one of its own flags and is the selected command, so the program can
+  print `usage()`. Without arguments, with only an option, or with only a
+  parent's flag before a child branch, it still refuses.
+- **A holder of a closure that captures a resource builds on Champ (#777,
+  structural build).** An action value's role is implemented by the
+  closure layouts the backend adds, not by module declarations, so the
+  object layouts missed that a holder of such a value reaches the captured
+  resource and the loader refused it (`OBJECT_RETENTION`). The layouts now
+  count, for each action type, what its closures capture. The program runs
+  as on Tomato; the full ownership verifier still reports B104 for it (see
+  #777).
+- **Cell and Atomic over other closed plain data run on Champ (#778).**
+  After #764 the producer still refused Atomic/Cell over maps, variants of
+  plain objects, arrays of native handles or of plain roles and generic role
+  instances. Such a value now registers `async.atomic.Atomic_t_<type>`: its
+  operations name the value type, the storage holds it and the closed
+  flag, and an array of role values carries its deps as own elaborates it.
+  The SPB 17 loader admits it only as closed plain data by its whole graph
+  (`ATOMIC_PLAIN`); the producer refuses a value that may reach a resource
+  by name. Futures stay out (D25). `L04.fakes.failing-assertion` runs; the
+  other cases stop next on #780, #781, the allocation checker
+  (`L09.db.row-readers`), `spawn` (`L08.db.query-lifetime`) and Futures in
+  arrays (`L11.sqlite.prepared-pool-query`).
+- **A holder of action values is no identity when their closures own
+  nothing (#723).** Own classified a function type by the runtime-managed
+  dictionary of its open calls, so any object that held an action value
+  (`OrderedSet` through `Filtered`'s condition) counted as owning a
+  resource. It got a fresh creation summary that the SPB 17 layout, which
+  gives an identity only to an object with a destroy, has no identity for
+  (`FRESH_ORIGIN`, `L09.collections.ordered-sets`). Now a function type
+  inside another type's graph counts by the closed set of closures the
+  module creates of it, as a role counts by its implementations (P2.4 §4.1:
+  a closure owns a captured resource only when it captured a fresh one);
+  a function type a value from outside the module may have (an entry
+  parameter, a bodyless function's result) keeps its dictionary, and so
+  does the function type itself. The full verifier's obligation formula
+  counts function types the same way. The case runs; #777 is the
+  remaining defect of holders whose closures capture a resource.
+- **Cell and Atomic over a plain role run on Champ (#764).** The OIR-2
+  specializer registered Atomic/Cell only for plain scalars and arrays, so
+  `std/config/ini.ok`'s `Cell<List<string>>` stopped `L09.ini.native-
+  equivalence` ("std object cell.Cell<[Role(..)]>"). Per the decision in
+  P2.4 §4.8, a role value is admitted when the role is plain: every
+  implementation in the program (object witnesses and the builtin adapters
+  of #757) is closed plain data without destroy and without a resource in
+  its graph. The registered `async.atomic.Atomic_role_<role>` holds a traced
+  role reference and its closed flag; its operations are the registered P1
+  entries, with the role value's deps as for an object. The SPB 17 loader
+  checks the closure by the witness tables (`ATOMIC_ROLE`); the producer
+  refuses a role with a resource implementation by name ("Atomic/Cell over
+  the role … plain roles only"). The case runs (220 cases, 0 mismatches).
+- **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
+  loader (`D18_EXECUTOR`) checks a merge close's envelope against the
+  destroys its inventory may see. When it cannot reconstruct the inventory
+  it assumes every destroy the function's inputs and callees reach. A
+  packet carried around a loop (a `map` or `for` that builds an array,
+  through builder journals) is a cycle, which has no finite inventory, so a
+  method of an object holding a resource with a failing destroy was refused
+  ("fs.file.FileBytes.bytes#2 close 4: merge envelope 0 omits destroy
+  failures 11"), though own's empty envelope was right. Neither own nor
+  codegen was wrong: the loader's evidence was too weak. It now proves
+  emptiness flow-insensitively: a location may hold a key only when a
+  definition introduces one (a fresh call result, a committed resource, an
+  opaque input or an unrecognised producer) or passes one on, so cycles of
+  copies and journals stay empty. The proof never names a key, so it cannot
+  certify a direct plan. `L10.fs.missing-file` and
+  `L12.malformed-boundary-inputs` run on Champ.
+- **An Error payload of a plain variant runs on Champ (#763).** The SPB 17
+  P1 contract admitted an Error enum's payload of a variant type only when
+  every case of the variant was an Error case, and its test refused "a plain
+  variant", so `L05.variants.case-layouts` stopped at load with "invalid P1
+  plain Error layout". The language spec admits payload enums whose payloads
+  satisfy the same rule and shows a nested variant by its own text, as
+  Tomato does: `Fault.major(1, Shape.rect(2, 3))`. A plain variant now names
+  its cases in SPB 17 (`enum_names`, one per case; `ENUM_NAMES` admits it),
+  the P1 contract admits a named plain variant whose cases show their
+  payloads (recursively, a recursive variant included), and Champ's
+  `Error.text` writes the case and its payload. A plain variant without
+  names, with names that miss a case, or with a payload the text cannot
+  show (a `char`) is still refused.
+- **The bound-flag check of a constructor field is linked to the field by
+  its flag, not by its message (#770).** The verifier's construction rule
+  (A2) and the producer's construction self-check took a field as
+  initialized behind any `cond` whose failing edge trapped with that field's
+  `not initialized` message, so a check of another flag passed. Both now
+  compute each field's bound flags: values whose every definition is
+  `const false`, a `const true` that follows a write of the field in its
+  block (`obj.init` on the early self; also `stage` for the producer), or a
+  block parameter whose every incoming argument is such a flag; unwind edges
+  pass their leading parameters. The `cond` must read the field's flag; the
+  trap must still be `TrapCode::Unbound`. The producer's undef propagation
+  now follows unwind and catch edges too, so a field bound inside a `try`
+  whose body fails first gets its check and fails as on Tomato instead of
+  completing with an undef field. Verifier fixtures: a check of another
+  field's flag and a check of an ordinary bool are refused.
+- **OIR verifier: no selection names a bound Future (review of D25, F4,
+  #784).** `b9-bound-future-named` covered admissible selections only, and
+  the Full model kept a bound created Future's duty with its owner only in
+  an admissible partition. Both now hold for every selection: a plain
+  `scope.split` or a held transfer that names a bound Future is refused,
+  and no partition moves the holder graph of a bound Future it names. The
+  negative `invalid/B9-own-split-steals-shared-cache` is back, now with
+  `fut.new … binding b0`.
+- **SPB 17: a map value is never a Future (review of D25, F2).** The
+  leaf rule that admits arrays of Futures (#758) also admitted
+  `Map<K, Future<V>>`, but a map selection's runtime walk does not enter
+  Future values: the entries of its Futures would stay in the closing scope
+  while the static model believed the selection took them. `MAP_PLAIN` now
+  refuses a Future map value; maps of Futures get their own design
+  (#800).
+- **OIR own: an alias of a Future in a nested scope no longer unbinds it
+  (review of D25, F1, #784).** Whether a binding holds a Future is now the
+  flow-sensitive bound bit of its cache-duty atoms in the own analysis,
+  which follows the value through the block parameters High passes into a
+  branch and survives the alias's scope. Before, own kept one binding per
+  value and missed the branch's parameter: `let f = work(); if c { let g =
+  f; } helper(Wrapper(pending: f)); await f;` named `f` in the store's
+  admissible split and own stopped with an internal error ("a split names a
+  bound Future"). `fut.new … binding` names the first binding of the value
+  in the Future's owner.
+- **Champ: a bound Future stays with its binding when an aggregate stores it
+  (#784, PR-B1).** A binding marks a Future's duty bound and moves nothing:
+  `fut.new` gains the optional attribute `binding bN` for a Future that its
+  owner scope binds (SPB 17 does not carry it); an admitted Future (a call
+  result, a rehome from a nested scope) is bound by `scope.split admissible`
+  and `own.bind`. Own never names a bound Future in an offer or a store, coro
+  absorbs only a fresh Future's tokens, and the loader keeps the admission
+  filter of a split whose root can reach a Future holder. New verifier rules
+  `b9-binding-attribute`, `b9-bound-future-named` and
+  `b9-bound-future-absorbed`. `let f = work(); helper(Wrapper(pending: f));
+  await f;` now runs as on Tomato instead of ending Cancelled. A Done Future
+  stored in a bound holder now settles at the binding's close (#794).
+- **SPB 17: entry packets that can carry Future entries (#782, PR-B2).** An
+  aggregate input of an async body that reaches a Future holder makes the
+  body's inputs non-plain and its start packet a carrier; a bare `Future<T>`
+  input stays plain. The may-admit analysis seeds entry packets that can
+  carry entries (a synchronous entry's packet parameter, an async body's
+  start packet), so their closes settle dynamically; own ends those scopes'
+  schedules with the dynamic step and names a returned borrowed Future in
+  the exit selection. New loader rule `SPB_FUTURE_INPUT`: `fut.new` passes a
+  packet that carries entries only to a body whose inputs can bring them.
+- **Champ: Futures in object fields and in arrays (#771, #758).** Async
+  ABI D25.2, revision of 2026-11-16, and the ruling "How a stored Future
+  leaves". A Future created in a function and stored by a constructor
+  moves its duty with the constructor's packet: coro absorbs its cache
+  token (and the task token of a spawned Future, task first) into the
+  selected packet, own emits no `cache.rehome` for it, and the entry leaves
+  with its holder through the exit selection. SPB 17: a selected Future
+  field, or a field of an array of Futures (`ArrayLeaf::Future`, wire tag
+  23), in an object that reaches what its packet carries
+  (`SPB_FUTURE_TYPES`); a Future input of a call is no plain input
+  (`CALL_PLAIN_PACKET`); an object that reaches no identity takes no
+  static position; a dynamic split moves the entries it reaches; an exit
+  that returns a value reaching a holder takes that value's selection
+  (`SPB_EXIT_SELECTION`). The Champ selection walk treats a Champ Future,
+  as a root, a field or an array element, as a holder. The Full verifier
+  models `service.absorb` and a selection of Future holders. On Champ,
+  `L08.cancel.after-await-settled`, `late-after-last-await`,
+  `shared-awaited-survives`, `nested-frame-next-await`,
+  `final-exit-window` and `L08.collect.race-empty` print Tomato's output
+  (`okkama-cli/tests/champ_cases_d25.rs`, also under GC stress). Open:
+  a bound Future must not be absorbed (PR-B, #784), entry packets of async
+  bodies (#782), a store on some paths only (#783).
+
+- **Tomato: `e.text()` on a cancellation caught as `Error` no longer
+  crashes (#744).** A catch of the Error role binds a `Cancelled` value,
+  which Sparrow builds from the system `Cancelled` object; the OIR-1
+  lowering brought that object into the program only when a body named
+  `Cancelled`, so `rt_catch` bound an unbound word and the role call
+  `text()` read through it (SIGSEGV; 0.5.8's `sparrow` crashes on its own
+  bytecode of the program too). Every catch of the Error role now brings the
+  system object along, and the program prints `error: Operation was
+  cancelled`. Without the object (only a crafted SPB lacks it) the Error
+  catch no longer matches a cancellation, which keeps unwinding, instead of
+  binding the unbound word.
+- **An early-self constructor that may leave a field unbound runs on Champ
+  (#746).** #708 checks a maybe-unbound field's flag before a complete
+  `obj.new`; a constructor that hands out `self` first (language §12.10)
+  completes through `obj.init $pending = false` instead, and both the
+  producer's construction self-check and the verifier's construction rule
+  (A2) joined the field's state over paths and refused the completion
+  ("completion before field initialization"). Both now take the field as
+  initialized on the passing edge of its bound-flag check: a `cond` whose
+  failing target traps with `TrapCode::Unbound` and Tomato's message for
+  that field, directly or through empty `br` blocks (own splits the edges).
+  The program fails as on Tomato, `Object "Gate" field "a" was not
+  initialized`. Verifier fixtures: two valid (direct and split check) and
+  four invalid (another field's check, a non-Unbound trap, completion on the
+  failing edge, an instruction on the split edge).
+- **Builtin values behind roles on Champ (#757).** The OIR-2 producer
+  adapted an array only to `Iterating<T>` and refused the other forms, so
+  nine conformance cases stopped with "builtin role adapter outside the C3
+  ByteSource bridge" or "role has no reachable implementation". An array
+  now gets one adapter object per array type and role element, as Tomato's
+  `ArraySequence<S, T>`: it witnesses every `Sequencing<T>`, `Iterating<T>`
+  and `Sizing` of the module, with `size`, `item`, `first`, `last` (an
+  empty array fails with Tomato's "Cannot read first item of an empty
+  sequence") and `cursor`. An element crosses into the role element as on
+  Tomato: an object or variant is wrapped into its role, and an inner array
+  goes through its own adapter, at any depth (#488). Wraps inside closure
+  bodies get their adapters too. A call or walk of a role that no object or
+  adapter witnesses joins an empty set of implementations and lowers as
+  `unreachable`: no value of such a role can exist. The SPB 17 backend
+  admits an array or map of objects that hold role, cap, action or `any`
+  values as a view of closed plain data (own tracks those as references;
+  the loader keeps checking `ARRAY_PLAIN`). Eight cases pass;
+  `L08.collect.race-empty` stops next on an array of futures in an object
+  field (#758). The Champ case harness passes a case's `args`.
+- **Champ: the Event cell's runtime word and Tomato's tracking (#601 Q1
+  audit A1, A2).** The waiters word of the Event cell was typed `any` in SPB
+  17: `==` of two Events read the runtime list of waiters as an any box
+  (unsound), and an `any` holding a resource made the cell reach resources,
+  which dropped every `okkama.event.*` catalogue entry. SPB 17 gains
+  `Type::RuntimeCell` (wire tag 43), a traced hidden storage word that is no
+  value type, no source field, never selected and never compared (loader
+  rule `SPB_RUNTIME_CELL`); the Event cell is `[Bool, Bool, RuntimeCell]`
+  and keeps its source field `initial`, which `==` compares, as on Tomato.
+  Champ's equality reads only objects. A Champ runtime also never runs
+  Tomato's resource tracking: in a program with a destroy, a driver
+  Future's settle took its cache record word for an outcome region.
+- **A Future creation offers only its managed inputs (#601 Q1).** Own
+  offered every input of an async call when one of them was managed, a
+  Future argument included, though a Future input only borrows its cache
+  and no selection may name it (OIR-2 §10.2, D12). On Champ the creation
+  then walked the Future's frame and stopped with "unsupported selection
+  root", for example `spawn Worker(event).run(child)`.
+
+- **Collections of native handles on Champ (#751).** SPB 17 had no array
+  leaf for a native handle and no builder of handles, so OIR-2 code
+  generation stopped on json's parsed nodes (`Array(Handle(_))`,
+  `Builder(Handle(_))`) in seven conformance cases. `ArrayLeaf::Handle(decl)`
+  (wire tag 22) is the new leaf, so arrays, builders and maps of handles
+  translate. A native handle is plain data without an Okkama destroy (P2.4
+  §4.7, #717): its collections are plain and, like a handle, not compared.
+  The loader checks that the leaf names a native handle declaration
+  (`HANDLE_TYPE`), and `test.is` now compares arrays only when `val.eq`
+  would (`TEST_OPERAND`). Table natives over arrays of their module's
+  handles (`json_node_items`, `json_array_node`, `json_object_node`) get
+  their trusted entries. Champ keeps handle elements as references to their
+  registry cells, which the collector traces as it traces a handle field.
+  Six of the cases pass; `L12.malformed-boundary-inputs` stops next on #753.
+- **Natives with map parameters or results on Champ (#752).** The SPB 17
+  loader built trusted native entries only from scalar and array
+  signatures, so `regex_state_prepare` (`%string:int`) and
+  `environment_normalize` (`%string:string`) had neither an entry nor an
+  adapter. A data adapter now rebuilds the table's signature over the
+  program's map composites: each map must have exactly the table's key and
+  value types, plain data the adapter carries. The unresolved-provider
+  adapter accepts such maps too. Champ hands its maps to Tomato's native
+  bridge and takes them back in key order, as Tomato does. The four regex
+  and environment cases pass.
+- **Debug builds optimize Cranelift (#761).** Champ's JIT runs in every debug
+  build: unit tests, the end-to-end harnesses and the conformance adapter,
+  which builds with plain `cargo build`. Unoptimized Cranelift code
+  generation took most of a case's run time, and cases near the 30 s
+  conformance budget timed out depending on the runner. The dev profile now
+  optimizes the Cranelift crates and `regalloc2` (`opt-level = 2`), and
+  Okkama's own crates stay debug. CPU time on a debug champ-abi build, on
+  top of #755: L07.traversal.escaping 16.4 s → 8.9 s,
+  L09.digest.md5-sha1-vectors 16.5 s → 6.2 s, L09.csv.rows-and-round-trip
+  13.0 s → 5.0 s.
+- **SPB 17 liveness and allocation checks are fast (#755).** Liveness swept
+  every PC until nothing changed, kept a `BTreeSet` per PC and re-closed all
+  dependency records at every PC; one load computed it up to four times per
+  function, and the allocation checker and root maps re-closed dependencies
+  per use. Liveness is now a postorder worklist over predecessors with sparse
+  per-PC lists, closing obligations only from locations that just became
+  live; the loader solves it once without roots and reuses that result when
+  the roots add nothing live; the allocator, its checker and the JIT share an
+  obligation table, and the checker keeps each state in one buffer. Results
+  are unchanged: the algorithms before #755 stay as a test-only reference
+  that every liveness and allocation in the `okkama-sparrow` and compiler
+  tests is checked against (feature `liveness-reference`). The work budget
+  now counts entries read per visit, so a long backward chain is no longer
+  rejected and a wide fan-out is. In debug Champ builds `L07.traversal.escaping`
+  takes 17 s instead of 24 s, and `L07.traversal.early-exits` 16 s instead
+  of 24 s; Cranelift codegen is now most of what remains.
+- **Champ closes detached Futures' outcomes at shutdown and keeps their
+  records until then (#699, draft 3 §7.3, KL-1).** A detached Future whose
+  outcome packet holds identities stays in the root registry through every
+  collection; at shutdown the root closer destroys those identities once, in
+  one serial plan, after settling the packets' own service entries. A
+  shielded root closer frame for async destroys follows D1 (#760).
+
+- **Cancellation at the final exit: Tomato re-run and conformance cases
+  (#739).** The four K2 probes are now conformance cases with Tomato's
+  output (`L08.cancel.final-exit-window`,
+  `L08.cancel.final-async-destroy-shielded`,
+  `L08.cancel.final-defer-await-interrupted`,
+  `L08.cancel.late-after-last-await`). Tomato 0.5.8 and the current tree
+  agree with the K2 ruling as written (`direct 42 cancelled false`); Champ
+  runs them once `Event` (Q1) and async destroy (D1) lower.
+
+- **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
+  rehomes ran on every function and cloned a dense map of all locations at
+  every instruction. Debug builds spent 50 s of a 53 s compile of
+  `L10.stdin.lines` there, and nine Champ conformance cases timed out. The
+  analysis now runs only for functions with a state-form `cache.rehome` and
+  keeps only the locations that hold scopes; `L10.stdin.lines` compiles and
+  runs in 10 s instead of 104 s.
+
+- **Elements a cursor step owns live as long as the collection on Champ (#697).**
+  `Owned(...).map() -> res { res; }` collects the resource each cursor step
+  owns; the step is bound in the iteration scope, so the admissible rehome of
+  the builder left that resource behind and Champ destroyed it with the
+  iteration while the array still held it (`L07.traversal.escaping`). The
+  rehome is now a `held(...)` transfer: it moves what the inner scope admitted
+  or bound among the identities the element reaches; staged identities and
+  identities outside the source stay with their owners without a failure.
+  OIR-2 gains `SelectionExpr::Held` (text `held(...)`, only the whole
+  selection of a `scope.transfer` between non-action scopes, verifier rule
+  T1); SPB 17 carries it as a `false` flag after the transfer's selection
+  (`TRANSFER_ADMISSION`), and Champ runs it with `champ_scope_transfer_held`.
+- **Async tests load on Champ (#725).** The SPB 17 loader took only a
+  synchronous `() -> void` observation body as a test (`TEST_ENTRY`), so the
+  program of an async test, a void async body that starts with an empty
+  continuation 0 (async ABI C-2, #691), was refused. `TEST_ENTRY` now also
+  takes a void async body; as a fixed root its start must stay empty
+  (`SPB_ASYNC_ENTRY`).
+- **A constructor that may leave a field unbound runs on Champ and fails as on Tomato (#708).** The
+  OIR-2 producer gives each constructor field that its body may leave unbound (no default, not given,
+  no top-level write) a bound flag that crosses joins as the fields do, and checks it before the complete
+  self with Tomato's failure, `Object "Gate" field "a" was not initialized`. The producer's construction
+  self-check takes a field that may be unbound into a complete self only behind that check.
+  `L04.ctor.unbound-field-dies-after-body` and `L12.constructor-nested-resource-failure` (bound fields
+  destroyed once when the body or a nested construction fails) run on Champ against their case.json;
+  `L09.csv.rows-and-round-trip` already ran after #702. The early-self form is #746.
+- **An async defer with owned inputs never starts when a cancellation is pending, as on Tomato
+  (#728).** Ruling #601 K2: a `defer await` is an unshielded await of the deferred call, and Tomato
+  raises a pending cancellation before the call starts. Champ did so only for an empty input packet;
+  with owned arguments it started the child, whose code ran up to its first await. Now the step closes
+  the inputs itself through the common cleanup executor, each destroyed once with the cancellation as
+  the primary failure (a failing destroy is its secondary), as a body that cannot start closes its
+  continuation-0 inputs, and unwinds with it. Inputs with an async destroy or a service entry still
+  start the child (#745).
+- **`catch e is Error` takes a cancellation on Champ, as on Tomato (#738).** Language spec 9.5: the
+  system `Cancelled` does the role `Error`. Champ's catch binds a new `Cancelled` object for a catch of
+  the Error role too, and its `text()` through the role is "Operation was cancelled". The OIR-2 → SPB 17
+  codegen adds the system `Cancelled` descriptor, after every other one, to a program that catches the
+  Error role without declaring it, and the SPB 17 loader admits such a catch only in a program that
+  declares `Cancelled` (`CATCH_TYPE`). A provider's `NativeFailure` already matched `catch e is Error`
+  on both engines; a test now holds it. Tomato's debug build crashes on this program when it does not
+  name `Cancelled` (#744).
+- **A native's program failure passes every catch on Champ, as on Tomato (#719).** Language spec 9.5:
+  only a native's own `NativeFailure` takes part in matching. Champ no longer rewrites a synchronous
+  native's program failure (a missing provider, a refused permission group) into a catchable
+  `NativeFailure`; it ends the run with Tomato's report and exit 1. The OIR-2 native contract and the
+  SPB 17 native entry mask (`NATIVE_FAILURES`, `EXTERNAL_SIGNATURE`) now declare Program besides Native;
+  a thrown value or a `Panic` failure from a provider stops the machine as a broken entry contract.
+- **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
+  Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
+  cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2
+  producer gate, own and the verifier rule B11.1 now count a function type by the closures the module
+  creates (a lambda's captures, a bound action's receiver) and a role by its implementations; caps,
+  `any`, Futures, builtin capabilities and anything with destroy stay refused. A summary path may step
+  into a variant case's payload (T4), and SPB 17 treats a native handle as plain data, still not
+  comparable. `L04.once.keeps-plain-closure-and-role` runs on Champ; the two regex cases stop on #702.
+- **Low cleanup inference is linear in its chains (#687).** The inventory of a scope state indexes the
+  incoming edges once and shares the witness sequences it extends instead of copying them;
+  `L09.collections.ordered-sets` needs 1.8M low steps instead of 14.5M and now stops on #723.
+- **Full verification of large async bodies (#693).** The linearity verifier recorded a value slot once
+  per mutable access between clones; it now keeps each slot once, which takes the low verification of
+  `L08.order.lazy-branches` from 114M to 79M steps. The full verifier (the gate profile) gets a measured
+  limit of 120M steps; structural builds keep 50M.
+- **Closure-dense programs compile and load on Champ in seconds (#701).**
+  The SPB 17 allocation checker kept one `BTreeSet` per frame slot, cloned
+  it at every visit and rebuilt every slot on every edge; a 940-instruction
+  `main` with 69 slots and nested loops took 2 s per check in a debug build,
+  and one `okkama run` checked each function five or six times (the
+  producer, the pipeline, the decoder, the runtime, its cleanup-plan load,
+  the JIT). The checker now keeps sorted vectors, runs an edge's copies by
+  reference and visits in reverse postorder (same verdicts, same budgets),
+  and a program passes `verify_load` once in the compiler and once in the
+  runtime. `L05.reduce.accumulator-in-place`, `L05.variants.search`,
+  `L04.roles.contextual-wrap`, `L07.destroy.branch-scope` and
+  `L04.invariant.early-self-in-blocks` no longer time out on Champ (debug
+  build: 19–73 s before, 5.6–11.4 s after). `L09.compare.failing-order-stops-the-sort`
+  still waits for an O(n log n) sort (#678).
+  `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
+  times on stderr.
+- **Module constants on Champ (#709).** A `const` whose value is an array or a
+  map (an OIR-2 global with an init function) had no SPB 17 layout ("unsupported
+  declaration app.const.PRIMES"). SPB 17 gains a globals table: each constant
+  is closed plain data written as data (constants, enum cases, arrays and maps
+  of earlier data, children first), read by the new data operation
+  `global.get` (wire 95, `Immediate::Global`). The loader checks the table with
+  the new rules `GLOBAL_TYPE` (closed plain data, last datum is the value),
+  `GLOBAL_DATA` (each datum builds its declared type from earlier data) and
+  `GLOBAL_GET` (an existing constant, read as its type). Champ builds every
+  constant once before the program runs and keeps it as a runtime constant;
+  a read is the word itself. `L06.const.values` and
+  `L05.literal.empty-collections` pass on Champ.
+
+- **Champ indexes byte arrays (#703).** `bytes[i]` on an `@byte` value stopped
+  SPB 17 generation ("array.get requires a certified plain array"): `array.get`
+  took only the plain array shape. The loader now admits a byte array receiver
+  under `ARRAY_GET_OPERANDS` (its element is a byte, from the receiver's
+  declared type), and Champ reads the packed byte in place, with Tomato's
+  "Array index out of bounds" outside it. Two further gaps behind the same
+  cases are closed: `variant.tag` and `variant.get` of a one-case Error
+  variant (which SPB 17 represents by its case object) become a constant 0 and
+  a field read, and own's summaries declare the program failure of the
+  `scope.split` it emits for a deps-carrying reference offered to an owning
+  call or bound (a role value with plain implementers or an object holding
+  one, not only an Atomic), which `ENTRY_FAILURE_MASK` required. `L05.array.replaced`, `L09.encoding.hex`,
+  `.quoted-printable`, `.utf-codecs`, `L09.random.pcg32-reproducible`,
+  `L09.uuid.values`, `L10.stdin.chunks`, `.for-lines` and `.lines` pass on
+  Champ.
+- **Champ runs Error enums with payloads (#705).** The P1 contract of
+  `Error.text` admitted only Error enums and single-case payloads of strings,
+  ints and bools, while codegen emits a case without payload as a case object
+  with no storage, and payloads may be any scalar, a plain enum or another
+  Error variant: `L07.catch-pattern.cases-and-types`,
+  `L07.error-enum.text-escaping` and `L07.error-enum.uncaught` stopped at load
+  with `invalid P1 plain Error layout`. The contract now admits exactly the
+  layouts the text can show, a plain enum carries its case texts
+  (`enum_names`, rule `ENUM_NAMES`), and `Error.text` writes strings as Okkama
+  literals and enums and nested errors by their texts, as Tomato does. Every
+  Error variant is an SPB 17 variant of its case objects: `catch` of the
+  variant takes each of its cases, and its values are thrown and widened to
+  `Error` (`CATCH_TYPE`, `FAIL_OPERAND`, `move`). `L09.csv.rows-and-round-trip`
+  now passes these rules and stops later, at a dead unwind landing of a total
+  construction (see the ticket).
+- **`catch e is NativeFailure` on the OIR-2 → SPB 17 → Champ path (#673).**
+  The language spec (9.5) admits `Error`, an error enum or the system
+  `NativeFailure` as a catch type, but the OIR-2 lowering, the OIR verifier
+  (T1), the SPB 17 loader (`CATCH_TYPE`) and Champ's private descriptor all
+  refused the system object. The lowering now declares it (four `str`
+  fields; its readers are methods, `text()` is the message as in Tomato),
+  the verifier and the loader admit exactly that declaration, and Champ
+  gives native failure payloads the declared descriptor.
+  `L10.random.secure-invariants` passes on Champ; the json, regex and pcg32
+  natives cases now stop on #705, #707, #717 and #703.
+- **Champ compares unbound raw scalar fields as Tomato does (#713).** The
+  undef placeholder of a float, bool, byte or char field is Tomato's
+  `UNBOUND_RAW` marker instead of the zero word, so comparing an object
+  with such an unbound field fails with "cannot compare unbound object
+  fields" instead of reading it as bound.
+- **Four single blockers of the wave-4 Champ run (#710).** An `Atomic` of a
+  float, char or rat array has its registered specialization (P2.4 §4.8);
+  a literal `if` whose other arm holds a collection the join's empty type
+  cannot take passes an empty collection of that type (the arm never runs);
+  natives take and return float arrays; an awaited role value carries the
+  await's deps in own. The loader admits `val.eq` of two values of one
+  scalar type (OIR-1 §16.3) and never-level empty arrays retagged to a
+  deeper shape. `L02.equality.signed-zero-composite`,
+  `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
+  Champ; the other four cases stop on #706, #687, #717 and #718.
+- **Own's flow analysis is linear in the plain values of a function (#707).**
+  Each program point kept a state for every SSA value of the function, and
+  every instruction charged (and walked) the whole state, so a large `main`
+  with thousands of plain values cost work quadratic in its size and
+  exhausted own's work budget (`own_rewrite: Incomplete`) in
+  `L05.variants.case-layouts`, `L07.try-mark.diverging-operand` and
+  `L09.digest.md5-sha1-vectors`, whose largest functions have 0 to 20
+  values that may own among 700 to 4 800. A point now keeps states only for
+  the values that may own (the only ones with dependencies; no consumer
+  reads the masks of plain values). The budgets are unchanged.
+
+- **Own declares the program failure of every split it elaborates (#706).**
+  Elaboration gives deps to, and so splits, any deps-carrying reference
+  without an obligation (a cap value, a role, a function value), not only
+  owned values and Atomic. Summary inference counted only the latter, so a
+  lambda own entry binding a cap parameter, a witness entry returning a role
+  field and a generic method staging a role value declared no failure while
+  their bodies held a `scope.split`, and the loader refused them with
+  `ENTRY_FAILURE_MASK`. Inference now declares the failure wherever the
+  driver may split such a reference: at a binding, a staged value or an exit
+  inside a scope that keeps a state, and at a call that offers it (not where
+  the scope is elided or the offer is dropped, so plain functions stay
+  infallible). `L09.collections.heap-and-deque`,
+  `L09.collections.persistent-list`, `L09.math.aggregates` and
+  `L12.caps-in-collections-and-closures` pass on Champ. The loader rules are
+  unchanged.
+
+- **The SPB 17 emitter drops the code it disconnects (#702).** A Low
+  invocation that SPB 17 computes totally (a total scalar operation, a plain
+  construction such as `throw E.case(x)`) becomes data and a branch, and its
+  unwind edge is dropped; the cleanup chain behind that edge stayed in the
+  function, still reading by Low dominance a local carried to a catch
+  handler, so the loader refused it with `SPB_STRUCTURE` "definition does not
+  dominate use" (`L05.batching.functional`, the `L07.traversal.*` cases,
+  `strings.parse.Number.rat`, `time.rfc3339.Rfc3339.parsed`). The emitter now
+  removes unreachable blocks with their closes, plans, envelopes and records
+  and renumbers the rest. Low was valid; the loader rules are unchanged.
+- **Single-case Error variants on Champ (#704).** SPB 17 holds an Error
+  enum with one payload case as that case's object, but `variant.tag` and
+  `variant.get` were emitted on it as on a variant (`VARIANT_TAG` in
+  `confirm … else throw`, `xs[i] else v` and case patterns). Its tag is now
+  the constant 0 and its payload read a field read that cannot fail. A
+  failure raised from an owning entry (a closure that throws into its
+  caller's `catch`) now clears the entry's input packet as `ret.own` does,
+  instead of stopping Champ with "owning entry did not consume input". The
+  loader rules are unchanged.
+- **Own never indexes a missing scope state (#672).** A constructor that
+  stores a field which carries deps but holds no obligation (a role whose
+  implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)
+  sits in an elided action scope; own panicked on `scopes[&action]` before
+  wave 2 stopped staging such values. Every remaining lookup of a scope
+  state or of scope facts in the own driver now reports an `InvalidFlow`
+  diagnostic naming the function and site instead of panicking.
+
+- **Champ constructs objects with an Atomic field, and every Cell (#671,
+  #686).** Own classified a builtin capability without `destroy` (Atomic) as
+  a service obligation, so a holder such as `Cell` or an object with an
+  `Atomic` field got a fresh creation summary, while the SPB 17 layout (in
+  line with P2.4 §4.8: close is explicit, a read returns a reference with
+  deps) gives such a holder no identity; the loader then refused the
+  constructor with `FRESH_PACKET`. Own now treats the capability as a
+  deps-carrying reference with no obligation, and a function that
+  partitions one declares the program failure of its `scope.split`
+  (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
+- **`ordering()` on Champ is Tomato's runtime sort (#678).** The OIR-2
+  producer synthesized an O(n²) insertion sort, so sorting 10⁵ ints ran out of
+  the step budget. Following the lead's ruling (a synthesized merge sort took
+  the Full High verifier past its step budget, 470afc9cf), `ordering()` now
+  lowers to one operation, as Tomato's `ordering` intrinsic. Scalars and text
+  (int, float, rat, byte, char, str) use OIR-2 `array.order` (total) and
+  SPB 17 `array.order` (`array.op` sub-code 6, rule `ARRAY_ORDER_TYPE`); Champ
+  runs Tomato's sort with the same comparators and interrupt/memory polling,
+  and a byte array stays bytes. Elements ordered by `Comparing<T>.order` use
+  OIR-2 `call.order` (the failures of `order`, inferred by own like a role
+  dispatch) and the SPB 17 operation `array.order.dispatch` (Champ opcode 99,
+  rule `ORDER_DISPATCH`, with the dispatch's `DISPATCH_SITE`/`DISPATCH_TARGET`
+  and failure mask); its re-entrant Champ helper `champ_machine_order` runs
+  Tomato's bottom-up merge (now shared, `merge_order`) and calls `order`
+  through the dispatch once per comparison, so the comparisons and their
+  effects come in Tomato's order; the first failure stops the sort and
+  propagates, and the source array stays rooted. Each comparison borrows its
+  elements, so elements that own resources sort too (each destroyed once, as
+  in Tomato); an owning `order` slot gets an empty packet per comparison and
+  must return one.
+  `L09.compare.failing-order-stops-the-sort` passes on Champ.
+- **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
+  `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
+  had no char kind. OIR-2 `cvt` now takes char (char → int and char → str
+  total; int → char fails outside 0..0x10FFFF and on surrogates with Tomato's
+  message "char needs a Unicode scalar value (0..0x10FFFF, not a
+  surrogate)"); SPB 17 `Convert` admits the same three pairs, and Champ and
+  its JIT run them with Tomato's semantics. `s.characters()` reaches SPB 17
+  as `str.ext` sub-code 16 (`StrCharacters`, appended; no existing id
+  changed). Cases `L01.lex.crlf.raw-string-keeps-cr`,
+  `L02.char.code-round-trip`, `L02.char.string-cast` and
+  `L02.char.surrogate-rejected` pass on Champ; `L06.const.values` now passes
+  own and low and stops in the SPB 17 layout on its collection constants.
+- **The OIR-2 High verifier admits `fut.done`, `fut.cancel` and `fut.cancelled`
+  (#688).** Rule H6 rejected them although plan P2.5 §3.1 lowers
+  `f.done()`, `f.cancel()` and `f.cancelled()` to these operations in High
+  (spec §10.1); a program using them stopped in `verify_high`. H6 still
+  rejects every other Future ownership or state operation in High.
+- **The SPB 17 loader tracks a successor's must-use permission through calls
+  and the exit protocol (#680).** A successor result of a call that cannot
+  fail (`invoke.observe` with a plain next flow) could be dropped, and taking
+  it was rejected as "already taken"; a produced successor that an outcome
+  edge left unassigned was dropped silently; `ret.own` and `ret.defer`
+  checked nothing. Now `exit.prepare` (and `exit.replace`) move the value's
+  permission into the pending exit, cleanup and `exit.dispatch` carry it, and
+  `exit.commit` hands it only to a successor-typed result; `ret.own`/`ret.defer`
+  return live successors and leave none behind. On a failure path (`raise`,
+  an unwind dispatch, `exit.abort`) the permission may lapse: must-use is a
+  normal-path promise. The successor rules report stable codes
+  `SUCCESSOR_TAKEN`, `SUCCESSOR_DROPPED`, `SUCCESSOR_FORGED` and
+  `SUCCESSOR_JOIN` instead of `SPB_STRUCTURE`. The SPB 17 code generator no
+  longer discharges a permission it already moved into a pending exit.
+
+- **Tomato delivers a cancellation to a nested frame resumed by the scheduler
+  (#670).** A task awaiting its own async call, whose frame's awaited future
+  had settled and queued it, ignored a cancellation requested before that
+  frame ran: the request stayed on the task, the frame's next `await`
+  suspended, a second `cancel()` did nothing, and the task hung (or the run
+  stopped with "no task can make progress"). The frame's next `await` now
+  raises `Cancelled`, once, and it unwinds through the frame and the task.
+  New case `L08.cancel.nested-frame-next-await`.
+- **Champ correctness, ten conformance cases (#677).** On the OIR-2 → SPB 17
+  → Champ path: a `raise` inside a try reaches the enclosing catch (a
+  non-matching catch or a bare rethrow in a nested try no longer escapes);
+  a match on a catch payload and on payload-free Error enums lowers; a
+  multi-file root keeps every file and `std.…` paths resolve; integer
+  literals beyond 63 bits load; a program without `main` fails with
+  `RuntimeError: Program requires main() declaration`; a constructor may
+  branch before binding its fields; compiled callees are called directly and
+  self tail calls run as loops, so a million-level recursion and ten million
+  tail calls fit the stack (#664). `okkama run` and `okkama build` no longer
+  parse `test` bodies outside test mode (§14), as imports and OCS already
+  did.
+
+- **Tomato keeps an await's outcome when the cancellation comes after it
+  (#663).** A task whose awaited future had settled, and which was only
+  waiting for its turn, raised `Cancelled` at that finished `await` when it was
+  cancelled meanwhile, and the outcome was lost. It now runs on with the
+  outcome, and the cancellation is raised at its next `await` (#546). A
+  cancellation requested before the future settled still raises at that
+  `await`. New case `L08.cancel.after-await-settled`.
+  `L08.collect.settlement-order` had relied on the old behaviour for an
+  incidental loser, so that loser now waits on a chain that never starts. The
+  expected output is the same.
+
+- **`okkama check` checks test code too (#649).** It used to strip `test` and
+  `fake` blocks before analysis, so their errors showed up only on
+  `okkama run -t`. It now also analyses the test profile of files that have
+  tests and reports each diagnostic once. `okkama lint` and the language
+  server had the reverse gap: in a file with tests they missed errors that
+  only production code can have, such as `Role.fake()` in `main`.
+
+- **Cause stacks in failure reports (#74).** Each `Caused by:` entry shows the
+  place and stack of its own raise, not only the outermost failure. Rethrowing
+  the caught value itself (`throw e;`) keeps the original origin, stack and
+  causes and prints once instead of naming itself as its cause.
+
+- **Group-owned Futures and safe suspension snapshots on Sparrow (#581).**
+  FutureGroup retains registered Futures, their caches and transferred fresh
+  dependencies after a registering call or lexical binding exits. Duplicate
+  registration, multiple groups and surviving lexical owners release the cache
+  once at its final owner; internal FutureScope groups settle their children
+  before cleanup and preserve the body result. Lowering and region elision
+  account for these hidden ownership edges, including async destroys. This
+  prevents accepted HTTP connections from closing before dispatch. Suspended
+  frames now save live registers and clear dead ones instead of resurrecting
+  reclaimed pointers, fixing the SQLite throughput lifetime GC-stress crash.
+
+- **Unique await and escaping cache results on Sparrow (#581).** In addition to
+  direct async calls, `await.take` now accepts proven fresh results of plain
+  Future factories, fresh Future outcomes returned by async actions, and exclusive
+  local bindings. The proof rejects publication, aliases, repeated observations
+  and loop reuse; bound extraction preserves the original cleanup boundary and
+  never gains fresh argument admission. Scope `keep` also carries escaping views
+  out of dying local caches, including nested Futures, while external borrows
+  retain their owners. Rehomed cache resources keep scope ownership instead of
+  becoming fresh call arguments. This fixes pooled SQLite leases and early
+  body/connection cleanup in the HTTP/web stack.
+
+- **CLI tests follow the removed IR engine (#584).** Help expectations use the
+  Sparrow/JVM engine list and current JIT wording; the obsolete REPL test is gone.
+
+- **Future-owned cached outcomes (#581).** On IR and Sparrow, ordinary await borrows
+  a Future's result. Repeated awaits and duplicate collector inputs keep one
+  owner; destroying that Future releases its fresh outcome exactly once in
+  reverse creation order. Retained inputs still follow escaping Futures (#578),
+  and tracking awaited values remains safe (#579). The ownership corpus restores
+  the #579–#581 checks and makes returned await aliases explicit borrows.
+
+### Removed
+
+Removed the JVM backend (#585): the `codegen/jvm` generator, the embedded Java
+runtime `okkama.rt` with its committed classes, JAR output, the `okkama-native`
+C ABI that served it through FFM, `tools/jvm-runtime`, the JDK in CI and the
+Docker image, and the `jvm` configurations of the gate, `t/`, okgen and the
+mutation check. Measured before the decision: OIR-2 would remove up to 87% of
+its time on resource-heavy code, but it would stay about 8× slower than
+Sparrow. `--engine jvm`, `OKKAMA_ENGINE=jvm` and `--target jvm` report an
+error; `okkama build` makes Sparrow bytecode without `--target`, and
+`--budgeted` is gone. Unicode, IDNA and time-zone tables that Sparrow's
+natives read moved to `okkama-runtime-core/data` unchanged. The last release
+with the JVM backend is 0.5.8.
+
+Removed the IR engine and the `okkama-runtime` crate, its interpreter, host,
+ownership state, destroy tracing and tests, plus IR-only support in
+`okkama-runtime-core` (#584). Sparrow is the only Okkama engine; `--engine ir`
+and `OKKAMA_ENGINE=ir` now report an error, and the IR-dependent REPL is
+removed. Tools, CI and the gate use Sparrow, including passes-off and GC-stress
+coverage; the JVM backend followed later in this release (#585). Shared native providers,
+values and scheduler support used by Sparrow remain available.
+
+Removed hidden fake storage from the test profile, including its six operations,
+compiler checks and runtime support on IR, Sparrow and JVM (#583). Use `Cell`
+for mutable synchronous test values and `Atomic` for async code or object and
+fake fields; role fakes and their ordinary typed fields remain available.
+
+### Added
+
+- **SPB 17 catalogue rows of channels (Q2) and groups, collectors and
+  timeouts (G1) (#601 B3, memo §§5.2, 6.2).** The 22 members Tomato runs as
+  intrinsics (`Channel.new_capacity`, `sending`, `receiving`, the endpoints'
+  constructors, `send`, `item` and `close`; `FutureGroup.new`, `start`,
+  `active`, `cancel`, `wait`, `FutureScope.outcome`, the collectors'
+  `results`, `winner`, `outcome`, `remaining_count`, `completion`, and
+  `Within`/`Before.outcome`) are rows of `spb17::drivers::HOLDERS`, each
+  instantiated per specialization as the Atomic entries are
+  (`okkama.channel.Sending.send$int` over `async.channel.Sending_int`). A
+  holder's hidden word is a `RuntimeCell` (ruling PR-C); a Channel and a
+  FutureGroup hold duties. The rows wait for their runtime (lane A, A3/A4):
+  the loader does not admit them yet (`HOLDERS_READY`).
+
+- **Async natives on Champ (#601 N1, OIR-2 async ABI D22, ruling PR-N).**
+  The 51 `native async` declarations of std `runtime/` (database, network,
+  process, application, TLS, time, signal, fs, fs_root) have a contract in
+  the companion catalogue: each takes and publishes plain data or native
+  handles only, so the asynchronous ABI admits them. The producer declares
+  an async native `[async, extern]` with the High creation envelope and the
+  catalogue's body summary (`suspends`, `cancelled`); its call is an
+  ordinary async call, and own creates its Future in the `external`
+  environment. SPB 17 makes it a trusted driver of the table
+  (`EntryAbi::AsyncExternal`, a map result through the #752 adapter), and
+  the Champ declaration view runs it with Tomato's `drivers::native`. Loader
+  rules under `SPB_EXTERNAL_ASYNC`: the inputs packet of a native driver's
+  `fut.new` is statically empty (PR-N), and the program entry is never a
+  driver (#774). The SPB 17 catalogue rows of the std async primitives are
+  now the one source of the producer's members, failures and deps (#774 D3).
+  `L10.clock.monotonic-order`, `L08.deadlock.after-timer` and
+  `L10.env.process-snapshot` run on Champ.
+
+- **`spawn` of any Future on Champ: `fut.spawn.bound`, SPB 17 opcode 87
+  (#601 F1, ruling PR-E; closes #766).** A spawn of a Future that its
+  creating call did not just give (a synchronous action that returns a
+  Future, a bound async action value's call) starts the Future if it is cold
+  and registers it, as Tomato's `spawn` does; it moves no duty, and the
+  Future's cache duty stays where it is. The duty form of D24.1 stays for
+  the Future a creating call just gave. New helper
+  `champ_future_spawn_bound` (class X); loader rule `SPB_SPAWN` gains: the
+  bound form takes its Future and names no service.
+
+- **Async role slots and bound async action values on Champ (#601 F1,
+  ruling PR-D).** An async action of a role (`role Loader { async load() is
+  int; }`) is a synchronous slot that returns the Future of its outcome. Each
+  implementation is reached through a creation thunk: a synchronous function
+  with the slot's signature that calls the async action, whose cold Future
+  own returns through `cache.rehome … target caller`. An implementation by an
+  async intrinsic (`Cancelling.wait` by the cancellation token) gets the same
+  thunk. An async action type `async (A) is T` is a synchronous `Fn` that
+  returns the Future; binding an async method binds its thunk, and calling the
+  value creates the cold Future. No new ABI. `L08.role-shape.async-dispatch`
+  runs; the other cases of the slice stop next on N1, G1, #775, #759 and
+  #735.
+
+- **Variadic role slots on Champ (#601 F1, ruling PR-D item 5).** A role
+  action with a variadic tail (`WritingText.write(values is ...string)`) is an
+  ordinary slot whose last parameter is the array the checker packs at every
+  call site; the producer refused it ("async or variadic role slot"). Std's
+  P1 direct-call objects (Stdout, Utf8Encoded) now get their witnesses when a
+  value of them becomes a role value, as `fs/temp` does with `ByteSource`.
+  `L00.stderr.basic` and five `L10.fs` cases run; the two temporary-directory
+  cases stop next on #785.
+
+- **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
+  Event, Lock, Semaphore, Barrier and the cancellation token are a trusted
+  catalogue of the producer (`lowering/oir2/drivers`) and of SPB 17
+  (`spb17::drivers`): a member whose std body is a VM intrinsic, and the
+  constructors Tomato overrides, is a bodyless `[intrinsic]` named as Tomato
+  names it. An async member is an async external: its call is
+  `fut.new … environment external`, and SPB 17 declares it
+  `EntryAbi::AsyncExternal` (wire tag 5), a driver whose parameters are its
+  registers. New loader rule `SPB_EXTERNAL_ASYNC`: an async external is a
+  bodyless external that resolves only to a catalogue driver, a catalogue
+  driver is never declared synchronous, and `fut.new` passes it its
+  registers' types. Champ links the catalogue to Tomato's intrinsics in its
+  declaration view, so Tomato's drivers run a driver Future (Tomato's driver
+  frame with the Champ tail) through the same scheduler as `spawn`, with an
+  empty outcome packet committed before the waiters wake; the synchronous
+  members run as Tomato's intrinsics. Payloads are plain; the Event cell
+  keeps Tomato's layout `[initial, set, waiters]`. Eleven conformance cases
+  pass on Champ (`L08.wake.event-set`, `wake.already-settled`,
+  `wake.multiple-waiters`, `wake.cancel-defers-cleanup`,
+  `spawn.event-barrier`, `deadlock.two-tasks`,
+  `shutdown.outstanding-task-cleanup`, `cancel.awaited-cleanup-settles`,
+  `cancel.awaited-spawned`, `cancel.final-defer-await-interrupted`,
+  `L12.cancellation-runs-cleanup`; `champ_cases_q1`). The other std async
+  intrinsics name their slice in the refusal: channels Q2, groups,
+  collectors and timeouts G1.
+
+- **Champ runs `spawn` of an async action (#601 P1, OIR-2 async ABI D24).**
+  `spawn R(…).a(…)` lowers to the creating call followed by `fut.spawn` of
+  the fresh Future (own forwards the owner state; coro adds the spawned
+  task's duty beside the cache duty and schedules it first; low settles both).
+  SPB 17 assigns opcode 65 (class X, helper `champ_future_spawn`), and the
+  token `cache.rehome` carries a returned spawned Future's task duty. Champ
+  starts the task at once on the spawner's stack until its first suspension
+  and registers it in the root registry; at its owner's close a running task
+  detaches with its cache to the root (not cancelled) and a settled one
+  closes; shutdown cancels the running registered tasks, waits for them,
+  closes the detached outcomes and reports the first unobserved failure that
+  is not a cancellation, in spawn order. New verifier rules
+  `d24-spawn-not-fresh` and `d24-schedule-task-first`; new loader rule
+  `SPB_SPAWN`, with `SPB_TASK_RECEIPT` and `SPB_SCHEDULE` extended to spawned
+  task duties. `L08.wake.spawn-and-cold-start`,
+  `L08.failure.spawned-task-observed` and `L08.shutdown.unobserved-failure`
+  pass on Champ (`champ_cases_spawn`); the other spawn cases now stop on
+  `Event`/channels (Q1), async destroy (D1) or async role slots (F1).
+  Futures created in a `for` body still stop in coro (#759).
+
+- **OIR-2 low settles the dynamic transfers of open calls and `any` (#683).**
+  `lower_cleanup` and the Low verifier now accept `own.dynamic` with the
+  registered open Closure protocol (reason `closure`) and with the
+  synchronous `any` protocol (reason `any`), not only the storage merge
+  protocol. Their entries join the scope inventory and the common cleanup
+  executor releases them in serial order through their runtime descriptors
+  (`oir.sync_closure.cleanup`, `oir.any.cleanup`). Reserve and failure
+  dispatch follow the storage merge entries, and no plan is direct without
+  order evidence. The dynamic site stays counted (B7.1). Eleven C3b
+  open-call cases now pass own and Low and stop in SPB 17, which has no
+  `fn` values, `fn.call`, `own.dynamic` or protocol table yet (#676).
+  `L09.collections.ordered-sets` hits the low step budget (#687).
+
+- **Champ: int, byte, float, rat and str operations in SPB 17 (#675).**
+  SPB 17 now has five operation families, one wire code each with a
+  sub-code: `int.ext` (14), `byte.ext` (15), `float.ext` (16), `rat.ext`
+  (17) and `str.ext` (18). They cover the bit operations, shifts and
+  rotations, the bit actions, `abs`/`sign`, float arithmetic, `pow` and
+  `sqrt`, exact rat arithmetic with numerator/denominator, and slice, split,
+  replace, trim, chomp, case, repeat, find, starts/ends and utf8. Ints stay
+  exact beyond 64 bits, constants included, and rat constants have their own
+  form. The operations that can fail (shift and rotation counts, ints outside
+  signed 64 bits in bit operations, non-finite floats, zero divisors, slice
+  bounds, a negative repeat count) go through S2 with explicit outcomes and
+  the program-failure mask. The new loader rules are `SCALAR_OP_TYPE` and
+  `CONST_RAT`. Champ runs the operations with Tomato's semantics, which are
+  now shared functions in `sparrow-core::ops`, through one JIT helper,
+  `champ_machine_scalar`; float neg/abs and byte and/or/xor/not are inline.
+  The producer lowers `byte >>> int` as `byte.shr`, which takes the int count,
+  and lowers an `any` coercion to `any.box`. Of the 47 cases blocked on these
+  operations, 38 now pass on Champ (`champ_cases_scalars`). Four pass own and
+  low and then stop on collection operations. Five wait on char conversions
+  in OIR-2 (#679).
+- **OIR-2: open action invocation and `any` in the producer (#569 C3b, C6).**
+  An invocation of an action value is open exactly where own sees no finite
+  origin in the invoking body (a parameter, a produced result, a field read,
+  the block parameters they reach); the producer now gives each such call the
+  registered open sync callable ABI (the Closure protocol, one cleanup
+  intrinsic per `fn` type and a `type.of` runtime descriptor) instead of a
+  diagnostic, and known invocations stay precise. The runtime catalogue keys
+  its cleanup intrinsics by type, so a module can invoke several open `fn`
+  types, and registers `oir.any.cleanup`. `any` boundaries lower to `any.box`
+  (element by element in heterogeneous literals, never a box of a box), and
+  every function whose values reach `any` binds a checked runtime descriptor.
+  An untagged `[]`/`[:]` arm of an `if`/`match` takes the join's collection
+  type. Eleven `any` cases reach Low; the open-call cases reach own and stop in
+  Low, which does not yet take the Closure transfer of an open call result.
+
+- **OIR-2 core (#563).** A new crate, `okkama-oir` (std only, re-exported by
+  the compiler as `oir2`), holds the 0.6.0 intermediate representation with
+  ownership in SSA:
+  - a data model with typed arenas and four profiles (`high`, `own`, `coro`, `low`);
+  - 268 operations, each with an ownership contract and normal/unwind outcome schemas;
+  - builders and an editing API;
+  - a canonical text codec (`oir 2 <profile>`) on the OIR-1 grammar, with
+    `oir 1` rejected.
+
+  It is backed by 113 fixtures covering every example of the specification,
+  the M1–M9 pairs and negative cases, plus round-trip and property tests.
+  Nothing in the pipeline uses it yet: the verifier (#564) and ownership
+  elaboration (#565) build on it.
+
+- **OIR-2 verifier (#564).** `okkama-oir::verify` checks a module
+  independently at each of four boundaries: `verify_high`, `verify_own`,
+  `verify_coro` and `verify_low`. It covers:
+  - structure, types, SSA and dominance;
+  - edge contracts and authority;
+  - the high-profile contract H1–H9;
+  - ownership conservation and lexical lifetimes;
+  - provenance and call conventions;
+  - builders and successor must-use;
+  - dynamic protocols, async (Future inputs, caches, frames, unique-cache
+    proofs) and the lowered cleanup automaton;
+  - profile limits.
+
+  Each of 63 rule IDs has a canonical valid and invalid fixture. Rules
+  that stay structural until producers supply metadata are listed in
+  `docs/phases.md`. The verifier never repairs a module and never infers
+  ownership.
+
+- **OIR-2 high lowering, first slice (#566, #567).** A new lowering
+  produces OIR-2 `high` directly from the analysed program. It is not
+  derived from OIR-1, and nothing yet routes production builds through it.
+  The slice covers:
+  - declarations, the lexical scope tree, bindings and rebinds;
+  - scalars, control flow and loops;
+  - objects, constructors with early self, calls and successors;
+  - temporaries and discarded results (#308);
+  - defer registration, throw, try/catch, rethrow and destroy bodies;
+  - resource returns;
+  - the std the first P1 programs call: Stdout and writeln, Cell and
+    UTF-8 encoding as ordinary std code, Atomic and `Error.text` as
+    intrinsics, encoding and stdout writes as natives with compiler
+    summaries.
+
+  Constructs outside the slice get an explicit "unsupported" diagnostic
+  rather than a fallback. Every lowering golden passes `verify_high`.
+
+- **OIR-2 lowering of collections, roles and generics, first part (#568).**
+  - **Generics.** A demand-driven specializer turns generic declarations
+    into concrete ones before lowering, so OIR-2 never sees an open
+    generic. It has growth limits and reports the request chain.
+  - **Roles.** Static and dynamic calls, narrowing, return adapters, and
+    a successor of a role (`^Package`), which keeps its must-use
+    obligation.
+  - **Collections.** Literals and operations on arrays, maps and ranges.
+    Every read names its projection (index, slice, map entry, keys,
+    values, removal, path), so ownership follows exactly what is taken.
+  - **Builders.** Streaming builders for large literals.
+  - **Traversal.** `for` over arrays, ranges, maps, `Iterating` and
+    `Batching`, with the cursor protocol and per-iteration lifetimes.
+  - **Functional blocks.** `map`, `filter`, `reduce`, `any`, `all` and
+    `find` lower as code inside the enclosing action, never as lambda calls.
+  - **Plain `once let`.** A failed computation publishes nothing. The std
+    collections List, Frequencies, Heap and Deque lower from their own
+    source.
+  - **Object map keys** that the language allows (no destroy, no caps,
+    key fields) are accepted by the verifier (#635).
+
+  A coverage manifest classifies the 145 conformance and corpus cases it
+  answers for. `return` from a `defer` now lowers as a replacement of the
+  enclosing result (#609).
+
+- **First end-to-end wiring of the new pipeline (#593, #648).** Under the
+  feature `champ-abi`, `OKKAMA_PIPELINE=oir2` runs a program through the
+  OIR-2 pipeline into Champ: high, own, low, SPB 17 and the JIT. Builds run
+  the structural checks; the full ownership verifier is a test and CI
+  gate, and runs in a build only with `--verify-ownership`. `Atomic.replace`
+  is now a call-boundary entry (#606).
+
+- **All 25 P1 programs run in Champ and match the oracle (#633).** Stdout,
+  checkpoints, exit code, stderr and the destroy trace all agree with the
+  current Sparrow, through high, own, low, SPB 17, the loader and the JIT. To
+  get there:
+  - SPB 17 and Champ gained plain arrays (`array.new/len/get`, with a
+    bounds unwind), completed plain construction, `obj.next` with a
+    successor packet, and explicit outcomes for what low leaves as block
+    unwind;
+  - an admission fix stopped bound resources from reaching calls early.
+
+  The full ownership gate stays red (19 Incomplete, one B51).
+
+  An `okkama` built with `champ-abi` now runs Champ when
+  `OKKAMA_PIPELINE=oir2` is set. It refuses SPB 16, because that build
+  compiles Tomato's resource tracking out.
+- **Champ loader rules from two independent audits (#652).**
+  - `RETURN_PACKET_NOT_FLAT`: a returned packet must hold only admission.
+  - `ENTRY_BLOCK_TARGET`: no edge may enter the entry block.
+  - `FALLIBLE_DATA_OUTCOMES`: a fallible data operation in a function that
+    holds services must have explicit outcomes. In plain functions the JIT
+    now checks the status after it instead of using a zero.
+  - `CREATION_UNCOMMITTED`: an object that may reach a resource must be
+    committed before any other use.
+
+  Selection walks treat arrays and ranges as leaves.
+- **Conformance on Champ (#593).** `adapters/rust/adapter-champ.json` runs the
+  suite on Champ. `tools/champ_blockers.py` ranks the Champ-only failures by
+  normalised cause, and `tools/run_champ.sh` runs both engines. The first
+  run passed 534 of 1038 cases on Champ, with no case failing on both
+  engines.
+
+- **Champ coverage, wave 2 (#660, #661, #569, #657).** On Champ the
+  conformance suite rose from 534 to 665 of 1039 cases, and no case
+  fails on both engines.
+  - **Backend.**
+    - A conversion is fallible only where its types make it so: `int.string()`
+      is total, so code with a live resource no longer needs an unwind for it
+      (#658).
+    - SPB 17 carries `byte`, `float`, `rat`, `char` and enum variants, with
+      comparisons, structural equality and variant access. The loader checks
+      each new form, keeps float constants finite and restricts structural
+      equality to plain values.
+  - **Own and low.**
+    - Collections, maps and variants keep their elements' obligations with
+      their owners.
+    - A builder carries an explicit journal of its elements.
+    - A `catch` landing has a deps recipe, and `m[k] else …` lowers.
+  - **Producer.**
+    - Arithmetic and bit operations on `float`, `rat` and `byte`, and the
+      string builtins.
+    - `catch case`, `try?`, stream writes, module constants and spread
+      arguments.
+  - **Open calls (O1).** A call of an action value whose target is unknown
+    follows one registered contract, checked against a catalogue:
+    - the environment is borrowed, so one action value can be called many
+      times;
+    - the result may be fresh or alias the environment or an argument.
+
+    The verifier treats two filters with the same keys as one cell, so
+    repeated calls of one callable no longer leave phantom fresh inputs.
+
+  Independent audits found no unsound acceptance; their findings are fixed
+  or ticketed (#653–#656, #666–#670).
+
+
+- **Champ coverage, wave 4 (#601, #622, #676, #689, #692, #695–#700, #711, #712).**
+  On Champ the conformance suite rose from 673 to 908 of 1040 cases (CI on
+  616048635), and no case fails on either engine.
+  - **Async, wave 1, end to end.** `async main` awaiting plain async actions
+    runs high → own → coro → low → SPB 17 → Champ JIT: the coro pass with
+    D21 frame layouts and continuations, low with the D18 cancel envelope and
+    conditional delivery, SPB 17 opcodes 64–77 and their loader rules, the
+    Champ Future record (a Tomato frame with cache, slots and scope area),
+    the root driver, and the JIT for async bodies (resume dispatch, frame
+    slots, S-class helpers). All eight W1 cases pass, normally and under GC
+    stress (V1–V10).
+  - **Async, wave 2.** Cold Futures take their fresh resource inputs and own
+    their outcomes; a Future or a view escapes through `cache.rehome` to a
+    scope or to the caller; a temporary await takes the cached outcome
+    (`await.take` with its unique-cache proof); resources, defers and pending
+    exits cross suspension points; cancellation is delivered at awaits, and a
+    nested close keeps it for the next one (R1, R2, R4, R5, K1).
+  - **Roles, closures and `any`.** Dispatch tables, action values as layouts,
+    open calls through the Closure protocol and `any` boxes run on Champ;
+    managed collections of roles and `any` values that reach resources
+    (#676, #689, #711).
+  - **Rules.** Two audits of wave 4 and of the async verifiers were fixed
+    (#692, #695); async bodies need their D21 layout in coro and low (#696);
+    a scope close takes only its own service duties (#684); the full
+    verifier models which creations can hold an obligation (#700);
+    `scope.transfer` moves only admitted identities (#697); shielding is a
+    property of every close, and `cleanup.shield` is gone (#690).
+  - **Parity.** Champ's failure messages match Tomato's (#698, #712, #713);
+    `catch e is Cancelled` works on Champ (#724); and, as on Tomato, a
+    cancellation still pending at a task's final exit keeps the result, while
+    a `defer await` of the final cleanup is interrupted by it.
+- **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
+  Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
+  case fails on both engines.
+  - **Test mode.** `okkama run -t` runs through OIR-2 on Champ: SPB 17 carries
+    a tests table and a `test.check` operation, and `skip`, `close`, `text` and
+    `bytes` are test intrinsics with plain operands (C8b).
+  - **Natives.** A catalogue beside the runtime ABI table classifies every
+    native by ABI kind, transport, handle role and effect; 594 synchronous
+    natives are admitted, and none is trusted by name alone. `native object`
+    declarations are handles without a destroy token, and a canonical symbol
+    that no provider registers fails at run time after the program has run up
+    to it (C7, #645).
+  - **Own.** A builder's elements live in the journal of the scope that made
+    the builder, so they are destroyed with that scope, not at function exit
+    (#666). Test functions are fixed observation roots, like `main` (#667). A
+    handler that own routes a failure past must abandon its buffers and
+    re-raise; a callee with no language parameters receives an empty packet
+    (#668).
+  - **Loader.** Every rule of the load gate now has a positive and a negative
+    test (#654). The tests found two defects. An exhausted evidence budget was
+    reported under another rule's code; that is fixed. An owned return can drop
+    a live successor's must-use permission, because the successor check does
+    not follow the exit protocol yet; that is #680.
+  - **Async.** The OIR-2 data model for suspension, frame layouts and the
+    await-unwind adapter (#601 V1).
+- **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
+  `high` to `own` makes ownership explicit for synchronous code. It covers:
+  - scope ends, call conventions and per-scope exits with the reserve;
+  - defer registration and replacement;
+  - successors and construction stages;
+  - partitions of accepted inputs.
+
+  Seventeen own goldens verify with `verify_own`. The pass changed some
+  verifier rules, so an independent audit checked them. It found three
+  rules that accepted a borrow outliving its owner. Each is now rejected,
+  and each has an invalid fixture that the earlier verifier accepted.
+  A later part covers closures (captures snapshotted, only fresh parts
+  transferred), bound and open invocation, caps with their owner graph,
+  `any` boxes, opaque values, roles and dynamic protocols. The first P1
+  run then showed four own defects, all fixed: plain arrays on the
+  `Stdout` path, real memory accounting, call packets that must still be
+  consumed when their scope is elided, and terminator liveness after a
+  staging split. Every P1 fixture now passes the own rewrite. Async is
+  still to come.
+
+- **OIR-2 verifier: memory and work (#634).** The ownership verifier ran
+  out of its 256 MiB budget on the P1 programs: every flow state held dense
+  vectors over every SSA value. Flow relations are now stored per value,
+  sparsely, and shared between states through a persistent tree of 64-value
+  pages, so a change copies only its path. Work is charged by the
+  operations actually made, a dirty-state worklist runs each state once with
+  its final input, and history that no observer can read (dead scalar
+  constants) is dropped. The limits stay 50M work and 256 MiB.
+
+  Verdicts do not change. A differential mode runs the previous dense
+  solver beside the new one (`okkama-rs/tools/verifier-differential.sh`,
+  feature `verifier-differential`) and reports every disagreement; on the
+  whole corpus it compares 19,560 runs with 0 mismatches. An independent
+  audit found no unsound acceptance; its findings (a false B105 when dropped
+  history was named by a cleanup root map, an unchecked fast path in alias
+  remapping, too broad differential exclusions) are fixed.
+
+- **OIR-2 cleanup specialization (#591).** A pass from `own` to `low`
+  expands scope closes into an explicit cleanup automaton: one plan in
+  serial order across static, journal and protocol entries, the reserve
+  merged whole on failure, typed failure and exit dispatch, and root
+  requirements at every boundary. A compiled direct plan is used only
+  with checked order evidence, and only when cleanup cannot fail or the
+  reserve is empty; otherwise the common runtime merge runs.
+
+- **Sparrow Champ: the new runtime, behind the cargo feature `champ-abi`
+  (#571, #572, #573).** Champ destroys every object exactly once without
+  identity tables. It is built as a candidate toolchain; the default build
+  and the CLI are unchanged.
+  - **Bytecode and loader (#571).** SPB 17 bytecode is emitted from OIR-2
+    `low`. Before anything runs, a load-time verifier checks:
+    - types, including pending values;
+    - linear services and cleanup phases;
+    - serial order and the direct-plan restriction;
+    - failure masks computed from bodies;
+    - root maps before and after helpers.
+
+    It compares the compiler's evidence and never repairs it. Every rule
+    has a negative test with a stable code.
+  - **Runtime (#572).** Object layouts with an identity tail only for
+    objects that have their own destroy. Packets, scopes, journals and
+    owned calls with one outcome channel. A common cleanup executor runs
+    the reserve and suffix merge and keeps failure links.
+  - **JIT (#573).** Cranelift lowering of every P1 operation with a shared
+    helper registry, precise stack maps, and the rule that a helper's
+    result words are written last and never kept in the map. Owning-entry
+    rejection settles the input exactly once. All cleanup runs within the
+    stack headroom.
+
+  All eleven reference programs run under the JIT, also with a collection
+  at every safepoint, and give the expected destroy order.
+
+- **Register-colouring diagnostics (#540).** `OKKAMA_PROFILE_REGISTERS=1`
+  reports compiler phase times, busy-set cloning work, conflict-list capacity,
+  edge moves and assigned registers. Bounded, opt-in large-function fixtures
+  support baseline measurement before changing the allocator; no speedup is claimed.
+
+- **Ownership tools for the 0.6.0 rebuild (#553, #555, #560).** Three
+  developer-only aids that measure how much of ownership the compiler can
+  decide statically and check every later change against today's runtime:
+  - `OKKAMA_OWNERSHIP_REPORT=FILE` writes a census of where the owner of
+    every value with a `destroy` is: its scope, the result, an aggregate, or
+    unknown with a reason (#553);
+  - `OKKAMA_OWNERSHIP_PROTOTYPE=1` removes callee-root adopts of parameters
+    that every caller already owns (OH-09), and `SPARROW_TRACE_DESTROY=FILE`
+    traces every destroyed identity (#555). Over 1 030 programs the traces
+    are identical; std loses 12.9% of its static region operations and 20.5%
+    of executed adopts, 11-ownership 11% of its time;
+  - `tests/ownership-corpus`: 96 programs and 427 checks of Book chapter 20
+    with identical results on both engines; pending checks wait on #578–#581
+    (#560);
+  - `OKKAMA_TRACE_DESTROY=FILE` gives the IR engine the same destroy trace
+    as Sparrow, numbered the same way, so one program can be compared across
+    engines (#561).
+
+### Changed
+
+- **Enum declarations accept a trailing comma after the last case (#594).**
+  Parameter, argument and literal lists already accepted one. The case list
+  now follows the same rule (`enum_cases … trailing_comma?`), so an enum
+  written one case per line can end with a comma. `okkama fmt` treats the
+  case list like any other list:
+  - it stays on one line when it fits;
+  - it goes one case per line when the author broke it, wrote a trailing
+    comma, or it does not fit;
+  - a payload keeps its own trailing comma (before, the formatter dropped
+    it).
+
+  Anonymous action parameters still reject a trailing comma, as the
+  specification requires (§8.10.2).
+
+- **Faster Sparrow: the 0.6.0 perf wave.** Micro A/B against the previous
+  0.6.0 state: geometric mean −7.0% over 69 benchmarks (Docker, fat LTO, five
+  runs). `float` −70%, `rat` operations −13…−26%, `try-catch` −24%, and calls,
+  arrays, constructors and maps −3…−5%. Ten changes are significant, all
+  faster; `json-parse` +2.7% and `map-keys` +3.8% stay within the noise band. Contents:
+  - payload objects lose their extra box (#436);
+  - the GC walks precomputed pointer-bearing field indices (#437);
+  - SPB is decoded and verified once on the CLI path, and CLIF diagnostics are
+    collected only when profiling (#480, #481);
+  - one invocation record per function for closure and direct calls (#536,
+    phase A);
+  - direct helpers for builder, rational and map-length operations, and
+    guarded scalar conversions (#537, phase A);
+  - range proofs keep more integers out of GC root maps (#539);
+  - register-colouring profile and fixtures (#540, stage 1);
+  - direct calls to already compiled static callees (#542);
+  - region entries are borrowed once per pass, and size classes come from a
+    table (#543).
+- **Format versions bumped (#586).** SPB 16, worker frames `OKW2`,
+  conformance schemas `/2`. Old versions are rejected with a message that
+  names the expected one; no old readers remain. The OIR-1 text dump keeps
+  `oir 1`: version 2 belongs to the OIR-2 text format (#563), and the OIR-1
+  dump is deleted with OIR-1 (#576).
+
+- **Sparrow payload ownership prototype (#436).** PAYLOAD cells keep the
+  typed owning box inline, removing the extra thin-pointer allocation.
+  Tracing, downcasts, drop, builder reuse and external-memory estimates use
+  the same owner. The 64-bit cell grows from 16 to 24 bytes; performance
+  acceptance awaits the bounded Docker A/B and release gate.
+
+### Fixed
+
+- **Sparrow CLI loading (#480, #481).** Normal `sparrow` execution and
+  `okkama exec` decode and verify SPB once on the VM stack, rendering uncaught
+  traces before releasing the program. Test-profile execution also avoids
+  the launcher's extra decode. CLIF diagnostic counts are collected only
+  with compile profiling enabled, at the same pre-codegen sampling point.
+  Startup and allocation improvements await bounded Docker A/B measurements.
+
+- **Compiler CFG traversal (#469).** Dominator DFS keeps a fixed-size
+  successor iterator in each frame instead of rebuilding temporary vectors
+  on every edge. Unwind order, RPO and dominator intervals are unchanged.
+
+- **Sparrow keeps AllFutures results until the awaiting scope ends (#580).**
+  The results sequence had no identity, so the awaiting scope did not adopt
+  the resources in it and later calls destroyed them early, in creation
+  order. They now live as long as the scope and are destroyed in reverse
+  order, as on the IR engine. Found by the ownership corpus.
+
+## [0.5.8] — 2026-11-14
+
+0.5.8 removes allocations that grow with the input from the encodings, the
+regex engine and Sparrow's standard output. It also rebuilds the JIT's
+liveness analysis, and makes case-insensitive regexes match whole case
+folding classes. It changes no public API.
+- **Encodings.** Quoted-printable encodes in one pass (#460): one 64 KiB
+  line takes 0.30 ms instead of 1.18 s. base32, base64 (#461) and base85
+  (#551) look symbols up in tables. Validity checks build no output (#459).
+- **Regex.** Character matching allocates nothing per character (#462). A
+  case-insensitive class search takes 11.9 µs instead of 34 µs.
+- **Behaviour change.** With `ignore_case`, a letter now matches its whole
+  simple case folding class (#550). `K`, `k` and the Kelvin sign match each
+  other. Turkish `ı` and `İ` match only themselves, so `i` no longer
+  matches `ı`.
+- **Sparrow.** stdout and stderr write without copying the bytes (#458).
+  The JIT's liveness analysis keeps one slab per function (#455, #456),
+  with identical results and unchanged compile time.
+- **Declined with numbers.** #454 (sort maps in the JIT) gave no gain.
+  #450 (event statistics) was tried twice and taxed the default path: the
+  regex benchmark rose 10% in the first attempt, and constructor and
+  successor rose 3.5% in the second.
+- **Release report.** The micro-benchmark A/B
+  (`okkama-docs/benchmarks/reports/2026-11-14-v0.5.8/micro.html`) shows no
+  regression. Sparrow is −2.1% by geometric mean over 69 reliable pairs,
+  with no pair past the noise band; the IR engine is +0.1%. Conformance is
+  1035/1035 on six configurations.
+
+### Changed
+
+- **Quoted-printable encodes in one pass (#460).** The encoder made a
+  `String` per input byte and folded lines by removing tokens from the
+  front of a vector, so a long line cost quadratic moves. Both engines now
+  write each token straight into the output and fold by column; the output
+  is byte-for-byte the same. One 64 KiB line: 1.18 s → 0.30 ms; 60 bytes:
+  1.96 → 0.36 µs. Implemented by Codex, reviewed and verified by Claude.
+
+- **base32 and base64 look symbols up in a table, in one pass (#461).**
+  Decoding 64 base64 characters: 4.17 → 0.37 µs; 87 KiB: 7.1 → 0.37 ms.
+  Accepted inputs, error offsets and their order are unchanged.
+  Implemented by Codex, reviewed and verified by Claude.
+
+- **Regex character matching allocates nothing per character (#462).**
+  Case variants come from the character case iterators instead of three
+  `String`s and a `Vec` per character. A case-insensitive class search:
+  34.0 → 11.9 µs; a case-insensitive literal: 12.7 → 6.3 µs. The set of
+  case variants is unchanged. Implemented by Codex, reviewed and verified
+  by Claude.
+
+- **Encoding validity checks no longer build output they discard (#459).**
+  UTF valid-prefix checks, and base85 and quoted-printable invalid-offset
+  checks, scan without collecting text or bytes. UTF-16 decoding of 64k
+  characters: 405 → 311 µs. Implemented by Codex, reviewed and verified by
+  Claude.
+
+- **Writing to standard output no longer copies the bytes (#458).** Sparrow
+  wrote stdout and stderr from an owned copy of every byte array. It now
+  writes from the array itself. Writing 64 bytes: 37 → 28 ns; 64 KiB:
+  6.4 → 4.7 µs; a `writeln` of a short line: 188 → 162 ns.
+
+- **base85 looks symbols up in a table, in one pass (#551).** Decoding
+  64 KiB: 3.37 → 0.29 ms. Accepted inputs, offsets and the canonical-tail
+  rule are unchanged. Implemented by Codex, reviewed and verified by
+  Claude.
+
+- **The JIT's liveness analysis keeps one slab per function (#455, #456).**
+  Blocks are revisited from a worklist, scratch sets are reused, and the
+  sets per instruction live in one allocation whose size the
+  `MAX_LIVENESS_BYTES` cap now bounds in full. Results are identical (the
+  old analysis checks 1 536 generated functions in the tests); compile time
+  is unchanged, since Cranelift dominates it. Implemented by Codex, reviewed
+  and verified by Claude.
+
+- **Case-insensitive regexes match whole case folding classes (#550).**
+  With `ignore_case`, a letter now matches every member of its simple case
+  folding class, in both directions: `K`, `k` and the Kelvin sign `K`
+  match each other, as do `Å`/`å`/`Å`, `Ω`/`ω`/`Ω`, `S`/`s`/`ſ`,
+  `Σ`/`σ`/`ς` and `ß`/`ẞ`. Before, the Kelvin sign matched `k` but not
+  `K`. Turkish dotless `ı` and dotted `İ` now match only themselves, so
+  `i` no longer matches `ı`. ASCII mode is unchanged. Implemented by
+  Codex, reviewed and verified by Claude.
+
+### Fixed
+
+- **CI tests take minutes, not an hour (#557).** The Tests job linked each of
+  the ~90 test binaries with fat LTO: 35 min on Ubuntu, 55 on macOS. It now
+  builds under the gate profile (release optimisations, no LTO) and runs the
+  tests with cargo-nextest in parallel, every failure in one report and a
+  flaky test retried once and marked: 6.5 and 4.4 min. CI also runs on
+  release branches, so each merged ticket is tested while work goes on. The
+  fat-LTO binaries are still exercised by the conformance and std jobs.
+
+- **The SIGTERM drain test waits for the slow request instead of a second
+  (#556).** It slept a fixed second before signalling; on a loaded runner
+  the server had not taken `/slow` yet and the test read an empty answer.
+  `/slow` now says `slow started` on stderr and the test signals after it.
+
+- **The large-function compile-time test tolerates a slow CI sample (#554).**
+  It failed on every macOS CI run since 0.5.6 with `lets` growing ×8.1–9.0
+  against a ×8 bound. A probe on the same runner showed every compiler phase
+  growing linearly (×4–5); the failures were single slow samples on a shared
+  3-vCPU machine. The pair is now measured up to three times; a quadratic
+  phase (×16) still fails.
+
+- **The quoted-printable docs say what the encoder does with tabs (#549).**
+  They promised that a tab stays literal inside a line; the encoder always
+  writes `=09`, which is valid RFC 2045. The docs now say so and a test
+  pins it; the output is unchanged.
+
+## [0.5.7] — 2026-11-13
+
+0.5.7 removes the quadratic paths that the hardening audit found in
+Sparrow's async collections and in the runtime's handling of values, and
+makes the engines agree on two cancellation rules the owner decided. It
+changes no public API.
+- **Async.** `AllFutures`, `Raced`, `FirstSuccessful` and `Before`/`Within`
+  listen to each input once (#443), `FutureCompletions` serves its
+  requests as inputs settle (#444), and failures are ordered in one pass
+  (#445): 40 000 sleeping tasks collected in 0.20 s instead of 1.52 s,
+  32 000 completions drained in 0.03 s instead of 5.4 s. A request of a
+  stream with a duplicated pending input no longer deadlocks (#547).
+- **Values and natives.** `join` builds its string in place (#447), ranges
+  in array literals push inline integers (#448), map literals read their
+  operands by position (#449), and natives no longer copy big integers'
+  digits (#451) or widen byte arrays to check a length (#446).
+- **Engines agree.** A cancellation that arrives after an `await` has
+  finished is raised at the next `await` on every engine (#546), and a
+  cancelled `FutureCompletions` cancels its stream on IR and the JVM too
+  (#548).
+- **Release report.** The micro-benchmark A/B
+  (`okkama-docs/benchmarks/reports/2026-11-13-v0.5.7/micro.html`) has no
+  regression: Sparrow −3.5% by geometric mean over 72 reliable pairs, with
+  `map-literal-12` −13% and `channel` −11% past the noise band; the IR
+  engine −0.1%. It caught one regression before the release:
+  `regex-first-match` +8–13% from #450, which was reverted and goes back to
+  0.5.8. Conformance is 1035/1035 on six configurations.
+
+### Changed
+
+- **Sparrow's future collections no longer rescan every input (#443).**
+  `AllFutures`, `Raced`, `FirstSuccessful` and `Before`/`Within` listened
+  to every unfinished input again on each wake-up and picked each settled
+  input with a full scan, so n inputs cost O(n²). A collection now listens
+  to each input once and is told which inputs settled, in settlement order.
+  On Linux, 1 CPU: 20 000 inputs settling one after another take 0.017 s of
+  CPU instead of 2.48 s; 40 000 sleeping tasks collected with `AllFutures`
+  take 0.20 s instead of 1.52 s. The order is unchanged: inputs settled at
+  the start by position, the rest by settlement. Async micro-benchmarks are
+  within ±1.5%, the run-to-run spread of the baseline.
+
+- **`AllFutures` orders its failures in one pass (#445).** It kept each
+  failure once by searching the list of failures, then sorted the
+  secondaries by searching the inputs inside the sort key. Both were
+  O(n²). A set and a single table of first positions replace them; the
+  order stays the same: the first failure observed is primary, the others
+  follow by input position. 32 000 inputs that all fail: 952 ms → 9 ms.
+
+- **`FutureCompletions` hands out settled inputs as they settle (#444).**
+  Each `completion()` request removed itself from every input, scanned and
+  sorted all of them, and listened to every unfinished input again: O(n)
+  per request, O(n²) to drain a stream. The stream now listens to each
+  input once and serves waiting requests at the moment an input settles.
+  32 000 inputs settling one after another drain in 0.028 s of CPU
+  instead of 5.39 s; 32 000 already-settled inputs in 0.017 s instead of
+  2.08 s. Futures no longer carry a completion-order stamp; notifications
+  give the order. Async micro-benchmarks are within ±2%.
+
+- **`join` builds its string in place (#447).** It cloned the separator,
+  grew a temporary `String` part by part and copied it into the heap. Now
+  the lengths are summed first and the parts copied once into a string of
+  the right size; the ASCII flag comes from the parts' flags. Three short
+  parts: 65 → 32 ns; one part: 33 → 18 ns; Cyrillic: 82 → 54 ns; 1 000
+  parts: 7.2–7.7 → 5.9 µs. A result past the 4 GiB a string can hold is
+  now an error instead of a truncated length.
+
+- **Natives read big integers without copying their digits (#451).** A
+  native that only inspected an integer argument copied a big one's digits
+  into a new `Rc`, and several then copied them again into a `BigInt`. The
+  host now lends the heap's integer (`integer_view`, `int64`, `bigint`);
+  a copy is made only for a value the native keeps. `IntegerBytes` of a
+  200-bit value: 242 → 175 ns; of a 4 000-bit value: 1 460 → 1 350 ns.
+
+- **A map literal finds its operands at once (#449).** The generic helper
+  looked up each operand by searching the instruction's uses, so a map
+  literal of k entries made O(k²) comparisons. A map literal now reads its
+  entries by position, with the search as fallback; instructions with a
+  few operands keep the search, which costs them nothing. A 64-entry
+  literal: 6.25 → 2.98 µs; `map-literal-12` −12%, `map-literal-8` −8%.
+
+- **Ranges in array literals and accumulators skip the staging copies
+  (#448).** A range part such as `[i..i + 1000]` built a vector of
+  `BigInt`s, one per element, and copied it into the builder; appending an
+  array copied it to a temporary first. Ranges between inline integers now
+  push the words directly, a bounded chunk at a time, and an append extends
+  from the source. `[i..i + 1000]`: 11.7 → 0.91 µs; `[i..i + 8]`: 166 →
+  53 ns; a reduce from a 1 000-element initial array: 1 145 → 938 ns.
+
+- **Natives no longer widen byte arrays to check their length (#446).**
+  `SecretBytes` and database byte values checked a payload's length by
+  turning every byte into a word and every word into a slot — about
+  24 bytes of temporaries per byte. The length is now read from the array,
+  and natives that take an array walk it in place instead of flattening a
+  trie or widening bytes first. 1 MiB: a database byte value 943 → 125 µs,
+  a `SecretBytes` 1 128 → 335 µs (the rest is the copy and the zeroing).
+
+### Fixed
+
+- **IR and Sparrow agree on a cancellation that comes after an `await` has
+  completed (#546).** When a task's awaited future had already settled and
+  the task was waiting only for its turn to run on, the IR engine turned
+  that finished `await` into `Cancelled`; Sparrow let it finish and raised
+  the cancellation at the next `await`. The owner chose Sparrow's rule, and
+  IR now follows it: a pending cancellation is raised at the task's next
+  `await`, before that future starts. `AllFutures` therefore reports the
+  same secondary failures on both engines.
+- **A cancelled `FutureCompletions` request cancels the stream on IR too
+  (#548).** On IR, cancelling a waiting `completion()` left the stream's
+  inputs running and a later request got `NoFutures`. Now, as on Sparrow,
+  the request cancels the unfinished inputs, waits for their cleanup and
+  fails with the cancellation, and every later request fails the same way.
+  The JVM backend's runtime follows the same rule.
+- **A `FutureCompletions` request no longer hangs when another request
+  polls first (#547).** A request woken by a settled input was dropped
+  from the waiting requests if another request served the stream before it
+  ran, and nothing served it again. Two requests on a stream with one
+  pending input given twice deadlocked. Only a request that is being
+  cancelled leaves the queue now.
+
+## [0.5.6] — 2026-11-13
+
+0.5.6 fixes the language bugs found while documenting std and writing the
+Bible, makes the Linux packages build again, and makes five changes to
+Sparrow's collector and scheduler. Each change was measured before it was
+kept.
+- **Language.** An index at the end of a `confirm` condition no longer
+  takes the confirm's `else` (#521). A generic library may keep a closure
+  or a role value in a `once let` (#520).
+- **Sparrow.**
+  - The pages of a past burst are no longer swept again and again (#435):
+    a program that once held a million objects runs its steady phase 2.8×
+    faster.
+  - Objects are marked when they are queued (#438): marking takes 23–34%
+    less time on shared graphs.
+  - Fewer allocations when Futures settle and sockets wake (#434, #440,
+    #442): `cancel` and `event-wake` are 4–6% faster, and new connections
+    to the hello server 3–7% faster.
+- **Measured and declined.**
+  - A larger collection floor (#544) made `sha256` 52% slower.
+  - A deadline heap for timers (#441) gave parity.
+- **Release report.** The micro-benchmark A/B
+  (`okkama-docs/benchmarks/reports/2026-11-13-v0.5.6/micro.html`) has every
+  pair within the noise band: Sparrow −2.5% by geometric mean, the IR
+  engine +1.0%. Conformance is 1032/1032 on six configurations.
+
+### Changed
+
+- **Fewer allocations in Sparrow's scheduler (#434, #440, #442).** A Future with
+  one waiter, the common `await`, wakes it without building a vector. The
+  collector visits the scheduler's roots in place instead of copying them.
+  Micro-benchmarks on Linux: `cancel` 268 → 256 ns, `event-wake` 214 → 205,
+  `event-many-waiters` 1275 → 1217; the other async programs are unchanged.
+  A poll of the reactor keeps its buffer of woken frames and wakes each
+  frame once (#442). On new connections the hello server answers in
+  0.112 ms instead of 0.115–0.121 ms, 8 350 requests/s instead of
+  7 650–8 200; keep-alive is unchanged.
+
+- **Sparrow stops sweeping the pages of a past burst (#435).** A program
+  that once held many objects kept every small-object page for good, and
+  each later collection swept them all. A sweep now keeps the empty pages
+  the next cycle can fill and frees the rest. A program that held a million
+  objects and then ran a long steady phase takes 0.70 s instead of 1.95 s.
+  Resident memory stays where it was, because mimalloc keeps the freed
+  pages for reuse.
+
+- **Sparrow marks an object when it queues it (#438).** An object shared
+  by many references entered the mark worklist once per reference. Now it
+  enters once. Marking takes 23–34% less time on `11-ownership`, whose
+  records sit in an array and a map at once, and 26% less after a burst.
+
+### Fixed
+
+- **The `else` of `confirm` after an index is the confirm's (#521).**
+  `confirm size >= pair[1] else panic "short";` took the `else` as the
+  index's fallback. The panic handler was lost: a false condition failed
+  with a generic "confirm failed". With `else throw` it was a syntax error.
+  An `else` at the top level of a confirm condition now belongs to
+  `confirm`, with or without a line break before it. An index or `Maybe`
+  fallback inside the condition is written in parentheses. Book §14.1;
+  conformance `L01.gram.confirm.index-else`, `L07.confirm.index-else-panic`.
+
+- **A generic library may keep a closure in a `once let` (#520).**
+  `FilteredGeneration` from `testing/generation` did not compile:
+  `SortedBy.ranked` keeps its sorted entries in a `once let`, and the
+  entries held a closure. The rule had counted every function value and
+  every role value as a possible resource. Now the compiler decides over
+  the whole program:
+  - a function type is a resource only when some closure of that type
+    captures one;
+  - a role is a resource only when some object that does it is one.
+
+  A `once let` that would keep a resource is still refused, now with the
+  type it keeps (`Cache keeps () is string, which reaches one through a
+  function value or a role`). Book §18.6; conformance `L04.once.*` (five new
+  cases).
+
 ## [0.5.5] — 2026-11-13
 
 0.5.5 is the library release: the web stack, data formats, the platform, and
@@ -343,6 +3227,11 @@ documentation for all of std.
     no longer runs into the error list.
 
 ### Fixed
+
+- **Linux packages link against glibc 2.17 (#545).** `preadv2` (#121) and
+  `renameat2` (#126) are called as system calls, not through glibc, which
+  has them only since 2.26 and 2.28; the first build of the v0.5.5 packages
+  failed on manylinux2014 for that reason.
 
 - **Sparrow's heap no longer grows when a program recycles its garbage
   (#522).** The collector counted only new pages, but machine code reuses
@@ -3470,7 +6359,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   cold 0.201 s, first repetition 0.121 s, steady 0.075 s. The ladder
   programs changed (sha256 of inputs), so a release report needs a new
   baseline. Docs: `okkama-docs/benchmarks/README.md`, LLM guide §6
-  ([#236](https://github.com/shootnix/okkama/issues/236)).
+  ([#236](https://github.com/Okkama-lang/okkama/issues/236)).
 
 - Language: operator roles (#215). The std module `operators` declares
   `Adding<T, R>` (`plus`), `Subtracting<T, R>` (`minus`), `Multiplying<T, R>`
@@ -3490,7 +6379,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   OCS contract `OBJ.OPERATOR-ROLES` with `L04.operators.*` and
   `L09.time.operators`, std contract `STD.OPERATORS`; Book §22.3, spec §12.2,
   LLM context, BigInt guide (EN/RU)
-  ([#215](https://github.com/shootnix/okkama/issues/215)).
+  ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Language: `async destroy { … }` (#154). The block may await; it is awaited
   where its owner's scope ends — normal end, `return`, `last`, a failure or a
@@ -3507,7 +6396,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   sparrow-origin reports it unsupported. OCS contract `LIFE.ASYNC-DESTROY`
   with five `L07.destroy.async-*` cases; Book §20.1.1, spec §11.5.1, grammar,
   async guide §7.2, LLM context, Sparrow book (EN/RU)
-  ([#154](https://github.com/shootnix/okkama/issues/154)).
+  ([#154](https://github.com/Okkama-lang/okkama/issues/154)).
 
 - Language: module constants (#153). `const NAME = value;` (optionally
   `is Type`) at module scope names a value the compiler computes from
@@ -3523,7 +6412,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   of the JVM main class set in `<clinit>`; sparrow-origin reports it
   unsupported (#14). OCS `L06.const.*` and contract `MOD.CONST`; Book §26.3.2,
   spec §5.1.2, grammar, LLM context, Sparrow book (also `str.fn`), VS Code
-  highlighting (EN/RU) ([#153](https://github.com/shootnix/okkama/issues/153)).
+  highlighting (EN/RU) ([#153](https://github.com/Okkama-lang/okkama/issues/153)).
 
 - Language: generic map keys are checked (#242). A type parameter used as a
   map key — `%T:V` in a field, a signature or a body, or a literal `[item: 1]`
@@ -3538,7 +6427,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   membership and counting, traversal in key order. OCS contract
   `GEN.KEY-PARAMS` with `L05.generic.key-param-values` and three rejected
   forms; Book §8.2, spec §6.5, LLM context (EN/RU)
-  ([#242](https://github.com/shootnix/okkama/issues/242)).
+  ([#242](https://github.com/Okkama-lang/okkama/issues/242)).
 
 - Language: string builtins (#210) — `contains`, `starts_with`, `ends_with`,
   `find` and `find_last` (a `Maybe<int>` code point index; an empty part is
@@ -3558,9 +6447,9 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `L02.char.code-round-trip`, `L05.array.search-and-shape` and their invalid
   forms; `L02.char.string-cast` now expects the text. Book chapters 6 and 10,
   spec §6.6/§6.6.1, LSP completion (EN/RU)
-  ([#210](https://github.com/shootnix/okkama/issues/210),
-  [#211](https://github.com/shootnix/okkama/issues/211),
-  [#231](https://github.com/shootnix/okkama/issues/231)).
+  ([#210](https://github.com/Okkama-lang/okkama/issues/210),
+  [#211](https://github.com/Okkama-lang/okkama/issues/211),
+  [#231](https://github.com/Okkama-lang/okkama/issues/231)).
 
 - Language: `else if` chains in an `if` expression (#257): `let size = if n
   > 5 { "large" } else if n > 2 { "medium" } else { "small" };`, as an
@@ -3568,7 +6457,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   one type; a chain was a syntax error outside statement position. OCS
   `L03.if.expression-else-if` now expects the value (it expected the
   rejection); Book §11.6, spec §8.11, grammar `if_expr` (EN/RU)
-  ([#257](https://github.com/shootnix/okkama/issues/257)).
+  ([#257](https://github.com/Okkama-lang/okkama/issues/257)).
 
 - Language: a postfix condition on `return` and `throw` (#258): `return x if
   found;`, `return if done;` in a void action, `throw Empty.list if
@@ -3577,13 +6466,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the bare form, while `return if a { 1; } else { 2; };` still returns an
   `if` expression. OCS `L03.return.postfix-if`; Book §12.7, spec, grammar
   (EN/RU); `okkama fmt` keeps the form
-  ([#258](https://github.com/shootnix/okkama/issues/258)).
+  ([#258](https://github.com/Okkama-lang/okkama/issues/258)).
 
 - Diagnostics (#256): `while` and `do … while`, compound assignments (`+=`,
   `-=`, `<<=`, …), `++`/`--`, `break` and `continue` name what Okkama writes
   instead (`loop` with `last if`, a new name, `reduce` or a successor, `last`,
   `next`) instead of "Expect expression" or "Undefined variable"
-  ([#256](https://github.com/shootnix/okkama/issues/256)).
+  ([#256](https://github.com/Okkama-lang/okkama/issues/256)).
 
 - Language: default values for trailing parameters of object actions and
   constructors (#149): `greet(name is string, mark is string = "!", times is
@@ -3594,14 +6483,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   defaulted one needs a default; variadic actions, role signatures, natives
   and enum payloads cannot have any. Overload selection treats a left-out
   parameter as neutral. OCS `L03.args.default-values`; Book §11.4 (EN/RU);
-  `okkama fmt` prints the defaults ([#149](https://github.com/shootnix/okkama/issues/149)).
+  `okkama fmt` prints the defaults ([#149](https://github.com/Okkama-lang/okkama/issues/149)).
 
 - Language: an anonymous action's declared result (`(job is Job) is int {
   … }`) fixes its type and supplies generic arguments, so
   `SortedBy(origin: jobs, key: (job is Job) is int { job.priority(); })` needs
   no `SortedBy<Job,int>` at the binding (#214). The checker already did this;
   a test now pins it, and `collections/ordering`'s documentation no longer
-  asks for the annotation ([#214](https://github.com/shootnix/okkama/issues/214)).
+  asks for the annotation ([#214](https://github.com/Okkama-lang/okkama/issues/214)).
 
 - Language: `any`, `all` and `find` with early exit (#150), in the block
   syntax of `map`/`filter`/`reduce`: `orders.any() -> order { order.overdue();
@@ -3611,7 +6500,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   work on maps with `key, value`. Lowering reuses the value-mode loop of `for`
   with a `last`-like exit, so every engine runs it unchanged. OCS
   `L05.functional.early-exit`; Book (EN/RU); LSP completion
-  ([#150](https://github.com/shootnix/okkama/issues/150)).
+  ([#150](https://github.com/Okkama-lang/okkama/issues/150)).
 
 - Language: `test.throws(Type) { … }` (#216) asserts that a block throws a
   `Type` and yields the caught error: `let refused = test.throws(Refused) {
@@ -3621,7 +6510,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   keeps the written form. 64 std assertions of the form
   `test.ok(try { …; false; } catch e is T { true; })` in 28 modules now read
   `test.throws(T) { …; };`; the ones that match an enum case keep their `try`.
-  Book §14 (EN/RU) ([#216](https://github.com/shootnix/okkama/issues/216)).
+  Book §14 (EN/RU) ([#216](https://github.com/Okkama-lang/okkama/issues/216)).
 
 - std `cell`: `Cell<T>`, the mutable value of synchronous code (#152) —
   `Cell(value)`, `value()`, `replace(value)`, no `close()`. The compiler keeps
@@ -3632,7 +6521,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   tasks. Thirteen local accumulators in std (`diff`, `db/postgres`,
   `db/postgres/wire`) moved from `Atomic` with `defer close()` to `Cell`; the
   four that live in async actions stay `Atomic`, as the new check requires.
-  Book §19.1 (EN/RU) ([#152](https://github.com/shootnix/okkama/issues/152)).
+  Book §19.1 (EN/RU) ([#152](https://github.com/Okkama-lang/okkama/issues/152)).
 
 - JVM: `--max-steps` and `--max-memory` (#237), so every budget now works on
   every engine with the same reports. Steps are counted alike on the IR
@@ -3649,7 +6538,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `okkama build --target jvm --budgeted` writes classes that count steps; the
   limit comes from `java -Dokkama.steps=N` (no property, no limit), and
   `-Xmx` with `-Dokkama.memory=N` gives any JAR the memory report
-  ([#237](https://github.com/shootnix/okkama/issues/237)).
+  ([#237](https://github.com/Okkama-lang/okkama/issues/237)).
 
 - Language: exponent literals are floats (#57): `1e5`, `1.5e-3`, `2E+10`,
   `1_000e1_0` — `e` or `E`, an optional sign, digits that `_` may separate,
@@ -3662,7 +6551,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `okkama fmt` keeps the spelling. OCS: `L01.lex.float.exponent` runs the forms
   on every engine and `L01.lex.float.exponent-out-of-range` (was
   `exponent-rejected`) rejects `1e400`
-  ([#57](https://github.com/shootnix/okkama/issues/57)).
+  ([#57](https://github.com/Okkama-lang/okkama/issues/57)).
 
 - Language: value objects are map keys (#212). An object whose fields are all
   scalars (`byte` and `rat` included), enums or such objects, with no `destroy`
@@ -3679,7 +6568,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `L05.map.resource-key-rejected` rejects a `destroy` object. Book (EN/RU),
   spec §6.3/§8.8 and the LLM context follow. A map keyed by a type parameter
   is still checked only at run time (#242)
-  ([#212](https://github.com/shootnix/okkama/issues/212)).
+  ([#212](https://github.com/Okkama-lang/okkama/issues/212)).
 
 - Language: names before one type share it in every parameter list, as they
   already do in field declarations — `full(separator, suffix is string)`,
@@ -3688,7 +6577,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `(a, b is int) is int { … }`. A group cannot be variadic ("give the
   variadic parameter its own type"). `okkama fmt` keeps the grouping the
   author wrote. Two OCS cases run the forms on every engine and reject a
-  variadic group ([#232](https://github.com/shootnix/okkama/issues/232)).
+  variadic group ([#232](https://github.com/Okkama-lang/okkama/issues/232)).
 
 - LSP: every syntax error at once (H-24). The editor's check parses in a
   recovering mode (`syntax::parse_recovering`): after an error in a statement
@@ -3702,7 +6591,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the strict parse that stops at the first error. Tests cover two
   independent errors, statement errors in one body, a missing and a stray
   `}`, the cap, and 500 damaged copies of the all-syntax file
-  ([#47](https://github.com/shootnix/okkama/issues/47)).
+  ([#47](https://github.com/Okkama-lang/okkama/issues/47)).
 
 - Benchmarks, method (H-31): the runner (`okkama-docs/benchmarks/run.py`)
   builds every program first, warms each configuration up once and then runs
@@ -3717,7 +6606,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   configuration is reported. Reference interpreters older than the current
   stable line (here Python 3.9, Ruby 2.6) are listed and the report says so.
   The report shows each time's spread and the start-up line; steady-state
-  timing is #236 ([#54](https://github.com/shootnix/okkama/issues/54)).
+  timing is #236 ([#54](https://github.com/Okkama-lang/okkama/issues/54)).
 
 - Sparrow core, profiling (H-32, O01): `--stats` attributes allocations —
   each inline allocation site in machine code counts its allocations and
@@ -3730,7 +6619,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   median and interquartile range, peak memory and the `--stats`
   differences, with a verdict (faster beyond the spread, memory within 5 %)
   and a JSON record of commit, hashes, seed and settings
-  ([#55](https://github.com/shootnix/okkama/issues/55)).
+  ([#55](https://github.com/Okkama-lang/okkama/issues/55)).
 
 - Execution budgets on the IR engine and the JVM: `okkama run --engine ir`
   takes `--max-steps`, `--max-memory`, `--max-output` and `--timeout` with
@@ -3743,7 +6632,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   and which is killed with the same report; steps and memory there wait for
   #237. A test runs every budget on ir and sparrow, and output and timeout on
   the JVM, expecting identical reports
-  ([#71](https://github.com/shootnix/okkama/issues/71)).
+  ([#71](https://github.com/Okkama-lang/okkama/issues/71)).
 
 - Compiler, OIR pass `fold` (H-36): `int.add`, `int.sub`, `int.mul`,
   `int.mod` by a nonzero constant, `int.neg` and integer comparisons of
@@ -3753,7 +6642,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   time), nor word-level bitwise operations, and a result longer than 1024
   digits stays a computation. It runs after `tail-calls`, before `hoist`;
   the gate's run with the passes off checks it like every pass
-  ([#56](https://github.com/shootnix/okkama/issues/56)).
+  ([#56](https://github.com/Okkama-lang/okkama/issues/56)).
 
 - Language: `+` and `-` on arrays and maps. `a + b + c` concatenates arrays
   (or merges maps, the rightmost value winning a repeated key); `a - b`
@@ -3767,7 +6656,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `arr.diff`, `map.merge`, `map.diff` (96–99) with verifier rules; the IR
   engine, the JVM backend (`Rt.concat/difference/merge/without`), the
   Sparrow core and the previous VM implement them; seven OCS cases
-  ([#145](https://github.com/shootnix/okkama/issues/145)).
+  ([#145](https://github.com/Okkama-lang/okkama/issues/145)).
 
 - Sparrow core, debugging (H-21): a wrong result can be narrowed to one
   compiled function without rebuilding. `SPARROW_CORE_UNOPTIMIZED=symbols`
@@ -3777,13 +6666,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   function, and `SPARROW_CORE_DUMP=symbols` prints its CLIF before the passes
   (with the helpers and functions it calls by name) and its machine code.
   `--stats` adds the compile time and machine-code size of each function and
-  their totals ([#44](https://github.com/shootnix/okkama/issues/44)).
+  their totals ([#44](https://github.com/Okkama-lang/okkama/issues/44)).
 
 - Docs: the trust model is back in the repository (`docs/security-model.md`,
   H-01): for source, bytecode on the Sparrow core, programs, packages and
   embedding it says what is guaranteed, what is not (each with its open
   issue) and how to run untrusted input today
-  ([#37](https://github.com/shootnix/okkama/issues/37)).
+  ([#37](https://github.com/Okkama-lang/okkama/issues/37)).
 
 - Tools: `tools/gen/okgen.py` generates well-defined programs from a seed
   (BigInt promotion, strings, arrays, objects, a role, closures, try/catch,
@@ -3794,7 +6683,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   copy and checks that the generator finds and minimizes it: with 30 seeds
   the IR defect is found by 2 programs, the core's by 6 and the JVM's by 8,
   each minimized to one statement
-  ([#35](https://github.com/shootnix/okkama/issues/35)).
+  ([#35](https://github.com/Okkama-lang/okkama/issues/35)).
 
 - Docs: the Sparrow Book (`docs/SparrowBook/SparrowBook.md`, Russian
   `SparrowBook-RU.md`) — a textbook of Sparrow assembly: the file layout,
@@ -3814,7 +6703,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   stops the run with "internal error in native …", and the runtime refuses
   further runs; a fresh one works. `run_worker` is marked as the CLIs'
   worker entry, not an embedding API. No cost without restrictions
-  ([#31](https://github.com/shootnix/okkama/issues/31)).
+  ([#31](https://github.com/Okkama-lang/okkama/issues/31)).
 
 - Compiler: an independent check of Sparrow register allocation (H-10). The
   core trusts the allocation for its stack maps, and the SPB verifier checks
@@ -3825,7 +6714,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   It passes on every function of the repository's 1509 programs and catches a
   live value overwritten, a value an unwind handler needs overwritten, and
   block parameters written in the wrong order
-  ([#30](https://github.com/shootnix/okkama/issues/30)).
+  ([#30](https://github.com/Okkama-lang/okkama/issues/30)).
 
 - Compiler: phase contracts (`docs/phases.md`) — what the lexer, parser,
   analysis, lowering, IR passes, both code generators and SPB loading take,
@@ -3834,7 +6723,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   public consumer of OIR (both code generators, `execute`, `run_tests`)
   rejects a corrupted module, and that failures in short-circuit operands,
   `throw`, closures and region cleanup point at their source operation with
-  every pass selection ([#36](https://github.com/shootnix/okkama/issues/36)).
+  every pass selection ([#36](https://github.com/Okkama-lang/okkama/issues/36)).
 
 - Compiler: `OKKAMA_IR_PASSES=none|all|tail-calls,hoist,regions,jumps,undef`
   selects the IR passes. Every engine runs the passed OIR, so engine
@@ -3843,7 +6732,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   that programs (i64 edges, BigInt promotion, division by zero, failures with
   cleanup order, deep tail recursion) print the same under every selection
   and that a deliberately wrong pass (`sabotage-int-add`) is caught
-  ([#29](https://github.com/shootnix/okkama/issues/29)).
+  ([#29](https://github.com/Okkama-lang/okkama/issues/29)).
 
 - Sparrow core: runtime helpers called from machine code are described once
   (H-06): each entry names the helper's Rust signature, which is checked at
@@ -3854,7 +6743,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   test runs programs that reach all 28. A panic in a helper aborts with its
   message at the `extern "C"` boundary; turning it into a failure status
   would cost every helper call. No cost: ±0.2% instructions
-  ([#23](https://github.com/shootnix/okkama/issues/23)).
+  ([#23](https://github.com/Okkama-lang/okkama/issues/23)).
 
 - Sparrow core: collector stress mode, `SPARROW_CORE_GC_STRESS=1` — every
   safepoint collects and reclaimed cells are poisoned, so a value kept alive
@@ -3864,7 +6753,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   register value, and a source program with handlers, cleanup regions and
   nested failing calls prints what the IR engine prints. The core needed no
   fix; with stack-map roots disabled the stressed tests fail
-  ([#22](https://github.com/shootnix/okkama/issues/22)).
+  ([#22](https://github.com/Okkama-lang/okkama/issues/22)).
 
 - Sparrow core: execution budgets for untrusted programs and services.
   `okkama exec`, `okkama run --engine sparrow` and `sparrow run` take
@@ -3877,10 +6766,10 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `Execution interrupted`; `catch` does not see it and a later run in the same
   process starts from the base memory. Machine code polls only when a budget
   is set: unbudgeted runs are unchanged (±0.1% instructions); with a step
-  budget, +7–15%. IR/JVM: [#71](https://github.com/shootnix/okkama/issues/71);
+  budget, +7–15%. IR/JVM: [#71](https://github.com/Okkama-lang/okkama/issues/71);
   native operations and per-runtime memory:
-  [#72](https://github.com/shootnix/okkama/issues/72)
-  ([#21](https://github.com/shootnix/okkama/issues/21)).
+  [#72](https://github.com/Okkama-lang/okkama/issues/72)
+  ([#21](https://github.com/Okkama-lang/okkama/issues/21)).
 
 - Blade: `blade build` and `blade run`. Every setting is in `blade.toml`:
   `[build] entry/target/output` (sparrow or jvm; default
@@ -3889,7 +6778,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `blade.toml` or `blade.lock` are newer than the output and returns the
   program's exit status; both refuse a project whose dependencies are not
   installed. `blade new` writes the sections with their defaults
-  ([#68](https://github.com/shootnix/okkama/issues/68)).
+  ([#68](https://github.com/Okkama-lang/okkama/issues/68)).
 
 ### Changed
 
@@ -3909,7 +6798,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Rendering is slower than the native writer: 37 ms instead of 4 on the core,
   203 instead of 9 on the IR engine, 36 instead of 8 on the JVM. Benchmark:
   `okkama-docs/benchmarks/ini/bench.ok`; guide: `docs/std/ini-guide.md`
-  ([#13](https://github.com/shootnix/okkama/issues/13)).
+  ([#13](https://github.com/Okkama-lang/okkama/issues/13)).
 
 - Language: overloads may differ in their results (#215). Two actions with
   the same name and arity are compatible when their parameter types differ;
@@ -3920,7 +6809,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Subtracting<Instant, Duration>`); the same instance twice is an error. OCS
   `L03.overloads.results-differ-by-parameter-types` replaces
   `overloads.incompatible-returns`; Book §11 rule 8, spec §11.8 (EN/RU)
-  ([#215](https://github.com/shootnix/okkama/issues/215)).
+  ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Std: `BigInt` arithmetic is operators (#215). The expression objects
   `BigSum`, `BigDifference`, `BigProduct`, `BigQuotient`, `BigRemainder`,
@@ -3930,14 +6819,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `a.power(exponent, maximum_bits)`. The errors (`BigDivisionByZero`,
   `InvalidBigExponent`, `InvalidBigPowerLimit`, `BigPowerLimitExceeded`) are
   unchanged and are thrown by the call. Std modules and OCS cases that used
-  the objects are rewritten ([#215](https://github.com/shootnix/okkama/issues/215)).
+  the objects are rewritten ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Language: the builtin comparisons `more` and `more_or_equal` are renamed
   `greater` and `greater_or_equal` (#284), the pair to `less` that `Order`
   already uses (`less, equal, greater`): `3.greater(1)`,
   `2.greater_or_equal(2)`. The old names are gone, with no alias. LSP
   completion, OCS `VAL.NUMERIC-METHODS`, Book §10 (EN/RU), spec, LLM context
-  and OASM follow ([#284](https://github.com/shootnix/okkama/issues/284)).
+  and OASM follow ([#284](https://github.com/Okkama-lang/okkama/issues/284)).
 
 - Async: await is structured (#147). Cancelling a task cancels the future it
   awaits — a lazy future its `await` started, a spawned task, a runtime
@@ -3951,14 +6840,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `ASYNC.STRUCTURED-AWAIT` with `L08.cancel.awaited-cleanup-settles`,
   `.awaited-spawned` and `.shared-awaited-survives`; scheduler tests; Book
   §31.5, spec §18, async guide §4.6, LLM context (EN/RU)
-  ([#147](https://github.com/shootnix/okkama/issues/147)).
+  ([#147](https://github.com/Okkama-lang/okkama/issues/147)).
 
 - Language: `bool.string()` (and `string(flag)`, `@string(..., flag)`) is
   `"true"` or `"false"`, no longer the `"1"`/`"0"` inherited from the Perl
   implementation; map keys in error messages read the same way, on every
   engine. No std module printed a boolean; OCS cases that did now
   expect the words. Book §5.1.1 and chapter 10, spec §6.6/§6.6.1, LLM context,
-  LSP completion (EN/RU) ([#262](https://github.com/shootnix/okkama/issues/262)).
+  LSP completion (EN/RU) ([#262](https://github.com/Okkama-lang/okkama/issues/262)).
 
 - JVM: the runtime (`okkama.rt`) is built for Java 22 as one source tree
   (the FFM natives in `src22` joined the rest), so the JVM engine needs JDK
@@ -3978,7 +6867,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   exponent gives a rat" became `rat.pow`. Lowering raises by squaring with
   the exact `int`/`rat` products every engine already has. OCS
   `L02.int.pow-exact`; Book chapter 10 (EN/RU)
-  ([#228](https://github.com/shootnix/okkama/issues/228)).
+  ([#228](https://github.com/Okkama-lang/okkama/issues/228)).
 
 - `db/postgres`: a query is one round trip. Bind, Execute without a row limit
   and Sync go out together and the server streams the whole answer; the row
@@ -3995,7 +6884,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   page boundaries, early close, failures mid-stream and in parsing, COPY
   refusal, transactions with a reader closed early, rollback and the implicit
   commit failure, on the core and the IR engine
-  ([#11](https://github.com/shootnix/okkama/issues/11)).
+  ([#11](https://github.com/Okkama-lang/okkama/issues/11)).
 
 - Compiler: building an array or map with `reduce` is linear (#243). When the
   block uses its accumulator only as its value — alone, or as the left end of
@@ -4009,7 +6898,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   core, 44 s → 0.25 s on the IR engine, 2.9 s → 0.28 s on the JVM; n = 10^6
   now takes 0.18 / 0.67 / 0.35 s. OCS `L05.reduce.accumulator-in-place`
   checks both paths on every engine; the Book (EN/RU) describes the rule
-  ([#243](https://github.com/shootnix/okkama/issues/243)).
+  ([#243](https://github.com/Okkama-lang/okkama/issues/243)).
 
 ### Security
 
@@ -4029,7 +6918,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   239 → 75 µs, OAEP decryption 5.5 → 3.5 ms, PKCS#1 v1.5 signing 4.6 → 3.3 ms,
   PSS signing 4.2 → 3.8 ms. OpenSSL vectors cover SHA-384/512 signatures,
   OAEP-SHA384 and the X.509 legacy forms
-  ([#70](https://github.com/shootnix/okkama/issues/70)).
+  ([#70](https://github.com/Okkama-lang/okkama/issues/70)).
 
 ### Fixed
 
@@ -4071,7 +6960,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   with `os/environment` now runs as fast as without it on every engine.
   Tests in `lowering_ownership.rs`, including a closure that captures a
   resource and stays tracked; LLM guide and phases.md updated
-  ([#292](https://github.com/shootnix/okkama/issues/292)).
+  ([#292](https://github.com/Okkama-lang/okkama/issues/292)).
 
 - IR engine and JVM: a TLS read abandoned by a timeout or a cancellation
   could lose the record it received (#12 follow-up). The abandoned read's
@@ -4095,7 +6984,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   hoist, jumps, undef`, and the tail-position check follows empty
   trampoline blocks the result reaches `ret` through. A call before an owned
   object's destroy is still not a tail call. LLM guide and phases.md updated
-  ([#285](https://github.com/shootnix/okkama/issues/285)).
+  ([#285](https://github.com/Okkama-lang/okkama/issues/285)).
 
 - Sort: a stopped or failing `ordering()` no longer crashes the engine
   (#283). Since #238 a budget that fired in the middle of a sort made the
@@ -4107,7 +6996,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   leaves the sort by unwinding with a private marker, caught inside the
   intrinsic, and the sort stays Rust's stable sort. Unit tests stop it at
   several fixed comparisons. OCS `L09.compare.failing-order-stops-the-sort`
-  ([#283](https://github.com/shootnix/okkama/issues/283)).
+  ([#283](https://github.com/Okkama-lang/okkama/issues/283)).
 
 - JVM: `==` on objects that refer to each other no longer overflows the
   stack (#278). A constructor that hands its `self` to a collaborator makes a
@@ -4118,7 +7007,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   being compared further up the stack equal, as the other engines do, and
   hash through `Obj.cyclicHash`; other classes are unchanged. OCS
   `L04.equality.cyclic-graphs`
-  ([#278](https://github.com/shootnix/okkama/issues/278)).
+  ([#278](https://github.com/Okkama-lang/okkama/issues/278)).
 
 - Objects: an action called on an object whose constructor has not returned
   is rejected on every engine (#271, spec §11.4). A constructor may hand its
@@ -4136,7 +7025,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   code 5, SPB format 12); other objects are unchanged. In std this concerns
   `Http2ServerStream` and `MultipartFormPart`. OCS: five
   `L04.invariant.escaped-self-*` cases. Book §18.2 (EN/RU), OIR-1 §16.1,
-  Sparrow book ([#271](https://github.com/shootnix/okkama/issues/271)).
+  Sparrow book ([#271](https://github.com/Okkama-lang/okkama/issues/271)).
 
 - Tests: a successor passed to `test.is` or `test.isnt` is an ordinary
   argument (#275). Passed directly it crashed the compiler (`lowering
@@ -4145,14 +7034,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   consumes the argument as every call argument does. The Book's own example
   `test.is(bottle.open().close(), bottle)` works. OCS
   `L07.test-runner.successor-assertions`
-  ([#275](https://github.com/shootnix/okkama/issues/275)).
+  ([#275](https://github.com/Okkama-lang/okkama/issues/275)).
 
 - Docs: map keys follow decision D-007 everywhere (#274). The spec (§6.3),
   the LLM context and the Book (§5.3, §8.2, §31.1, EN/RU) no longer say that
   `byte` values are map keys; `%byte:V` stays a compile error, as the OCS
   case `L05.map.byte-keys-rejected` requires. Book §31.1 also no longer says
   that objects are not keys: value objects are keys since #212
-  ([#274](https://github.com/shootnix/okkama/issues/274)).
+  ([#274](https://github.com/Okkama-lang/okkama/issues/274)).
 
 - db/postgres: closing a reader early no longer costs the rest of a long
   answer (#240). Since #11 a query streams its whole answer, so a reader
@@ -4171,7 +7060,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   closed after the first one settle in 18 ms on the core, where reading 10⁶
   through takes 182 ms. The IR engine's drain itself is slow (#280).
   std guide `db-postgres.md`
-  ([#240](https://github.com/shootnix/okkama/issues/240)).
+  ([#240](https://github.com/Okkama-lang/okkama/issues/240)).
 
 - Terminal: input typed after a read was interrupted reaches the next read
   (#12). A terminal read that a timeout or a cancelled task gave up still
@@ -4187,7 +7076,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   (now said in `terminal/screen`). OCS `L11.tls.cancelled-read-keeps-data`
   with the `tls-late-echo` fixture shows that a TLS read interrupted the
   same two ways loses nothing
-  ([#12](https://github.com/shootnix/okkama/issues/12)).
+  ([#12](https://github.com/Okkama-lang/okkama/issues/12)).
 
 - Runtime: cleanup regions no longer walk a large structure again for every
   value that points into it (#9). A region learns which resources to destroy
@@ -4207,7 +7096,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   New benchmark `11-ownership` (100 000 records in an array and a map, 300
   rounds); OCS `L07.ownership.shared-structure-returned` and
   `.shared-structure-loop`
-  ([#9](https://github.com/shootnix/okkama/issues/9)).
+  ([#9](https://github.com/Okkama-lang/okkama/issues/9)).
 
 - IR engine: calls are as fast as before #153 again (#265). The `const`
   globals were built lazily from inside the instruction loop, which called
@@ -4223,7 +7112,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   build against wave 10: calls +0.6%, roles +2.2%, arithmetic −0.6%,
   objects −1.1%, closures +5.6% (PGO compiles that path differently;
   without PGO both versions run the same instructions)
-  ([#265](https://github.com/shootnix/okkama/issues/265)).
+  ([#265](https://github.com/Okkama-lang/okkama/issues/265)).
 
 - Compiler: a `reduce` into an array or a map (#243) whose elements reach a
   `destroy` compiles (#266). It was an internal error (`region.track …:
@@ -4234,7 +7123,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   and a builder is never tracked, adopted or kept. What the block gathers —
   made there or bound with `let` — lives as long as the result, as with
   `map`. Lowering test and OCS `L07.ownership.reduce-builder`
-  ([#266](https://github.com/shootnix/okkama/issues/266)).
+  ([#266](https://github.com/Okkama-lang/okkama/issues/266)).
 
 - Budgets: a long host operation no longer outlives `--timeout` (#238). On
   the Sparrow core a PBKDF2 derivation of 10⁹ rounds ran on after the time
@@ -4247,7 +7136,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   IR engine's run did; SQLite queries already stopped (they run on the
   connection's thread while the scheduler waits). CLI test
   `long_host_operations_stop_for_the_timeout`; Book, toolchain commands (EN/RU)
-  ([#238](https://github.com/shootnix/okkama/issues/238)).
+  ([#238](https://github.com/Okkama-lang/okkama/issues/238)).
 
 - Compiler: one function of many sequential loops compiles in linear time
   (#239). Three phases were quadratic on it. Lowering copied the value of
@@ -4262,7 +7151,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `reduce` blocks (10⁵ instructions): codegen 4.1 s at 2 500 blocks before,
   0.15 s at 25 000 now; the whole pipeline is about 0.5 s and grows linearly.
   `tests/large_functions.rs` gains the `loops` shape
-  ([#239](https://github.com/shootnix/okkama/issues/239)).
+  ([#239](https://github.com/Okkama-lang/okkama/issues/239)).
 
 - Docs and LSP: chapter 10 of the Book listed `less`/`more` for `char`, which
   has only `order`; LSP completion offered `int.pow` as a `float` (it is the
@@ -4284,12 +7173,12 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   both); the program's `catch` does not see the stop and its cleanup does not
   run, as for every budget. A sort through `Comparing` was already
   interruptible: each comparison is a call. Unlimited runs are unchanged
-  ([#238](https://github.com/shootnix/okkama/issues/238)).
+  ([#238](https://github.com/Okkama-lang/okkama/issues/238)).
 
 - `db/postgres`: `COPY … FROM STDIN` no longer hangs the connection. The
   server ignores a Sync that arrives in copy-in mode, so after the driver's
   CopyFail it waited for another Sync that never came; the refusal now sends
-  one ([#11](https://github.com/shootnix/okkama/issues/11)).
+  one ([#11](https://github.com/Okkama-lang/okkama/issues/11)).
 
 - Deep recursion no longer looks like a hang (#241). A failure thousands or
   millions of frames deep rendered one trace line per frame, each with a
@@ -4300,7 +7189,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   12.6 s on the core. On the core, a stack overflow under `--max-memory`
   (which caps the machine stack) is now `Execution budget exhausted: memory`,
   as on the IR engine and the JVM, instead of `RuntimeError: Stack overflow`
-  ([#241](https://github.com/shootnix/okkama/issues/241)).
+  ([#241](https://github.com/Okkama-lang/okkama/issues/241)).
 
 - Book: chapter 10 (EN/RU) lists every builtin action the compiler has —
   string `empty`, `trim`, `chomp`; array `item`, `first`, `last`, `cursor`,
@@ -4308,18 +7197,18 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `numerator`, `denominator`; Future `cancel`, `done`, `cancelled` — and a
   test reads the compiler's table from `analysis/check/builtin.rs`, so a new
   builtin fails until the Book names it
-  ([#224](https://github.com/shootnix/okkama/issues/224)).
+  ([#224](https://github.com/Okkama-lang/okkama/issues/224)).
 
 - Diagnostics say what the rule is and what to write instead: assigning a
   field after construction ("objects are immutable; return a successor",
-  [#226](https://github.com/shootnix/okkama/issues/226)); `class`,
+  [#226](https://github.com/Okkama-lang/okkama/issues/226)); `class`,
   `interface`, `extends`, `implements` and `static` from other languages
   name the Okkama construct — `object`, `role`, fields and `does`
-  ([#227](https://github.com/shootnix/okkama/issues/227)); a `match` used as a
+  ([#227](https://github.com/Okkama-lang/okkama/issues/227)); a `match` used as a
   value that leaves enum cases out names them instead of "Expression does
-  not produce a value" ([#229](https://github.com/shootnix/okkama/issues/229));
+  not produce a value" ([#229](https://github.com/Okkama-lang/okkama/issues/229));
   `ordering()` without the `Comparing` role loaded says which import is
-  missing ([#233](https://github.com/shootnix/okkama/issues/233)). The words
+  missing ([#233](https://github.com/Okkama-lang/okkama/issues/233)). The words
   stay ordinary identifiers: only code that failed to parse before gets the
   new messages.
 
@@ -4330,7 +7219,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the bindings of functional blocks (`list.map() -> m { m. }`, `reduce`'s
   accumulator from its initial value) and locals declared since the last
   successful check (`let c = sum.cents();` then `c.`, or `let d is Money`)
-  ([#225](https://github.com/shootnix/okkama/issues/225)).
+  ([#225](https://github.com/Okkama-lang/okkama/issues/225)).
 
 - Compiler, imports (O06): a module imported from many modules is read and
   parsed once. Loaders now name a module's identity (`ModuleLoader::resolve`,
@@ -4342,7 +7231,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   with one linear pass over the strongly connected components instead of a
   search per block, so functions of any size get it (the 4096-block cap is
   gone); the pass shares that routine with the recursion analysis
-  ([#51](https://github.com/shootnix/okkama/issues/51)).
+  ([#51](https://github.com/Okkama-lang/okkama/issues/51)).
 
 - Runtimes, strings (O07): slicing a non-ASCII string one code point at a
   time, and `length()` in a loop, are linear on every engine instead of
@@ -4356,7 +7245,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   letters take 0.49 s, 0.13 s and 0.20 s (a debug build against the 0.4.0
   release). The core's cache is cleared at each collection, the only time a
   string's memory is freed; the IR engine and the JVM hold weak references
-  ([#52](https://github.com/shootnix/okkama/issues/52)).
+  ([#52](https://github.com/Okkama-lang/okkama/issues/52)).
 
 - Compiler, anonymous actions (H-33): an anonymous action written in an
   action captures `self` only when its body reads the receiver — `self`, a
@@ -4370,7 +7259,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   statement form, so a new form must decide whether it reads the receiver.
   An OCS case shows the receiver destroyed at once when its action does not
   read it, and kept while it does
-  ([#53](https://github.com/shootnix/okkama/issues/53)).
+  ([#53](https://github.com/Okkama-lang/okkama/issues/53)).
 
 - Sparrow core, load-time contracts of generic intrinsics: payloads are
   checked by type, not only by representation. The object types a channel's
@@ -4382,7 +7271,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   timed results and `AllFutures` results must be the type of the futures
   they wait for; `fake.storage` reads compare stored and requested types
   structurally. Tests pair crafted copies of these intrinsics with compiler
-  output ([#69](https://github.com/shootnix/okkama/issues/69)).
+  output ([#69](https://github.com/Okkama-lang/okkama/issues/69)).
 
 - Compiler, types (H-26): a local's type may be at most 64 levels deep. A
   chain of `let`s can deepen a generic type one level per step
@@ -4391,7 +7280,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   16 GB. Now the first local past the limit is one error. Interning types
   was measured and is not worth it: checking `std/web/app.ok` with its
   imports spends about 3 % of its working time on types, against lexing,
-  parsing and allocation ([#49](https://github.com/shootnix/okkama/issues/49)).
+  parsing and allocation ([#49](https://github.com/Okkama-lang/okkama/issues/49)).
 
 - Compiler, very large functions (H-28, H-39): three phases were quadratic
   in the size of one function and are linear now. The ownership flow of the
@@ -4406,7 +7295,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   growth; a release test requires the whole pipeline to grow linearly. The
   lowering of very many branches over very many locals is still
   superlinear (0.6 s at 10⁵ instructions): #239
-  ([#50](https://github.com/shootnix/okkama/issues/50)).
+  ([#50](https://github.com/Okkama-lang/okkama/issues/50)).
 
 - Sparrow core, budgets: one operation whose result can be much larger than
   its operands is measured against the memory budget before it is built —
@@ -4417,7 +7306,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   stops with "Execution budget exhausted: memory" before allocating. Long
   natives that cannot be interrupted (sorting, provider calls) and
   per-runtime memory accounting remain open in #238
-  ([#72](https://github.com/shootnix/okkama/issues/72)).
+  ([#72](https://github.com/Okkama-lang/okkama/issues/72)).
 
 - Runtimes: host state belongs to one run, not to a thread (Q03). Every
   engine entry (IR program and test runs, the previous Sparrow VM, each
@@ -4431,7 +7320,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `env.set`, a spawned worker starts in the program's directory rather than
   the process's, and a core worker no longer changes its process's
   directory. A later `default_environment` for the same name replaces the
-  earlier one ([#40](https://github.com/shootnix/okkama/issues/40)).
+  earlier one ([#40](https://github.com/Okkama-lang/okkama/issues/40)).
 
 - Build: the declared MSRV is true again — `rust-version` is 1.97 (Cranelift
   0.137 needs it; it said 1.85), and a CI job *MSRV* checks every target on
@@ -4440,7 +7329,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   toolchain pinned in
   `tools/release-toolchain.txt` (1.97.1), each package records its compiler
   in `lib/okkama/TOOLCHAIN`, and `gate.json` records `rustc -V`
-  ([#41](https://github.com/shootnix/okkama/issues/41)).
+  ([#41](https://github.com/Okkama-lang/okkama/issues/41)).
 
 - Build: debug tests and clippy are green and part of the release gate (Q05).
   The gate runs the whole workspace's tests unoptimized too (stack depth and
@@ -4451,7 +7340,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   are by design, each with its reason: `transmute` of `dlsym` addresses to
   their function-table types, the legacy VM's large public error, recursive
   regex and pattern helpers with many arguments
-  ([#42](https://github.com/shootnix/okkama/issues/42)).
+  ([#42](https://github.com/Okkama-lang/okkama/issues/42)).
 
 - IR runtime, cycle collector (H-13): `OKKAMA_GC=stress` collects at every
   new candidate, and the gate runs the IR conformance suite that way, so an
@@ -4464,7 +7353,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   collect it after its last holder goes, keep it while held, and check that
   the count of live objects returns to its base after repeated cycles, with
   and without stress. A CI job runs the heap and collector tests under Miri
-  ([#43](https://github.com/shootnix/okkama/issues/43)).
+  ([#43](https://github.com/Okkama-lang/okkama/issues/43)).
 
 - Compiler, lexer (H-22): malformed number literals are one error over the
   whole literal instead of a number followed by a stray identifier that
@@ -4473,14 +7362,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   none). A token table pins numbers next to `.`, `..`, `..=`, `...`, `_` and
   the 64-bit bounds with exact spans; two OCS cases reject `1__0` and `1e5`.
   The `INT64_MAX` limit of `0x…`/`0b…` literals stays as documented; whether
-  to lift it is #235 ([#45](https://github.com/shootnix/okkama/issues/45)).
+  to lift it is #235 ([#45](https://github.com/Okkama-lang/okkama/issues/45)).
 
 - Compiler, parser (H-23): binary operators live in one table — token, AST
   operation, precedence level and chaining (`LEVELS` in `parser/expr.rs`) —
   instead of a precedence enum, its successor function and a token match
   written separately; the range level's "at most one operator" is a property
   of its row. A test parses every pair of adjacent levels both ways and every
-  level chained with itself ([#46](https://github.com/shootnix/okkama/issues/46)).
+  level chained with itself ([#46](https://github.com/Okkama-lang/okkama/issues/46)).
 
 - LSP and diagnostics, positions (H-25): the language server negotiates the
   position encoding — UTF-8 when the client offers it (byte offsets, no
@@ -4492,13 +7381,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   takes two cells, a combining mark none. Tests round-trip every character
   boundary of Cyrillic, emoji, combining marks, tabs, LF/CRLF and the end of
   the file through all three encodings
-  ([#48](https://github.com/shootnix/okkama/issues/48)).
+  ([#48](https://github.com/Okkama-lang/okkama/issues/48)).
 
 - Book: numeric operands never mix (owner decision, #230). The Book said that
   `rat` mixes with `int`/`byte` and that ordering promotes; the compiler has
   always rejected both (`1 + 1 / 2`, `1 / 2 < 1`, `byte(2) + 3`). §5 and the
   operator table now state the rule: same category on both sides, explicit
-  conversion otherwise ([#230](https://github.com/shootnix/okkama/issues/230)).
+  conversion otherwise ([#230](https://github.com/Okkama-lang/okkama/issues/230)).
 
 - Sparrow core: compiling a function with k values live across k fallible
   instructions took about 0.3 KiB × k² before it ran (476 MiB at k = 1000,
@@ -4516,7 +7405,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   blocks) compile as before. Straight-line instructions now share one
   Cranelift block; only jump, handler and resume targets start one. Benchmarks
   on the core: instructions −2.4…+0.6% (most −1%), time within noise
-  ([#73](https://github.com/shootnix/okkama/issues/73)).
+  ([#73](https://github.com/Okkama-lang/okkama/issues/73)).
 
 - Fuzzing: `tools/fuzz/run.sh` reported a target as a finding when its build
   was killed for memory (an ASan build of cranelift-codegen with one codegen
@@ -4524,7 +7413,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   one job, and a failed build exits with status 2 and `logs/build.log`
   instead of a finding. A 20-second smoke run of all six targets in a 6 GB
   container has no findings
-  ([#34](https://github.com/shootnix/okkama/issues/34)).
+  ([#34](https://github.com/Okkama-lang/okkama/issues/34)).
 
 - Sparrow core: an uncaught failure printed only its report; the IR engine and
   the previous VM also print the place in the source and the call stack. The
@@ -4536,7 +7425,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   case that fails at run time, and every failing case of the cleanup and
   async levels, prints the same place and stack on the core and on the IR
   engine. Only the failure path
-  changed ([#10](https://github.com/shootnix/okkama/issues/10)).
+  changed ([#10](https://github.com/Okkama-lang/okkama/issues/10)).
 
 - IR runtime: dropping a value graph with repeated edges recursed through
   destructors — the release queue took only references whose count was
@@ -4546,7 +7435,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   joins the queue, and `any` is never boxed twice, so boxes do not nest.
   Chains and DAGs of 200 000 levels through objects, arrays, maps, `any`,
   builders and closures drop on a 2 MiB stack in debug and release
-  ([#28](https://github.com/shootnix/okkama/issues/28)).
+  ([#28](https://github.com/Okkama-lang/okkama/issues/28)).
 
 - Compiler: a name conflict now names both sources — two `take` of one name
   (`Object "Thing" is already declared by module "lib/a"; this import takes
@@ -4556,7 +7445,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   name order, so `okkama check a.ok b.ok` and `okkama check b.ok a.ok` print
   the same bytes; every conformance case and std module checks identically
   run to run and with its files reversed
-  ([#33](https://github.com/shootnix/okkama/issues/33)).
+  ([#33](https://github.com/Okkama-lang/okkama/issues/33)).
 
 - Sparrow core on x86_64: the macOS x86_64 package now has a smoke test (run
   under Rosetta 2 on the arm64 runner: a program, the core under a stressed
@@ -4564,7 +7453,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   engine and the core on x86_64 Linux next to conformance. Checked locally
   under Rosetta: the handler-liveness programs under collector stress, budget
   polls and interruption, and all benchmarks print what arm64 prints
-  ([#27](https://github.com/shootnix/okkama/issues/27)).
+  ([#27](https://github.com/Okkama-lang/okkama/issues/27)).
 
 - Releases: packages were published without the release gate, which ran only
   by hand, judged steps by the last line of their logs and carried on after a
@@ -4573,7 +7462,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Every step's status comes from its exit code (`ocs` exits 0 only when all
   mandatory cases pass); a failed build stops the gate; `gate.json` lists the
   commit, the steps with their status and time, and the known std failures,
-  shown in the run summary ([#26](https://github.com/shootnix/okkama/issues/26)).
+  shown in the run summary ([#26](https://github.com/Okkama-lang/okkama/issues/26)).
 
 - Compiler: generic code that asks for ever deeper specializations —
   `Grow<T>` constructing `Grow<Box<T>>`, or a method returning `Node<Box<T>>`
@@ -4582,7 +7471,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   specializations, is now a diagnostic naming the newest requests of the chain
   (`Grow<Box<…>>.deep <- Grow<Box<…>>.deep <- …`). The repository's programs
   stay at depth 20 and 2 416 specializations
-  ([#32](https://github.com/shootnix/okkama/issues/32)).
+  ([#32](https://github.com/Okkama-lang/okkama/issues/32)).
 
 - Sparrow core: a function's machine frame grew with the number of its helper
   calls — every call with arguments took its own stack slot — so a long
@@ -4593,8 +7482,8 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   (`destroy`, closures) is tested to end as `Stack overflow` with the process
   usable afterwards. `--stats` reports the largest machine frame. Compile
   memory for functions with thousands of live values:
-  [#73](https://github.com/shootnix/okkama/issues/73)
-  ([#25](https://github.com/shootnix/okkama/issues/25)).
+  [#73](https://github.com/Okkama-lang/okkama/issues/73)
+  ([#25](https://github.com/Okkama-lang/okkama/issues/25)).
 
 - SPB: decoding and verification are bounded in memory. The verifier kept a
   register set per instruction, so a 234 KiB file of 32 000 registers needed
@@ -4606,7 +7495,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   against a callee whose signature was not yet verified); every signature is
   now checked before any body. Tests truncate a program at every byte and
   corrupt every byte with every value; all 2035 SPB of the repository
-  round-trip byte for byte ([#24](https://github.com/shootnix/okkama/issues/24)).
+  round-trip byte for byte ([#24](https://github.com/Okkama-lang/okkama/issues/24)).
 
 - Compiler: loading imports recursed once per nested import, so a chain of
   16 000 small modules overflowed the stack (SIGABRT). The import graph is now
@@ -4614,7 +7503,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   keep their diagnostic. A program's import graph is bounded — 1024 nested
   imports, 16384 modules, 256 MiB of module sources — and the import that
   crosses a bound is a compile-time error
-  ([#20](https://github.com/shootnix/okkama/issues/20)).
+  ([#20](https://github.com/Okkama-lang/okkama/issues/20)).
 
 - Dependencies: `crypto-bigint` 0.7.5 → 0.7.10 (RUSTSEC-2026-0387) and
   `ctutils` 0.4.2 → 0.4.8 (RUSTSEC-2026-0385) — their constant-time
@@ -4622,8 +7511,8 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   change and weekly and fails on any new advisory. The one exception is
   RUSTSEC-2023-0071 (Marvin, `rsa`): no version of the crate fixes it; private
   RSA operations on the Rust engines are not constant-time until a provider is
-  chosen ([#70](https://github.com/shootnix/okkama/issues/70))
-  ([#19](https://github.com/shootnix/okkama/issues/19)). The conformance
+  chosen ([#70](https://github.com/Okkama-lang/okkama/issues/70))
+  ([#19](https://github.com/Okkama-lang/okkama/issues/19)). The conformance
   adapter no longer caches a failed build: a gate run without a new crate in
   its offline registry kept reporting every case unsupported.
 
@@ -4635,7 +7524,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `InterruptHandle` does for the IR runtime and the core. Tests: a handle
   loaded before close, interrupts racing close and worker exit, and a
   conformance case cancelling running queries around `close`
-  ([#18](https://github.com/shootnix/okkama/issues/18)).
+  ([#18](https://github.com/Okkama-lang/okkama/issues/18)).
 
 - X.509: building a certificate path had no work bound — ambiguous issuers
   (same name and key identifier) made the search exponential, 10 supplied
@@ -4647,7 +7536,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `resource_exhausted` (`CertificateLimitExceeded`). The JVM runtime runs the
   same search instead of JDK `CertPathBuilder`, so every engine finds the
   same path and stops at the same point
-  ([#17](https://github.com/shootnix/okkama/issues/17)).
+  ([#17](https://github.com/Okkama-lang/okkama/issues/17)).
 
 - Sparrow: a crafted `.spb` could make the core read an integer as a pointer —
   the core takes each register's machine representation from the declared
@@ -4661,21 +7550,21 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   helpers; `sparrow check` runs them), recognizes Atomic and Event cells by
   their constructor intrinsics instead of by name, and keeps every channel's
   messages to one representation. Generic payloads checked by type:
-  [#69](https://github.com/shootnix/okkama/issues/69)
-  ([#16](https://github.com/shootnix/okkama/issues/16)).
+  [#69](https://github.com/Okkama-lang/okkama/issues/69)
+  ([#16](https://github.com/Okkama-lang/okkama/issues/16)).
 
 - Blade: a package name is checked as a module path (identifiers separated by `/`)
   before it becomes a directory of `pkg/`; `../../victim` as a name of a package
   without `.ok` files replaced files outside the project. Names differing only in
   letter case are refused, and a nested package cannot land on its parent's files
-  ([#15](https://github.com/shootnix/okkama/issues/15)).
+  ([#15](https://github.com/Okkama-lang/okkama/issues/15)).
 
 - Blade: `pkg/` and `blade.lock` change together. Both are prepared next to
   the old ones and a marker is written before the renames; a blade
   interrupted at any step is finished (marker present) or rolled back by the
   next `blade install`, and `blade build`/`run` refuse a half-committed
   project. `blade install SOURCE` holds the project for the manifest edit as
-  well as the install ([#39](https://github.com/shootnix/okkama/issues/39)).
+  well as the install ([#39](https://github.com/Okkama-lang/okkama/issues/39)).
 
 ## [0.4.0] — 2026-11-07
 
@@ -4800,7 +7689,7 @@ moved out.
   the new `std/db` and `encoding/bytes` use (byte ranges, SQLite and PostgreSQL result
   pages): SQLite and PostgreSQL programs and byte parsing failed with "native provider
   is not implemented" there. IR and JVM now implement them; the previous VM does not
-  (it is removed in 0.5, [#14](https://github.com/shootnix/okkama/issues/14)).
+  (it is removed in 0.5, [#14](https://github.com/Okkama-lang/okkama/issues/14)).
 - JVM: errors the runtime raises for async intrinsics (`ChannelClosed`,
   `InvalidChannelCapacity`, …) are built as error enums; since they became enums the
   task constructing them died and the program waited forever.
@@ -4818,7 +7707,7 @@ moved out.
 - Calling an action through a cap (`customer.wtf()` on a `Customer::Public` value)
   reported "Can only call actions on objects"; the error now names the cap, says that
   an owner's action is not available through it and lists the cap's computed fields
-  (`::name`) ([#8](https://github.com/shootnix/okkama/issues/8)).
+  (`::name`) ([#8](https://github.com/Okkama-lang/okkama/issues/8)).
 - **An object successor declared `is ^Role` is rejected with a clear error** instead of
   passing the checker and crashing in IR verification with an internal compiler error;
   the checker also accepted a role the object does not do. An object successor returns
@@ -4909,9 +7798,9 @@ moved out.
   `sparrow-core`; process workers of the core run `okkama --worker FILE.spb` or
   `sparrow --worker FILE.spb`. The previous VM stays for one release as
   `sparrow-origin` and `--engine sparrow-origin` (removed in 0.5,
-  [#14](https://github.com/shootnix/okkama/issues/14)). Known limitation: an uncaught
+  [#14](https://github.com/Okkama-lang/okkama/issues/14)). Known limitation: an uncaught
   failure on the core prints its report without the source line and call stack
-  ([#10](https://github.com/shootnix/okkama/issues/10)). `make gate` runs the release
+  ([#10](https://github.com/Okkama-lang/okkama/issues/10)). `make gate` runs the release
   gate in a container (`tools/gate/docker.sh`, `tools/docker/Dockerfile`; `make
   gate-local` without it): conformance on ir, jvm, sparrow and sparrow-origin, std
   tests on ir and sparrow.
@@ -5029,7 +7918,7 @@ moved out.
   the rest of the list. The core now knows a role value is one of the objects doing
   that role and a native handle holds no objects, so such data gets no identity:
   20000 rows take 46 ms. The general cost of region tracking over large data is
-  [#9](https://github.com/shootnix/okkama/issues/9).
+  [#9](https://github.com/Okkama-lang/okkama/issues/9).
 - **TLS and the terminal on the new core**, the last natives it lacked (all 621 ABI
   natives now run there). `runtime/tls_transport` is a rustls client over the core's
   TCP sockets, driven by its own reactor like the sockets (no I/O threads), with the
@@ -5489,17 +8378,23 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.5.5...HEAD
-[0.5.5]: https://github.com/shootnix/okkama/compare/v0.5.4...v0.5.5
-[0.5.4]: https://github.com/shootnix/okkama/compare/v0.5.3...v0.5.4
-[0.5.3]: https://github.com/shootnix/okkama/compare/v0.5.1...v0.5.3
-[0.5.1]: https://github.com/shootnix/okkama/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/shootnix/okkama/compare/v0.4.3...v0.5.0
-[0.4.3]: https://github.com/shootnix/okkama/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/shootnix/okkama/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/shootnix/okkama/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/shootnix/okkama/compare/v0.3.2...v0.4.0
-[0.3.2]: https://github.com/shootnix/okkama/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/shootnix/okkama/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/shootnix/okkama/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/shootnix/okkama/releases/tag/v0.2.0
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/Okkama-lang/okkama/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/Okkama-lang/okkama/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Okkama-lang/okkama/compare/v0.5.8...v0.6.0
+[0.5.8]: https://github.com/Okkama-lang/okkama/compare/v0.5.7...v0.5.8
+[0.5.7]: https://github.com/Okkama-lang/okkama/compare/v0.5.6...v0.5.7
+[0.5.6]: https://github.com/Okkama-lang/okkama/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/Okkama-lang/okkama/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/Okkama-lang/okkama/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/Okkama-lang/okkama/compare/v0.5.1...v0.5.3
+[0.5.1]: https://github.com/Okkama-lang/okkama/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Okkama-lang/okkama/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/Okkama-lang/okkama/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/Okkama-lang/okkama/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/Okkama-lang/okkama/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Okkama-lang/okkama/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/Okkama-lang/okkama/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Okkama-lang/okkama/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Okkama-lang/okkama/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Okkama-lang/okkama/releases/tag/v0.2.0

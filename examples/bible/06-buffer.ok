@@ -1,0 +1,19 @@
+module bible/text_buffer v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/buffer" take TextBuffer;
+
+// A page assembled piece by piece: each write appends to text the runtime
+// keeps, and string() hands out the finished, immutable result.
+main() is int {
+    let page = TextBuffer();
+    page.writeln("<ul>");
+    for ["tea", "milk", "bread"] -> item {
+        page.writeln("  <li>", item, "</li>");
+    }
+    page.write("</ul>");
+    let html = page.string();
+    Stdout().writeln(html);
+    Stdout().writeln(html.length(), " characters");
+    0;
+}

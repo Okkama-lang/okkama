@@ -1,0 +1,37 @@
+// Extracted from scopes; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        Res("X", log);
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "X";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        let x = Res("Y", log);
+        x;
+    }
+    confirm log.value() == "Y";
+    Stdout().writeln(log.value());
+    0;
+}

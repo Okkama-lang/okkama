@@ -1,0 +1,31 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "url/value" take ParsedUrl, UrlParts, UrlHostKind;
+
+// URL parts read: authority, host name, address and kind; normalized.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let base = ParsedUrl("https://user@Example.org:8443/a/b/../c?q=" + x + "#top").parts();
+        let other = UrlParts(scheme: "http", host: Maybe.some("10.0.0." + x), path: "/p");
+        let total = base.authority().length() + base.host_name().ascii().length() + other.host_address().string().length()
+            + (if base.host_kind() == UrlHostKind.name { 1; } else { 0; }) + base.normalized().string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

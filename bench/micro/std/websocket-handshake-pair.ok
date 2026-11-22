@@ -1,0 +1,62 @@
+// #244: websocket-handshake-pair; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+import "async/scope" take FutureGroup;
+import "random/source" take PcgRandom;
+import "http/websocket" take WebSocketLimits, WebSocketClose, WebSocketClosed, TextWebSocketMessage, BinaryWebSocketMessage;
+import "http/internal/websocket_frame" take WebSocketFrame, WebSocketFrameHeader, ParsedWebSocketFrameHeader, WebSocketHeaderPrefix;
+import "http/internal/websocket_messages" take ParsedWebSocketClose, WebSocketMessageAssembly;
+import "http/internal/websocket_output" take WebSocketOutput, WebSocketOutputTicket, WebSocketOutputSettlement, WebSocketOutputCancelled;
+import "http/websocket_session" take WebSocketSession;
+import "http/internal/websocket_upgrade" take WebSocketOpeningCleanup;
+import "io/stream" take AsyncReading, Closing;
+import "json" take Json, JsonField;
+import "http/websocket_handshake" take WebSocketClientHandshake, WebSocketServerHandshake;
+import "http/http1_head" take Http1RequestHead;
+import "http/header" take Headers, Header;
+import "http/version" take HttpVersion;
+import "url/value" take ParsedUrl;
+import "http/http1_reading" take Http1HeadRead;
+import "http/websocket_server" take WebSocketAccepting, WebSocketUpgrade;
+import "http/websocket_origin" take SameOriginWebSockets;
+import "http/websocket_client" take WebSocketOpening, WebSocketPolicy, WebSocketConnecting;
+import "http/endpoint" take HttpEndpointSelection, AllEndpoints;
+import "net/dns" take FixedResolution;
+import "net/tls" take TlsClientPolicy;
+import "crypto/x509/trust" take TrustedCertificates;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let url = ParsedUrl("ws://example.test/"+x).parts();
+        let client = WebSocketClientHandshake(url,["p"+x],Headers(Header("Origin","http://example.test")),Utf8Encoded("the sample nonce").bytes());
+        let request = client.request();
+        let head = Http1RequestHead(request::Head::method,request::Head::target,request::Head::headers,HttpVersion.http_1_1);
+        let server = WebSocketServerHandshake(head);
+
+        let connecting = WebSocketConnecting(url,["p"+x],Headers(),FixedResolution(),TlsClientPolicy(TrustedCertificates()),WebSocketPolicy(),FixedClock());
+        let response = server.response("p"+x);
+        let selected = client.selected(response);
+        let contribution = selected.length()+response::Head::code;
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

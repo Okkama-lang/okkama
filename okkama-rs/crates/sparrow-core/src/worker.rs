@@ -1,6 +1,6 @@
 //! Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
 //! in a child `sparrow-next --worker FILE.spb`; arguments and the result cross
-//! as OKW1 transfer values (the previous engine's wire format).
+//! as OKW2 transfer values (the previous engine's wire format).
 //!
 //! Core words carry no tags, so values are encoded and decoded by the static
 //! types of the entry function's parameters and result. Only primitives and
@@ -21,7 +21,7 @@ use okkama_sparrow::{Type, TypeRef};
 use std::io::Write;
 use std::rc::Rc;
 
-const FRAME: &[u8; 4] = b"OKW1";
+const FRAME: &[u8; 4] = b"OKW2";
 const TRAILER: &[u8; 4] = b"OKL1";
 const NOT_TRANSFERABLE: &str = "spawn cannot transfer objects, closures, Futures or native handles";
 
@@ -39,9 +39,45 @@ fn count(out: &mut Vec<u8>, value: usize) -> Result<(), String> {
 
 /// Append `value` of static type `ty`.
 fn encode(runtime: &Runtime, out: &mut Vec<u8>, value: Word, ty: TypeRef) -> Result<(), String> {
+    // One frame per open container (#452): scratch is bounded by depth, and
+    // a map is read through its iterator instead of a copy of its entries.
+    enum Frame<'a> {
+        Items(std::borrow::Cow<'a, [Word]>, usize, TypeRef),
+        Entries(crate::maps::Iter<'a>, TypeRef, TypeRef, Option<Word>),
+    }
     let program = &runtime.loaded.program;
-    let mut work = vec![(value, ty)];
-    while let Some((value, ty)) = work.pop() {
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut next = Some((value, ty));
+    loop {
+        let (value, ty) = match next.take() {
+            Some(item) => item,
+            None => match frames.last_mut() {
+                None => break,
+                Some(Frame::Items(elements, at, element)) => match elements.get(*at) {
+                    Some(&value) => {
+                        *at += 1;
+                        (value, *element)
+                    }
+                    None => {
+                        frames.pop();
+                        continue;
+                    }
+                },
+                Some(Frame::Entries(entries, key, item, pending)) => match pending.take() {
+                    Some(value) => (value, *item),
+                    None => match entries.next() {
+                        Some((_, &(k, v))) => {
+                            *pending = Some(v);
+                            (k, *key)
+                        }
+                        None => {
+                            frames.pop();
+                            continue;
+                        }
+                    },
+                },
+            },
+        };
         match program.ty(ty) {
             Some(Type::Int) => {
                 out.push(1);
@@ -75,17 +111,13 @@ fn encode(runtime: &Runtime, out: &mut Vec<u8>, value: Word, ty: TypeRef) -> Res
                 let elements = runtime.heap.elements(value);
                 out.push(7);
                 count(out, elements.len())?;
-                work.extend(elements.iter().rev().map(|&e| (e, *element)));
+                frames.push(Frame::Items(elements, 0, *element));
             }
             Some(Type::Map(key, item)) => {
                 let map = runtime.heap.payload::<MapValue>(value).ok_or_else(|| NOT_TRANSFERABLE.to_owned())?;
                 out.push(8);
                 count(out, map.entries.len())?;
-                let entries: Vec<(Word, Word)> = map.entries.values().copied().collect();
-                for &(k, v) in entries.iter().rev() {
-                    work.push((v, *item));
-                    work.push((k, *key));
-                }
+                frames.push(Frame::Entries(map.entries.iter(), *key, *item, None));
             }
             _ => return Err(NOT_TRANSFERABLE.into()),
         }
@@ -253,7 +285,7 @@ fn build(runtime: &mut Runtime, ty: TypeRef, values: &[Word]) -> Word {
 /// entry ahead of the call's arguments.
 pub fn bind(runtime: &mut Runtime, action: Word, entry: Word, fields: Vec<(Word, Repr)>) -> Word {
     let function = crate::heap::payload(runtime.heap.header_of(action));
-    let words = runtime.heap.layouts.closures[function as usize].len();
+    let words = runtime.heap.layouts().closures[function as usize].len();
     let captures: Vec<Word> = (0..words).map(|i| runtime.heap.field(action, i)).collect();
     let bound = runtime.heap.closure_new(function, &captures);
     runtime.state_new(bound, State::WorkerBinding { entry, fields });
@@ -379,7 +411,9 @@ fn settle(runtime: &mut Runtime, output: &Output, result: Option<TypeRef>) -> Re
         .and_then(|length| end.checked_sub(length))
         .ok_or_else(|| "invalid worker response length".to_owned())?;
     if !raw[start..end].starts_with(FRAME) {
-        return Err("invalid worker response frame".into());
+        let found = raw.get(start..start + 4).unwrap_or(&raw[start..end]);
+        return Err(format!("unsupported worker response frame version {} (this runtime reads OKW2)",
+            String::from_utf8_lossy(found)));
     }
     // The action's output, into the process buffer (#132).
     okkama_runtime_core::stdout::write(&raw[..start]).map_err(|e| e.to_string())?;
@@ -463,4 +497,65 @@ pub fn respond(runtime: &mut Box<Runtime>, request: &[u8], stack: u64) -> Vec<u8
     response.extend_from_slice(&length.to_be_bytes());
     response.extend_from_slice(TRAILER);
     response
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    fn runtime() -> Runtime {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"wire\" \"1.0.0\"\n\
+             type t0 int\ntype t1 str\ntype t2 map t1 t0\ntype t3 array t2\ntype t4 array t3\ntype t5 bool\n\
+             function f0 \"main\" {\nregisters [t5]\nparams [r0]\nresult t5\n0: ret r0\n}\n",
+        )
+        .unwrap();
+        Runtime::new(crate::program::Loaded::new(program)).unwrap()
+    }
+    fn str_(out: &mut Vec<u8>, s: &str) {
+        out.push(3);
+        text(out, s).unwrap();
+    }
+    fn int(out: &mut Vec<u8>, n: &str) {
+        out.push(1);
+        text(out, n).unwrap();
+    }
+    /// A map of `entries` (keys already in key order) on the wire.
+    fn map(out: &mut Vec<u8>, entries: &[(&str, &str)]) {
+        out.push(8);
+        count(out, entries.len()).unwrap();
+        for (k, v) in entries {
+            str_(out, k);
+            int(out, v);
+        }
+    }
+
+    /// #452: nested arrays of maps round-trip byte for byte -- depth-first,
+    /// arrays in order, maps in key order, empty containers included -- and
+    /// the frames walk a wide map without copying its entries.
+    #[test]
+    fn nested_arrays_and_maps_round_trip_byte_for_byte() {
+        let mut wire = Vec::new();
+        wire.push(7);
+        count(&mut wire, 3).unwrap();
+        wire.push(7);
+        count(&mut wire, 2).unwrap();
+        map(&mut wire, &[("a", "1"), ("b", "-2"), ("c", "123456789012345678901234567890")]);
+        map(&mut wire, &[]);
+        wire.push(7);
+        count(&mut wire, 0).unwrap();
+        wire.push(7);
+        count(&mut wire, 1).unwrap();
+        let wide: Vec<(String, String)> = (0..500).map(|i| (format!("k{i:04}"), i.to_string())).collect();
+        let wide: Vec<(&str, &str)> = wide.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        map(&mut wire, &wide);
+
+        let mut runtime = runtime();
+        let mut reader = Reader::new(&wire);
+        let value = reader.value(&mut runtime, TypeRef(4)).unwrap();
+        reader.finish().unwrap();
+        let mut again = Vec::new();
+        encode(&runtime, &mut again, value, TypeRef(4)).unwrap();
+        assert_eq!(again, wire);
+    }
 }

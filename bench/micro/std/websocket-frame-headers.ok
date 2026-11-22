@@ -1,0 +1,49 @@
+// #244: websocket-frame-headers; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+import "async/scope" take FutureGroup;
+import "random/source" take PcgRandom;
+import "http/websocket" take WebSocketLimits, WebSocketClose, WebSocketClosed, TextWebSocketMessage, BinaryWebSocketMessage;
+import "http/internal/websocket_frame" take WebSocketFrame, WebSocketFrameHeader, ParsedWebSocketFrameHeader, WebSocketHeaderPrefix;
+import "http/internal/websocket_messages" take ParsedWebSocketClose, WebSocketMessageAssembly;
+import "http/internal/websocket_output" take WebSocketOutput, WebSocketOutputTicket, WebSocketOutputSettlement, WebSocketOutputCancelled;
+import "http/websocket_session" take WebSocketSession;
+import "http/internal/websocket_upgrade" take WebSocketOpeningCleanup;
+import "io/stream" take AsyncReading, Closing;
+import "json" take Json, JsonField;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let header = WebSocketFrameHeader(2,true,v,false);
+        let bytes = header.bytes([]);
+        WebSocketHeaderPrefix(bytes,false).checked();
+        let parsed = ParsedWebSocketFrameHeader(bytes,false,1024).header();
+        let close = WebSocketClose(4000+v,x);
+        let closure = ParsedWebSocketClose([15.byte(),160.byte()]+Utf8Encoded(x).bytes(),true).closure();
+        let assembly = WebSocketMessageAssembly(WebSocketLimits());
+        assembly.close();
+        let json = TextWebSocketMessage("{\"n\":"+x+"}").json();
+        let contribution = parsed.length()+close::Close::code+json.int("n")+(if assembly.closed() { 1; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

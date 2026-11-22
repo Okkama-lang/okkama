@@ -1,0 +1,54 @@
+module bible/expressions v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gradebook {
+    has scores is %string:int;
+    Gradebook(:scores);
+
+    names() is @string { scores.keys(); }
+    score(name is string) is int { scores[name]; }
+
+    // An if chain in tail position is the value of the action.
+    letter(score is int) is string {
+        if score >= 90 { "A" } else if score >= 75 { "B" } else if score >= 60 { "C" } else { "F" }
+    }
+
+    // `return` leaves the action from inside the loop.
+    first_below(limit is int) is Maybe<string> {
+        for scores.keys() -> name {
+            return Maybe.some(name) if scores[name] < limit;
+        }
+        Maybe.none;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let book = Gradebook(scores: ["Grace": 58, "Ada": 97, "Edsger": 60, "Alan": 74]);
+
+    for book.names() -> name {
+        let score = book.score(name);
+        let letter = book.letter(score);
+        // `match` compares values; `else` takes the rest.
+        let verdict = match letter {
+            case "A", "B" { "good"; }
+            case "C" { "pass"; }
+            else { "retake"; }
+        };
+        // An `if` expression has two branches of one type.
+        let honours = if score >= 95 { ", with honours"; } else { ""; };
+        out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
+    }
+
+    // `next` and `last` take a postfix condition.
+    for 1..=20 -> n {
+        next if n % 3 != 0;
+        last if n > 12;
+        out.writeln("multiple of 3: " + n.string());
+    }
+
+    out.writeln("first below 60: " + (book.first_below(60) else "nobody"));
+    out.writeln("first below 50: " + (book.first_below(50) else "nobody"));
+    0;
+}

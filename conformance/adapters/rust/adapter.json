@@ -1,8 +1,8 @@
 {
-  "schema": "ocs-adapter-config/1",
-  "protocol": "ocs-adapter/1",
+  "schema": "ocs-adapter-config/2",
+  "protocol": "ocs-adapter/2",
   "name": "okkama-rust",
-  "description": "Rust implementation: IR execution by default; set OCS_RUST_ENGINE=sparrow or jvm for independent engine runs.",
+  "description": "Rust implementation: Sparrow execution.",
   "command": [
     "python3",
     "-I",
@@ -13,7 +13,7 @@
     "OCS_RUST_TARGET_DIR": "{adapter_dir}/.target",
     "CARGO_HOME": "{host_home}/.cargo",
     "RUSTUP_HOME": "{host_home}/.rustup",
-    "OCS_RUST_ENGINE": "ir"
+    "OCS_RUST_ENGINE": "sparrow"
   },
   "pass_env": [
     "PATH"

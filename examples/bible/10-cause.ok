@@ -1,0 +1,46 @@
+module bible/cause v1.0.0;
+
+// Two ways to keep the cause of a failure: as a payload (a value the
+// program can match), and as the runtime link a new error gets when it
+// leaves a catch (for the report).
+import "io/stdout" take Stdout;
+
+enum StoreError is Error = (closed, full(limit is int));
+enum OrderError is Error = (storage(cause is StoreError), rejected(reason is string));
+
+object Store {
+    Store();
+    save(id is int) is int {
+        if id > 2 { throw StoreError.full(2); }
+        id;
+    }
+}
+
+object Orders {
+    has store is Store;
+    Orders(:store);
+    place(id is int) is int {
+        try { store.save(id); } catch e is StoreError { throw OrderError.storage(e); }
+    }
+    explain(id is int) is string {
+        try {
+            self.place(id).string();
+        }
+        catch OrderError.storage(cause) {
+            match cause {
+                case StoreError.full(limit) { "store holds " + limit.string(); }
+                case StoreError.closed { "store closed"; }
+            }
+        }
+        catch e is OrderError { e.text(); }
+    }
+}
+
+main() is int {
+    let orders = Orders(store: Store());
+    let out = Stdout();
+    out.writeln(orders.explain(1));
+    out.writeln(orders.explain(3));
+    out.writeln(OrderError.storage(StoreError.full(2)).text());
+    0;
+}

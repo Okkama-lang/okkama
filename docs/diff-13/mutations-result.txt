@@ -1,0 +1,97 @@
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter unchanged lines std/diff.ok
+MUTATION: 'DiffEdit(kind: DiffEditKind.equal,' -> 'DiffEdit(kind: DiffEditKind.removed,'
+=== RUN   unchanged lines have no diff
+--- FAIL: unchanged lines have no diff
+    expected "", got "--- left
+    +++ right
+    @@ -1 +0,0 @@
+    -same
+    "
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter one comparison std/diff.ok
+MUTATION: 'self.unified(3);' -> 'self.unified(0);'
+=== RUN   one comparison answers in unified and context form
+--- FAIL: one comparison answers in unified and context form
+    expected "--- left
+    +++ right
+    @@ -1,4 +1,5 @@
+     a
+    -b
+    +x
+     c
+     d
+    +e
+    ", got "--- left
+    +++ right
+    @@ -2 +2 @@
+    -b
+    +x
+    @@ -4,0 +5 @@
+    +e
+    "
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter the ratio std/diff.ok
+MUTATION: '(2 * matched).float()' -> 'matched.float()'
+=== RUN   the ratio is twice the matched lines over all lines
+--- FAIL: the ratio is twice the matched lines over all lines
+    expected 0.6666666666666666, got 0.3333333333333333
+    expected 1, got 0.5
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter edits walk std/diff.ok
+MUTATION: 'left: x, right: y' -> 'left: x + 1, right: y'
+=== RUN   edits walk both sides in order with their indexes
+--- FAIL: edits walk both sides in order with their indexes
+    expected [-a00, =b10, +c21], got [-a10, =b20, +c31]
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter repeated lines std/diff.ok
+MUTATION: 'if kind == 0 {' -> 'if kind == 1 {'
+=== RUN   repeated lines keep the native LCS tie order
+--- FAIL: repeated lines keep the native LCS tie order
+    expected [removed, equal, equal, added], got [equal, added, added, added]
+    expected "--- left
+    +++ right
+    @@ -2 +2 @@
+    -ж
+    +x
+    ", got "--- left
+    +++ right
+    @@ -0,0 +1 @@
+    +
+    @@ -2,0 +2,2 @@
+    +x
+    +🙂
+    "
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter line count accepts std/diff.ok
+MUTATION: 'size <= 512' -> 'size <= 511'
+=== RUN   line count accepts 512 and rejects 513 on either side
+--- FAIL: line count accepts 512 and rejects 513 on either side
+    InvalidDiff: InvalidDiff.because("line count must be 0..512")
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter lines accept std/diff.ok
+MUTATION: 'text.length() <= 4096' -> 'text.length() <= 4095'
+=== RUN   lines accept 4096 Unicode scalars and CR but reject LF
+--- FAIL: lines accept 4096 Unicode scalars and CR but reject LF
+    InvalidDiff: InvalidDiff.because("line length or embedded LF")
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter aggregate scalar std/diff.ok
+MUTATION: 'scalars <= 1048576' -> 'scalars <= 1048575'
+=== RUN   aggregate scalar limit is per input and inclusive
+--- FAIL: aggregate scalar limit is per input and inclusive
+    InvalidDiff: InvalidDiff.because("aggregate input length")
+FAIL
+
+COMMAND: OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std /Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-13/release/okkama run -t --filter rendering refuses std/diff.ok
+MUTATION: 'amount <= 1048576' -> 'amount <= 4194304'
+=== RUN   rendering refuses output beyond the scalar budget
+--- FAIL: rendering refuses output beyond the scalar budget
+    Panic: test.throws: the block did not throw DiffLimitExceeded
+FAIL
+

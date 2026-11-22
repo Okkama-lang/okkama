@@ -1,0 +1,77 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "time/format" take FormattedDate, FormattedLocalDateTime;
+import "time/date" take Date;
+import "time/day" take TimeOfDay;
+import "time/local_datetime" take LocalDateTime;
+import "os/environment" take Environment;
+
+// KIND=format|parse, SIZE=small|medium|large:
+// small `%Y-%m-%d` (a date), medium `%Y-%m-%dT%H:%M:%S.%f` (a local date-time),
+// large a 160-character pattern: prose, `%%` and every field twice.
+object Bench {
+    has kind, pattern, text is string;
+    has local is bool;
+    Bench(kind is string, size is string) {
+        self.kind = kind;
+        local = size != "small";
+        let chosen = if size == "small" {
+            "%Y-%m-%d";
+        }
+        else if size == "medium" {
+            "%Y-%m-%dT%H:%M:%S.%f";
+        }
+        else {
+            "Report generated on %d/%m/%Y at %H:%M:%S (%f ns) — 100%% local time; repeated: year %Y, month %m, day %d, " +
+                "hour %H, minute %M, second %S, fraction %f; end of the stamp.";
+        };
+        pattern = chosen;
+        let moment = LocalDateTime(
+            date: Date(year: 2026, month: 8, day: 11),
+            time: TimeOfDay(hour: 12, minute: 30, second: 45, nanosecond: 123456789)
+        );
+        text = if size != "small" {
+            FormattedLocalDateTime(origin: moment, pattern: chosen).string();
+        }
+        else {
+            FormattedDate(origin: moment.date(), pattern: chosen).string();
+        };
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let moment = LocalDateTime(
+            date: Date(year: 2000 + i % 50, month: 1 + i % 12, day: 1 + i % 28),
+            time: TimeOfDay(hour: i % 24, minute: i % 60, second: i % 60, nanosecond: i)
+        );
+        let step = if kind == "format" {
+            if local {
+                FormattedLocalDateTime(origin: moment, pattern: pattern).string().length();
+            }
+            else {
+                FormattedDate(origin: moment.date(), pattern: pattern).string().length();
+            }
+        }
+        else {
+            if local {
+                FormattedLocalDateTime(text: text, pattern: pattern).local_date_time().date()::Calendar::day;
+            }
+            else {
+                FormattedDate(text: text, pattern: pattern).date()::Calendar::day;
+            }
+        };
+        self.run(i + 1, n, acc + step % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench(Environment().text("KIND"), Environment().text("SIZE"));
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

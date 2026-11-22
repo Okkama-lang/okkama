@@ -1,0 +1,41 @@
+// #244: Чтение сохранённого prefix и следующего input.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/internal/websocket_upgrade" take WebSocketPrefixedInput;
+import "http/body" take ByteBodyInput;
+
+
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let input = ByteBodyInput([byte(7)]);
+            let reader = WebSocketPrefixedInput(input,[byte(v%256)]);
+            let first = await reader.bytes(1);
+            let second = await reader.bytes(1);
+            let contribution = first[0].int()+second[0].int();
+            input.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

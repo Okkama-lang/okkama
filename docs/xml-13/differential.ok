@@ -1,0 +1,118 @@
+module differential13 v1.0.0;
+
+// The native runtime/xml tokenizer against xml/internal/events (#13): the same
+// events (kind, name, text, attributes, offset) or the same refusal (reason,
+// offset) for every document of the file given.
+import "io/stdout" take Stdout;
+import "fs/file" take File;
+import "fs/path" take Path;
+import "async/atomic" take Atomic;
+import "strings/parse" take Number;
+import "cli/arguments" take ProcessArguments;
+import "runtime/xml" take XmlEventsState, xml_events, xml_events_error, xml_events_offset, xml_event_count,
+    xml_event_kind, xml_event_name, xml_event_text, xml_attribute_count, xml_attribute_name, xml_attribute_value,
+    xml_event_offset;
+import "xml/internal/events" take XmlTokens, XmlEvent;
+
+hidden object Record {
+    has record is string;
+
+    Record(record is string) {
+        self.record = record;
+    }
+
+    hidden limits() is @int {
+        let bar = record.find("|") else 0;
+        record.slice(0, bar).split(" ").map() -> part { Number(part).int(); };
+    }
+
+    hidden text() is string {
+        let bar = record.find("|") else 0;
+        record.slice(bar + 1, record.length());
+    }
+
+    hidden piece(text is string) is string {
+        text.length().string() + ":" + text;
+    }
+
+    reference() is string {
+        let limits = self.limits();
+        let state = xml_events(self.text(), limits[0], limits[1]);
+        if xml_events_error(state) != "" {
+            return "error " + xml_events_offset(state).string() + " " + xml_events_error(state);
+        }
+        let events is @string = (0..xml_event_count(state)).map() -> index {
+            let attributes is @string = (0..xml_attribute_count(state, index)).map() -> at {
+                self.piece(xml_attribute_name(state, index, at)) + "=" + self.piece(xml_attribute_value(state, index, at));
+            };
+            xml_event_kind(state, index).string() + "|" + self.piece(xml_event_name(state, index)) + "|" +
+                self.piece(xml_event_text(state, index)) + "|" + xml_event_offset(state, index).string() + "|" +
+                attributes.join(",");
+        };
+        "ok " + events.join(";");
+    }
+
+    okkama() is string {
+        let limits = self.limits();
+        let found = XmlTokens(origin: self.text(), maximum_depth: limits[0], maximum_events: limits[1]).events();
+        if found.error() != "" {
+            return "error " + found.offset().string() + " " + found.error();
+        }
+        let events is @string = (0..found.count()).map() -> index {
+            let attributes is @string = match found.items()[index] {
+                case XmlEvent.start(name, names, values, offset) {
+                    let pairs is @string = (0..names.size()).map() -> at {
+                        self.piece(names[at]) + "=" + self.piece(values[at]);
+                    };
+                    pairs;
+                }
+                else {
+                    let none_here is @string = [];
+                    none_here;
+                }
+            };
+            found.kind(index).string() + "|" + self.piece(found.name(index)) + "|" + self.piece(found.text(index)) +
+                "|" + found.event_offset(index).string() + "|" + attributes.join(",");
+        };
+        "ok " + events.join(";");
+    }
+}
+
+main() is int {
+    let path = ProcessArguments().strings()[0];
+    let records = File(path: Path(path)).text().content().split("@@@@DOC@@@@");
+    let differences = Atomic(0);
+    let valid = Atomic(0);
+    let blank is %string:int = [:];
+    let reasons = Atomic(blank);
+    for 0..records.size() -> index {
+        let probe = Record(records[index]);
+        let expected = probe.reference();
+        let actual = probe.okkama();
+        if expected.starts_with("ok") {
+            valid.replace(valid.value() + 1);
+        }
+        else {
+            let words = expected.split(" ");
+            let reason = words.slice(2, if words.size() < 5 { words.size(); } else { 5; }).join(" ");
+            let counted = reasons.value();
+            reasons.replace(counted + [reason: if counted.has(reason) { counted[reason] + 1; } else { 1; }]);
+        }
+        if expected != actual {
+            differences.replace(differences.value() + 1);
+            if differences.value() <= 20 {
+                let shown = records[index];
+                Stdout().writeln("document ", index, ": ", shown.slice(0, if shown.length() < 160 { shown.length(); } else { 160; }));
+                Stdout().writeln("  native: ", expected.slice(0, if expected.length() < 300 { expected.length(); } else { 300; }));
+                Stdout().writeln("  okkama: ", actual.slice(0, if actual.length() < 300 { actual.length(); } else { 300; }));
+            }
+        }
+    }
+    if ProcessArguments().strings().size() > 1 {
+        for reasons.value().keys() -> reason {
+            Stdout().writeln("  ", reasons.value()[reason], " ", reason);
+        }
+    }
+    Stdout().writeln("documents ", records.size(), ", well formed ", valid.value(), ", differences ", differences.value());
+    0;
+}

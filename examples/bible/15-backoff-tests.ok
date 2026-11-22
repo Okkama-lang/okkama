@@ -1,0 +1,90 @@
+module bible/backoff v1.0.0;
+
+// A retry policy with doubling waits, tested without waiting: the clock is a
+// fake that records each wait and returns at once, and the source is a stub
+// that answers from a script.
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "testing/double" take RecordedCalls, Stub;
+
+enum Down is Error = (unavailable(attempt is int));
+
+role Source {
+    async read(attempt is int) is string;
+}
+
+object Backoff {
+    has timing is Timing;
+    has attempts is int;
+
+    Backoff(:timing, :attempts);
+
+    async fetched(source is Source) is string {
+        await self.attempt(source, 1, Duration(seconds: 1));
+    }
+
+    async attempt(source is Source, number is int, delay is Duration) is string {
+        try {
+            await source.read(number);
+        }
+        catch e is Down {
+            confirm number < attempts else throw e;
+            await timing.wait(delay);
+            await self.attempt(source, number + 1, delay.plus(delay));
+        };
+    }
+}
+
+// The clock never waits: it writes each wait down and returns.
+object Recording does Timing {
+    has waits is RecordedCalls<Duration>;
+
+    Recording(:waits);
+
+    instant() is Instant { Instant(Duration(seconds: 0)); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    async wait(duration is Duration) is void { waits.record(duration); }
+}
+
+// The source answers from a script: "down" fails that attempt.
+object Scripted does Source {
+    has answers is Stub<string>;
+
+    Scripted(:answers);
+
+    async read(attempt is int) is string {
+        let answer = answers.next();
+        confirm answer != "down" else throw Down.unavailable(attempt);
+        answer;
+    }
+}
+
+async test "two failures cost one and then two seconds" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    let source = Scripted(answers: Stub(["down", "down", "ready"]));
+    test.is(await backoff.fetched(source), "ready");
+    test.is(waits.size(), 2);
+    test.is(waits.records().item(0).value(), Duration(seconds: 1));
+    test.is(waits.records().item(1).value(), Duration(seconds: 2));
+}
+
+async test "the first answer needs no wait" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    test.is(await backoff.fetched(Scripted(answers: Stub(["ready"]))), "ready");
+    test.is(waits.size(), 0);
+}
+
+async test "after the last attempt the failure reaches the caller" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 3);
+    let outcome = try {
+        await backoff.fetched(Scripted(answers: Stub(["down", "down", "down", "ready"])));
+    }
+    catch e is Down {
+        e.text();
+    };
+    test.is(outcome, "Down.unavailable(3)");
+    test.is(waits.size(), 2);
+}

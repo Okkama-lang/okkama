@@ -1,0 +1,9 @@
+module bible/cycle v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cycle/orders" take Order;
+
+main() is int {
+    Stdout().writeln("unreachable");
+    0;
+}

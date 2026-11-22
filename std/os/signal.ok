@@ -1,0 +1,245 @@
+module os/signal v1.0.0;
+
+// Stopping cleanly on Ctrl-C (SIGINT), SIGTERM or SIGHUP.
+//
+// Without an Interruption a signal ends the process at once, by the system's
+// default action: nothing more of the program runs, so defer blocks and
+// destroy do not either, and the shell sees the process killed by the signal.
+//
+// An Interruption takes the signals from the moment it is made until it is
+// closed or goes. The first one that comes is kept, and the program sees it at
+// the points it chooses: check() throws Interrupted.signal(signal) there, so
+// defer, destroy and catch handle it like any other failure. A long loop calls
+// check() once per step:
+//
+//     let interruption = Interruption();
+//     try {
+//         for files -> file {
+//             interruption.check();
+//             archive.add(file);
+//         }
+//     }
+//     catch e is Interrupted {
+//         archive.discard();
+//         return interruption.status();      // 130 after Ctrl-C, 143 after SIGTERM
+//     }
+//
+// An asynchronous program waits for it instead: await interruption.arrival().
+//
+// Once one signal has come, the signals are given their earlier actions back,
+// so a second Ctrl-C during the cleanup ends the process at once. status() is
+// the conventional exit status of the signal that came, 128 and its number: 130
+// for interrupt, 143 for terminate, 129 for hangup.
+//
+// Tests pass a source of their own, ManualSignals from testing/signal, and
+// raise the signal themselves.
+
+import "io/stream" take Closing;
+import "async/atomic" take Atomic;
+import "error" take InvalidArgument;
+import "runtime/signal" take signal_watch, signal_arrived, signal_unwatch, signal_arrival;
+
+// A signal a program can take: interrupt (SIGINT, Ctrl-C), terminate (SIGTERM)
+// or hangup (SIGHUP).
+enum CaughtSignal = (interrupt, terminate, hangup);
+
+// A signal came, and the program stopped where it checked for it.
+enum Interrupted is Error = (signal(signal is CaughtSignal));
+
+// Where signals come from: the process, or a test.
+role Signaling {
+    // The first signal that came, if one did.
+    arrived() is Maybe<CaughtSignal>;
+    // Waits until a signal comes; the first one.
+    async arrival() is CaughtSignal;
+    // Stops taking signals.
+    close() is void;
+    // Whether it stopped.
+    closed() is bool;
+}
+
+// The process's own signals, taken from when it is made until it is closed or
+// goes.
+object ProcessSignals does Signaling, Closing {
+    has watch is int;
+    has open is Atomic<bool>;
+
+    // Takes signals, interrupt and terminate unless told; at least one.
+    ProcessSignals(signals is @CaughtSignal = [CaughtSignal.interrupt, CaughtSignal.terminate]) {
+        confirm signals.size() > 0 else throw InvalidArgument.because("no signal to take");
+        let names is @string = signals.map() -> signal {
+            SignalName(signal).string();
+        };
+        watch = signal_watch(names);
+        open = Atomic(true);
+    }
+
+    destroy {
+        self.close();
+    }
+
+    // The first signal that came, if one did.
+    arrived() is Maybe<CaughtSignal> {
+        SignalFromName(signal_arrived(watch)).signal();
+    }
+
+    // Waits until a signal comes; the first one.
+    async arrival() is CaughtSignal {
+        let waiting = signal_arrival(watch);
+        SignalFromName(await waiting).signal() else CaughtSignal.interrupt;
+    }
+
+    // Gives the signals their earlier actions back; again does nothing.
+    close() is void {
+        if open.compare_and_replace(true, false) {
+            signal_unwatch(watch);
+        }
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        !open.value();
+    }
+}
+
+// The first signal of a source, seen where the program looks for it.
+object Interruption does Closing {
+    has source is Signaling;
+
+    // The process's signals, interrupt and terminate unless told.
+    Interruption(signals is @CaughtSignal = [CaughtSignal.interrupt, CaughtSignal.terminate]) {
+        source = ProcessSignals(signals: signals);
+    }
+
+    // Signals from source, as tests give them.
+    Interruption(source is Signaling) {
+        self.source = source;
+    }
+
+    destroy {
+        self.close();
+    }
+
+    // The signal that came, if one did.
+    signal() is Maybe<CaughtSignal> {
+        source.arrived();
+    }
+
+    // Whether a signal came.
+    interrupted() is bool {
+        source.arrived() != Maybe<CaughtSignal>.none;
+    }
+
+    // Throws Interrupted.signal(signal) once a signal came; call it where
+    // stopping is safe.
+    check() is void {
+        let came = source.arrived();
+        if came != Maybe<CaughtSignal>.none {
+            throw Interrupted.signal(came else CaughtSignal.interrupt);
+        }
+    }
+
+    // Waits until a signal comes; that one.
+    async arrival() is CaughtSignal {
+        let waiting = source.arrival();
+        await waiting;
+    }
+
+    // The exit status of the signal that came: 130 for interrupt, 143 for
+    // terminate, 129 for hangup; 0 while none has.
+    status() is int {
+        let came = source.arrived();
+        if came == Maybe<CaughtSignal>.none {
+            0;
+        }
+        else {
+            128 + SignalName(came else CaughtSignal.interrupt).number();
+        }
+    }
+
+    // Stops taking signals; again does nothing.
+    close() is void {
+        source.close();
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        source.closed();
+    }
+}
+
+// A signal's name in the runtime, and its number.
+hidden object SignalName {
+    has signal is CaughtSignal;
+
+    SignalName(signal is CaughtSignal) {
+        self.signal = signal;
+    }
+
+    string() is string {
+        match signal {
+            case CaughtSignal.interrupt {
+                "INT";
+            }
+            case CaughtSignal.terminate {
+                "TERM";
+            }
+            else {
+                "HUP";
+            }
+        }
+    }
+
+    number() is int {
+        match signal {
+            case CaughtSignal.interrupt {
+                2;
+            }
+            case CaughtSignal.terminate {
+                15;
+            }
+            else {
+                1;
+            }
+        }
+    }
+}
+
+hidden object SignalFromName {
+    has name is string;
+
+    SignalFromName(name is string) {
+        self.name = name;
+    }
+
+    signal() is Maybe<CaughtSignal> {
+        if name == "INT" {
+            Maybe.some(CaughtSignal.interrupt);
+        }
+        else if name == "TERM" {
+            Maybe.some(CaughtSignal.terminate);
+        }
+        else if name == "HUP" {
+            Maybe.some(CaughtSignal.hangup);
+        }
+        else {
+            Maybe<CaughtSignal>.none;
+        }
+    }
+}
+
+test "a process interruption sees no signal until one comes, and closes once" {
+    let interruption = Interruption();
+    test.ok(!interruption.interrupted());
+    test.is(interruption.status(), 0);
+    interruption.check();
+    interruption.close();
+    interruption.close();
+    test.ok(interruption.closed());
+    let hangup = ProcessSignals(signals: [CaughtSignal.hangup]);
+    test.is(hangup.arrived(), Maybe<CaughtSignal>.none);
+    hangup.close();
+    test.throws(InvalidArgument) {
+        let none_taken = ProcessSignals(signals: []);
+    };
+}

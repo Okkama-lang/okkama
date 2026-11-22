@@ -1,0 +1,46 @@
+module examples/async/channel_selection v1.0.0;
+
+import "async/channel" take Channel, Sending, SelectedReceiving, ChannelClosed;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+
+// Merge independently closing producers without consuming an unselected input.
+object Producer {
+    has output is Sending<string>;
+    has name is string;
+    Producer(:output, :name);
+
+    async run() is void {
+        for 0..3 -> index { await output.send(name + index.string()); }
+        output.close();
+    }
+}
+
+async main() is int {
+    let a is Channel<string> = Channel(capacity: 0);
+    let b is Channel<string> = Channel(capacity: 0);
+    let first = spawn Producer(output: a.sending(), name: "jobs-").run();
+    let second = spawn Producer(output: b.sending(), name: "events-").run();
+    let selected is SelectedReceiving<string> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let jobs = Atomic(0);
+    let events = Atomic(0);
+    let receiving = Atomic(true);
+    loop {
+        last if !receiving.value();
+        try {
+            let message = await selected.item();
+            if message.source() == 0 {
+                confirm message.value().starts_with("jobs-");
+                jobs.replace(jobs.value() + 1);
+            } else {
+                confirm message.value().starts_with("events-");
+                events.replace(events.value() + 1);
+            }
+        } catch error is ChannelClosed { receiving.replace(false); }
+    }
+    await first;
+    await second;
+    confirm jobs.value() == 3 && events.value() == 3;
+    Stdout().writeln("jobs: ", jobs.value(), ", events: ", events.value());
+    0;
+}

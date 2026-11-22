@@ -19,6 +19,67 @@ use miniz_oxide::inflate::stream::{InflateState, inflate};
 use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
 const CHUNK: usize = 64 * 1024;
+/// The first output buffer for an input of `size` bytes; it grows to CHUNK
+/// when filled, so a small value does not zero a whole CHUNK (#943).
+fn first_buffer(size: usize) -> Vec<u8> {
+    vec![0u8; size.saturating_add(1024).min(CHUNK)]
+}
+
+/// The next buffer after `buffer` was filled.
+fn grown(buffer: &mut Vec<u8>) {
+    if buffer.len() < CHUNK {
+        buffer.resize((buffer.len() * 2).min(CHUNK), 0);
+    }
+}
+
+/// Engines kept for the next codec on this thread. miniz builds hundreds of
+/// KiB of tables per engine, and fresh ones are page-faulted in on every
+/// one-shot value (#943): a finished codec hands its engine back, and a pooled
+/// engine is reset to the state a new one starts in.
+const POOLED: usize = 4;
+
+thread_local! {
+    static DEFLATERS: RefCell<Vec<Box<CompressorOxide>>> = const { RefCell::new(Vec::new()) };
+    static INFLATERS: RefCell<Vec<Box<InflateState>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn deflater(format: DataFormat, level: u8) -> Box<CompressorOxide> {
+    match DEFLATERS.with(|pool| pool.borrow_mut().pop()) {
+        Some(mut engine) => {
+            engine.reset();
+            engine.set_format_and_level(format, level);
+            engine
+        }
+        None => Box::new(CompressorOxide::new(create_comp_flags_from_zip_params(
+            level as i32,
+            format.to_window_bits(),
+            0,
+        ))),
+    }
+}
+
+fn inflater(format: DataFormat) -> Box<InflateState> {
+    match INFLATERS.with(|pool| pool.borrow_mut().pop()) {
+        Some(mut engine) => {
+            engine.reset(format);
+            engine
+        }
+        None => InflateState::new_boxed(format),
+    }
+}
+
+/// Keeps `engine` for the next codec, unless the pool is full or already gone
+/// (a codec dropped while the thread's locals are destroyed).
+fn give_back<T>(pool: &'static std::thread::LocalKey<RefCell<Vec<Box<T>>>>, engine: Box<T>) {
+    let _ = pool.try_with(|pool| {
+        if let Ok(mut pool) = pool.try_borrow_mut()
+            && pool.len() < POOLED
+        {
+            pool.push(engine);
+        }
+    });
+}
+
 /// Самый длинный заголовок gzip, который ждём целиком (FEXTRA, FNAME, FCOMMENT).
 const HEADER_LIMIT: usize = 64 * 1024;
 
@@ -128,7 +189,8 @@ fn seed(native: Native, value: &Value, maximum: u32) -> Result<u32, Error> {
 }
 
 struct Compressor {
-    engine: Box<CompressorOxide>,
+    /// Held until finish, then given back to the pool.
+    engine: Option<Box<CompressorOxide>>,
     format: Format,
     crc: u32,
     size: u32,
@@ -138,10 +200,9 @@ struct Compressor {
 
 impl Compressor {
     fn new(format: Format, level: u8) -> Self {
-        let window = if format == Format::Zlib { 15 } else { -15 };
-        let flags = create_comp_flags_from_zip_params(level as i32, window, 0);
+        let data = if format == Format::Zlib { DataFormat::Zlib } else { DataFormat::Raw };
         Self {
-            engine: Box::new(CompressorOxide::new(flags)),
+            engine: Some(deflater(data, level)),
             format,
             crc: 0,
             size: 0,
@@ -159,15 +220,22 @@ impl Compressor {
     }
 
     fn run(&mut self, mut input: &[u8], flush: TDEFLFlush, out: &mut Vec<u8>) -> Result<(), Fail> {
-        let mut buffer = vec![0u8; CHUNK];
+        let Some(engine) = self.engine.as_mut() else {
+            return Err(Fail("invalid_state", "The compressor has finished".into()));
+        };
+        let mut buffer = first_buffer(input.len());
         loop {
-            let (status, consumed, written) = compress(&mut self.engine, input, &mut buffer, flush);
+            let (status, consumed, written) = compress(engine, input, &mut buffer, flush);
             out.extend_from_slice(&buffer[..written]);
             input = &input[consumed..];
+            let filled = written == buffer.len();
+            if filled {
+                grown(&mut buffer);
+            }
             match status {
                 TDEFLStatus::Done => return Ok(()),
                 TDEFLStatus::Okay => {
-                    if flush == TDEFLFlush::None && input.is_empty() && written < buffer.len() {
+                    if flush == TDEFLFlush::None && input.is_empty() && !filled {
                         return Ok(());
                     }
                 }
@@ -200,7 +268,18 @@ impl Compressor {
             out.extend_from_slice(&self.size.to_le_bytes());
         }
         self.finished = true;
+        if let Some(engine) = self.engine.take() {
+            give_back(&DEFLATERS, engine);
+        }
         Ok(out)
+    }
+}
+
+impl Drop for Compressor {
+    fn drop(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            give_back(&DEFLATERS, engine);
+        }
     }
 }
 
@@ -248,7 +327,8 @@ fn gzip_header(bytes: &[u8]) -> Result<Option<usize>, Fail> {
 }
 
 struct Decompressor {
-    engine: Box<InflateState>,
+    /// Held until the stream ends, then given back to the pool.
+    engine: Option<Box<InflateState>>,
     format: Format,
     stage: Stage,
     /// Начало заголовка или хвоста, пришедшее не целиком.
@@ -264,7 +344,7 @@ impl Decompressor {
     fn new(format: Format, limit: u64) -> Self {
         let data = if format == Format::Zlib { DataFormat::Zlib } else { DataFormat::Raw };
         Self {
-            engine: InflateState::new_boxed(data),
+            engine: Some(inflater(data)),
             format,
             stage: if format == Format::Gzip { Stage::Header } else { Stage::Body },
             held: Vec::new(),
@@ -281,7 +361,7 @@ impl Decompressor {
         input.extend_from_slice(source);
         let mut out = Vec::new();
         let mut at = 0usize;
-        let mut buffer = vec![0u8; CHUNK];
+        let mut buffer = first_buffer(input.len().saturating_mul(4));
         loop {
             match self.stage {
                 Stage::Ended => {
@@ -316,7 +396,10 @@ impl Decompressor {
                     self.stage = Stage::Ended;
                 }
                 Stage::Body => {
-                    let result = inflate(&mut self.engine, &input[at..], &mut buffer, MZFlush::None);
+                    let Some(engine) = self.engine.as_mut() else {
+                        return Err(invalid("The compressed stream has ended"));
+                    };
+                    let result = inflate(engine, &input[at..], &mut buffer, MZFlush::None);
                     at += result.bytes_consumed;
                     let produced = &buffer[..result.bytes_written];
                     self.produced += produced.len() as u64;
@@ -328,14 +411,21 @@ impl Decompressor {
                         self.size = self.size.wrapping_add(produced.len() as u32);
                     }
                     out.extend_from_slice(produced);
+                    let filled = result.bytes_written == buffer.len();
                     match result.status {
                         Ok(MZStatus::StreamEnd) => {
                             self.stage = if self.format == Format::Gzip { Stage::Trailer } else { Stage::Ended };
+                            if let Some(engine) = self.engine.take() {
+                                give_back(&INFLATERS, engine);
+                            }
                         }
                         Ok(_) | Err(MZError::Buf) => {
                             let stuck = result.bytes_consumed == 0 && result.bytes_written == 0;
-                            if stuck || (at >= input.len() && result.bytes_written < buffer.len()) {
+                            if stuck || (at >= input.len() && !filled) {
                                 return Ok(out);
+                            }
+                            if filled {
+                                grown(&mut buffer);
                             }
                         }
                         Err(_) => return Err(invalid("The compressed data is damaged")),
@@ -350,6 +440,14 @@ impl Decompressor {
             return Err(invalid("The compressed stream is truncated"));
         }
         Ok(Vec::new())
+    }
+}
+
+impl Drop for Decompressor {
+    fn drop(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            give_back(&INFLATERS, engine);
+        }
     }
 }
 
@@ -370,6 +468,11 @@ fn levels(format: &str) -> Option<(i64, i64)> {
     }
 }
 
+/// A compressor's `limit` when the size of its whole input is not known.
+const UNKNOWN_SIZE: u64 = u64::MAX;
+
+/// A codec for `format`. Decompressing, `limit` caps the output; compressing,
+/// it is the whole input's size, or [`UNKNOWN_SIZE`].
 fn open(format: &str, compressing: bool, level: i64, limit: u64) -> Result<Codec, Fail> {
     let deflate = |format| {
         if compressing {
@@ -382,7 +485,10 @@ fn open(format: &str, compressing: bool, level: i64, limit: u64) -> Result<Codec
         ("deflate", _) => deflate(Format::Deflate),
         ("zlib", _) => deflate(Format::Zlib),
         ("gzip", _) => deflate(Format::Gzip),
-        ("zstd", true) => Codec::Other(Box::new(zstd_codec::ZstdCompressor::new(level as i32)?)),
+        ("zstd", true) => {
+            let size = (limit != UNKNOWN_SIZE).then_some(limit);
+            Codec::Other(Box::new(zstd_codec::ZstdCompressor::new(level as i32, size)?))
+        }
         ("zstd", false) => Codec::Other(Box::new(zstd_codec::ZstdDecompressor::new(limit)?)),
         ("brotli", true) => Codec::Other(Box::new(brotli_codec::BrotliCompressor::new(level as u32))),
         ("brotli", false) => Codec::Other(Box::new(brotli_codec::BrotliDecompressor::new(limit))),
@@ -455,7 +561,9 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
                 let Some(level) = args[2].as_int()?.to_i64().filter(|level| (low..=high).contains(level)) else {
                     return Err(failure(native, invalid(format!("Compression level must be {low}..{high}"))));
                 };
-                (level, 1)
+                // The whole input's size when known (#939); negative: unknown.
+                let size = args[3].as_int()?.to_i64().and_then(|size| u64::try_from(size).ok());
+                (level, size.unwrap_or(UNKNOWN_SIZE))
             } else {
                 let Some(limit) = args[3].as_int()?.to_i64().filter(|limit| *limit > 0) else {
                     return Err(failure(native, invalid("Decompression limit must be positive")));
@@ -531,7 +639,7 @@ mod tests {
     }
 
     fn other_roundtrip(format: &str, level: i64, data: &[u8], pieces: usize) -> (Vec<u8>, usize) {
-        let Ok(Codec::Other(mut compressor)) = open(format, true, level, 1) else { panic!("open") };
+        let Ok(Codec::Other(mut compressor)) = open(format, true, level, UNKNOWN_SIZE) else { panic!("open") };
         let mut packed = Vec::new();
         for chunk in data.chunks((data.len() / pieces).max(1)) {
             packed.extend(compressor.write(chunk).ok().expect("write"));
@@ -567,7 +675,7 @@ mod tests {
     fn zstd_and_brotli_refuse_damage_truncation_and_overflow() {
         let data = b"tea ".repeat(1000);
         for format in ["zstd", "brotli"] {
-            let Ok(Codec::Other(mut compressor)) = open(format, true, levels(format).unwrap().0 + 1, 1) else {
+            let Ok(Codec::Other(mut compressor)) = open(format, true, levels(format).unwrap().0 + 1, UNKNOWN_SIZE) else {
                 panic!("open")
             };
             let mut packed = compressor.write(&data).ok().unwrap();
@@ -584,6 +692,39 @@ mod tests {
         }
         assert!(levels("zstd") == Some((1, 22)) && levels("brotli") == Some((0, 11)));
         assert!(open("lzma", true, 1, 1).is_err());
+    }
+
+    /// #939: a whole input of known size is compressed into a frame that says
+    /// its size, reads back whole, and costs far less to start than a stream
+    /// of unknown size.
+    #[test]
+    fn zstd_with_a_known_size_records_it_and_starts_cheaply() {
+        let compress = |data: &[u8], size: u64| {
+            let Ok(Codec::Other(mut compressor)) = open("zstd", true, 19, size) else { panic!("open") };
+            let mut packed = compressor.write(data).ok().expect("write");
+            packed.extend(compressor.finish().ok().expect("finish"));
+            packed
+        };
+        for data in [&b"8 bytes!"[..], b"", &b"tea ".repeat(5000)] {
+            let packed = compress(data, data.len() as u64);
+            // Frame header descriptor: Frame_Content_Size_flag (bits 7-6) or
+            // Single_Segment_flag (bit 5) set means the content size is present.
+            assert!(packed[4] & 0b1110_0000 != 0, "{} bytes: no content size", data.len());
+            let Ok(Codec::Other(mut decompressor)) = open("zstd", false, 0, 1 << 20) else { panic!("open") };
+            assert_eq!(decompressor.write(&packed).ok().expect("decompress"), data);
+            assert!(decompressor.finish().is_ok());
+        }
+        let unknown = compress(b"8 bytes!", UNKNOWN_SIZE);
+        assert_eq!(unknown[4] & 0b1110_0000, 0, "an unknown size is not recorded");
+        let time = |size: u64| {
+            let started = std::time::Instant::now();
+            for _ in 0..20 {
+                compress(b"8 bytes!", size);
+            }
+            started.elapsed()
+        };
+        let (known, unknown) = (time(8), time(UNKNOWN_SIZE));
+        assert!(known * 4 < unknown, "known {known:?} vs unknown {unknown:?}");
     }
 
     #[test]
@@ -636,4 +777,89 @@ mod tests {
         let mut small = Decompressor::new(Format::Gzip, 3);
         assert!(small.write(&tail).is_err());
     }
+
+    fn packed(compressor: &mut Compressor, data: &[u8]) -> Vec<u8> {
+        let mut out = compressor.write(data).ok().expect("write");
+        out.extend(compressor.finish().ok().expect("finish"));
+        out
+    }
+
+    fn fresh(format: Format, level: u8) -> Compressor {
+        let window = if format == Format::Zlib { 15 } else { -15 };
+        let mut compressor = Compressor::new(format, level);
+        let engine = Box::new(CompressorOxide::new(create_comp_flags_from_zip_params(level as i32, window, 0)));
+        drop(compressor.engine.replace(engine));
+        compressor
+    }
+
+    fn inputs() -> Vec<Vec<u8>> {
+        let mut noise = Vec::new();
+        let mut state = 7u32;
+        for _ in 0..(CHUNK + 4099) {
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            noise.push((state >> 16) as u8);
+        }
+        vec![Vec::new(), b"12345678".to_vec(), b"tea ".repeat(25_000), noise]
+    }
+
+    #[test]
+    fn compression_pooled_engines_write_what_fresh_engines_write() {
+        // #943: a reset engine from the pool must give byte-identical output,
+        // even after it served another format and level.
+        for format in [Format::Deflate, Format::Zlib, Format::Gzip] {
+            for level in [0u8, 1, 6, 9] {
+                for data in inputs() {
+                    let mut dirty = Compressor::new(if format == Format::Zlib { Format::Gzip } else { Format::Zlib }, 9 - level);
+                    let _ = packed(&mut dirty, b"warming the pooled engine with other settings");
+                    let pooled = packed(&mut Compressor::new(format, level), &data);
+                    let expected = packed(&mut fresh(format, level), &data);
+                    assert!(pooled == expected, "format {} level {level} size {}", format as u8, data.len());
+                    let mut back = Decompressor::new(format, 1 << 30);
+                    let mut out = back.write(&pooled).ok().expect("inflate");
+                    out.extend(back.finish().ok().expect("end"));
+                    assert!(out == data);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compression_finished_codecs_give_their_engines_back() {
+        DEFLATERS.with(|pool| pool.borrow_mut().clear());
+        INFLATERS.with(|pool| pool.borrow_mut().clear());
+        let deflaters = || DEFLATERS.with(|pool| pool.borrow().len());
+        let inflaters = || INFLATERS.with(|pool| pool.borrow().len());
+        let mut compressor = Compressor::new(Format::Zlib, 6);
+        let data = packed(&mut compressor, b"pool");
+        assert_eq!(deflaters(), 1);
+        let second = Compressor::new(Format::Zlib, 6);
+        assert_eq!(deflaters(), 0);
+        drop(second);
+        assert_eq!(deflaters(), 1);
+        let mut decompressor = Decompressor::new(Format::Zlib, 1024);
+        assert!(decompressor.write(&data).ok().expect("inflate") == b"pool");
+        assert_eq!(inflaters(), 1);
+        let unfinished = Decompressor::new(Format::Zlib, 1024);
+        assert_eq!(inflaters(), 0);
+        drop(unfinished);
+        assert_eq!(inflaters(), 1);
+        let many: Vec<Compressor> = (0..POOLED + 3).map(|_| Compressor::new(Format::Deflate, 1)).collect();
+        drop(many);
+        assert_eq!(deflaters(), POOLED);
+    }
+
+    #[test]
+    fn compression_small_buffers_grow_for_large_output() {
+        // One write that expands far beyond the first buffer of a small input.
+        let data = vec![0u8; 3 * CHUNK + 17];
+        for format in [Format::Deflate, Format::Zlib, Format::Gzip] {
+            let compressed = packed(&mut Compressor::new(format, 9), &data);
+            assert!(compressed.len() < 4096);
+            let mut back = Decompressor::new(format, 1 << 30);
+            let mut out = back.write(&compressed).ok().expect("inflate");
+            out.extend(back.finish().ok().expect("end"));
+            assert!(out == data);
+        }
+    }
 }
+

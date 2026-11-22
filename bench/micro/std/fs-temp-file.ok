@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/environment" take Environment;
+import "fs/temp" take TemporaryDirectory;
+import "fs/temp" take TemporaryFile;
+
+// A temporary file written as text, a line and bytes; flushed, synced, sized and read from its current position.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-fs-");
+        let root = scratch.path();
+        let file = TemporaryFile(directory: scratch, prefix: "tf-");
+        file.write("head", x);
+        file.writeln("line");
+        file.write([byte(v), byte(2)]);
+        file.flush();
+        file.sync();
+        let size = file.size();
+        let tail = file.bytes(4).size();
+        let named = if file.path().name().starts_with("tf-") { 1; } else { 0; };
+        file.close();
+        scratch.close();
+        let total = size + 100 * tail + 1000 * named;
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

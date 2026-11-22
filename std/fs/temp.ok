@@ -9,9 +9,11 @@ import "io/stream" take ByteSource, Reading, Writing, WritingText, Closing, Inco
 import "encoding/utf" take Utf8Encoded;
 import "os/environment" take Environment;
 import "runtime/fs" take FileState, TemporaryDirectoryState, path_encode, path_decode,
-    file_state_read, file_state_write, file_state_flush, file_state_close, file_state_closed,
-    temporary_file_create, temporary_file_path, temporary_file_preserve, temporary_directory_create,
-    temporary_directory_path, temporary_directory_closed, temporary_directory_close, symlink;
+    file_state_read, file_state_write, file_state_flush, file_state_sync, file_state_close,
+    file_state_closed, temporary_file_create, temporary_file_path, temporary_file_preserve,
+    temporary_file_replace, temporary_directory_create, temporary_directory_path,
+    temporary_directory_closed, temporary_directory_close, symlink, stat, chmod, directory_sync,
+    directory_entries, file_content;
 
 // Temporary resources are created eagerly with unpredictable names inside an
 // explicitly supplied directory. prefix is one filename component, not a path.
@@ -36,6 +38,29 @@ import "runtime/fs" take FileState, TemporaryDirectoryState, path_encode, path_d
 // Preservation never replaces an existing destination. It keeps the operation
 // atomic when both paths share a filesystem and copies in bounded chunks when
 // crossing filesystems.
+//
+// replace(destination) is the other way to keep it: it takes the place of
+// whatever is at destination in one step, and is never copied. Make the
+// temporary file in the destination's directory, so both share a filesystem:
+//
+//     let temporary = TemporaryFile(directory: Directory(path: output.parent()), prefix: ".report-");
+//     defer temporary.close();
+//     temporary.write(payload);
+//     temporary.replace(output);
+//
+// It is durable as well as atomic: the file is synchronized before the rename
+// and the directory after it. A reader sees the old file or the new one, never
+// a part. The new file keeps the permission bits of the file it replaces (owner,
+// group and others; through a link, the target's); with nothing there it stays
+// owner-only. It is a new file: hard links to the old one keep the old content,
+// and its owner is whoever runs the program. A symbolic link at destination is
+// itself replaced, and its target is left alone. When the rename was done but
+// the directory could not be synchronized, the new content is in place and the
+// failure is FileError.failed("not_durable", …).
+//
+// flush() only hands the bytes to the operating system, which may still lose
+// them in a crash; sync() makes them durable, as far as the system and the disk
+// keep that promise.
 //
 // TemporaryDirectory.close() recursively deletes its contents. Symbolic links
 // are removed as leaves; their targets are never traversed or deleted.
@@ -98,10 +123,22 @@ object TemporaryFile does Reading, Writing, WritingText, Closing {
         self.write(Utf8Encoded(text.join("") + "\n"));
     }
 
-    // Sends written bytes on to the disk.
+    // Hands written bytes to the operating system; sync() makes them durable.
     flush() is void {
         try {
             file_state_flush(state);
+        }
+        catch failure is NativeFailure {
+            throw FileFailure(failure).error();
+        }
+    }
+
+    // Makes written bytes durable: they survive a crash once sync returns, as
+    // far as the system and the disk keep that promise (fsync; F_FULLFSYNC on
+    // macOS).
+    sync() is void {
+        try {
+            file_state_sync(state);
         }
         catch failure is NativeFailure {
             throw FileFailure(failure).error();
@@ -155,6 +192,38 @@ object TemporaryFile does Reading, Writing, WritingText, Closing {
         }
         catch failure is NativeFailure {
             throw FileFailure(failure: failure, path: destination.string()).error();
+        }
+    }
+
+    // Puts the file at destination in one step, replacing what is there, and
+    // makes it durable: synchronized, renamed over destination (never copied),
+    // then its directory synchronized. It keeps the permission bits of the file
+    // it replaces. A failure before the rename leaves destination as it was.
+    replace(destination is Path) is void {
+        let target = destination.string();
+        try {
+            chmod(temporary_file_path(state), stat(path_encode(target))["permissions"]);
+        }
+        catch failure is NativeFailure {
+            if failure.code() != "not_found" {
+                throw FileFailure(failure: failure, path: target).error();
+            }
+        }
+        try {
+            file_state_sync(state);
+            temporary_file_replace(state, path_encode(target));
+        }
+        catch failure is NativeFailure {
+            throw FileFailure(failure: failure, path: target).error();
+        }
+        try {
+            directory_sync(path_encode(destination.parent().string()));
+        }
+        catch failure is NativeFailure {
+            throw FileError.failed(
+                "not_durable",
+                target + " is replaced, but its directory was not synchronized: " + failure.message(),
+            );
         }
     }
 }
@@ -341,5 +410,93 @@ test "a temporary directory makes its own files and takes text" {
     notes.flush();
     test.is(notes.size(), 14);
     notes.close();
+    scratch.close();
+}
+
+test "a replacing file takes the destination's place in one step and keeps its permission bits" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-temp-test-");
+    let output = scratch.path().child("report.bin");
+    let old = TemporaryFile(directory: scratch, prefix: ".report-");
+    old.write([byte(1), byte(2), byte(3)]);
+    old.preserve(output);
+    old.close();
+    chmod(path_encode(output.string()), 416);
+    let temporary = TemporaryFile(directory: scratch, prefix: ".report-");
+    temporary.write([byte(7), byte(0), byte(8)]);
+    temporary.sync();
+    test.is(file_content(path_encode(output.string())), [byte(1), byte(2), byte(3)]);
+    temporary.replace(output);
+    test.ok(temporary.closed());
+    test.is(temporary.path(), output);
+    temporary.close();
+    temporary.close();
+    test.is(file_content(path_encode(output.string())), [byte(7), byte(0), byte(8)]);
+    test.is(stat(path_encode(output.string()))["permissions"], 416);
+    test.is(directory_entries(path_encode(scratch.path().string())), ["report.bin"]);
+    let fresh = scratch.path().child("fresh.bin");
+    let created = TemporaryFile(directory: scratch, prefix: ".fresh-");
+    created.replace(fresh);
+    created.close();
+    test.is(file_content(path_encode(fresh.string())), []);
+    test.is(stat(path_encode(fresh.string()))["permissions"], 384);
+    test.is(directory_entries(path_encode(scratch.path().string())), ["fresh.bin", "report.bin"]);
+    scratch.close();
+}
+
+test "replacements one after another: the last rename wins and no temporary file is left" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-temp-test-");
+    let output = scratch.path().child("state");
+    let first = TemporaryFile(directory: scratch, prefix: ".state-");
+    let second = TemporaryFile(directory: scratch, prefix: ".state-");
+    first.write("first");
+    second.write("second");
+    second.replace(output);
+    test.is(file_content(path_encode(output.string())), Utf8Encoded("second").bytes());
+    first.replace(output);
+    test.is(file_content(path_encode(output.string())), Utf8Encoded("first").bytes());
+    first.close();
+    second.close();
+    test.is(directory_entries(path_encode(scratch.path().string())), ["state"]);
+    scratch.close();
+}
+
+test "a failed replace leaves the destination alone and close removes the temporary file" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-temp-test-");
+    let folder = scratch.path().child("folder");
+    Directory(path: folder).create();
+    let kept = TemporaryFile(directory: Directory(path: folder), prefix: "kept-");
+    kept.preserve(folder.child("kept"));
+    kept.close();
+    let temporary = TemporaryFile(directory: scratch, prefix: ".folder-");
+    temporary.write([byte(1)]);
+    test.ok(try {
+        temporary.replace(folder);
+        false;
+    }
+    catch FileError.invalid_operation(_) {
+        true;
+    });
+    test.is(directory_entries(path_encode(folder.string())), ["kept"]);
+    temporary.close();
+    test.is(directory_entries(path_encode(scratch.path().string())), ["folder"]);
+    test.ok(try {
+        temporary.replace(scratch.path().child("late"));
+        false;
+    }
+    catch FileError.invalid_operation(_) {
+        true;
+    });
+    test.ok(!FileEntry(path: scratch.path().child("late")).existence());
+    let missing = scratch.path().child("missing").child("file");
+    let stray = TemporaryFile(directory: scratch, prefix: ".stray-");
+    test.ok(try {
+        stray.replace(missing);
+        false;
+    }
+    catch FileError.not_found(failed) {
+        failed == missing.string();
+    });
+    stray.close();
+    test.is(directory_entries(path_encode(scratch.path().string())), ["folder"]);
     scratch.close();
 }

@@ -1,0 +1,11 @@
+module bible/evidence v1.0.0;
+
+object Bucket<T> {
+    has values is @T;
+    Bucket(:values);
+}
+
+main() is int {
+    let empty = Bucket(values: []);
+    0;
+}

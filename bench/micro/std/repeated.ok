@@ -1,0 +1,30 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "collections/repetition" take Repeated;
+import "cell" take Cell;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let repeated = Repeated(value: i % 9, count: 1 + i % 6);
+        let total = Cell(0);
+        for repeated -> value {
+            total.replace(total.value() + value);
+        }
+        self.run(i + 1, n, acc + (total.value() + repeated.size() + repeated.item(0)) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

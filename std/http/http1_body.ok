@@ -14,7 +14,6 @@ import "io/stream" take AsyncReading, Closing, InvalidReadLimit;
 import "io/decorators" take InvalidReading;
 import "io/buffer" take ByteBuffer;
 import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -102,7 +101,7 @@ object Http1BodyReading does BodyReading {
     }
 
     // The length of a fixed body; UnknownBodyLength otherwise.
-    length() is BigInt {
+    length() is int {
         plan.length();
     }
 }
@@ -120,7 +119,7 @@ object Http1IncomingBody does BodyOpening {
     }
 
     // Its length when fixed; UnknownBodyLength otherwise.
-    length() is BigInt {
+    length() is int {
         origin.length();
     }
 
@@ -178,9 +177,9 @@ hidden object Http1BodyInput does AsyncReading {
             plan.length();
         }
         else {
-            BigInt(0);
+            0;
         };
-        confirm length.order(BigInt(limits::Limits::body_bytes)) != Order.greater
+        confirm length.order((limits::Limits::body_bytes)) != Order.greater
             else throw Http1LimitExceeded.kind("body_bytes");
         self.origin = origin;
         self.kind = kind;
@@ -188,7 +187,7 @@ hidden object Http1BodyInput does AsyncReading {
         self.head = head;
         cache = ByteBuffer(prefix);
         phase = Atomic(0);
-        remaining = Atomic(length.int());
+        remaining = Atomic(length);
         used = Atomic(0);
         metadata = Atomic(0);
         trailers = Atomic(Headers());
@@ -199,7 +198,6 @@ hidden object Http1BodyInput does AsyncReading {
         let group is FutureGroup<@byte> = FutureGroup();
         let complete = Event();
         let cleanup = Http1BodyOperationCleanup(group: group, complete: complete);
-        defer await cleanup.close();
         let pending = self.read_step(group, limit);
         group.start(pending);
         let result = await pending;
@@ -261,7 +259,7 @@ hidden object Http1BodyInput does AsyncReading {
             if stage == 0 {
                 let line = await self.line(group);
                 let size = ParsedHttp1ChunkLine(origin: line, limits: limits).size();
-                let count = size.int();
+                let count = size;
                 confirm count <= limits::Limits::body_bytes - used.value()
                     else throw Http1LimitExceeded.kind("body_bytes");
                 remaining.replace(count);
@@ -415,7 +413,7 @@ hidden object Http1BodyOperationCleanup {
         self.complete = complete;
     }
 
-    async close() is void {
+    async destroy {
         let pending = group.active() > 0;
         if !complete.ready() {
             group.cancel();
@@ -437,7 +435,7 @@ async test "empty framing closes its explicit owner without a source read" {
     let reader = Http1BodyReading(
         origin: input.input(),
         owner: buffer.closing(),
-        plan: Http1BodyPlan(Http1BodyKind.empty, BigInt(0), true),
+        plan: Http1BodyPlan(Http1BodyKind.empty, 0, true),
         prefix: [],
         head: Headers()
     );

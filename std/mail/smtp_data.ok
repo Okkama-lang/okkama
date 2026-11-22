@@ -20,7 +20,6 @@ import "mime/part" take MimeLimits, MimeLimitFailure, ParsedMime, MimePart, Mime
     MimeMultipartParsing, MimeContent, MimeMetadata, MimeParsedNode;
 import "mime/transfer" take TransferEncoding;
 import "mime/media_type" take MimePosition, MediaType;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "io/stream" take ByteSource;
 import "io/buffer" take ByteBuffer;
@@ -113,7 +112,8 @@ hidden object SmtpDataValue {
     has mode is SmtpBodyMode;
 
     SmtpDataValue(origin is MailMessage, capabilities is SmtpCapabilities, limits is SmtpDataLimits) {
-        confirm MimeMetadata(origin.headers()).encoding() != TransferEncoding.binary
+        let encoding = MimeMetadata(origin.headers()).encoding();
+        confirm encoding != TransferEncoding.binary
             else throw InvalidSmtpData.located(0, "binary MIME requires BDAT, not DATA");
         let original = origin.limits();
         let maximum = if original::Limits::body_bytes < limits::Limits::message_bytes {
@@ -146,7 +146,7 @@ hidden object SmtpDataValue {
             && rendered[rendered.size() - 2].int() == 13
             && rendered[rendered.size() - 1].int() == 10;
         let content is @byte = if !terminated
-            && MimeMetadata(origin.headers()).encoding() == TransferEncoding.base64 {
+            && encoding == TransferEncoding.base64 {
                 if rendered.size() > maximum - 2 {
                     if maximum < original::Limits::body_bytes {
                         throw SmtpLimitExceeded.kind("message_bytes");
@@ -170,7 +170,7 @@ hidden object SmtpDataValue {
         if capabilities.has_maximum_size() {
             let maximum = capabilities.maximum_size();
             confirm maximum.sign() == 0
-                || BigInt(content.size().string()).order(maximum) != Order.greater
+                || (content.size()).order(maximum) != Order.greater
                 else throw SmtpLimitExceeded.kind("server_size");
         }
         let buffer = ByteBuffer();
@@ -321,4 +321,22 @@ test "SMTP DATA counts original content and quotes a dot-only line" {
     );
     test.is(prepared.message_size(), 5);
     test.is(Utf8Decoded(prepared.bytes()).string(), "\r\n..\r\n.\r\n");
+}
+
+test "SMTP DATA terminates base64 and enforces declared transport encoding" {
+    let text = "Content-Transfer-Encoding: base64\r\n\r\nAQID";
+    let message = ParsedMail(Utf8Encoded(text).bytes()).message();
+    let capabilities = SmtpCapabilities(SmtpReply(250, ["server"]));
+    test.is(
+        Utf8Decoded(PreparedSmtpData(message, capabilities).bytes()).string(),
+        text + "\r\n.\r\n"
+    );
+    let eight = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: 8bit\r\n\r\na\r\n").bytes()).message();
+    test.throws(MissingSmtpExtension) {
+        PreparedSmtpData(eight, capabilities);
+    };
+    let binary = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: binary\r\n\r\na\r\n").bytes()).message();
+    test.throws(InvalidSmtpData) {
+        PreparedSmtpData(binary, capabilities);
+    };
 }

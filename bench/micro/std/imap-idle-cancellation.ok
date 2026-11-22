@@ -1,0 +1,80 @@
+// #244: imap-idle-cancellation; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;
+import "mail/imap_session" take ImapSession, ImapSessionReply, SelectedMailbox, ImapSelectionToken, ImapSelectedState, ImapAssignedUids, ImapCopiedUids, SearchedMail, FetchedMail, ChangedMailFlags, CopiedMail, MovedMail, ExpungedMail, CreatedImapMailbox, RenamedImapMailbox, ImapMailboxDeletion, ImapSubscription, AppendedMail, MailboxEvent, MailboxEventKind, MailboxEvents, MailboxEventsClosed, ImapIdleTask, ImapEventObservation;
+import "mail/imap_exchange" take ImapCommandChannel, ImapLiteralWriting, ImapIdleContinuation;
+import "mail/imap_command" take ImapCommand, ImapSimpleCommand;
+import "mail/imap_command_reading" take ImapCommandLimits;
+import "mail/imap" take ImapCapabilities;
+import "mail/imap_name" take ImapMailboxName;
+import "mail/imap_uid" take ImapUid, ImapUidSet, ImapUidValidity, MailboxUids;
+import "mail/imap_search" take AllMail;
+import "mail/imap_command" take ImapDatum, FlagChange;
+import "mail/mailbox" take MailFlags;
+import "mail/message" take MailMessage;
+import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
+import "mime/part" take TextBody;
+import "async/event" take Event;
+import "async/channel" take Channel;
+import "async/scope" take FutureGroup;
+import "mail/imap_command_reading" take ImapResponseObserving;
+import "mail/imap_response" take ImapResponse;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object Observer does ImapResponseObserving { Observer(); async observed(response is ImapResponse) is int { 1; } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let wire = "* FLAGS ()\r\n* "+x+" EXISTS\r\n* OK [UIDVALIDITY 1] valid\r\nO1 OK [READ-WRITE] selected\r\n";
+            let input = ByteBodyInput(Utf8Encoded(wire).bytes());
+            let sink = Sink();
+            let channel = ImapCommandChannel(input,sink,input,[],ImapCommandLimits());
+            let session = ImapSession(channel,ImapCapabilities(["IMAP4rev1","UIDPLUS","MOVE","IDLE"]),"account");
+            let name = ImapMailboxName("box"+x);
+
+            let selected = await session.select(name,false);
+            let events is Channel<MailboxEvent> = Channel(2);
+            let stop = Event(); stop.set();
+            let finished = Event();
+            let task = ImapIdleTask(session,selected.context(),events.sending(),stop,finished);
+            task.start();
+            let one = await task.outcome();
+            let second is Channel<MailboxEvent> = Channel(2);
+            let activated = await session.activate_idle(selected.context(),second.sending(),stop,Event());
+            let two = await activated.outcome();
+            let third is Channel<MailboxEvent> = Channel(2);
+            let three = await session.idle_run(selected.context(),third.sending(),stop,Event());
+            let idle = await channel.idle(stop,Observer());
+            let mailbox_events = MailboxEvents(selected);
+            await mailbox_events.close();
+            let first_error = try { await mailbox_events.event(); 0; } catch e is MailboxEventsClosed { 1; };
+            let second_error = try { await mailbox_events.next(); 0; } catch e is MailboxEventsClosed { 1; };
+            let group is FutureGroup<int> = FutureGroup();
+            let sent = Event();
+            let continuation = await ImapIdleContinuation(sink,stop,sent,group).write();
+            await group.wait();
+            let contribution = one+two+three+idle.size()+first_error+second_error+continuation+(if mailbox_events.closed() && sent.ready() { v; } else { 0; });
+            session.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

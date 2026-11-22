@@ -1,0 +1,47 @@
+module bible/top v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+
+// The best `size` items seen so far, largest first. Offering an item returns a
+// new Top: the old one is unchanged.
+object Top<T: Comparing<T>> {
+    has size is int;
+    has items is @T;
+    Top(:size, :items);
+    offered(item is T) is Top<T> {
+        let larger = items.filter() -> kept { kept.order(item) != Order.less; };
+        let smaller = items.filter() -> kept { kept.order(item) == Order.less; };
+        Top(size: size, items: (larger + [item] + smaller).take(size));
+    }
+    items() is @T { items; }
+}
+
+// A domain object that orders itself: higher amount first, then by name.
+object Bid does Comparing<Bid> {
+    has bidder is string;
+    has amount is int;
+    Bid(:bidder, :amount);
+    amount() is int { amount; }
+    bidder() is string { bidder; }
+    order(other is Bid) is Order {
+        if amount != other.amount() { return amount.order(other.amount()); }
+        other.bidder().order(bidder);
+    }
+    text() is string { bidder + ":" + amount.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // No item yet, so the declared type supplies T.
+    let scores is Top<int> = Top(size: 3, items: []);
+    let best = [12, 40, 7, 33, 40, 18].reduce(scores) -> top, score { top.offered(score); };
+    out.writeln(best.items().map() -> score { score.string(); }.join(" "));
+    let words is Top<string> = Top(size: 2, items: []);
+    out.writeln(["kiwi", "apple", "pear", "fig"].reduce(words) -> top, word { top.offered(word); }.items().join(" "));
+    let bids is Top<Bid> = Top(size: 2, items: []);
+    let won = [Bid(bidder: "ann", amount: 50), Bid(bidder: "bob", amount: 70), Bid(bidder: "cy", amount: 70)]
+        .reduce(bids) -> top, bid { top.offered(bid); };
+    out.writeln(won.items().map() -> bid { bid.text(); }.join(" "));
+    0;
+}

@@ -1,10 +1,11 @@
 module time/zone v1.0.0;
 
 import "time/duration" take Duration, DurationUnit;
-import "time/clock" take Instant;
+import "time/clock" take Instant, Timing, SystemClock;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
 import "time/local_datetime" take LocalDateTime;
+import "testing/time" take ManualClock;
 import "runtime/time_zone" take timezone_version, timezone_known, timezone_offset,
     timezone_daylight, timezone_abbreviation, timezone_local_candidates, timezone_local_instant;
 
@@ -116,7 +117,7 @@ object FixedZone does TimeZone {
     FixedZone(name is string, offset is Duration) {
         confirm name.length() > 0
             else throw InvalidTimeZone.because("fixed time-zone name must not be empty");
-        confirm offset::Span::seconds.denominator() == "1"
+        confirm offset::Span::seconds.denominator() == 1
             else throw InvalidTimeZone.because("time-zone offset must contain whole seconds");
         confirm offset::Span::seconds > -86400.rat() && offset::Span::seconds < 86400.rat()
             else throw InvalidTimeZone.because("time-zone offset must be within one day");
@@ -201,6 +202,25 @@ object ZonedDateTime {
 }
 
 // The zone facts of a zoned date-time.
+// The date today in a zone, on the system clock or a given one:
+//
+//     Today(zone: Zone("Europe/Berlin")).date();
+object Today {
+    has zone is TimeZone;
+    has clock is Timing;
+
+    // Today in zone, on clock.
+    Today(zone is TimeZone, clock is Timing = SystemClock()) {
+        self.zone = zone;
+        self.clock = clock;
+    }
+
+    // The date.
+    date() is Date {
+        ZonedDateTime(instant: clock.instant(), zone: zone).local_datetime().date();
+    }
+}
+
 object ZoneObservation {
     has origin is ZonedDateTime;
 
@@ -335,4 +355,13 @@ test "fixed zones have one offset and refuse bad ones" {
         },
         "unknown Mars/Base"
     );
+}
+
+test "today is the date in the zone at the clock's instant" {
+    // 2026-01-01T03:00:00Z.
+    let clock = ManualClock(Instant(origin: Duration(seconds: 1767236400)));
+    test.is(Today(zone: FixedZone(name: "UTC", offset: Duration(hours: 0)), clock: clock).date().string(), "2026-01-01");
+    test.is(Today(zone: FixedZone(name: "UTC-5", offset: Duration(hours: -5)), clock: clock).date().string(), "2025-12-31");
+    test.is(Today(zone: Zone("America/New_York"), clock: clock).date().string(), "2025-12-31");
+    test.is(Today(zone: Zone("Asia/Tokyo"), clock: clock).date().string(), "2026-01-01");
 }

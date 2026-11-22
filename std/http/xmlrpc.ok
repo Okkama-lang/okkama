@@ -22,7 +22,6 @@ module http/xmlrpc v1.0.0;
 
 import "collections/sequence" take Sequencing;
 import "collections/list" take List, EmptyList;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "compare" take Order;
 import "time/local_datetime" take LocalDateTime;
@@ -64,6 +63,14 @@ enum XmlRpcLimitExceeded is Error = (kind(kind is string));
 // The value of a fault, or the fault of a success, was asked for.
 enum WrongXmlRpcResult is Error = (mismatch);
 
+// A value was read as a kind it is not, a struct has no member of that name,
+// or an array or a call has no value at that position.
+enum WrongXmlRpcValue is Error = (
+    kind(expected is XmlRpcKind, actual is XmlRpcKind),
+    member(name is string),
+    position(position is int),
+);
+
 // The endpoint answered with a status other than 2xx.
 enum XmlRpcHttpFailed is Error = (status(status is int));
 
@@ -73,6 +80,22 @@ role XmlRpcValue {
     kind() is XmlRpcKind;
     // Calls the writer's one callback for its kind.
     print(to is XmlRpcWriting) is void;
+    // A string's text; WrongXmlRpcValue for another kind.
+    text() is string;
+    // An int's value; WrongXmlRpcValue for another kind.
+    int() is int;
+    // A boolean's value; WrongXmlRpcValue for another kind.
+    bool() is bool;
+    // A double's exact decimal value; WrongXmlRpcValue for another kind.
+    decimal() is Decimal;
+    // A dateTime.iso8601's value; WrongXmlRpcValue for another kind.
+    local_date_time() is LocalDateTime;
+    // A base64 value's bytes; WrongXmlRpcValue for another kind.
+    bytes() is @byte;
+    // An array's value at index; WrongXmlRpcValue for another kind or no such index.
+    item(index is int) is XmlRpcValue;
+    // A struct's member value; WrongXmlRpcValue for another kind or no such member.
+    member(name is string) is XmlRpcValue;
 }
 
 // Something that takes XML-RPC values one kind at a time.
@@ -122,6 +145,41 @@ object XmlRpcInteger does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.integer(origin);
     }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.integer);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.integer);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.integer);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.integer);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.integer);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.integer);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.integer);
+    }
 }
 
 // An XML-RPC boolean.
@@ -146,6 +204,41 @@ object XmlRpcBoolean does XmlRpcValue {
     // Calls the writer's boolean callback.
     print(to is XmlRpcWriting) is void {
         to.boolean(origin);
+    }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.boolean);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.boolean);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.boolean);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.boolean);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.boolean);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.boolean);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.boolean);
     }
 }
 
@@ -172,6 +265,46 @@ object XmlRpcText does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.text(origin);
     }
+
+    // The text.
+    text() is string {
+        origin;
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.text);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.text);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.text);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.text);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.text);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.text);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.text);
+    }
 }
 
 // An XML-RPC double, from a float.
@@ -196,6 +329,46 @@ object XmlRpcFloat does XmlRpcValue {
     // Calls the writer's floating callback.
     print(to is XmlRpcWriting) is void {
         to.floating(Decimal(origin.string()));
+    }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.floating);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.floating);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.floating);
+    }
+
+    // The exact decimal value.
+    decimal() is Decimal {
+        Decimal(origin.string());
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.floating);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.floating);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.floating);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.floating);
     }
 }
 
@@ -225,6 +398,41 @@ object XmlRpcDouble does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.floating(origin);
     }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.floating);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.floating);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.floating);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.floating);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.floating);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.floating);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.floating);
+    }
 }
 
 // An XML-RPC dateTime.iso8601.
@@ -252,6 +460,41 @@ object XmlRpcDateTime does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.datetime(origin);
     }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.datetime);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.datetime);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.datetime);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.datetime);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.datetime);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.datetime);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.datetime);
+    }
 }
 
 // An XML-RPC base64 value.
@@ -276,6 +519,41 @@ object XmlRpcBinary does XmlRpcValue {
     // Calls the writer's binary callback.
     print(to is XmlRpcWriting) is void {
         to.binary(origin);
+    }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.binary);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.binary);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.binary);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.binary);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.binary);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.binary);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.binary);
     }
 }
 
@@ -317,6 +595,47 @@ object XmlRpcArray does XmlRpcValue {
     // Calls the writer's elements callback.
     print(to is XmlRpcWriting) is void {
         to.elements(origin);
+    }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.array);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.array);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.array);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.array);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.array);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.array);
+    }
+
+    // The value at index; WrongXmlRpcValue.position when there is none.
+    item(index is int) is XmlRpcValue {
+        confirm index >= 0 && index < origin.size() else throw WrongXmlRpcValue.position(index);
+        origin[index];
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.array);
     }
 }
 
@@ -411,6 +730,51 @@ object XmlRpcStruct does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.members(origin);
     }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.structure);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.structure);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.structure);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.structure);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.structure);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.structure);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.structure);
+    }
+
+    // The value of the member called name; WrongXmlRpcValue.member when there is none.
+    member(name is string) is XmlRpcValue {
+        for origin -> entry {
+            if entry.name() == name {
+                return entry.value();
+            }
+        }
+        throw WrongXmlRpcValue.member(name);
+    }
 }
 
 // The nil extension; only read and written when the limits enable it.
@@ -426,6 +790,46 @@ object XmlRpcNil does XmlRpcValue {
     // Calls the writer's nil_value callback.
     print(to is XmlRpcWriting) is void {
         to.nil_value();
+    }
+
+    // Not text: WrongXmlRpcValue.
+    text() is string {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.nil_value);
+    }
+
+    // Not integer: WrongXmlRpcValue.
+    int() is int {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.integer, XmlRpcKind.nil_value);
+    }
+
+    // Not boolean: WrongXmlRpcValue.
+    bool() is bool {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.boolean, XmlRpcKind.nil_value);
+    }
+
+    // Not floating: WrongXmlRpcValue.
+    decimal() is Decimal {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.floating, XmlRpcKind.nil_value);
+    }
+
+    // Not datetime: WrongXmlRpcValue.
+    local_date_time() is LocalDateTime {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.datetime, XmlRpcKind.nil_value);
+    }
+
+    // Not binary: WrongXmlRpcValue.
+    bytes() is @byte {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.binary, XmlRpcKind.nil_value);
+    }
+
+    // Not an array: WrongXmlRpcValue.
+    item(index is int) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.array, XmlRpcKind.nil_value);
+    }
+
+    // Not a struct: WrongXmlRpcValue.
+    member(name is string) is XmlRpcValue {
+        throw WrongXmlRpcValue.kind(XmlRpcKind.structure, XmlRpcKind.nil_value);
     }
 }
 
@@ -454,6 +858,14 @@ object XmlRpcCall {
     // The parameters.
     parameters() is Sequencing<XmlRpcValue> {
         parameters;
+    }
+
+    // The parameter at position (from 0); WrongXmlRpcValue.position when there
+    // is none: call.parameter(0).text().
+    parameter(position is int) is XmlRpcValue {
+        confirm position >= 0 && position < parameters.size()
+            else throw WrongXmlRpcValue.position(position);
+        parameters[position];
     }
 }
 
@@ -576,7 +988,7 @@ object XmlRpcLimits {
     }
 
     // The limits as given, without nil.
-    XmlRpcLimits(depth is int, values is int, text_bytes is BigInt, binary_bytes is BigInt) {
+    XmlRpcLimits(depth is int, values is int, text_bytes is int, binary_bytes is int) {
         XmlRpcBudget(
             depth: depth,
             values: values,
@@ -585,8 +997,8 @@ object XmlRpcLimits {
         );
         self.depth = depth;
         self.values = values;
-        self.text_bytes = text_bytes.int();
-        self.binary_bytes = binary_bytes.int();
+        self.text_bytes = text_bytes;
+        self.binary_bytes = binary_bytes;
         nil_enabled = false;
     }
 
@@ -594,8 +1006,8 @@ object XmlRpcLimits {
     XmlRpcLimits(
         depth is int,
         values is int,
-        text_bytes is BigInt,
-        binary_bytes is BigInt,
+        text_bytes is int,
+        binary_bytes is int,
         nil_enabled is bool
     ) {
         XmlRpcBudget(
@@ -606,19 +1018,19 @@ object XmlRpcLimits {
         );
         self.depth = depth;
         self.values = values;
-        self.text_bytes = text_bytes.int();
-        self.binary_bytes = binary_bytes.int();
+        self.text_bytes = text_bytes;
+        self.binary_bytes = binary_bytes;
         self.nil_enabled = nil_enabled;
     }
 
     // Bytes of text in all.
-    text_bytes() is BigInt {
-        BigInt(text_bytes);
+    text_bytes() is int {
+        text_bytes;
     }
 
     // Bytes of binary in all.
-    binary_bytes() is BigInt {
-        BigInt(binary_bytes);
+    binary_bytes() is int {
+        binary_bytes;
     }
 
     // The largest document these limits allow, at most 16 MiB.
@@ -649,11 +1061,11 @@ object XmlRpcLimits {
 }
 
 hidden object XmlRpcBudget {
-    XmlRpcBudget(depth is int, values is int, text_bytes is BigInt, binary_bytes is BigInt) {
+    XmlRpcBudget(depth is int, values is int, text_bytes is int, binary_bytes is int) {
         confirm depth >= 0 && depth <= 64 && values >= 0 && values <= 4096
             else throw InvalidXmlRpc.because("structural budgets");
         for [text_bytes, binary_bytes] -> bytes {
-            confirm bytes.sign() >= 0 && bytes.order(BigInt(8388608)) != Order.greater
+            confirm bytes.sign() >= 0 && bytes.order((8388608)) != Order.greater
                 else throw InvalidXmlRpc.because("byte budget");
         }
     }
@@ -679,13 +1091,13 @@ hidden object XmlRpcUsage {
 
     text(origin is string) is void {
         let bytes = Utf8Encoded(origin).bytes().size();
-        confirm bytes <= limits.text_bytes().int() - text.value()
+        confirm bytes <= limits.text_bytes() - text.value()
             else throw XmlRpcLimitExceeded.kind("text_bytes");
         text.replace(text.value() + bytes);
     }
 
     binary(bytes is int) is void {
-        confirm bytes <= limits.binary_bytes().int() - binary.value()
+        confirm bytes <= limits.binary_bytes() - binary.value()
             else throw XmlRpcLimitExceeded.kind("binary_bytes");
         binary.replace(binary.value() + bytes);
     }
@@ -852,7 +1264,7 @@ hidden object XmlRpcDoubleText {
 
     string() is string {
         let raw = origin.coefficient().string();
-        let sign = if raw.slice(0, 1) == "-" {
+        let sign = if raw.starts_with("-") {
             "-";
         }
         else {
@@ -997,18 +1409,23 @@ hidden object XmlRpcResultWire {
 // DTD/PI/attributes/extension tags are rejected by this protocol grammar.
 hidden object XmlRpcXmlCharacters {
     XmlRpcXmlCharacters(origin is string) {
-        for (0..32) -> code {
-            if code == 9 || code == 10 || code == 13 {
-                next;
+        // One scan, retaining control-before-noncharacter error precedence.
+        let verdict = origin.characters().reduce(0) -> state, character {
+            let code = character.code();
+            if code < 32 && code != 9 && code != 10 && code != 13 {
+                2;
             }
-            let character = Utf8Decoded([code.byte()]).string();
-            confirm origin.split(character).size() == 1
-                else throw InvalidXmlRpc.because("XML control character");
-        }
-        for [[239.byte(), 191.byte(), 190.byte()], [239.byte(), 191.byte(), 191.byte()]] -> bytes {
-            confirm origin.split(Utf8Decoded(bytes).string()).size() == 1
-                else throw InvalidXmlRpc.because("XML noncharacter");
-        }
+            else {
+                if state == 0 && (code == 65534 || code == 65535) {
+                    1;
+                }
+                else {
+                    state;
+                }
+            }
+        };
+        confirm verdict != 2 else throw InvalidXmlRpc.because("XML control character");
+        confirm verdict != 1 else throw InvalidXmlRpc.because("XML noncharacter");
     }
 }
 
@@ -1066,6 +1483,7 @@ hidden object XmlRpcXmlDecoded {
 
 hidden object XmlRpcParsing {
     has source is PlistXmlSource;
+    has lookahead is Atomic<@PlistXmlToken>;
     has position is Atomic<int>;
     has usage is XmlRpcUsage;
 
@@ -1078,7 +1496,7 @@ hidden object XmlRpcParsing {
         catch e is Error {
             throw InvalidXmlRpc.because("UTF8 input");
         };
-        let text = if decoded != "" && decoded.slice(0, 1) == "﻿" {
+        let text = if decoded != "" && decoded.starts_with("﻿") {
             decoded.slice(1, decoded.length());
         }
         else {
@@ -1087,6 +1505,8 @@ hidden object XmlRpcParsing {
         XmlRpcXmlCharacters(text);
         source = PlistXmlSource(source: text, base: 0);
         position = Atomic(0);
+        let empty is @PlistXmlToken = [];
+        lookahead = Atomic(empty);
         usage = XmlRpcUsage(limits);
         let first = try {
             let token = self.source.token(0);
@@ -1102,9 +1522,16 @@ hidden object XmlRpcParsing {
     }
 
     token() is PlistXmlToken {
+        let at = position.value();
+        let saved = lookahead.value();
+        if saved.size() == 1 && saved[0].start() == at {
+            return saved[0];
+        }
         try {
-            let token = source.token(position.value());
+            let token = source.token(at);
             confirm token.kind() != "doctype" else throw InvalidXmlRpc.because("DTD disabled");
+            // peek/open/close may inspect the same token more than once (#943).
+            lookahead.replace([token]);
             token;
         }
         catch e is Error {
@@ -1168,7 +1595,7 @@ hidden object XmlRpcParsing {
                 next;
             }
             if token.kind() == "text" {
-                confirm token.text().split("]]>").size() == 1
+                confirm !token.text().contains("]]>")
                     else throw InvalidXmlRpc.because("CDATA close in text");
             }
             let value = if token.kind() == "cdata" {
@@ -1281,7 +1708,7 @@ hidden object XmlRpcParsing {
                         "\r",
                         ""
                     ).replace("\n", "");
-                    let remaining = usage.limits().binary_bytes().int();
+                    let remaining = usage.limits().binary_bytes();
                     confirm text.length() <= ((remaining + 2) / 3).int() * 4
                         else throw XmlRpcLimitExceeded.kind("binary_bytes");
                     let bytes = try {
@@ -1409,7 +1836,7 @@ hidden object XmlRpcIntegerText {
     XmlRpcIntegerText(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 16
             else throw InvalidXmlRpc.because("integer spelling budget");
-        let text = if origin.slice(0, 1) == "+" {
+        let text = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
@@ -1435,13 +1862,13 @@ hidden object XmlRpcParsedDouble {
     XmlRpcParsedDouble(origin is string) {
         confirm origin != "" && origin.length() <= 4096
             else throw InvalidXmlRpc.because("double spelling budget");
-        let text = if origin.slice(0, 1) == "+" {
+        let text = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
             origin;
         };
-        let offset = if text != "" && text.slice(0, 1) == "-" {
+        let offset = if text != "" && text.starts_with("-") {
             1;
         }
         else {
@@ -1456,13 +1883,13 @@ hidden object XmlRpcParsedDouble {
             confirm "0123456789".split(packed.slice(index, index + 1)).size() == 2
                 else throw InvalidXmlRpc.because("double digits");
         }
-        let normalized = if digits.slice(0, 1) == "." {
+        let normalized = if digits.starts_with(".") {
             text.slice(0, offset) + "0" + digits;
         }
         else {
             text;
         };
-        let complete = if normalized.slice(normalized.length() - 1, normalized.length()) == "." {
+        let complete = if normalized.ends_with(".") {
             normalized + "0";
         }
         else {
@@ -1753,9 +2180,9 @@ object XmlRpcHandling does Handling {
     // Answers POSTs to path with calling, within limits.
     XmlRpcHandling(path is string, calling is XmlRpcCalling, limits is XmlRpcLimits) {
         confirm path != ""
-            && path.slice(0, 1) == "/"
-            && path.split("?").size() == 1
-            && path.split("#").size() == 1
+            && path.starts_with("/")
+            && !path.contains("?")
+            && !path.contains("#")
             else throw InvalidXmlRpc.because("absolute request path required");
         self.path = path;
         self.calling = calling;
@@ -1839,4 +2266,130 @@ test "standard XMLRPC values do not require casts" {
         true;
     });
     test.is(XmlRpcInteger(-2147483648).int(), -2147483648);
+}
+
+test "every value reads as its own kind and refuses the others (#517)" {
+    let values is @XmlRpcValue = [
+        XmlRpcInteger(7),
+        XmlRpcBoolean(true),
+        XmlRpcText("Ann"),
+        XmlRpcFloat(1.5),
+        XmlRpcDouble(Decimal("2.25")),
+        XmlRpcDateTime(LocalDateTime(
+            date: Date(year: 2026, month: 11, day: 22),
+            time: TimeOfDay(hour: 1, minute: 2, second: 3, nanosecond: 0)
+        )),
+        XmlRpcBinary([1.byte(), 2.byte()]),
+    ];
+    test.is(values[0].int(), 7);
+    test.ok(values[1].bool());
+    test.is(values[2].text(), "Ann");
+    test.ok(values[3].decimal() == Decimal("1.5"));
+    test.ok(values[4].decimal() == Decimal("2.25"));
+    test.is(values[5].local_date_time().string(), "2026-11-22T01:02:03");
+    test.is(values[6].bytes().size(), 2);
+    let read = (0..values.size()).map() -> index {
+        try {
+            values[index].text();
+            "text";
+        }
+        catch WrongXmlRpcValue.kind(expected, actual) {
+            if expected == XmlRpcKind.text && actual == values[index].kind(): "refused" else: "wrong";
+        };
+    };
+    test.is(read.join(","), "refused,refused,text,refused,refused,refused,refused");
+    test.throws(WrongXmlRpcValue) {
+        XmlRpcText("1").int();
+    };
+    test.throws(WrongXmlRpcValue) {
+        XmlRpcNil().bool();
+    };
+}
+
+test "arrays, structs and calls read by position and name (#517)" {
+    let point = XmlRpcStruct(
+        XmlRpcMember(name: "name", value: XmlRpcText("origin")),
+        XmlRpcMember(name: "x", value: XmlRpcInteger(3)),
+        XmlRpcMember(name: "tags", value: XmlRpcArray(XmlRpcText("a"), XmlRpcText("b"))),
+    );
+    test.is(point.member("name").text(), "origin");
+    test.is(point.member("x").int(), 3);
+    test.is(point.member("tags").item(1).text(), "b");
+    test.ok(try {
+        point.member("y");
+        false;
+    }
+    catch WrongXmlRpcValue.member(name) {
+        name == "y";
+    });
+    test.ok(try {
+        point.member("tags").item(2);
+        false;
+    }
+    catch WrongXmlRpcValue.position(position) {
+        position == 2;
+    });
+    test.throws(WrongXmlRpcValue) {
+        point.item(0);
+    };
+    test.throws(WrongXmlRpcValue) {
+        XmlRpcText("a").member("x");
+    };
+    let call = XmlRpcCall(method: "move", parameters: [point, XmlRpcInteger(5)]);
+    test.is(call.parameter(0).member("name").text(), "origin");
+    test.is(call.parameter(1).int(), 5);
+    test.throws(WrongXmlRpcValue) {
+        call.parameter(2);
+    };
+}
+
+test "XMLRPC lookahead advances across comments empty and nested values" {
+    let wire = "<methodCall><!--a--><methodName>sum</methodName><params><param><value><array><data><value><string/></value><value><int>7</int></value></data></array></value></param></params></methodCall>";
+    let call = ParsedXmlRpcCall(Utf8Encoded(wire).bytes(), XmlRpcLimits()).call();
+    test.is(call.method(), "sum");
+    test.is(call.parameter(0).item(0).text(), "");
+    test.is(call.parameter(0).item(1).int(), 7);
+    test.throws(InvalidXmlRpc) {
+        ParsedXmlRpcCall(Utf8Encoded(wire + "<extra/>").bytes(), XmlRpcLimits()).call();
+    };
+}
+
+test "XMLRPC joins scalar pieces and writes values in document order" {
+    let text = "<methodCall><methodName>s<![CDATA[u]]><!--gap-->m</methodName><params><param><value><string>a<![CDATA[b]]>&amp;c</string></value></param><param><value><int>9</int></value></param></params></methodCall>";
+    let call = ParsedXmlRpcCall(Utf8Encoded(text).bytes(), XmlRpcLimits()).call();
+    test.is(call.method(), "sum");
+    test.is(call.parameter(0).text(), "ab&c");
+    let wire = XmlRpcCallWire(call, XmlRpcLimits()).bytes();
+    let again = ParsedXmlRpcCall(wire, XmlRpcLimits()).call();
+    test.is(again.method(), "sum");
+    test.is(again.parameter(0).text(), "ab&c");
+    test.is(again.parameter(1).int(), 9);
+}
+
+test "XMLRPC scalar checks preserve legal whitespace and error precedence" {
+    XmlRpcXmlCharacters("x\t\n\ré");
+    test.throws(InvalidXmlRpc) {
+        XmlRpcXmlCharacters("x" + 0.char().string());
+    };
+    let noncharacter = 65535.char().string();
+    test.is(
+        try {
+            XmlRpcXmlCharacters(noncharacter);
+            "accepted";
+        }
+        catch InvalidXmlRpc.because(reason) {
+            reason;
+        },
+        "XML noncharacter"
+    );
+    test.is(
+        try {
+            XmlRpcXmlCharacters(noncharacter + 0.char().string());
+            "accepted";
+        }
+        catch InvalidXmlRpc.because(reason) {
+            reason;
+        },
+        "XML control character"
+    );
 }

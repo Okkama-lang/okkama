@@ -2,13 +2,15 @@
 
 use okkama_compiler::SourceFile;
 use okkama_compiler::ir::{self, InstKind, TermKind};
-use okkama_compiler::lowering::{LoweringError, lower_program};
+use okkama_compiler::lowering::{self, LoweringError, lower_program};
 use okkama_compiler::syntax::{self, ParseOptions, prune};
 
+/// The lowering's regions as the passes after it leave them, without the static pass (#909 2b: it replaces the
+/// regions of local resources, and tests/statics.rs covers it).
 fn lower(text: &str) -> Result<ir::Module, LoweringError> {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    lower_program(&prune::strip_test_items(program))
+    lowering::with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&prune::strip_test_items(program)))
 }
 
 fn module(text: &str) -> ir::Module {
@@ -76,6 +78,46 @@ fn bindings_own_and_call_results_are_tracked() {
     // Конструктор Res ничем не владеет (поле — int): региона у него нет.
     let ctor = function(&module, "Res.new#0");
     assert_eq!(count(ctor, |kind| matches!(kind, InstKind::RegionEnter)), 0);
+}
+
+#[test]
+fn discarded_await_results_are_tracked_by_the_enclosing_block() {
+    // A resource whose field may hold another one stays with its region (the static pass of #909 leaves it), so
+    // the regions the lowering chose stay visible.
+    let module = module(
+        "module app v1.0.0; role Tag { t() is int; } object Mark does Tag { Mark(); t() is int { 1; } destroy { } } \
+         object Res { has n is int; has tag is Tag; Res(:n, :tag); destroy { confirm n > 0; } } \
+         object Work { Work(); async make() is Res { Res(n: 2, tag: Mark()); } } \
+         async main() is int { Res(n: 4, tag: Mark()); { Res(n: 1, tag: Mark()); await Work().make(); \
+         Res(n: 3, tag: Mark()); } 0; }"
+    );
+    let main = function(&module, "main");
+    let insts: Vec<_> = main.blocks.iter().flat_map(|block| &block.insts).collect();
+    let awaited = insts.iter().find(|inst| matches!(inst.kind, InstKind::AwaitTake(_)))
+        .expect("await exists").result.expect("await returns Res");
+    let tracked_region = |value| {
+        let regions: Vec<_> = insts.iter().filter_map(|inst| match inst.kind {
+            InstKind::RegionTrack { region, value: tracked } if tracked == value => Some(region),
+            _ => None,
+        }).collect();
+        assert_eq!(regions.len(), 1, "each temporary is tracked exactly once:\n{module}");
+        regions[0]
+    };
+    let region = tracked_region(awaited);
+    let calls: Vec<_> = insts.iter().filter_map(|inst| match &inst.kind {
+        InstKind::Call { func, .. } if module.functions[func.0].symbol == "Res.new#0" => inst.result,
+        _ => None,
+    }).collect();
+    assert_eq!(calls.len(), 3, "{module}");
+    assert_ne!(tracked_region(calls[0]), region, "outer scope stays separate:\n{module}");
+    assert_eq!(tracked_region(calls[1]), region, "preceding temporary shares the region:\n{module}");
+    assert_eq!(tracked_region(calls[2]), region, "following temporary shares the region:\n{module}");
+    assert_eq!(count(main, |kind| matches!(kind,
+        InstKind::RegionLeave { region: closed, keep: None } if *closed == region
+    )), 1, "discarded result does not escape the block:\n{module}");
+    assert_eq!(count(main, |kind| matches!(kind,
+        InstKind::RegionUnwind { region: closed, .. } if *closed == region
+    )), 1, "failure also closes the block:\n{module}");
 }
 
 #[test]
@@ -233,7 +275,8 @@ fn async_destroys_are_settled_in_async_functions() {
     assert_eq!(count(run, |kind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::RegionUnwind { .. })), 0);
     let work = function(&settled, "Job.work");
     assert_eq!(count(work, |kind| matches!(kind, InstKind::RegionSettle { .. } | InstKind::RegionSettleUnwind { .. })), 0);
-    assert!(count(work, |kind| matches!(kind, InstKind::RegionLeave { .. })) >= 1, "{text}");
+    // A synchronous close: through its region, or directly for a static resource (#909 2b).
+    assert!(count(work, |kind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::ResourceLeave { .. })) >= 1, "{text}");
 
     let plain = module(&format!(
         "{RES} object Job {{ Job(); async run() is int {{ let r = Res(n: 1); 1; }} }} async main() is int {{ await Job().run(); }}"
@@ -328,10 +371,13 @@ fn only_bodies_that_may_own_an_async_destroy_settle() {
     // The unrelated body still closes its regions, synchronously, on every
     // exit: block, loop iteration, failure.
     let unrelated = function(&module, "Job.unrelated");
-    assert!(count(unrelated, |kind| matches!(kind, InstKind::RegionLeave { .. })) >= 2, "{module}");
-    assert!(count(unrelated, |kind| matches!(kind, InstKind::RegionUnwind { .. })) >= 1, "{module}");
+    // A synchronous close goes through its region or, for a static resource (#909 2b), directly.
+    let leave = |kind: &InstKind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::ResourceLeave { .. });
+    let unwind = |kind: &InstKind| matches!(kind, InstKind::RegionUnwind { .. } | InstKind::ResourceUnwind { .. });
+    assert!(count(unrelated, leave) >= 2, "{module}");
+    assert!(count(unrelated, unwind) >= 1, "{module}");
     let failing = function(&module, "Job.failing");
-    assert!(count(failing, |kind| matches!(kind, InstKind::RegionUnwind { .. })) >= 1, "{module}");
+    assert!(count(failing, unwind) >= 1, "{module}");
 
     // A function value hides what it captures: once a value that may reach
     // an async destroy is captured (or boxed as `any`) anywhere, every body
@@ -348,4 +394,209 @@ fn only_bodies_that_may_own_an_async_destroy_settle() {
         assert!(settles(&captured, symbol), "{symbol} owns a value that may hide an async destroy:\n{captured}");
     }
     assert!(!settles(&captured, "Job.plain"), "{captured}");
+}
+
+#[test]
+fn cold_future_tracks_adopts_and_keeps_retained_dependencies() {
+    let module = module(r#"
+        module app v1.0.0;
+        object Res {
+            Res();
+            async read(arg is Res) is string { "ok"; }
+            destroy {}
+        }
+        object Box {
+            has cold is Future<string>;
+            Box(:cold);
+        }
+        object Factory {
+            Factory();
+            make() is Future<string> { Res().read(Res()); }
+            boxed() is Box { Box(cold: self.make()); }
+        }
+        main() is int { let cold = Factory().make(); let boxed = Factory().boxed(); 0; }
+    "#);
+    let make = function(&module, "Factory.make");
+    let tracks: Vec<_> = make.blocks.iter().flat_map(|block| &block.insts).filter_map(|inst| {
+        if let InstKind::RegionTrack { region, value } = inst.kind { Some((region, value)) } else { None }
+    }).collect();
+    // Receiver, argument and Future all belong to the same lexical region;
+    // both normal closes keep the escaping result, including the root close.
+    assert_eq!(tracks.len(), 4, "{module}");
+    assert_ne!(tracks[3].0, tracks[0].0, "the root tracks the body result");
+    assert_eq!(tracks[3].1, tracks[2].1);
+    assert!(tracks[..3].iter().all(|(region, _)| *region == tracks[0].0), "{module}");
+    assert!(matches!(make.values[tracks[2].1.0], ir::Type::Future(_)), "{module}");
+    for inst in make.blocks.iter().flat_map(|block| &block.insts) {
+        if let InstKind::RegionLeave { keep, .. } = inst.kind {
+            assert!(keep.is_some_and(|value| matches!(make.values[value.0], ir::Type::Future(_))), "{module}");
+        }
+    }
+    let main = function(&module, "main");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::RegionAdopt { .. })), 2, "{module}");
+    // A wrapper with only a Future field is not plain either.
+    let boxed = function(&module, "Factory.boxed");
+    assert!(count(boxed, |kind| matches!(kind, InstKind::RegionTrack { .. })) >= 2, "{module}");
+}
+
+#[test]
+fn future_ownership_corpus_lowers_with_stdlib() {
+    use okkama_compiler::lowering::{LoadedModule, ModuleLoader, lower_linked};
+    use std::path::PathBuf;
+
+    struct CorpusLoader(PathBuf);
+    impl ModuleLoader for CorpusLoader {
+        fn load(&mut self, path: &str, _importer: &str) -> Result<Option<LoadedModule>, String> {
+            let file = ["std", "t/support"].into_iter()
+                .map(|root| self.0.join(root).join(format!("{path}.ok")))
+                .find(|file| file.is_file());
+            let Some(file) = file else { return Ok(None); };
+            let text = std::fs::read_to_string(&file).map_err(|error| error.to_string())?;
+            let id = file.to_string_lossy().into_owned();
+            let source = SourceFile::new(id.clone(), text).unwrap();
+            let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+            Ok(Some(LoadedModule { id, source, program: prune::strip_test_items(program) }))
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for file in ["cold-futures", "future-completions", "async-results", "all-futures", "channel-transfer", "raced", "async-destroy"] {
+        let path = root.join(format!("tests/ownership-corpus/{file}.ok"));
+        let source = SourceFile::new(path.to_string_lossy(), std::fs::read_to_string(&path).unwrap()).unwrap();
+        let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+        let module = lower_linked(&program, source.name(), &mut CorpusLoader(root.clone())).unwrap();
+        ir::verify(&module).unwrap();
+    }
+
+    // Compile the real signals fixture without opening sockets or running it.
+    // Both HTTP and HTTPS server factories must take the listener before
+    // returning it inside HttpServer, rather than leaving it in a dying cache.
+    let path = root.join("okkama-rs/crates/okkama-cli/tests/signals/serve.ok");
+    let source = SourceFile::new(path.to_string_lossy(), std::fs::read_to_string(&path).unwrap()).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let module = lower_linked(&program, source.name(), &mut CorpusLoader(root)).unwrap();
+    ir::verify(&module).unwrap();
+    let mut listeners = 0;
+    for function in module.functions.iter().filter(|function| function.symbol.contains("WebApplication.server")) {
+        let insts: Vec<_> = function.blocks.iter().flat_map(|block| &block.insts).collect();
+        for inst in &insts {
+            if let InstKind::Call { func, .. } = &inst.kind
+                && module.functions[func.0].symbol.ends_with("TcpListening.listener")
+            {
+                let future = inst.result.unwrap();
+                assert!(insts.iter().any(|inst| matches!(inst.kind, InstKind::AwaitTake(value) if value == future)));
+                listeners += 1;
+            }
+        }
+    }
+    assert_eq!(listeners, 2, "HTTP and HTTPS factories take their listeners");
+}
+
+#[test]
+fn future_outcome_await_tracking_preserves_future_owner() {
+    let module = module(&format!(
+        "{RES} object Work {{ Work(); async make() is Res {{ Res(n: 1); }} }} \
+         async main() is int {{ let f = Work().make(); {{ await f; }} await f; await Work().make(); 0; }}"
+    ));
+    let main = function(&module, "main");
+    let instructions: Vec<_> = main.blocks.iter().flat_map(|block| &block.insts).collect();
+    let borrowed = instructions.iter().find(|inst| matches!(inst.kind, InstKind::Await(_)))
+        .expect("bound Future borrows").result.unwrap();
+    let taken = instructions.iter().find(|inst| matches!(inst.kind, InstKind::AwaitTake(_)))
+        .expect("temporary Future takes").result.unwrap();
+    assert!(!instructions.iter().any(|inst| matches!(inst.kind,
+        InstKind::RegionTrack { value, .. } if value == borrowed)), "{module}");
+    assert_eq!(instructions.iter().filter(|inst| matches!(inst.kind,
+        InstKind::RegionTrack { value, .. } if value == taken)).count(), 1, "{module}");
+}
+
+#[test]
+fn fresh_invocations_take_but_aliases_borrow() {
+    let module = module(&format!(
+        "{RES} object Work {{ Work(); async make() is Res {{ Res(n: 1); }} \
+         alias(f is Future<Res>) is Future<Res> {{ f; }} }} \
+         async main() is int {{ let w = Work(); let f = w.make(); \
+         await f; await f; await w.alias(f); let fs = [f]; await fs.item(0); \
+         await w.make(); let action is async () is Res = w.make; await action(); 0; }}"
+    ));
+    let main = function(&module, "main");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::Await(_))), 4, "{module}");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::AwaitTake(_))), 2, "{module}");
+    let text = module.to_string();
+    assert!(text.contains("await.take "), "{text}");
+    let program = okkama_compiler::codegen::sparrow::generate(&module).unwrap();
+    let bytes = okkama_sparrow::encode(&program).unwrap();
+    assert_eq!(okkama_sparrow::decode(&bytes).unwrap(), program);
+    assert_eq!(okkama_sparrow::assemble(&okkama_sparrow::disassemble(&program)).unwrap(), program);
+}
+
+#[test]
+fn borrowed_async_outcome_cleanup_settles_the_future_owner() {
+    let module = module("module app v1.0.0; \
+        object Res { Res(); async destroy {} } \
+        object Work { Work(); async make() is Res { Res(); } } \
+        async main() is int { let f = Work().make(); { await f; } await f; 0; }");
+    assert!(settles(&module, "main"), "{module}");
+    assert_eq!(count(function(&module, "main"), |kind| matches!(kind, InstKind::Await(_))), 2);
+}
+
+#[test]
+fn plain_future_factories_and_unique_bindings_take_at_their_boundary() {
+    let module = module(&format!("{RES}
+        object Work {{ Work(); async make() is Res {{ Res(n: 1); }}
+            future() is Future<Res> {{ self.make(); }}
+            relay() is Future<Res> {{ self.future(); }}
+            alias(f is Future<Res>) is Future<Res> {{ f; }} }}
+        async main() is int {{ let w = Work(); await w.relay();
+            let f = w.future(); {{ await f; }}
+            let shared = w.make(); await w.alias(shared); await shared;
+            let repeated = w.make(); for 0..2 -> i {{ await repeated; }}
+            0; }}"));
+    let main = function(&module, "main");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::AwaitTake(_))), 2, "{module}");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::Await(_))), 3, "{module}");
+    let instructions: Vec<_> = main.blocks.iter().flat_map(|block| &block.insts).collect();
+    let (future, result) = instructions.iter().filter_map(|inst| match inst.kind {
+        InstKind::AwaitTake(future) => Some((future, inst.result.unwrap())), _ => None,
+    }).nth(1).unwrap();
+    let home = instructions.iter().find_map(|inst| match inst.kind {
+        InstKind::RegionAdopt { region, value } if value == future => Some(region), _ => None,
+    }).unwrap();
+    assert!(instructions.iter().any(|inst| matches!(inst.kind,
+        InstKind::RegionAdopt { region, value } if region == home && value == result)), "{module}");
+    assert!(!instructions.iter().any(|inst| matches!(inst.kind,
+        InstKind::RegionTrack { value, .. } if value == result)), "{module}");
+}
+
+#[test]
+fn async_factory_outcomes_require_their_own_freshness_proof() {
+    let module = module(&format!("{RES}
+        object Work {{ Work(); async make() is Res {{ Res(n: 1); }}
+            async fresh() is Future<Res> {{ self.make(); }}
+            async alias(f is Future<Res>) is Future<Res> {{ f; }}
+            wrapper(f is Future<Res>) is Future<Future<Res>> {{ self.alias(f); }} }}
+        async main() is int {{ let w = Work(); let f = w.make();
+            await (await w.fresh()); await (await w.alias(f));
+            await (await w.wrapper(f)); await f; 0; }}"));
+    let main = function(&module, "main");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::AwaitTake(_))), 4, "{module}");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::Await(_))), 3, "{module}");
+}
+
+#[test]
+fn field_and_closure_publication_prevent_unique_take() {
+    let module = module(&format!("{RES}
+        object Work {{ Work(); async make() is Res {{ Res(n: 1); }} }}
+        object Saved {{ has future is Future<Res>; Saved(:future);
+            pending() is Future<Res> {{ future; }} }}
+        async main() is int {{
+            let stored = Work().make(); let saved = Saved(future: stored);
+            await stored; await saved.pending();
+            let captured = Work().make();
+            let closure = () is Future<Res> {{ captured; }};
+            await captured; await closure(); 0;
+        }}"));
+    let main = function(&module, "main");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::AwaitTake(_))), 0, "{module}");
+    assert_eq!(count(main, |kind| matches!(kind, InstKind::Await(_))), 4, "{module}");
 }

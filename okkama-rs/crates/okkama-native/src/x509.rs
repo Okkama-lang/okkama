@@ -226,6 +226,30 @@ fn pss(key: &PublicKey, parameters: Option<Tlv<'_>>, message: &[u8], signature: 
 
 fn ecdsa(spki: &[u8], curve: Option<&str>, hash: Hash, message: &[u8], signature: &[u8]) -> Result<bool> {
     use p256::ecdsa::signature::hazmat::PrehashVerifier;
+    // The usual pairs verify on aws-lc, five times faster (#943); the rest
+    // (SHA-1, SHA-224, SHA-512, P-521) on RustCrypto.
+    let fast: Option<&'static aws_lc_rs::signature::EcdsaVerificationAlgorithm> = match (curve, hash) {
+        (Some("1.2.840.10045.3.1.7"), Hash::Sha256) => Some(&aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1),
+        (Some("1.2.840.10045.3.1.7"), Hash::Sha384) => Some(&aws_lc_rs::signature::ECDSA_P256_SHA384_ASN1),
+        (Some("1.3.132.0.34"), Hash::Sha256) => Some(&aws_lc_rs::signature::ECDSA_P384_SHA256_ASN1),
+        (Some("1.3.132.0.34"), Hash::Sha384) => Some(&aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1),
+        _ => None,
+    };
+    if let Some(algorithm) = fast {
+        macro_rules! point {
+            ($curve:ident) => {{
+                use $curve::pkcs8::DecodePublicKey;
+                $curve::ecdsa::VerifyingKey::from_public_key_der(spki)
+                    .map_err(|_| invalid("EC public key"))?
+                    .to_sec1_point(false)
+                    .as_bytes()
+                    .to_vec()
+            }};
+        }
+        let point = if curve == Some("1.2.840.10045.3.1.7") { point!(p256) } else { point!(p384) };
+        let key = aws_lc_rs::signature::UnparsedPublicKey::new(algorithm, &point);
+        return Ok(key.verify(message, signature).is_ok());
+    }
     let digest = hashed(hash, message);
     macro_rules! verify {
         ($curve:ident) => {{

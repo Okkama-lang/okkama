@@ -1,0 +1,51 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
+import "mime/part" take MimePart, MimeMetadata, TextBody, BinaryBody, MultipartBody, MimeLimits, InvalidMime;
+import "mime/media_type" take MediaType;
+import "mime/transfer" take TransferDecodedBody, TransferEncoding;
+import "encoding/utf" take Utf8Encoded;
+
+// One header.
+hidden object Header {
+    Header();
+    of(name is string, value is string) is MessageHeader { MessageHeader(name: MessageHeaderName(name), value: value); }
+}
+
+// Bodies and metadata checked against media types (half of them mismatched); a body rendered within limits; base64 and quoted-printable decoded.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let h = Header();
+        let odd = i % 2 == 1;
+        let text = TextBody(origin: "t" + x, charset: "utf-8");
+        let a = try { text.validate(MediaType(if odd { "image/png"; } else { "text/plain; charset=utf-8"; })); 1; } catch e is InvalidMime { 2; };
+        let b = try { BinaryBody([byte(v)]).validate(MediaType(if odd { "multipart/mixed; boundary=z"; } else { "image/png"; })); 4; } catch e is InvalidMime { 8; };
+        let part = MimePart(headers: MessageHeaders(h.of("Content-Type", "text/plain; charset=utf-8")), body: text);
+        let multi = MultipartBody(subtype: "mixed", boundary: "q" + x, parts: [part]);
+        let c = try { multi.validate(MediaType(if odd { "text/plain"; } else { "multipart/mixed; boundary=q" + x; })); 16; } catch e is InvalidMime { 32; };
+        let d = try { MimeMetadata(MessageHeaders(h.of("Content-Type", "text/plain"), h.of("Content-Transfer-Encoding", if odd { "7bit"; } else { "8bit"; }))).validate(); 64; }
+            catch e is InvalidMime { 128; };
+        let rendered = part.render_body(MimeLimits(), 0, 1, 1000).bytes().size();
+        let encoded = if odd { "aGk="; } else { "h=C3=A9" + x; };
+        let decoded = TransferDecodedBody(BinaryBody(Utf8Encoded(encoded).bytes()), if odd { TransferEncoding.base64; } else { TransferEncoding.quoted_printable; }).bytes();
+        let total = a + b + c + d + 1000 * rendered + 10000 * decoded.size();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

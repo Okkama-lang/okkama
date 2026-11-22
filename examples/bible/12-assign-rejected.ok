@@ -1,0 +1,12 @@
+module bible/assign v1.0.0;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    bump() is int {
+        count = count + 1;
+        count;
+    }
+}
+
+main() is int { 0; }

@@ -1,0 +1,161 @@
+# Heavy runs of 0.6.0 (Tweed) on GitHub's runners instead of the owner's
+# machine (LLM-GUIDE §1.1): the crate suites of a wave branch, conformance and
+# more corpora (t/, micro programs, examples, the Bible's examples) on the
+# Tomato pipeline. Run it by pushing a branch named wave/<name> at the commit
+# to test (both suites), or, once this file is on the default branch, by
+# dispatch:
+#   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
+name: Wave
+
+on:
+  push:
+    branches: ["wave/**"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to test (must be pushed)
+        required: true
+      suites:
+        description: "tests, conformance or both"
+        required: true
+        default: both
+
+concurrency:
+  group: wave-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.part }})
+    if: inputs.suites != 'conformance'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Tweed (owner, 2026-11-20): Champ, OIR-2 and its verifier differential are retired (#911).
+        # Every crate and every test target, as the release CI's workspace run: a
+        # --lib-only wave let integration-test failures through (#466 follow-up).
+        part: [compiler, sparrow, cli, rest, clippy]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      # The toolchain the workspace declares (rust-version), so a newer stable
+      # on the runner does not bring lints the developers' toolchain lacks.
+      - name: Rust
+        run: |
+          version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' okkama-rs/Cargo.toml)"
+          rustup toolchain install "$version" --profile minimal --component clippy && rustup default "$version"
+          rustc -V
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: wave-${{ matrix.part }}
+      - name: Run
+        working-directory: okkama-rs
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          gate="--profile gate --locked"
+          case "${{ matrix.part }}" in
+            compiler) cargo test $gate -p okkama-compiler ;;
+            sparrow) cargo test $gate -p okkama-sparrow -p sparrow-core ;;
+            cli) cargo test $gate -p okkama-cli ;;
+            rest)
+              cargo test $gate --workspace --exclude okkama-compiler --exclude okkama-sparrow \
+                --exclude sparrow-core --exclude okkama-cli ;;
+            clippy)
+              cargo clippy $gate --workspace --all-targets -- -D warnings ;;
+          esac
+
+  conformance:
+    name: Conformance (${{ matrix.engine }})
+    if: inputs.suites != 'tests'
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [sparrow]
+    # SQLite 3.41+ for std db/sqlite.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            conformance/adapters/rust/.target
+          key: wave-ocs-${{ matrix.engine }}-${{ hashFiles('okkama-rs/Cargo.lock') }}
+          restore-keys: wave-ocs-${{ matrix.engine }}-
+      - name: Fetch crates
+        working-directory: okkama-rs
+        run: cargo fetch --locked
+      - name: Run full-release
+        working-directory: conformance
+        run: |
+          adapter=adapters/rust/adapter.json
+          # A failing case fails the job (as in the release CI), after the
+          # artifact and the corpora below; a missing results.jsonl fails here.
+          set +e
+          CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet \
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" | tee ocs.log
+          status=${PIPESTATUS[0]}
+          set -e
+          grep -E '^\[ *[0-9]+/ *[0-9]+\] +[A-Z_]+ ' ocs.log | grep -v '\] PASS ' | head -50 |
+            while IFS= read -r line; do echo "::error title=OCS ${{ matrix.engine }}::$line"; done
+          echo "ocs_status=$status" >> "$GITHUB_ENV"
+          test -f "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/results.jsonl"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: conformance-${{ matrix.engine }}
+          path: out/${{ matrix.engine }}/
+      # More code on the binary conformance built (#894, owner 2026-11-20): the t/ suite (#245, ~50k
+      # generated checks), the micro-benchmark programs against their oracles (bench/micro, no timing),
+      # examples/ and the Bible's examples; a failure fails the job.
+      - name: Corpora
+        run: |
+          mkdir -p out/corpora
+          bin=conformance/adapters/rust/.target/debug/okkama
+          t="--configs sparrow --okkama $bin"; pipeline=""
+          status=0
+          run() {
+            name=$1; shift
+            "$@" > out/corpora/$name.txt 2>&1 || status=1
+            {
+              echo "### $name on ${{ matrix.engine }}"
+              echo '```'
+              sed -n '/^Failures by reason:/,/^$/p' out/corpora/$name.txt | head -40
+              tail -2 out/corpora/$name.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          run t python3 tools/t/run.py $t --jobs 4
+          run micro python3 bench/micro/check.py --okkama $bin $pipeline --jobs 4
+          run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
+          run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
+          exit $status
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: corpora-${{ matrix.engine }}
+          path: out/corpora/
+      - name: Conformance verdict
+        if: always()
+        run: test "${ocs_status:-1}" = 0 || { echo "::error::conformance cases failed (see the annotations)"; exit 1; }
+
+  maps:
+    name: Code maps current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      # docs/map/files.md and rules.md are generated from the code (owner, 2026-11-20): regenerate and commit.
+      - run: python3 tools/map/gen.py --check

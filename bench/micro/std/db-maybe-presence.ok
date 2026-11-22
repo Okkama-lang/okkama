@@ -1,0 +1,65 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "math/decimal" take Decimal;
+import "db/value" take DbValue, DbValueKind, DbNull, DbBoolean, DbInteger, DbFloating, DbDecimal, DbText, DbBytes;
+import "db/row" take Row, Column;
+
+// The position of a kind in DbValueKind.
+hidden object Code {
+    Code();
+    of(kind is DbValueKind) is int {
+        match kind {
+            case DbValueKind.null_value { 0; }
+            case DbValueKind.boolean { 1; }
+            case DbValueKind.integer { 2; }
+            case DbValueKind.floating { 3; }
+            case DbValueKind.decimal { 4; }
+            case DbValueKind.text { 5; }
+            case DbValueKind.bytes { 6; }
+        }
+    }
+}
+
+// Presence: 1 present, 2 NULL, 3 missing.
+hidden object Seen {
+    Seen();
+    of(value is Presence<bool>) is int {
+        match value { case Presence.some(found) { 1; } case Presence.none { 2; } else { 3; } }
+    }
+}
+
+// Row maybe and presence readers: present, NULL and missing columns.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let names is @string = ["b", "y", "d", "f", "g", "n", "t", "z"];
+        let columns is @Column = (0..8).map() -> at { Column(index: at, name: names[at], declaration: ""); };
+        let values is @DbValue = [DbBoolean(v % 2 == 0), DbBytes([byte(v), byte(5)]), DbDecimal(Decimal(x + ".5")), DbInteger(i % 2),
+            DbFloating(if v > 4 { 6.5; } else { 2.5; }), DbInteger(v * 13), DbText("t" + x), DbNull()];
+        let row = Row(columns: columns, values: values);
+        let s = Seen();
+        let total = (row.maybe("t").text() else "").length() + (row.maybe("z").text() else "zz").length()
+            + s.of(row.presence("b").boolean()) + s.of(row.presence("z").boolean()) + s.of(row.presence("missing").flag())
+            + (match row.presence("y").bytes() { case Presence.some(bytes) { bytes[1].int(); } else { 0; } })
+            + (match row.presence("n").cell() { case Presence.some(cell) { Code().of(cell.kind()); } else { 0; } })
+            + (match row.presence("d").decimal() { case Presence.some(d) { d.string().length(); } else { 0; } })
+            + s.of(row.presence("f").flag());
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

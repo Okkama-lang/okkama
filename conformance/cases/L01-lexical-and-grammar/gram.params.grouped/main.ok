@@ -35,7 +35,7 @@ main() is int {
     let add = (a, b is int, c is string) is string { (a + b).string() + c; };
     out.writeln(add(40, 2, "?"));
     let failure = Failure.declined(7, 12);
-    let text = failure ?? .declined(id, line): id.string() + ":" + line.string() !! .moved(from, to): from + to;
+    let text = match failure { case Failure.declined(id, line): id.string() + ":" + line.string(); case Failure.moved(from, to): from + to; };
     out.writeln(text);
     0;
 }

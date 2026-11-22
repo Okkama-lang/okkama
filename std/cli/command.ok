@@ -663,7 +663,7 @@ object CliCommand {
     ) {
         confirm name != "" && name.length() <= 128
             else throw InvalidCommandSyntax.because("invalid command name");
-        confirm name.slice(0, 1) != "-"
+        confirm !name.starts_with("-")
             else throw InvalidCommandSyntax.because("command name starts with a dash");
         for Utf8Encoded(name).bytes() -> octet {
             confirm octet.int() > 32 && octet.int() != 127
@@ -730,8 +730,10 @@ object CliCommand {
     }
 
     // The arguments read by this command: values by name, the selected
-    // subcommand, the operands. A bad argument throws CliFailure with its
-    // index. Reading is pure and repeatable.
+    // subcommand, the operands. A command with subcommands needs one of them,
+    // unless one of its own flags was given (`tool --help`): then it is the
+    // selected command. A bad argument throws CliFailure with its index.
+    // Reading is pure and repeatable.
     invocation(arguments is Sequencing<string>) is Invocation {
         CliParsing(origin: self, arguments: CliArgumentSnapshot(arguments: arguments).strings()).invocation();
     }
@@ -770,8 +772,9 @@ hidden object CliTreeBudget {
 enum InvalidCommandSyntax is Error = (because(reason is string));
 
 // Parsing is repeatable and has no I/O. Branch commands accept options then one
-// child name; leaves accept options and operands. Ancestor aliases cease to be
-// recognized after selecting a child. -- affects the remaining complete argv.
+// child name, or stop at one of their own flags; leaves accept options and
+// operands. Ancestor aliases cease to be recognized after selecting a child.
+// -- affects the remaining complete argv.
 // The arguments as read: the selected subcommand and every value by the name
 // of its option, flag or operand.
 //
@@ -986,6 +989,8 @@ hidden object CliParsing {
     has path is Atomic<@CliCommand>;
     has position is Atomic<int>;
     has literal is Atomic<bool>;
+    // A flag of the selected command was given: a branch may stop there (#637).
+    has flagged is Atomic<bool>;
     has operands is Atomic<@CliOperandToken>;
     has entries is Atomic<SettingOverlay>;
     has arguments is @string;
@@ -1004,6 +1009,7 @@ hidden object CliParsing {
         path = Atomic(root);
         position = Atomic(0);
         literal = Atomic(false);
+        flagged = Atomic(false);
         let empty is @CliOperandToken = [];
         operands = Atomic(empty);
         entries = Atomic(SettingOverlay());
@@ -1023,14 +1029,14 @@ hidden object CliParsing {
                 position.replace(at + 1);
                 next;
             }
-            if !literal.value() && token.length() > 1 && token.slice(0, 1) == "-" {
+            if !literal.value() && token.length() > 1 && token.starts_with("-") {
                 self.option(token, at);
             }
             else {
                 self.operand(token, at);
             }
         }
-        confirm command.value().commands().size() == 0
+        confirm command.value().commands().size() == 0 || flagged.value()
             else throw CliFailure.detailed(arguments.size(), "", "child command required");
         self.finish_operands();
         Invocation(
@@ -1049,7 +1055,7 @@ hidden object CliParsing {
     }
 
     hidden option(token is string, at is int) is void {
-        if token.slice(0, 2) == "--" {
+        if token.starts_with("--") {
             let name = token.split("=").first();
             let option = self.option_index(name);
             let flag = self.flag_index(name);
@@ -1159,6 +1165,7 @@ hidden object CliParsing {
     }
 
     hidden flag(flag is Flag) is void {
+        flagged.replace(true);
         entries.replace(
             entries.value().replaced(
                 SettingEntry(key: flag.key(), values: ["true"], source: source)
@@ -1182,6 +1189,7 @@ hidden object CliParsing {
             let selected = children[found];
             path.replace(path.value() + [selected]);
             command.replace(selected);
+            flagged.replace(false);
             syntax.replace(
                 CommandSyntax(
                     options: selected.options(),
@@ -1390,11 +1398,11 @@ hidden object ShellCompletion {
         let words = CompletionWords(origin).items();
         if shell == CompletionShell.fish {
             let lines is @string = words.map() -> word {
-                let declaration = if word.length() > 2 && word.slice(0, 2) == "--" {
+                let declaration = if word.length() > 2 && word.starts_with("--") {
                     " -l " + FishCompletionLiteral(word.slice(2, word.length())).string();
                 }
                 else {
-                    if word.length() == 2 && word.slice(0, 1) == "-" {
+                    if word.length() == 2 && word.starts_with("-") {
                         " -s " + FishCompletionLiteral(word.slice(1, 2)).string();
                     }
                     else {
@@ -1476,9 +1484,7 @@ hidden object CompletionNames {
     }
 
     added(name is string) is ^CompletionNames {
-        let found = origin.reduce(false) -> old, value {
-            old || value == name;
-        };
+        let found = origin.contains(name);
         if !found {
             let revised is @string = origin + [name];
             ^origin = revised;
@@ -1605,6 +1611,51 @@ test "a subcommand is the declared object; ancestor options stop at the child" {
     test.throws(CliFailure) {
         todo.invocation([]);
     };
+}
+
+test "a branch command stops at its own flag, not at an option or a parent's flag" {
+    let count = CliCommand(name: "count", operands: [Operand(name: "FILE")]);
+    let show = CliCommand(name: "show", flags: [Flag(name: "help", short: "h")]);
+    let remote = CliCommand(name: "remote", flags: [Flag(name: "help", short: "h")], commands: [show]);
+    let tally = CliCommand(
+        name: "tally",
+        options: [Option(name: "config")],
+        flags: [Flag(name: "help", short: "h"), Flag(name: "verbose", short: "v")],
+        commands: [count, remote]
+    );
+    for [["--help"], ["-h"], ["-vh"], ["--verbose"]] -> arguments {
+        let call = tally.invocation(arguments);
+        test.ok(call.command() == tally);
+        test.is(call.path(), ["tally"]);
+        test.is(call.operands(), []);
+    }
+    test.ok(tally.invocation(["--help"]).flag("help"));
+    let nested = tally.invocation(["remote", "--help"]);
+    test.ok(nested.command() == remote);
+    test.is(nested.path(), ["tally", "remote"]);
+    test.ok(nested.flag("help"));
+    test.ok(tally.invocation(["-h", "count", "a.txt"]).command() == count);
+    test.ok(tally.invocation(["remote", "show", "-h"]).command() == show);
+    let refusals is @string = [
+        [],
+        ["--config", "x"],
+        ["-h", "remote"],
+        ["--quiet"],
+    ].map() -> arguments {
+        try {
+            tally.invocation(arguments);
+            "accepted";
+        }
+        catch CliFailure.detailed(index, token, message) {
+            index.string() + " " + message;
+        };
+    };
+    test.is(refusals, [
+        "0 child command required",
+        "2 child command required",
+        "2 child command required",
+        "0 unknown option",
+    ]);
 }
 
 test "bad arguments are refused with their index" {

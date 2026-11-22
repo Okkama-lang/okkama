@@ -1,0 +1,42 @@
+// #244: smtp-client-settings; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "async/event" take Event;
+import "mail/smtp_session" take SmtpSession, SmtpConnecting, SmtpSecurity;
+import "mail/smtp" take SmtpCapabilities, SmtpExtension;
+import "mail/smtp_reply" take SmtpReply;
+import "mail/smtp_data" take SmtpDataLimits;
+import "mail/message" take MailMessage;
+import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
+import "mime/part" take TextBody;
+import "crypto/x509/trust" take TrustedCertificates;
+import "net/dns" take FixedResolution;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let connection = SmtpConnecting(host:"smtp.example.test",port:1024+v,security:SmtpSecurity.plaintext,trust:TrustedCertificates(),resolver:FixedResolution(),clock:FixedClock());
+        let extension = SmtpExtension("SIZE "+x);
+        let limits = SmtpDataLimits(v,2*v,998);
+        let contribution = extension.parameters().item(0).length()+limits::Limits::message_bytes;
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

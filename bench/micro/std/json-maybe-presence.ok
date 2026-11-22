@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "json" take ParsedJson;
+
+// Presence: 1 present, 2 null, 3 missing.
+hidden object Seen {
+    Seen();
+    of(value is Presence<int>) is int {
+        match value {
+            case Presence.some(found) { 1; }
+            case Presence.none { 2; }
+            else { 3; }
+        }
+    }
+}
+
+// The rest of the maybe readers; presence readers that tell present, null and missing apart.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let root = ParsedJson("{\"id\":" + x + ",\"name\":\"n" + x + "\",\"ok\":true,\"price\":" + x + ".5,\"none\":null," +
+            "\"tags\":[\"a\",\"b\"],\"inner\":{\"k\":" + x + "}}").root();
+        let seen = Seen();
+        let total = (if root.maybe("inner").object() == Maybe.none { 0; } else { 1; }) + (if root.maybe("absent").present() { 1; } else { 0; })
+            + (root.maybe("name").text() else "").length()
+            + seen.of(root.presence("id").int()) + seen.of(root.presence("none").integer()) + seen.of(root.presence("absent").int())
+            + (match root.presence("ok").boolean() { case Presence.some(flag) { 1; } else { 0; } });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

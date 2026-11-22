@@ -111,8 +111,8 @@ pub(super) enum Task {
     Test {
         index: usize,
     },
-    /// Intrinsic рантайма без владельца с данной сигнатурой (`test.is`,
-    /// `fake.storage.set`, …): одна функция на набор типов.
+    /// Intrinsic рантайма без владельца с данной сигнатурой (например,
+    /// `test.is`): одна функция на набор типов.
     Runtime {
         name: String,
         params: Vec<Type>,
@@ -234,10 +234,17 @@ pub(super) struct Ctx<'r, 'a> {
     /// Типы значений, принятых областями каждой задачи, чьи области
     /// закрываются `region.settle` (#328); решение — после всех тел.
     pub settle_types: Vec<Option<Vec<Type>>>,
+    /// Awaiting scope and whether the source is a lexical binding (#581).
+    pub await_regions: Vec<HashMap<ir::ValueId, (ir::ValueId, bool)>>,
     /// Some value that may reach an object with an `async destroy` is boxed
     /// as `any`, captured by a function value or owns a capability somewhere
     /// in the program (#328): then values of those types may too.
     pub dynamic_async: bool,
+    /// `once let` whose value type is plain only if function values and
+    /// role values turn out plain (#520): checked when every body is lowered,
+    /// with the closures and specializations of the whole program. Each is
+    /// (value type, object, action, span, module of the task).
+    pub once_checks: Vec<(Type, String, Span, usize)>,
     plain_roles: Vec<bool>,
     /// Plain-ность объявлений ролей по всем объявлениям объектов программы
     /// (не только уже специализированным): роль, которую делает объект с
@@ -303,7 +310,9 @@ impl<'r, 'a> Ctx<'r, 'a> {
             async_objects: Vec::new(),
             async_roles: Vec::new(),
             settle_types: Vec::new(),
+            await_regions: Vec::new(),
             dynamic_async: false,
+            once_checks: Vec::new(),
         }
     }
 
@@ -1177,7 +1186,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 _ => {}
             }
         }
-        if self.escapes_self(decl) {
+        if thir::escapes_self(self.bodies, decl) {
             let instance = &mut self.objects[id.0];
             instance.pending = Some(instance.fields.len());
             instance.fields.push((PENDING_FIELD.to_string(), Type::Bool, None));
@@ -1217,15 +1226,6 @@ impl<'r, 'a> Ctx<'r, 'a> {
             .iter()
             .find(|(m, l, _)| *m == method && *l == local)
             .map(|(_, _, field)| *field)
-    }
-
-    /// Конструктор объявления отдаёт `self` значением (§11.4): сотрудник может
-    /// получить объект, создание которого ещё не завершено.
-    fn escapes_self(&self, decl: DeclObject) -> bool {
-        self.bodies.iter().any(|body| {
-            matches!(body.owner, BodyOwner::Ctor { object, .. } if object == decl)
-                && thir::first_expr(&body.block, &|expr| matches!(expr.kind, thir::ExprKind::SelfValue)).is_some()
-        })
     }
 
     /// `does R`: функция каждого слота роли (анализ проверил соответствие).
@@ -1284,8 +1284,13 @@ impl<'r, 'a> Ctx<'r, 'a> {
                     if target.is_async {
                         own = ResultType::Value(Type::Future(Box::new(own)));
                     }
+                    // An async slot's result is `Future<role>`: its witness is async too (#790).
+                    let expected_role = match &expected {
+                        ResultType::Value(Type::Future(inner)) if target.is_async => (**inner).clone(),
+                        other => other.clone(),
+                    };
                     if let (true, ResultType::Value(result @ Type::Role(_))) =
-                        (own != expected, &expected)
+                        (own != expected, &expected_role)
                     {
                         let task = Task::Witness {
                             object: id,
@@ -1389,7 +1394,9 @@ impl<'r, 'a> Ctx<'r, 'a> {
         loop {
             let mut changed = false;
             for index in 0..self.objects.len() {
-                let plain = self.objects[index].destroy.is_none()
+                let plain = !group_decl(self.reg, self.objects[index].decl.0)
+                    && !self.carries_resource(index)
+                    && self.objects[index].destroy.is_none()
                     && self.objects[index]
                         .fields
                         .iter()
@@ -1415,6 +1422,14 @@ impl<'r, 'a> Ctx<'r, 'a> {
         }
     }
 
+    /// #587: a channel capability (`Channel<T>`, `Sending<T>`, `Receiving<T>`) owns its unread messages, so it
+    /// is not plain when `T` may be a resource (the IR's `channel_carriers`, judged here by declarations).
+    fn carries_resource(&self, index: usize) -> bool {
+        let instance = &self.objects[index];
+        channel_decl(self.reg, instance.decl.0)
+            && !instance.env.iter().all(|(_, ty)| decl_plain_ty(ty, &self.decl_plain_objects, &self.decl_plain_roles))
+    }
+
     /// Какие специализации могут достать объект с `async destroy` (#328):
     /// объект — свой асинхронный destroy или такое поле; роль — её делает
     /// такой объект. Считается, когда все тела опущены: значение роли
@@ -1431,7 +1446,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 // System objects (`Cancelled`, `NativeFailure`) have no destroy.
                 let own = self.reg.objects.get(self.objects[index].decl.0)
                     .is_some_and(|info| info.destroy.is_some_and(|destroy| destroy.is_async));
-                let reaching = own || self.objects[index].fields.iter().any(|(_, ty, _)| self.may_async_destroy(ty));
+                let reaching = own || group_decl(self.reg, self.objects[index].decl.0) || self.objects[index].fields.iter().any(|(_, ty, _)| self.may_async_destroy(ty));
                 if !self.async_objects[index] && reaching {
                     self.async_objects[index] = true;
                     changed = true;
@@ -1474,6 +1489,12 @@ impl<'r, 'a> Ctx<'r, 'a> {
             }),
             Type::Array(element) | Type::Builder(element) => self.may_async_destroy(element),
             Type::Map(_, value) | Type::MapBuilder(_, value) => self.may_async_destroy(value),
+            // A borrowed await leaves the outcome in this Future's cache.
+            // Closing its owner may therefore have to await that destroy.
+            Type::Future(outcome) => match &**outcome {
+                ResultType::Value(value) => self.may_async_destroy(value),
+                ResultType::Void => false,
+            },
             Type::Any | Type::Fn(_) | Type::Cap(_) => self.dynamic_async,
             _ => false,
         }
@@ -1502,9 +1523,96 @@ impl<'r, 'a> Ctx<'r, 'a> {
             }),
             Type::Array(element) | Type::Builder(element) => self.is_plain(element),
             Type::Map(_, value) | Type::MapBuilder(_, value) => self.is_plain(value),
-            // В box и в захватах может лежать объект: владение отслеживается.
-            Type::Any | Type::Fn(_) | Type::Cap(_) => false,
+            // Boxes, captures and Future dependencies may retain owned objects.
+            Type::Any | Type::Fn(_) | Type::Cap(_) | Type::Future(_) => false,
             _ => true,
+        }
+    }
+
+    /// Whether the type may be plain once function and role values are
+    /// judged with the whole program (#520): `is_plain` with every function
+    /// value and every role taken as plain. A type that fails even this
+    /// reaches an object with `destroy` directly and is refused at once.
+    pub fn plain_but_for_values(&self, ty: &Type) -> bool {
+        let objects = self.settled_objects(&|_| true, &|_| true);
+        settled_plain(ty, &objects, &|_| true, &|_| true, &|id| self.variant_plain(id, &objects))
+    }
+
+    /// A variant is plain when the objects of all its cases are.
+    fn variant_plain(&self, id: usize, objects: &[bool]) -> bool {
+        self.variants
+            .get(id)
+            .is_none_or(|variant| variant.cases.iter().all(|(_, object)| objects.get(object.0).copied().unwrap_or(true)))
+    }
+
+    /// Plainness when every body is lowered (#520). A function value is
+    /// created only by `fn.closure` (a lambda or a bound action) with a
+    /// snapshot of its captures, so values of one signature are plain when
+    /// every closure of that signature captures only plain values. A role
+    /// value holds only an object whose specialization exists by now, as
+    /// for `async destroy` (#328), so a role is plain when every object that
+    /// does it is. `any` and capabilities stay conservative. A fixed point:
+    /// closures capture closures and objects hold roles.
+    pub fn settled_plain_types(&self, closures: &[(ir::FnSig, Vec<Type>)]) -> SettledPlain {
+        let mut fns: HashMap<ir::FnSig, bool> = closures.iter().map(|(sig, _)| (sig.clone(), true)).collect();
+        let mut roles = vec![true; self.roles.len()];
+        loop {
+            let fn_plain = |sig: &ir::FnSig| fns.get(sig).copied().unwrap_or(true);
+            let role_plain = |role: usize| roles.get(role).copied().unwrap_or(true);
+            let objects = self.settled_objects(&fn_plain, &role_plain);
+            let mut changed = false;
+            let mut next_roles = roles.clone();
+            for (index, object) in self.objects.iter().enumerate() {
+                if !objects[index] {
+                    for (role, _) in &object.does {
+                        if next_roles[role.0] {
+                            next_roles[role.0] = false;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            let mut next_fns = fns.clone();
+            let variant_plain = |id: usize| self.variant_plain(id, &objects);
+            for (sig, captures) in closures {
+                if next_fns[sig] && !captures.iter().all(|ty| settled_plain(ty, &objects, &fn_plain, &role_plain, &variant_plain)) {
+                    next_fns.insert(sig.clone(), false);
+                    changed = true;
+                }
+            }
+            if !changed {
+                let variants = (0..self.variants.len()).map(|id| self.variant_plain(id, &objects)).collect();
+                return SettledPlain { objects, roles, fns, variants };
+            }
+            roles = next_roles;
+            fns = next_fns;
+        }
+    }
+
+    /// Objects without `destroy` whose fields are plain, given how function
+    /// and role values are judged.
+    fn settled_objects(&self, fn_plain: &dyn Fn(&ir::FnSig) -> bool, role_plain: &dyn Fn(usize) -> bool) -> Vec<bool> {
+        let mut objects = vec![true; self.objects.len()];
+        // One snapshot per pass: a field is judged by the previous pass, and
+        // the table only ever turns true into false, so it settles.
+        loop {
+            let snapshot = objects.clone();
+            let variant_plain = |id: usize| self.variant_plain(id, &snapshot);
+            let mut changed = false;
+            for (index, object) in self.objects.iter().enumerate() {
+                let plain = !group_decl(self.reg, object.decl.0) && !self.carries_resource(index) && object.destroy.is_none()
+                    && object
+                        .fields
+                        .iter()
+                        .all(|(_, ty, _)| settled_plain(ty, &snapshot, fn_plain, role_plain, &variant_plain));
+                if objects[index] && !plain {
+                    objects[index] = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return objects;
+            }
         }
     }
 
@@ -1644,6 +1752,52 @@ fn module_path(program: &ast::Program) -> String {
 
 /// Plain-ность типа анализа на уровне объявлений: параметры типа plain
 /// (их подстановку учитывают аргументы), коробки и функции — нет.
+/// Plainness of a whole lowered program (#520): see
+/// `Ctx::settled_plain_types`.
+pub struct SettledPlain {
+    objects: Vec<bool>,
+    roles: Vec<bool>,
+    fns: HashMap<ir::FnSig, bool>,
+    variants: Vec<bool>,
+}
+
+impl SettledPlain {
+    pub fn is_plain(&self, ty: &Type) -> bool {
+        settled_plain(
+            ty,
+            &self.objects,
+            &|sig| self.fns.get(sig).copied().unwrap_or(true),
+            &|role| self.roles.get(role).copied().unwrap_or(true),
+            &|id| self.variants.get(id).copied().unwrap_or(true),
+        )
+    }
+}
+
+/// `Ctx::is_plain` with given tables for objects and given judgements of
+/// function and role values.
+fn settled_plain(
+    ty: &Type,
+    objects: &[bool],
+    fn_plain: &dyn Fn(&ir::FnSig) -> bool,
+    role_plain: &dyn Fn(usize) -> bool,
+    variant_plain: &dyn Fn(usize) -> bool,
+) -> bool {
+    match ty {
+        Type::Object(object) | Type::Successor(object) => objects.get(object.0).copied().unwrap_or(true),
+        Type::Role(role) => role_plain(role.0),
+        Type::Variant(id) => variant_plain(id.0),
+        Type::Array(element) | Type::Builder(element) => {
+            settled_plain(element, objects, fn_plain, role_plain, variant_plain)
+        }
+        Type::Map(_, value) | Type::MapBuilder(_, value) => {
+            settled_plain(value, objects, fn_plain, role_plain, variant_plain)
+        }
+        Type::Fn(sig) => fn_plain(sig),
+        Type::Any | Type::Cap(_) | Type::Future(_) => false,
+        _ => true,
+    }
+}
+
 fn decl_plain_ty(ty: &Ty, objects: &[bool], roles: &[bool]) -> bool {
     match ty {
         Ty::Object(object, args) => {
@@ -1654,9 +1808,21 @@ fn decl_plain_ty(ty: &Ty, objects: &[bool], roles: &[bool]) -> bool {
         }
         Ty::Array(element) | Ty::Successor(element) => decl_plain_ty(element, objects, roles),
         Ty::Map(_, value) => decl_plain_ty(value, objects, roles),
-        Ty::Any | Ty::Action(_) | Ty::Cap(..) | Ty::Variant(..) => false,
+        Ty::Any | Ty::Action(_) | Ty::Cap(..) | Ty::Variant(..) | Ty::Future(_) => false,
         _ => true,
     }
+}
+
+/// A group's intrinsic registration retains Futures outside its declared fields.
+fn group_decl(reg: &Registry<'_>, object: usize) -> bool {
+    reg.objects.get(object).is_some_and(|info|
+        info.name == "FutureGroup" && reg.modules[info.module].name == "async/scope")
+}
+
+/// The channel capabilities of `async/channel`, which own their unread messages (#587).
+fn channel_decl(reg: &Registry<'_>, object: usize) -> bool {
+    reg.objects.get(object).is_some_and(|info|
+        matches!(info.name.as_str(), "Channel" | "Sending" | "Receiving") && reg.modules[info.module].name == "async/channel")
 }
 
 /// Объявления объектов без `destroy`, чьи поля plain (при данных ролях).
@@ -1665,7 +1831,7 @@ fn decl_plain_objects(reg: &Registry<'_>, roles: &[bool]) -> Vec<bool> {
     loop {
         let mut changed = false;
         for (index, info) in reg.objects.iter().enumerate() {
-            let plain = info.destroy.is_none()
+            let plain = !group_decl(reg, index) && info.destroy.is_none()
                 && info
                     .fields
                     .iter()

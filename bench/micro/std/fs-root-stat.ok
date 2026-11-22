@@ -1,0 +1,53 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/environment" take Environment;
+import "fs/temp" take TemporaryDirectory;
+import "fs/file" take File, FileMode;
+import "fs/root" take FileRoot;
+import "fs/directory" take Directory;
+import "fs/stat" take FileStatFromMap;
+import "fs/error" take FileError;
+
+// Entries under a confined root: names of a directory, a piece read off-thread, a stat; runtime stat fields mapped; a missing file refused.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-fs-");
+        let root = scratch.path();
+        Directory(path: root.child("d")).create();
+        File(path: root.child("d").child("a" + x), mode: FileMode.writing).text().write("0123456789");
+        File(path: root.child("d").child("b"), mode: FileMode.writing).text().write("z");
+        let confined = FileRoot(scratch);
+        let names = confined.entry(["d"]).names(10).size();
+        let entry = confined.entry(["d", "a" + x]);
+        let piece = await entry.piece(i % 5, 3);
+        let size = entry.stat()::Shape::size;
+        entry.close();
+        confined.close();
+        let mapped = FileStatFromMap(origin: ["kind": 0, "size": v, "permissions": 420, "accessed_sec": 1, "modified_sec": 2, "changed_sec": 3,
+            "created_sec": -1, "device": 1, "inode": 2]).stat()::Shape::size;
+        let missing = try { File(path: root.child("none")).text().content().length(); } catch e is FileError { 7; };
+        scratch.close();
+        let total = names + 10 * piece[0].int() + 1000 * size + 10000 * mapped + 100000 * missing;
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

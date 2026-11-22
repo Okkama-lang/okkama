@@ -1,5 +1,5 @@
 //! Программа Sparrow — регистровый байткод Okkama (SPB 9), независимый от
-//! компилятора. Генератор переводит OIR-1 в эту модель (как в JVM-байткод),
+//! компилятора. Генератор переводит OIR-1 в эту модель ,
 //! VM исполняет её над общим рантаймом `okkama-runtime-core`.
 //!
 //! Функция — плоский массив инструкций над регистрами кадра; переходы — по
@@ -8,6 +8,9 @@
 //! Таблицы типов, объектов, ролей, enum, caps и функций — часть файла: VM не
 //! нужен исходник. Бинарная форма — [`encode`]/[`decode`], текстовая
 //! (ассемблер) — [`assemble`]/[`disassemble`]; обе однозначны и обратимы.
+
+pub mod layout;
+pub mod session;
 
 mod asm;
 mod codec;
@@ -18,7 +21,7 @@ mod verify;
 
 pub use asm::{AsmError, assemble, disassemble};
 pub use codec::{CodecError, MAX_FILE_BYTES, VERSION, decode, encode};
-pub use liveness::{MAX_LIVENESS_BYTES, live_counts, live_sets, live_weight, written};
+pub use liveness::{LiveSets, MAX_LIVENESS_BYTES, live_counts, live_sets, live_weight, written};
 pub use okkama_runtime_abi as abi;
 pub use operand::{Access, Operand};
 
@@ -380,6 +383,8 @@ instructions! {
     CallRole = 123, "call.role" { dst: Option<Dst>, receiver: Register, role: RoleRef, slot: u32, args: Vec<Register> }
     /// Поле cap вычисляется заново над владельцем (§8.5).
     CallCap = 124, "call.cap" { dst: Dst, cap: Register, ty: CapRef, field: u32 }
+    /// Consume the outcome of a compiler-proven unique temporary Future.
+    AwaitTake = 157, "await.take" { dst: Option<Dst>, future: Register }
     Await = 125, "await" { dst: Option<Dst>, future: Register }
     /// Запустить Future сейчас; результат — тот же Future.
     FutSpawn = 126, "fut.spawn" { dst: Dst, future: Register }
@@ -404,6 +409,17 @@ instructions! {
     RegionSettleUnwind = 139, "region.settle_unwind" { dst: Dst, region: Register, failure: Register }
     FailSecondary = 136, "fail.secondary" { dst: Dst, primary: Register, cleanup: Register }
     FailCaused = 137, "fail.caused" { dst: Dst, new: Register, handled: Register }
+    /// #909 2b: a static resource (its identity never leaves the scope); no region walk adopts it.
+    ResourcePin = 158, "resource.pin" { value: Register }
+    /// Destroy a pinned resource at its scope's exit, once; a destroy failure fails the instruction.
+    ResourceLeave = 159, "resource.leave" { value: Register }
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceUnwind = 160, "resource.unwind" { dst: Dst, value: Register, failure: Register }
+    /// #329: `resource.leave` of a static resource with an async destroy: a suspension point like
+    /// `region.settle` (the destroy is awaited shielded); a destroy failure fails the instruction.
+    ResourceSettle = 161, "resource.settle" { value: Register }
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceSettleUnwind = 162, "resource.settle_unwind" { dst: Dst, value: Register, failure: Register }
 
     Jump = 140, "jmp" { target: Target }
     Branch = 141, "br" { condition: Register, then_target: Target, else_target: Target }

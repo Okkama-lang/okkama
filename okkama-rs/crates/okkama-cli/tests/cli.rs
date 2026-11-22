@@ -76,7 +76,7 @@ fn example(name: &str) -> String {
 }
 
 #[test]
-fn native_stdio_preserves_bytes_and_shared_input_state_in_both_engines() {
+fn native_stdio_preserves_bytes_in_source_and_bytecode_runs() {
     let source = TempFile::new(
         "native-stdio.ok",
         br#"module app v1.0.0;
@@ -92,16 +92,14 @@ fn native_stdio_preserves_bytes_and_shared_input_state_in_both_engines() {
     let bytecode = TempFile::absent("native-stdio.spb");
     let input = b"one\r\nabtail\n";
     let expected = [input.as_slice(), &[0, 255]].concat();
-    let ir = run_stdin(&["run", source.path()], input);
-    assert_eq!(ir.status.code(), Some(0), "{}", stderr(&ir));
-    assert_eq!(ir.stdout, expected);
-    assert_eq!(ir.stderr, b"E\n");
+    let source_run = run_stdin(&["run", source.path()], input);
+    assert_eq!(source_run.status.code(), Some(0), "{}", stderr(&source_run));
+    assert_eq!(source_run.stdout, expected);
+    assert_eq!(source_run.stderr, b"E\n");
     let build = run_stdin(
         &[
             "build",
             source.path(),
-            "--target",
-            "sparrow",
             "-o",
             bytecode.path(),
         ],
@@ -115,8 +113,8 @@ fn native_stdio_preserves_bytes_and_shared_input_state_in_both_engines() {
 }
 
 #[test]
-fn standard_stdout_uses_real_native_providers_in_the_ir_interpreter() {
-    let source = TempFile::new("stdlib-stdout-ir.ok", "module app v1.0.0; import \"io/stdout\" take Stdout, Stderr; main() is int { Stdout().writeln(\"Aé🙂\"); Stderr().write(\"error\"); 0; }".as_bytes());
+fn standard_stdout_uses_real_native_providers_on_sparrow() {
+    let source = TempFile::new("stdlib-stdout.ok", "module app v1.0.0; import \"io/stdout\" take Stdout, Stderr; main() is int { Stdout().writeln(\"Aé🙂\"); Stderr().write(\"error\"); 0; }".as_bytes());
     let output = run_stdin(&["run", source.path()], b"");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "Aé🙂\n");
@@ -136,7 +134,8 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
         ),
     )
     .unwrap();
-    for engine in ["ir", "sparrow"] {
+    {
+        let engine = "sparrow";
         for (body, outcome, code) in [
             ("6 * 7;", "completed", 42),
             ("256;", "failed", 1),
@@ -186,38 +185,21 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
 }
 
 #[test]
-fn ocs_capabilities_follow_the_selected_engine() {
-    for engine in ["ir", "sparrow", "jvm"] {
-        let output = okkama()
-            .arg("--ocs-capabilities")
-            .env("OCS_RUST_ENGINE", engine)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(stdout(&output).contains(&format!("\"engine\": \"{engine}\"")));
-        // Все движки исполняют весь язык, включая режим тестов.
-        assert!(stdout(&output).contains("\"test\""), "{engine}");
+fn ocs_capabilities_report_sparrow_with_every_mode() {
+    // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
+    let output = okkama().arg("--ocs-capabilities").env_remove("OCS_RUST_ENGINE").output().unwrap();
+    assert!(output.status.success());
+    assert!(stdout(&output).contains("\"engine\": \"sparrow\""));
+    for mode in ["\"parse\"", "\"check\"", "\"run\"", "\"test\""] {
+        assert!(stdout(&output).contains(mode), "{mode}");
     }
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env_remove("OCS_RUST_ENGINE")
-        .output()
-        .unwrap();
-    // Как `okkama run`: IR по умолчанию.
-    assert!(stdout(&output).contains("\"engine\": \"ir\""));
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env("OCS_RUST_ENGINE", "typo")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]
 fn sparrow_build_and_exec_need_neither_source_nor_java() {
     let artifact = TempFile::absent("sparrow-roundtrip.spb");
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { let a = 20; a + 22; }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -232,13 +214,38 @@ fn sparrow_build_and_exec_need_neither_source_nor_java() {
     assert!(output.stderr.is_empty());
 }
 
+/// One engine (Tweed, 2026-11-20): every form of `run` executes on Sparrow, and a stale `OKKAMA_ENGINE` in the
+/// environment changes nothing. Sparrow's statistics tell it ran.
+#[test]
+fn every_run_form_executes_on_sparrow_whatever_the_environment() {
+    let source = TempFile::new(
+        "default-engine.ok",
+        br#"module app v1.0.0; main() is int { 0; } test "default" { test.ok(true); }"#,
+    );
+    for prefix in [&[][..], &["run"][..], &["run", "-t"][..], &["-t"][..]] {
+        for environment in [None, Some(""), Some("typo"), Some("ir"), Some("jvm")] {
+            let mut command = okkama();
+            command.args(prefix).arg(source.path()).env("SPARROW_CORE_STATS", "1").env_remove("OKKAMA_ENGINE");
+            if let Some(engine) = environment {
+                command.env("OKKAMA_ENGINE", engine);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{prefix:?}, env={environment:?}: {}", stderr(&output));
+            assert!(stderr(&output).contains("heap bytes allocated"), "{prefix:?}, env={environment:?}");
+            if prefix.contains(&"-t") {
+                assert!(stdout(&output).contains("--- PASS: default"), "{}", stdout(&output));
+            }
+        }
+    }
+}
+
 #[test]
 fn native_run_engines_execute_source_without_java() {
     let source = TempFile::new(
         "native-engines.ok",
         b"module app v1.0.0; main() is int { 6 * 7; }",
     );
-    // По умолчанию `run` — IR-интерпретатор в процессе: java не нужна.
+    // По умолчанию `run` — Sparrow в процессе: java не нужна.
     let output = okkama()
         .args(["run", source.path()])
         .env("PATH", "")
@@ -247,19 +254,9 @@ fn native_run_engines_execute_source_without_java() {
         .unwrap();
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
     assert!(output.stderr.is_empty());
-    // OKKAMA_ENGINE меняет умолчание; JVM без java в PATH — явная ошибка, а
-    // не тихий переход на другой движок.
-    let output = okkama()
-        .args(["run", source.path()])
-        .env("PATH", "")
-        .env("OKKAMA_ENGINE", "jvm")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
-    assert!(stderr(&output).contains("cannot start java"));
-    for engine in ["ir", "sparrow"] {
+    {
         let output = okkama()
-            .args(["run", "--engine", engine, source.path()])
+            .args(["run", source.path()])
             .env("PATH", "")
             .output()
             .unwrap();
@@ -268,12 +265,12 @@ fn native_run_engines_execute_source_without_java() {
         assert!(output.stderr.is_empty());
     }
     let output = run_stdin(
-        &["run", "--engine", "ir", "-"],
+        &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [[1, 2], [40]]; xs[0][1] + xs[1][0]; }",
     );
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
     let output = run_stdin(
-        &["run", "--engine", "ir", "-"],
+        &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [1]; xs[2]; }",
     );
     assert_eq!(output.status.code(), Some(1));
@@ -298,8 +295,9 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
           test \"through catch\" { try { test.skip(\"uncaught\"); } catch e is Error { test.fail(\"caught\"); } }\n\
           test \"failed first\" { test.is(1, 2); test.skip(\"too late\"); }\n",
     );
-    for engine in ["ir", "sparrow"] {
-        let output = run(&["run", "--engine", engine, "-t", source.path()]);
+    {
+        let engine = "sparrow";
+        let output = run(&["run", "-t", source.path()]);
         assert_eq!(output.status.code(), Some(1), "{engine}: {}", stderr(&output));
         assert_eq!(
             stdout(&output),
@@ -311,7 +309,7 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
             "{engine}"
         );
         let output = run(&[
-            "run", "--engine", engine, "-t", "--filter", "skip", "--filter", "private", source.path(),
+            "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
         ]);
         assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
         assert_eq!(
@@ -320,7 +318,9 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
              === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
             "{engine}"
         );
-        let output = run(&["run", "--engine", engine, "-t", "--filter", "nothing", source.path()]);
+        // A filter that selects nothing keeps its existing error behaviour
+        // (owner's #339 review): exit 1, not the runner's 4.
+        let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
     }
@@ -329,8 +329,233 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
     assert!(stderr(&output).contains("--filter selects tests: use it with -t"));
 }
 
+const REPORTED: &str = "module app v1.0.0;\n\
+    import \"random/source\" take PcgRandom;\n\
+    import \"io/stdout\" take Stdout;\n\
+    test \"first\" { test.ok(true); }\n\
+    test \"second <&>\" { Stdout().writeln(\"printed by second\"); test.is(\"a\\\"b\", \"c\"); }\n\
+    test \"third\" { test.skip(\"not 'today'\"); }\n\
+    test \"fourth\" { test.is(PcgRandom(7).bytes(3), [byte(215), byte(136), byte(231)]); }\n";
+
+fn run_with_std(args: &[&str]) -> Output {
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    okkama().env("OKKAMA_STDLIB_DIR", std).args(args).output().expect("run okkama")
+}
+
+/// #339: one report of a run, shown as people read it (the default), as one
+/// JSON document or as JUnit XML; machine formats own stdout. Tests are listed
+/// in declaration order, and a seed orders the run reproducibly.
+#[test]
+fn test_reports_list_every_test_and_a_seed_orders_the_run() {
+    let source = TempFile::new("reported.ok", REPORTED.as_bytes());
+    let human = run_with_std(&["run", "-t", source.path()]);
+    assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+    assert_eq!(
+        stdout(&human),
+        "=== RUN   first\n--- PASS: first\n\
+         === RUN   second <&>\nprinted by second\n--- FAIL: second <&>\n    expected \"c\", got \"a\"b\"\n\
+         === RUN   third\n--- SKIP: third\n    not 'today'\n\
+         === RUN   fourth\n--- PASS: fourth\nFAIL\n"
+    );
+    let named = run_with_std(&["run", "-t", "--report", "human", source.path()]);
+    assert_eq!(stdout(&named), stdout(&human));
+
+    let json = run_with_std(&["run", "-t", "--report", "json", source.path()]);
+    assert_eq!(json.status.code(), Some(1));
+    assert_eq!(stderr(&json), "printed by second\n");
+    let document: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("one JSON document");
+    assert_eq!(document["seed"], serde_json::Value::Null);
+    assert_eq!(document["passed"], false);
+    assert_eq!(document["totals"], serde_json::json!({"tests": 4, "passed": 2, "failed": 1, "skipped": 1}));
+    let names: Vec<&str> = document["tests"].as_array().unwrap().iter().map(|test| test["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["first", "second <&>", "third", "fourth"]);
+    assert_eq!(document["tests"][1]["failures"], serde_json::json!(["expected \"c\", got \"a\"b\""]));
+    assert_eq!(document["tests"][2]["reason"], "not 'today'");
+
+    let junit = run_with_std(&["run", "-t", "--report", "junit", source.path()]);
+    assert_eq!(junit.status.code(), Some(1));
+    let xml = stdout(&junit);
+    assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites tests=\"4\" failures=\"1\" errors=\"0\" skipped=\"1\">\n"));
+    assert!(xml.contains("<testcase name=\"second &lt;&amp;&gt;\""));
+    assert!(xml.contains("<failure message=\"expected &quot;c&quot;, got &quot;a&quot;b&quot;\">"));
+    assert!(xml.contains("<skipped message=\"not &apos;today&apos;\"/>"));
+    assert!(!xml.contains("printed by second"));
+
+    let order = sparrow_core::test_report::execution_order(4, Some(3));
+    assert_ne!(order, [0, 1, 2, 3], "seed 3 must reorder four tests");
+    let seeded = run_with_std(&["run", "-t", "--seed", "3", source.path()]);
+    let again = run_with_std(&["run", "-t", "--seed", "3", source.path()]);
+    assert_eq!(stdout(&seeded), stdout(&again));
+    assert!(stdout(&seeded).starts_with("=== SEED  3\n"));
+    let declared = ["first", "second <&>", "third", "fourth"];
+    let seeded_text = stdout(&seeded);
+    let ran: Vec<&str> = seeded_text.lines().filter_map(|line| line.strip_prefix("=== RUN   ")).collect();
+    let wanted: Vec<&str> = order.iter().map(|&index| declared[index]).collect();
+    assert_eq!(ran, wanted);
+    // The property generator's PCG stream is the run's own: fourth passes in any order.
+    assert!(stdout(&seeded).contains("--- PASS: fourth\n"));
+    let seeded_json: serde_json::Value =
+        serde_json::from_str(&stdout(&run_with_std(&["run", "-t", "--report", "json", "--seed", "3", source.path()]))).unwrap();
+    assert_eq!(seeded_json["seed"], 3);
+    let executions: Vec<u64> = seeded_json["tests"].as_array().unwrap().iter().map(|test| test["execution"].as_u64().unwrap()).collect();
+    for (position, &index) in order.iter().enumerate() {
+        assert_eq!(executions[index], position as u64);
+    }
+    let filtered = run_with_std(&["run", "-t", "--seed", "3", "--filter", "i", source.path()]);
+    let kept: Vec<String> = stdout(&filtered).lines().filter_map(|line| line.strip_prefix("=== RUN   ")).map(str::to_owned).collect();
+    let selected = ["first", "third"];
+    let wanted: Vec<String> = sparrow_core::test_report::execution_order(2, Some(3)).iter().map(|&index| selected[index].to_owned()).collect();
+    assert_eq!(kept, wanted);
+
+    for (args, message) in [
+        (vec!["run", "-t", "--report", "tap"], "unknown report format `tap`: use human, json or junit"),
+        (vec!["run", "-t", "--seed", "-1"], "--seed needs a whole number from 0 to 9007199254740991, not `-1`"),
+        (vec!["run", "-t", "--seed", "9007199254740992"], "not `9007199254740992`"),
+        (vec!["run", "-t", "--seed", "x"], "not `x`"),
+        (vec!["run", "--seed", "1"], "--seed orders tests: use it with -t"),
+        (vec!["run", "--report", "json"], "--report reports tests: use it with -t"),
+    ] {
+        let mut args = args;
+        args.push(source.path());
+        let output = run_with_std(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(stderr(&output).contains(message), "{args:?}: {}", stderr(&output));
+    }
+    let broken = TempFile::new("broken.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(missing); }\n");
+    assert_eq!(run_with_std(&["run", "-t", broken.path()]).status.code(), Some(4));
+    let passing = TempFile::new("passing.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(true); }\n");
+    assert_eq!(run_with_std(&["run", "-t", "--report", "junit", passing.path()]).status.code(), Some(0));
+}
+
+const SUB_CASES: &str = "module app v1.0.0;\n\
+    import \"io/stdout\" take Stdout;\n\
+    enum NoTariff is Error = (weight(grams is int));\n\
+    test \"postage\" {\n\
+        for [20, 50, 100, 250] -> grams {\n\
+            test.case(grams.string() + \" g\") {\n\
+                Stdout().writeln(\"ran \" + grams.string());\n\
+                test.is(grams % 50 == 0 || grams == 20, true);\n\
+                if grams == 50 { test.is(grams, 51); }\n\
+                if grams == 250 { throw NoTariff.weight(grams); }\n\
+            };\n\
+        }\n\
+    }\n\
+    test \"setup fails\" { throw NoTariff.weight(0); test.case(\"never\") { test.ok(true); }; }\n\
+    test \"duplicates\" { test.case(\"a\") { test.ok(true); }; test.case(\"a\") { test.ok(false); }; test.case(\"c\") { test.ok(true); }; }\n\
+    test \"skip\" { test.case(\"b\") { test.skip(\"later\"); }; test.case(\"never\") { test.ok(false); }; }\n\
+    test \"nested\" { test.case(\"outer\") { test.case(\"inner\") { test.ok(true); }; }; test.case(\"never\") { test.ok(false); }; }\n\
+    async test \"async cases\" { test.case(\"awaited\") { test.is(await Value().seven(), 7); }; }\n\
+    object Value { Value(); async seven() is int { 7; } }\n\
+    test \"plain\" { test.ok(true); }\n";
+
+/// #809: `test.case(name) { … }` gives a test named sub-cases that the report
+/// lists under it and `--filter TEST/CASE` selects; a failed or throwing
+/// sub-case fails its test and the next ones still run.
+#[test]
+fn sub_cases_are_reported_under_their_test_and_selected_by_name() {
+    let source = TempFile::new("subcases.ok", SUB_CASES.as_bytes());
+    let output = run_with_std(&["run", "-t", source.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   postage\nran 20\nran 50\nran 100\nran 250\n\
+         \x20   --- PASS: postage/20 g\n\
+         \x20   --- FAIL: postage/50 g\n        expected 51, got 50\n\
+         \x20   --- PASS: postage/100 g\n\
+         \x20   --- FAIL: postage/250 g\n        NoTariff.weight(250)\n\
+         --- FAIL: postage\n\
+         === RUN   setup fails\n--- FAIL: setup fails\n    NoTariff: NoTariff.weight(0)\n\
+         === RUN   duplicates\n\
+         \x20   --- PASS: duplicates/a\n\
+         \x20   --- PASS: duplicates/c\n\
+         --- FAIL: duplicates\n    duplicate sub-case \"a\": a name runs once\n\
+         === RUN   skip\n\
+         \x20   --- SKIP: skip/b\n        later\n\
+         --- PASS: skip\n\
+         === RUN   nested\n\
+         \x20   --- FAIL: nested/outer\n        RuntimeError: test.case \"inner\" inside test.case \"outer\": sub-cases do not nest\n\
+         --- FAIL: nested\n\
+         === RUN   async cases\n    --- PASS: async cases/awaited\n--- PASS: async cases\n\
+         === RUN   plain\n--- PASS: plain\nFAIL\n"
+    );
+
+    // Only the sub-cases whose names contain the text after the slash run;
+    // the others' blocks do not.
+    let selected = run_with_std(&["run", "-t", "--filter", "postage/100", source.path()]);
+    assert_eq!(selected.status.code(), Some(0), "{}", stderr(&selected));
+    assert_eq!(stdout(&selected), "=== RUN   postage\nran 100\n    --- PASS: postage/100 g\n--- PASS: postage\nPASS\n");
+    let whole = run_with_std(&["run", "-t", "--filter", "postage", source.path()]);
+    assert!(stdout(&whole).contains("ran 20\nran 50\nran 100\nran 250\n"));
+    let none = run_with_std(&["run", "-t", "--filter", "postage/7", source.path()]);
+    assert_eq!(none.status.code(), Some(0));
+    assert_eq!(stdout(&none), "=== RUN   postage\n--- SKIP: postage\n    no sub-case matches the filter\nPASS\n");
+    let nothing = run_with_std(&["run", "-t", "--filter", "nobody/x", source.path()]);
+    assert_eq!(nothing.status.code(), Some(1));
+
+    let json = run_with_std(&["run", "-t", "--report", "json", "--filter", "postage", source.path()]);
+    let document: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let test = &document["tests"][0];
+    assert_eq!(test["outcome"], "failed");
+    let ids: Vec<&str> = test["cases"].as_array().unwrap().iter().map(|case| case["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["postage/20 g", "postage/50 g", "postage/100 g", "postage/250 g"]);
+    assert_eq!(test["cases"][1]["failures"], serde_json::json!(["expected 51, got 50"]));
+    assert_eq!(document["totals"], serde_json::json!({"tests": 4, "passed": 2, "failed": 2, "skipped": 0}));
+    let junit = stdout(&run_with_std(&["run", "-t", "--report", "junit", "--filter", "duplicates", "--filter", "skip", source.path()]));
+    assert!(junit.contains("<testsuites tests=\"4\" failures=\"1\" errors=\"0\" skipped=\"1\">"), "{junit}");
+    assert!(junit.contains("<testcase name=\"skip/b\" classname="), "{junit}");
+    assert!(junit.contains("<testcase name=\"duplicates\" classname="), "{junit}");
+    assert!(!junit.contains("<testcase name=\"skip\" classname="), "{junit}");
+}
+
+/// Unequal objects, variants and nested values in a failing check show their values, not heap
+/// identities (#756); Champ's test mode shows the same text (`champ_cases_tests.rs`).
+const SHOWN_VALUES: &str = "module app v1.0.0;\n\
+    import \"time/duration\" take Duration;\n\
+    enum Shape = (dot, rect(w is int, h is int));\n\
+    enum Down is Error = (unavailable(code is int));\n\
+    object Point { has x is int; has label is string; Point(:x, :label); }\n\
+    object Box<T> { has v is T; Box(:v); }\n\
+    object Cached { has n is int; Cached(:n); twice() is int { once let doubled = n * 2; doubled; } }\n\
+    test \"values\" {\n\
+    \x20   test.is(Duration(seconds: 1), Duration(seconds: 2));\n\
+    \x20   test.is(Point(x: 1, label: \"a\\\"b\"), Point(x: 2, label: \"c\"));\n\
+    \x20   test.is(Box(v: Shape.rect(1, 2)), Box(v: Shape.dot));\n\
+    \x20   test.is(Box(v: [1, 2]), Box(v: [3]));\n\
+    \x20   test.is(Down.unavailable(3), Down.unavailable(4));\n\
+    \x20   test.isnt(Maybe.some(Point(x: 1, label: \"\")), Maybe.some(Point(x: 1, label: \"\")));\n\
+    \x20   test.is([Point(x: 1, label: \"p\")], [Point(x: 2, label: \"q\")]);\n\
+    \x20   let cached = Cached(n: 4);\n\
+    \x20   test.is(cached.twice(), 8);\n\
+    \x20   test.isnt(cached, Cached(n: 4));\n\
+    }\n";
+
+const SHOWN_VALUES_REPORT: &str = "=== RUN   values\n\
+    --- FAIL: values\n\
+    \x20   expected Duration(origin: 2), got Duration(origin: 1)\n\
+    \x20   expected Point(x: 2, label: \"c\"), got Point(x: 1, label: \"a\\\"b\")\n\
+    \x20   expected Box<Shape>(v: Shape.dot), got Box<Shape>(v: Shape.rect(1, 2))\n\
+    \x20   expected Box<@int>(v: [3]), got Box<@int>(v: [1, 2])\n\
+    \x20   expected Down.unavailable(4), got Down.unavailable(3)\n\
+    \x20   expected values to differ, both were Maybe.some(Point(x: 1, label: \"\"))\n\
+    \x20   expected [Point(x: 2, label: \"q\")], got [Point(x: 1, label: \"p\")]\n\
+    \x20   expected values to differ, both were Cached(n: 4)\n\
+    FAIL\n";
+
+#[test]
+fn failed_checks_show_objects_and_variants_by_value() {
+    let source = TempFile::new("shown.ok", SHOWN_VALUES.as_bytes());
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let output = okkama()
+        .args(["run", "-t", source.path()])
+        .env("OKKAMA_STDLIB_DIR", &std)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(stdout(&output), SHOWN_VALUES_REPORT);
+}
+
 /// The channel examples the channel guide shows (#341) print what their
-/// `.expected` files say on the IR engine and on Sparrow.
+/// `.expected` files say on Sparrow.
 #[test]
 fn channel_examples_print_their_expected_output() {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/channels");
@@ -341,8 +566,9 @@ fn channel_examples_print_their_expected_output() {
             continue;
         }
         let expected = std::fs::read_to_string(path.with_extension("expected")).unwrap();
-        for engine in ["ir", "sparrow"] {
-            let output = run(&["run", "--engine", engine, "--timeout", "30", path.to_str().unwrap()]);
+        {
+            let engine = "sparrow";
+            let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
             assert_eq!(output.status.code(), Some(0), "{} {engine}: {}", path.display(), stderr(&output));
             assert_eq!(stdout(&output), expected, "{} {engine}", path.display());
         }
@@ -355,8 +581,9 @@ fn channel_examples_print_their_expected_output() {
 fn uncaught_failure_prints_place_and_call_stack() {
     let source = b"module app v1.0.0;\nobject Box {\n    Box();\n    at(i is int) is int { [1, 2][i]; }\n}\nmain() is int {\n    Box().at(5);\n}\n";
     // Every engine reports the place and the call stack (the core since #10).
-    for engine in ["ir", "sparrow"] {
-        let output = run_stdin(&["run", "--engine", engine, "-"], source);
+    {
+        let engine = "sparrow";
+        let output = run_stdin(&["run", "-"], source);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
         assert!(
@@ -385,81 +612,58 @@ fn uncaught_failure_prints_place_and_call_stack() {
     assert_eq!(stderr(&output), "RuntimeError: Array index out of bounds\n");
 }
 
+/// #797 (language spec 9.5): a program failure passes every catch, also when a driver raises it and it reaches
+/// the caller through `await`.
 #[test]
-fn repl_keeps_variables_and_declarations_between_inputs() {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+fn a_drivers_program_failure_passes_a_catch_of_error() {
+    let source = b"module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimport \"runtime/time\" take sleep_nanoseconds;\n\
+        async main() is int {\n    let r = try { await sleep_nanoseconds(\"01\"); \"none\"; } catch e is Error { e.text(); };\n\
+        Stdout().writeln(\"caught \" + r);\n    0;\n}\n";
+    let std = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let mut child = okkama()
-        .arg("repl")
-        .env("OKKAMA_STDLIB_DIR", &std)
+        .args(["run", "-"])
+        .env("OKKAMA_STDLIB_DIR", std)
+        .env("OKKAMA_TRACE", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let input = "let x = 40\nx + 2\nobject Point {\n    has x is int;\n    Point(:x);\n}\nlet p = Point(x: x)\np\n\
-                 let x = \"text\"\n:vars\np.nope()\n[1][3]\nx\n";
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
     let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        stdout(&output),
-        "42 (int)\nPoint {\n    x: 40\n}\np: Point\nx: string\n\"text\" (string, 4 chars)\n"
-    );
-    let errors = stderr(&output);
-    assert!(
-        errors.contains("<input>:1:3: semantic error: Object \"Point\" has no action \"nope\""),
-        "{errors}"
-    );
-    assert!(
-        errors.contains("RuntimeError: Array index out of bounds\n"),
-        "{errors}"
-    );
-    assert!(errors.contains("  at <input> (<input>:1:"), "{errors}");
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(stderr(&output), "RuntimeError: Wait duration must be a canonical non-negative integer\n");
 }
 
 #[test]
-fn legacy_backend_alias_is_supported_but_conflicts_are_errors() {
+fn build_has_no_target_selection() {
+    // One engine, one target (owner, 2026-11-20): `--target` and `--backend` are unknown options, and a failed
+    // build leaves the previous artifact as it was.
     let file = TempFile::new("target-alias.spb", b"previous");
-    let output = run_stdin(
-        &["build", "-", "--backend", "sparrow", "-o", file.path()],
-        HELLO.as_bytes(),
-    );
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    let previous = std::fs::read(&file.0).unwrap();
-    let output = run_stdin(
-        &[
-            "build",
-            "-",
-            "--target",
-            "jvm",
-            "--backend",
-            "sparrow",
-            "-o",
-            file.path(),
-        ],
-        HELLO.as_bytes(),
-    );
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("conflicting target"));
-    assert_eq!(std::fs::read(&file.0).unwrap(), previous);
+    for flags in [&["--target", "sparrow"][..], &["--backend", "sparrow"], &["--target=sparrow"]] {
+        let mut args = vec!["build", "-"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-o", file.path()]);
+        let output = run_stdin(&args, HELLO.as_bytes());
+        assert_eq!(output.status.code(), Some(2), "{flags:?}");
+        assert!(stderr(&output).contains("unknown option"), "{flags:?}: {}", stderr(&output));
+        assert_eq!(std::fs::read(&file.0).unwrap(), b"previous");
+    }
 }
 
 #[test]
 fn native_run_does_not_ignore_arguments_or_fallback_to_java() {
+    // `--engine` is gone with the other engines: an unknown option, a usage error.
     for args in [
         vec!["run", "--engine"],
-        vec!["run", "--engine", "unknown", "-"],
+        vec!["run", "--engine", "sparrow", "-"],
     ] {
         assert_eq!(run(&args).status.code(), Some(2));
     }
-    for engine in ["ir", "sparrow"] {
+    {
         let output = run_stdin(
-            &["run", "--engine", engine, "-"],
+            &["run", "-"],
             b"module runtime/unlinked v1.0.0; native nothing() is int; main() is int { nothing(); }",
         );
         assert_eq!(output.status.code(), Some(1));
@@ -475,14 +679,14 @@ fn native_run_does_not_ignore_arguments_or_fallback_to_java() {
 fn sparrow_build_failure_preserves_artifact() {
     let artifact = TempFile::new("sparrow-preserved.spb", b"previous artifact");
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { missing_name; }",
     );
     assert_ne!(output.status.code(), Some(0));
     assert_eq!(std::fs::read(&artifact.0).unwrap(), b"previous artifact");
     // Float — часть языка Sparrow: та же программа собирается и исполняется.
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { let x = 1.5; (x * 4.0).int(); }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -497,7 +701,7 @@ fn sparrow_exec_validates_file_and_exit_status() {
     assert!(stderr(&output).contains("SPB"));
     for value in ["0", "255", "256", "999999999999999999999999999999999"] {
         let output = run_stdin(
-            &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+            &["build", "-", "-o", artifact.path()],
             format!("module app v1.0.0; main() is int {{ {value}; }}").as_bytes(),
         );
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -546,7 +750,7 @@ fn sparrow_cli_executes_control_flow_and_v2_function_calls() {
     let source =
         b"module app v1.0.0; main() is int { for 1..=5 -> i { if i < 4 { next; } i + 1; } }";
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", file.path()],
+        &["build", "-", "-o", file.path()],
         source,
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -621,8 +825,11 @@ fn help_and_version() {
         let output = run(args);
         assert_eq!(output.status.code(), Some(0));
         assert!(stdout(&output).contains("okkama ast <FILE|->"));
+        assert!(stdout(&output).contains("Run a program on Sparrow (JIT)"));
+        // One engine (Tweed): nothing to select.
+        assert!(!stdout(&output).contains("--engine") && !stdout(&output).contains("OKKAMA_ENGINE"));
         assert!(stdout(&output).contains("okkama ir <FILE|->"));
-        assert!(stdout(&output).contains("okkama build <FILE|-> --target jvm [--budgeted] -o <FILE>"));
+        assert!(stdout(&output).contains("okkama build <FILE|-> -o <FILE.spb>"));
         assert!(stderr(&output).is_empty());
     }
     let output = run(&["help", "ast"]);
@@ -641,9 +848,9 @@ fn help_and_version() {
     for args in [&["help", "build"][..], &["build", "--help"]] {
         let output = run(args);
         assert_eq!(output.status.code(), Some(0));
-        assert!(stdout(&output).contains("--target jvm"));
+        assert!(!stdout(&output).contains("--target") && !stdout(&output).contains("--backend"));
         assert!(stdout(&output).contains("--output"));
-        assert!(stdout(&output).contains("executable JAR"));
+        assert!(stdout(&output).contains("verified SPB"));
         assert!(stderr(&output).is_empty());
     }
     let output = run(&["--version"]);
@@ -893,19 +1100,18 @@ fn ir_lowering_error_points_at_the_offending_operand() {
 }
 
 #[test]
-fn build_dispatches_file_and_stdin_to_jvm_and_writes_a_class_file() {
-    let target = TempFile::absent("build-jvm-output.class");
+fn build_dispatches_file_and_stdin_to_sparrow_and_writes_bytecode() {
+    let target = TempFile::absent("build-sparrow-output.spb");
     let source = example("arithmetic.ok");
     for output in [
-        run(&["build", &source, "--target", "jvm", "-o", target.path()]),
+        run(&["build", &source, "-o", target.path()]),
         run_stdin(
-            &["build", "--target=jvm", "--output", target.path(), "-"],
+            &["build", "--output", target.path(), "-"],
             HELLO.as_bytes(),
         ),
         run(&[
             "build",
             &source,
-            "--target=jvm",
             &format!("--output={}", target.path()),
         ]),
     ] {
@@ -913,18 +1119,16 @@ fn build_dispatches_file_and_stdin_to_jvm_and_writes_a_class_file() {
         assert!(stdout(&output).is_empty());
         assert!(stderr(&output).is_empty());
         assert!(
-            std::fs::read(&target.0)
-                .unwrap()
-                .starts_with(&[0xca, 0xfe, 0xba, 0xbe])
+            okkama_sparrow::decode(&std::fs::read(&target.0).unwrap()).is_ok()
         );
     }
 }
 
 #[test]
 fn failed_build_preserves_an_existing_output_file() {
-    let target = TempFile::new("build-preserved.class", b"previous artifact");
+    let target = TempFile::new("build-preserved.spb", b"previous artifact");
     let output = run_stdin(
-        &["build", "-", "--target", "jvm", "-o", target.path()],
+        &["build", "-", "-o", target.path()],
         b"module app v1.0.0; import \"missing\" take X; main() is int { 1; }",
     );
     assert_eq!(output.status.code(), Some(1));
@@ -935,7 +1139,7 @@ fn failed_build_preserves_an_existing_output_file() {
 
 #[test]
 fn build_reports_frontend_errors_before_invoking_the_backend() {
-    let target = TempFile::absent("build-source-errors.class");
+    let target = TempFile::absent("build-source-errors.spb");
     for (source, expected) in [
         ("module app v1.0.0; main() is int { 1 2; }", "syntax error"),
         (
@@ -952,7 +1156,7 @@ fn build_reports_frontend_errors_before_invoking_the_backend() {
         ),
     ] {
         let output = run_stdin(
-            &["build", "-", "--target", "jvm", "-o", target.path()],
+            &["build", "-", "-o", target.path()],
             source.as_bytes(),
         );
         assert_eq!(output.status.code(), Some(1));
@@ -967,44 +1171,35 @@ fn build_reports_frontend_errors_before_invoking_the_backend() {
 fn build_option_errors_are_usage_errors() {
     for args in [
         &["build"][..],
-        &["build", "input.ok", "-o", "out.class"],
-        &["build", "input.ok", "--target", "jvm"],
-        &["build", "--target", "jvm", "-o", "out.class"],
-        &["build", "input.ok", "--target"],
-        &["build", "input.ok", "--target", "jvm", "-o"],
-        &["build", "input.ok", "--target", "native", "-o", "out.class"],
-        &["build", "input.ok", "--target", "jvm", "--output="],
+        &["build", "input.ok"],
+        &["build", "-o", "out.spb"],
+        &["build", "input.ok", "-o"],
+        &["build", "input.ok", "--output="],
         // Файлы одного модуля можно перечислить, но не вместе со stdin.
         &[
             "build",
             "input.ok",
             "-",
-            "--target",
-            "jvm",
             "-o",
-            "out.class",
+            "out.spb",
         ],
         &[
             "build",
             "input.ok",
-            "--target",
-            "jvm",
             "-o",
-            "out.class",
+            "out.spb",
             "--spans",
         ],
         &[
             "build",
             "input.ok",
-            "--target",
-            "jvm",
             "-o",
-            "out.class",
+            "out.spb",
             "--format",
             "text",
         ],
-        &["ir", "input.ok", "--target", "jvm"],
-        &["ast", "input.ok", "-o", "out.class"],
+        &["ir", "input.ok", "--target", "sparrow"],
+        &["ast", "input.ok", "-o", "out.spb"],
     ] {
         let output = run(args);
         assert_eq!(
@@ -1020,12 +1215,10 @@ fn build_option_errors_are_usage_errors() {
 
 #[test]
 fn build_reports_input_io_errors() {
-    let target = TempFile::absent("build-unreadable.class");
+    let target = TempFile::absent("build-unreadable.spb");
     let output = run(&[
         "build",
         "/nonexistent/okkama/input.ok",
-        "--target",
-        "jvm",
         "-o",
         target.path(),
     ]);
@@ -1038,13 +1231,11 @@ fn build_reports_input_io_errors() {
 #[test]
 fn build_reports_output_write_errors() {
     let parent = TempFile::absent("build-missing-parent");
-    let path = parent.0.join("out.class");
+    let path = parent.0.join("out.spb");
     let output = run_stdin(
         &[
             "build",
             "-",
-            "--target",
-            "jvm",
             "-o",
             path.to_str().unwrap(),
         ],
@@ -1430,14 +1621,9 @@ fn blade_project_rejects_undeclared_dependencies_and_file_versions() {
     assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
 }
 
-/// H-02: a function with 20 000 values that are live together (the register
-/// allocator falls back to one register per value, H-28) runs on the IR
-/// engine. Sparrow compiles every function and refuses one whose live
-/// registers would need more than its compile budget, with a message that
-/// says what to change. Until 0.5 the previous VM's JIT left such a function
-/// to its interpreter (#14).
+/// Sparrow refuses a function whose live registers exceed its compile budget.
 #[test]
-fn functions_with_huge_frames_run_on_ir_and_are_refused_by_sparrow() {
+fn functions_with_huge_frames_are_refused_by_sparrow() {
     let count = 20_000;
     let lets: String = (0..count).map(|i| format!("        let v{i} = seed + {i};\n")).collect();
     let values: Vec<String> = (0..count).map(|i| format!("v{i}")).collect();
@@ -1445,12 +1631,8 @@ fn functions_with_huge_frames_run_on_ir_and_are_refused_by_sparrow() {
         "module app v1.0.0;\nobject Wide {{\n    Wide();\n    sum(seed is int) is int {{\n{lets}        let values is @int = [{}];\n        values.reduce(0) -> total, value {{ total + value; }};\n    }}\n}}\nmain() is int {{ let wide = Wide(); (wide.sum(1) + wide.sum(2)) % 251; }}\n",
         values.join(", ")
     );
-    // Σ(seed + i) for seed 1 and 2 over i < 20 000, modulo 251.
-    let expected = (count * (count - 1) + 3 * count) % 251;
     let file = TempFile::new("wide-frame.ok", source.as_bytes());
-    let output = okkama().args(["run", "--engine", "ir"]).arg(&file.0).output().unwrap();
-    assert_eq!(output.status.code(), Some(expected), "{}", stderr(&output));
-    let output = okkama().args(["run", "--engine", "sparrow"]).arg(&file.0).output().unwrap();
+    let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(
         stderr(&output).contains("Wide.sum: compiling it would take more than 256 MiB"),
@@ -1493,9 +1675,10 @@ fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
     // #306: a string payload is an Okkama literal, so a newline in it does
     // not split the report.
     let source = b"module app v1.0.0;\nenum Ferr is Error = (text(s is string));\nmain() is int { throw Ferr.text(\"line1\\nline2 \\\"q\\\"\"); }\n";
-    for engine in ["ir", "sparrow"] {
+    {
+        let engine = "sparrow";
         let mut command = okkama();
-        command.args(["run", "--engine", engine, "-"]).env("OKKAMA_TRACE", "off");
+        command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().unwrap();
         child.stdin.take().unwrap().write_all(source).unwrap();
@@ -1508,7 +1691,7 @@ fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
 /// A cancelled process worker (#359): its Future settles Cancelled once the
 /// child has stopped and been reaped, as on Tomato, and a worker cancelled
 /// before its process started never starts (it used to run to its end and
-/// print after the cancel on the IR engine).
+/// print after the cancel).
 #[test]
 fn a_cancelled_worker_stops_before_its_future_settles() {
     let source = "module app v1.0.0;\n\
@@ -1531,9 +1714,10 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
             Stdout().writeln(\"end\");\n\
             0;\n}\n";
     let file = TempFile::new("cancelled-worker.ok", source.as_bytes());
-    for engine in ["ir", "sparrow"] {
+    {
+        let engine = "sparrow";
         let started = std::time::Instant::now();
-        let output = okkama().args(["run", "--engine", engine]).arg(&file.0).output().unwrap();
+        let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
         assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
         assert_eq!(stdout(&output), "-1 -1 true true\nend\n", "{engine}");
         assert!(started.elapsed() < std::time::Duration::from_secs(20), "{engine}");
@@ -1584,6 +1768,203 @@ fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
 }
 
 // ---- okkama man (#512)
+
+#[test]
+fn man_keyword_search_covers_paths_names_and_summaries_and_validates_arguments() {
+    let dir = std::env::temp_dir().join(format!("okkama-man-search-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("area")).unwrap();
+    std::fs::write(dir.join("area/demo.ok"), "module area/demo;\n\n// Module overview.\n\n// Unusual résumé.\nobject Widget {\n    // Send a parcel.\n    send() is void {}\n    // Hidden needle.\n    hidden secret() is void {}\n}\n// Hidden needle.\nhidden object Secret { Secret() {} }\n").unwrap();
+    let search = |args: &[&str]| okkama().arg("man").args(args)
+        .env("OKKAMA_STDLIB_DIR", &dir).env_remove("OKKAMA_IMPORT_DIRS")
+        .env_remove("PAGER").output().unwrap();
+    for query in ["AREA/DEMO", "widget", "RÉSUMÉ", "parcel"] {
+        let output = search(&["-k", query]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stdout(&output).contains("area/demo"), "{}", stdout(&output));
+    }
+    let output = search(&["--format", "markdown", "-k", "parcel"]);
+    assert!(stdout(&output).contains("Widget.send"), "{}", stdout(&output));
+    let output = search(&["-k", "needle"]);
+    assert!(output.status.success());
+    assert!(stdout(&output).contains("No matches"));
+    assert!(!stdout(&output).contains("Secret"));
+    for args in [&["-k"][..], &["-k", ""], &["-k", "x", "area/demo"], &["-k", "x", "-k", "y"]] {
+        assert_eq!(search(args).status.code(), Some(2), "{args:?}");
+    }
+    assert!(stdout(&man(&["--help"])).contains("-k QUERY"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn man_declaration_links_include_external_modules_and_warn_without_failing() {
+    let dir = std::env::temp_dir().join(format!("okkama-man-links-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("other.ok"), "module other;\n// The external role.\nrole Writing { write() is void; }\n").unwrap();
+    let file = dir.join("app.ok");
+    std::fs::write(&file, "module app;\n\n// See [Thing.write], [other.Writing], [Missing].\n\nobject Thing {\n    write(x is int) is void {}\n    write(x is string) is void {}\n}\n").unwrap();
+    for format in ["text", "markdown", "man", "html", "json"] {
+        let output = man(&["--format", format, file.to_str().unwrap()]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let page = stdout(&output);
+        assert!(page.contains("okkama-doc:/app#Thing.write"), "{page}");
+        assert!(page.contains("okkama-doc:/other#Writing"), "{page}");
+        if format == "html" { assert!(page.contains("href=\"other.html#Writing\""), "{page}"); }
+        assert!(stderr(&output).contains("warning: unresolved documentation link [Missing]"), "{}", stderr(&output));
+        assert!(stderr(&output).contains("app.ok:3:"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A bounded protocol client for the documentation regressions (#513).
+struct DocLsp {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    messages: std::sync::mpsc::Receiver<serde_json::Value>,
+    next: u32,
+}
+
+impl DocLsp {
+    fn new() -> Self {
+        Self::with_stdlib(&std_dir())
+    }
+
+    fn with_stdlib(stdlib: &std::path::Path) -> Self {
+        let mut child = okkama().arg("lsp").env("OKKAMA_STDLIB_DIR", stdlib)
+            .env_remove("OKKAMA_IMPORT_DIRS").stdin(Stdio::piped()).stdout(Stdio::piped())
+            .stderr(Stdio::null()).spawn().unwrap();
+        let input = child.stdin.take().unwrap();
+        let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (sender, messages) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(Some(message)) = lsp_server::Message::read(&mut output) {
+                if sender.send(serde_json::to_value(message).unwrap()).is_err() { break; }
+            }
+        });
+        let mut client = Self { child, input, messages, next: 0 };
+        client.request("initialize", serde_json::json!({"capabilities": {}}));
+        client.notify("initialized", serde_json::json!({}));
+        client
+    }
+
+    fn send(&mut self, message: serde_json::Value) {
+        let text = message.to_string();
+        write!(self.input, "Content-Length: {}\r\n\r\n{}", text.len(), text).unwrap();
+        self.input.flush().unwrap();
+    }
+
+    fn notify(&mut self, method: &str, params: serde_json::Value) {
+        self.send(serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params}));
+    }
+
+    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.next += 1;
+        let id = self.next;
+        self.send(serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        loop {
+            let message = self.messages.recv_timeout(std::time::Duration::from_secs(20)).expect("LSP response within 20 seconds");
+            if message.get("id") == Some(&serde_json::json!(id)) {
+                assert!(message.get("error").is_none(), "{message}");
+                return message["result"].clone();
+            }
+        }
+    }
+}
+
+#[test]
+fn lsp_doc_std_completion_resolves_links_from_unsaved_public_model() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-std-doc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module demo;\n// See [First].\nobject First {\n    First() {}\n    // Member [First.send].\n    send(x is int = 2) is void {}\n}\nhidden object Secret { Secret() {} }\n";
+    let file = dir.join("demo.ok");
+    std::fs::write(&file, library).unwrap();
+    let imported_uri = format!("file://{}", file.display());
+    let uri = format!("file://{}", dir.join("app.ok").display());
+    let text = "module app;\nmain() is int { std.demo.";
+    let mut client = DocLsp::with_stdlib(&dir);
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 1, "text": library.replace("Member", "Unsaved member")}}));
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "version": 1, "text": text}}));
+    let completion = client.request("textDocument/completion", serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 1, "character": text.lines().nth(1).unwrap().len()}}));
+    let items = completion.as_array().unwrap();
+    assert!(!items.iter().any(|item| item["label"] == "Secret"));
+    let first = items.iter().find(|item| item["label"] == "First").unwrap();
+    assert!(first["documentation"]["value"].as_str().unwrap().contains("Unsaved member"));
+    let resolved = client.request("completionItem/resolve", first.clone());
+    let documentation = resolved["documentation"]["value"].as_str().unwrap();
+    assert!(documentation.contains("Unsaved member"), "{documentation}");
+    assert!(documentation.contains("x is int = 2"));
+    assert!(documentation.contains("[First.send](okkama-doc:/demo#First.send)"));
+    assert!(!documentation.contains("Secret"));
+    client.notify("textDocument/didChange", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 2}, "contentChanges": [{"text": library.replace("object First", "hidden object First")}]}));
+    let hidden = client.request("completionItem/resolve", first.clone());
+    assert!(hidden.get("documentation").is_none(), "{hidden}");
+    client.request("shutdown", serde_json::Value::Null);
+    client.notify("exit", serde_json::Value::Null);
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+impl Drop for DocLsp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn lsp_doc_model_matches_man_and_tracks_open_change_and_close_of_imports() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-doc-integration-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module money;\n// Public [Money] and [Money.plus].\nobject Money {\n    // Create an amount.\n    Money() {}\n    // Integer amount.\n    plus(x is int = 1) is int { x; }\n    // Text amount.\n    plus(x is string) is string { x; }\n    // Private words.\n    hidden secret() is void {}\n}\n// Private type.\nhidden object Secret { Secret() {} }\n";
+    let path = dir.join("money.ok");
+    std::fs::write(&path, library).unwrap();
+    let text = "module app;\nimport \"money\" take Money;\nmain() is int { let m = Money(); let _s = m.plus(\"x\"); m.plus(2); }\n";
+    let uri = format!("file://{}", dir.join("app.ok").display());
+    let imported_uri = format!("file://{}", path.display());
+    let position = |needle: &str| serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 2, "character": text.lines().nth(2).unwrap().find(needle).unwrap() + 1}});
+    let mut client = DocLsp::new();
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "languageId": "okkama", "version": 1, "text": text}}));
+    let hover = client.request("textDocument/hover", position("plus(2)"));
+    let start = text.lines().nth(2).unwrap().find("plus(2)").unwrap();
+    assert_eq!(hover["range"], serde_json::json!({"start": {"line": 2, "character": start}, "end": {"line": 2, "character": start + 4}}));
+    let hover = hover["contents"]["value"].as_str().unwrap();
+    assert!(hover.contains("Integer amount"), "{hover}");
+    assert!(hover.contains("x is int = 1"));
+    assert!(!hover.contains("Text amount"));
+    assert!(!hover.contains("Private"));
+    let page = man(&["--format", "markdown", path.to_str().unwrap(), "Money.plus"]);
+    assert!(page.status.success(), "{}", stderr(&page));
+    assert!(stdout(&page).contains("Integer amount.") && stdout(&page).contains("Text amount."));
+    let imported = client.request("textDocument/hover", serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 1, "character": 22}}));
+    assert!(imported["contents"]["value"].as_str().unwrap().contains("[Money.plus](okkama-doc:/money#Money.plus)"));
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": imported_uri, "languageId": "okkama", "version": 1, "text": library.replace("Integer amount", "Opened buffer")}}));
+    let opened = client.request("textDocument/hover", position("plus(2)"));
+    assert!(opened["contents"]["value"].as_str().unwrap().contains("Opened buffer"), "{opened}");
+    client.notify("textDocument/didChange", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 2}, "contentChanges": [{"text": library.replace("Integer amount", "Changed buffer")}]}));
+    let changed = client.request("textDocument/hover", position("plus(2)"));
+    assert!(changed["contents"]["value"].as_str().unwrap().contains("Changed buffer"), "{changed}");
+    let completion = client.request("textDocument/completion", position("plus(2)"));
+    let completions = completion.as_array().unwrap();
+    assert!(completions.iter().any(|item| item["label"] == "plus" && item["documentation"]["value"].as_str().is_some_and(|value| value.contains("Changed buffer"))), "{completion}");
+    assert!(!completions.iter().any(|item| item["label"] == "secret"));
+    client.notify("textDocument/didClose", serde_json::json!({"textDocument": {"uri": imported_uri}}));
+    let closed = client.request("textDocument/hover", position("plus(2)"));
+    assert!(closed["contents"]["value"].as_str().unwrap().contains("Integer amount"), "{closed}");
+    client.request("shutdown", serde_json::Value::Null);
+    client.notify("exit", serde_json::Value::Null);
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn man_broken_links_are_lint_warnings_with_the_original_location() {
+    let file = TempFile::new("doc-warning.ok", b"module example;\n\n// See [Missing].\n\nobject Public { Public() {} }\n");
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout(&output).contains(":3:8: warning[unresolved-doc-link]: unresolved documentation link [Missing]"), "{}", stdout(&output));
+    assert!(!stdout(&output).contains("error:"));
+}
 
 fn std_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std")
@@ -1719,4 +2100,580 @@ fn man_survives_a_reader_that_leaves_early() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.code().is_some(), "killed by a signal");
     assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
+}
+
+/// A role whose fake holds a `Cell` in a field: rule #152 rejects it.
+const CELL_FAKE: &str = "module app v1.0.0;
+import \"cell\" take Cell;
+role Shelf {
+    put(id is int, title is string) is void;
+    fake {
+        has shelf is Cell<%int:string> = Cell([:]);
+        put(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+    }
+}
+main() is int { 0; }
+";
+
+#[test]
+fn check_reports_errors_in_test_blocks() {
+    // #649: code that exists only in test mode is checked too.
+    let source = "module app v1.0.0;\ntest \"t\" {\n    let x is int = \"no\";\n}\nmain() is int { 0; }\n";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.starts_with("<stdin>:3:"), "{text}");
+    assert!(text.contains(": semantic error: "), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(stdout(&output).is_empty());
+}
+
+#[test]
+fn check_reports_errors_in_fakes() {
+    let output = run_stdin(&["check", "-"], CELL_FAKE.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("semantic error: Field \"shelf\" cannot hold a Cell"), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+}
+
+#[test]
+fn check_passes_valid_tests_quietly() {
+    let source = "module app v1.0.0;
+role Counter {
+    count() is int;
+    fake {
+        has value is int = 3;
+        count() is int { value; }
+    }
+}
+object Twice { Twice(); of(n is int) is int { n * 2; } }
+test \"twice\" {
+    test.is(Twice().of(Counter.fake().count()), 6);
+}
+main() is int { Twice().of(0); }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).is_empty());
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+    // `--tests` still checks the test profile alone.
+    let output = run_stdin(&["check", "--tests", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+}
+
+#[test]
+fn check_reports_shared_errors_once() {
+    // Both profiles find the error in `main`; it is reported once, and the
+    // error inside the test follows it.
+    let source = "module app v1.0.0;
+test \"t\" {
+    let x is int = \"no\";
+}
+main() is int { let a = 1 + true; 0; }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    let shared = "<stdin>:5:25: semantic error: Operator + cannot be applied to int and bool\n";
+    assert_eq!(text.matches(shared).count(), 1, "{text}");
+    assert!(text.starts_with(shared), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
+    assert!(text.lines().nth(1).unwrap().starts_with("<stdin>:3:"), "{text}");
+    // A warning in shared code is printed once as well.
+    let source = "module app v1.0.0;
+test \"t\" { test.is(1, 1); }
+main() is int { let n = 2; for 0..n -> index { index; } }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stderr(&output),
+        "<stdin>:3:28: warning: For loop value is undefined when its source is empty: the body may not run\n"
+    );
+}
+
+#[test]
+fn check_rejects_fake_in_production_code_of_a_file_with_tests() {
+    // Test mode allows `Role.fake()`; production code must still not use it.
+    let source = "module app v1.0.0;
+role Counter {
+    count() is int;
+    fake {
+        has value is int = 3;
+        count() is int { value; }
+    }
+}
+test \"fake\" {
+    test.is(Counter.fake().count(), 3);
+}
+main() is int { Counter.fake().count(); }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("Counter.fake() is available only in test mode"), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    // `okkama lint` (and the language server, which shares its path) too.
+    let file = TempFile::new("fake-in-main.ok", source.as_bytes());
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("error: Counter.fake() is available only in test mode"), "{text}");
+    assert_eq!(text.matches("available only in test mode").count(), 1, "{text}");
+}
+
+#[test]
+fn lint_reports_errors_in_test_blocks_and_fakes() {
+    let file = TempFile::new("cell-fake.ok", CELL_FAKE.as_bytes());
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("error: Field \"shelf\" cannot hold a Cell"), "{text}");
+}
+
+/// #912: `OKKAMA_DEV=runtime,lower` answers which site requests identities and how often, which site adds to
+/// regions, and how many ownership operations each function has after the IR passes.
+#[test]
+fn devtrace_counts_ownership_by_site_and_function() {
+    let source = b"module app v1.0.0;\nobject Res { has n is int; Res(:n); read() is int { n; } destroy { } }\n\
+        object Maker { Maker(); make(i is int) is int { let r = Res(n: i); r.read(); } }\n\
+        main() is int { Maker().make(1) + Maker().make(2) - 3; }\n";
+    let out = std::env::temp_dir().join(format!("okkama-dev-{}", std::process::id()));
+    let mut child = okkama()
+        .args(["run", "-"])
+        .env("OKKAMA_DEV", "runtime,lower")
+        .env("OKKAMA_DEV_OUT", &out)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary = std::fs::read_to_string(out.join("summary.txt")).unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+    let count = |name: &str| summary.lines().find(|line| line.trim_start().starts_with(name))
+        .and_then(|line| line.split_whitespace().last()).and_then(|n| n.parse::<u64>().ok());
+    assert_eq!(count("identity requested at Res.new#0:"), Some(2), "{summary}");
+    assert!(count("ir after passes: ownership ops in Maker.make").is_some_and(|n| n > 0), "{summary}");
+}
+
+/// #552: an async body with many awaits keeps its registers in its frame (no copy per await). Ints, strings (heap
+/// values), floats (bit-cast in the frame), a loop and a failure caught across an await keep their values, also
+/// when the collector runs at every chance.
+#[test]
+fn a_big_async_body_keeps_its_values_in_its_frame() {
+    let mut body = String::new();
+    for i in 0..150 {
+        body += &format!("        let v{i} = await self.leaf({i});\n");
+    }
+    for i in 0..20 {
+        body += &format!("        let s{i} = await self.text({i});\n");
+    }
+    for i in 0..10 {
+        body += &format!("        let x{i} is float = {i}.5;\n");
+    }
+    // Groups of 50 stay under the expression nesting limit.
+    let ints: Vec<String> = (0..3)
+        .map(|g| format!("({})", (g * 50..g * 50 + 50).map(|i| format!("v{i}")).collect::<Vec<_>>().join(" + ")))
+        .collect();
+    let floats: Vec<String> = (0..10).map(|i| format!("x{i}")).collect();
+    let source = format!(
+        "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nenum Stop is Error = (now(code is int));\n\
+         object Wide {{\n    Wide();\n    async leaf(i is int) is int {{ i; }}\n\
+             async text(i is int) is string {{ \"t\" + i.string(); }}\n\
+             async fails(i is int) is int {{ confirm i < 0 else throw Stop.now(i); i; }}\n\
+             async run() is int {{\n{body}\
+                 let caught = try {{ await self.fails(7); }} catch Stop.now(code) {{ code; }};\n\
+                 let looped = (0..5).reduce(0) -> acc, i {{ acc + i; }};\n\
+                 let same = if s3 + s19 == \"t3t19\" {{ 1; }} else {{ 0; }};\n\
+                 {} + ({}).int() + caught + looped + same;\n    }}\n}}\n\
+         async main() is int {{ Stdout().writeln((await Wide().run()).string()); 0; }}\n",
+        ints.join(" + "),
+        floats.join(" + ")
+    );
+    // Σ0..150 = 11175, Σ(i + .5) over 0..10 = 50, caught 7, looped 10, same 1.
+    for stress in ["0", "1"] {
+        let mut child = okkama()
+            .args(["run", "-"])
+            .env("OKKAMA_STDLIB_DIR", std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std"))
+            .env("SPARROW_CORE_GC_STRESS", stress)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "stress {stress}: {}", stderr(&output));
+        assert_eq!(stdout(&output), "11243\n", "stress {stress}");
+    }
+}
+
+fn doctest_run(name: &str, source: &str) -> Output {
+    let file = TempFile::new(name, source.as_bytes());
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    okkama().args(["run", "-t", file.path()]).env("OKKAMA_STDLIB_DIR", std).output().unwrap()
+}
+
+#[test]
+fn doctest_compile_default_context_and_main_never_runs_without_opt_in() {
+    let out = doctest_run("doctest-context.ok", r#"module sample;
+import "io/stdout" as out;
+// Examples use this file's imports and declarations.
+//
+// ```okkama
+// main() is int { out.Stdout().writeln(Value().answer().string()); panic "must not run"; }
+// ```
+//
+// ```okkama,ignore
+// incomplete …
+// ```
+
+object Value { Value(); answer() is int { 42; } }
+main() is int { panic "original main must not run"; }
+"#);
+    assert!(out.status.success(), "{}\n{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("doctest") && stdout(&out).contains("compile"), "{}", stdout(&out));
+    // Paths include a process id, which may itself contain "42".
+    assert!(!stdout(&out).lines().any(|line| line == "42"), "{}", stdout(&out));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_runnable_expected_output_and_invalid_output() {
+    let source = r#"module sample;
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// main() is int { Stdout().writeln("ready"); 0; }
+// ```
+// ```output
+// ready
+// ```
+
+object Marker { Marker(); }
+"#;
+    let good = doctest_run("doctest-output-good.ok", source);
+    assert!(good.status.success(), "{}\n{}", stdout(&good), stderr(&good));
+    assert!(stdout(&good).contains("run"), "{}", stdout(&good));
+    let bad = doctest_run("doctest-output-bad.ok", &source.replace("// ready\n", "// wrong\n"));
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stderr(&bad).contains("expected stdout") && stderr(&bad).contains("wrong"), "{}", stderr(&bad));
+}
+
+#[test]
+fn doctest_compile_failure_maps_to_original_comment_and_propagates_exit() {
+    let bad = doctest_run("doctest-location.ok", "module sample;\r\n// Résumé.\r\n//\r\n// ```okkama\r\n// main() is int {\r\n//     let value is int = \"bad\";\r\n//     value;\r\n// }\r\n// ```\r\n\r\nobject Marker { Marker(); }\r\n");
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stderr(&bad).contains("doctest-location.ok:6:"), "{}", stderr(&bad));
+    let metadata = doctest_run("doctest-metadata.ok", "module sample;\n// ```okkama,run\n// 0;\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(metadata.status.code(), Some(1));
+    assert!(stderr(&metadata).contains("expected output"), "{}", stderr(&metadata));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_timeout_output_limits_and_temporary_cleanup() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-cleanup-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = TempFile::new("doctest-timeout.ok", b"module sample;\n// ```okkama,run\n// main() is int { loop {} }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    let before = std::time::Instant::now();
+    let out = okkama().args(["run", "-t", file.path()]).env("TMPDIR", &root).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("timeout (3 seconds)"), "{}", stderr(&out));
+    assert!(before.elapsed().as_secs() < 15);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "temporary directory leaked");
+    std::fs::write(&file.0, "module sample;\n// ```okkama,run\n// main() is int { 0; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n").unwrap();
+    let success = okkama().args(["run", "-t", file.path()]).env("TMPDIR", &root).output().unwrap();
+    assert!(success.status.success(), "{}", stderr(&success));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "success leaked temporary files");
+    std::fs::remove_dir(&root).unwrap();
+    let output = doctest_run("doctest-limit.ok", "module sample;\n// ```okkama,run\n// import \"runtime/stdio\" take stdout_write;\n// main() is int { loop { stdout_write(@byte(65, 66, 67, 10)); } }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("output"), "{}", stderr(&output));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_sandbox_denies_host_effects_and_repository_writes() {
+    for (name, import, call, permission) in [
+        ("net", "runtime/net\" take ip_parse", "ip_parse(1, \"127.0.0.1\", 1)", "Net"),
+        ("env", "runtime/environment\" take environment_snapshot", "environment_snapshot()", "Env"),
+        ("fs", "runtime/fs\" take path_encode", "path_encode(\"must-not-create\")", "Fs"),
+    ] {
+        let source = format!("module sample;\n// ```okkama,run\n// import \"{import};\n// main() is int {{ let _denied = {call}; 0; }}\n// ```\n// ```output\n// ```\n\nobject Marker {{ Marker(); }}\n");
+        let out = doctest_run(&format!("doctest-sandbox-{name}.ok"), &source);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr(&out).contains(&format!("{permission} permission")), "{}", stderr(&out));
+    }
+    assert!(!PathBuf::from("must-not-create").exists());
+}
+
+#[test]
+fn missing_docs_user_warning_and_std_wave_enforcement_use_file_identity() {
+    let user = TempFile::new("missing-docs-user.ok", b"module io/stdout;\nobject Undocumented { Undocumented(); }\n");
+    let out = run(&["lint", user.path()]);
+    assert!(stdout(&out).contains("warning[missing-docs]"), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("error[missing-docs]"));
+    let root = std::env::temp_dir().join(format!("okkama-doc-wave-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("io")).unwrap();
+    let module = root.join("io/stdout.ok");
+    std::fs::write(&module, "module io/stdout;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let out = okkama().args(["lint", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&out).contains("error[missing-docs]"), "{}\n{}", stdout(&out), stderr(&out));
+    let gate = okkama().args(["run", "-t", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert_eq!(gate.status.code(), Some(1));
+    assert!(stderr(&gate).contains("missing-docs"), "{}", stderr(&gate));
+    std::fs::write(&module, "module renamed;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let renamed = okkama().args(["lint", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&renamed).contains("error[missing-docs]"), "{}", stdout(&renamed));
+    let outside = root.join("other.ok");
+    std::fs::write(&outside, "module other;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let out = okkama().args(["lint", outside.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&out).contains("warning[missing-docs]"), "{}", stdout(&out));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_memory_limit_and_compile_only_when_isolation_cannot_start() {
+    let source = r#"module sample;
+// ```okkama,run
+// object Grow {
+//     Grow();
+//     double(text is string) is int { if text == "" { return 0; } self.double(text + text); }
+// }
+// main() is int { Grow().double("x"); }
+// ```
+// ```output
+// ```
+
+object Marker { Marker(); }
+"#;
+    let output = doctest_run("doctest-memory.ok", source);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("memory"), "{}", stderr(&output));
+    let file = TempFile::new("doctest-unavailable.ok", b"module sample;\n// ```okkama,run\n// main() is int { panic \"must not execute\"; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    let unavailable = file.0.join("nonexistent");
+    let out = okkama().args(["run", "-t", file.path()]).env("TMPDIR", unavailable).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("compile-only: isolation unavailable"), "{}", stdout(&out));
+}
+
+#[test]
+fn doctest_multifile_module_preserves_local_imports_and_explicit_module_context() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-imports-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.ok");
+    let second = root.join("second.ok");
+    std::fs::write(root.join("dependency.ok"), "module dependency; object Dependency { Dependency(); answer() is int { 41; } }").unwrap();
+    std::fs::write(&first, "module sample;\nimport \"dependency\" as dep;\n// ```okkama\n// main() is int { dep.Dependency().answer() + Value().answer(); }\n// ```\n//\n// ```okkama\n// module independent;\n// import \"dependency\" take Dependency;\n// main() is int { Dependency().answer(); }\n// ```\n\nobject Marker { Marker(); }\n").unwrap();
+    std::fs::write(&second, "module sample; object Value { Value(); answer() is int { 1; } }").unwrap();
+    let output = okkama().args(["run", "-t", first.to_str().unwrap(), second.to_str().unwrap()]).output().unwrap();
+    assert!(output.status.success(), "{}\n{}", stdout(&output), stderr(&output));
+    assert_eq!(stdout(&output).matches("(compile)").count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_runtime_failure_points_to_the_original_statement() {
+    let output = doctest_run("doctest-runtime-place.ok", "module sample;\n// ```okkama,run\n// main() is int {\n//     let number = 1;\n//     panic number.string();\n// }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-runtime-place.ok:5:"), "{}", stderr(&output));
+}
+
+#[test]
+fn doctest_syntax_failures_keep_positions_and_filters_select_examples() {
+    let source = "module sample;\n// ```okkama\n// main() is int {\n//     let = 1;\n//     0;\n// }\n// ```\n\nobject Marker { Marker(); }\n";
+    let output = doctest_run("doctest-syntax.ok", source);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-syntax.ok:4:"), "{}", stderr(&output));
+    let file = TempFile::new("doctest-filter.ok", b"module sample;\n// ```okkama\n// let count is int = 42;\n// ```\n\nobject Marker { Marker(); }\ntest \"inline\" { test.ok(true); }\n");
+    let selected = run(&["run", "-t", "--filter", "doctest", file.path()]);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    assert!(stdout(&selected).contains("(compile)"));
+    let inline = run(&["run", "-t", "--filter", "inline", file.path()]);
+    assert!(inline.status.success(), "{}", stderr(&inline));
+    assert!(!stdout(&inline).contains("(compile)"));
+}
+
+#[test]
+fn doctest_compile_checks_test_and_fake_bodies_instead_of_skipping_them() {
+    let output = doctest_run("doctest-test-body.ok", "module sample;\n// ```okkama\n// test \"typed\" {\n//     let number is int = \"bad\";\n//     test.is(number, 1);\n// }\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-test-body.ok:4:"), "{}", stderr(&output));
+    let source = "module sample;\n// ```okkama\n// role Counter {\n//     count() is int;\n//     fake {\n//         count() is int { \"bad\"; }\n//     }\n// }\n// test \"fake\" { test.is(Counter.fake().count(), 1); }\n// ```\n\nobject Marker { Marker(); }\n";
+    let fake = doctest_run("doctest-fake-body.ok", source);
+    assert_eq!(fake.status.code(), Some(1));
+    assert!(stderr(&fake).contains("doctest-fake-body.ok:6:"), "{}", stderr(&fake));
+    let valid = source.replace("\"bad\"", "1").replace("// ```okkama\n", "// ```okkama,run\n")
+        .replace("// ```\n\nobject", "// ```\n// ```output\n// ```\n\nobject");
+    let compiled = doctest_run("doctest-test-profile.ok", &valid);
+    assert!(compiled.status.success(), "{}", stderr(&compiled));
+    assert!(stdout(&compiled).contains("compile-only: isolation unavailable"), "{}", stdout(&compiled));
+}
+
+
+#[test]
+fn missing_docs_gate_preserves_normal_frontend_diagnostic_locations() {
+    let source = TempFile::new("missing-docs-syntax.ok", b"module sample;\nmain() is int {\n    let = 1;\n}\n");
+    for command in ["check", "ir", "build", "run"] {
+        let mut args = vec![command, source.path()];
+        let output_file = TempFile::absent("missing-docs-unused.spb");
+        if command == "build" { args.extend(["-o", output_file.path()]); }
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr(&output).contains("missing-docs-syntax.ok:3:"), "{command}: {}", stderr(&output));
+    }
+}
+
+
+#[test]
+#[cfg(not(unix))]
+fn doctest_unsupported_process_monitor_falls_back_to_compile_only() {
+    let output = doctest_run("doctest-platform.ok", "module sample;\n// ```okkama,run\n// main() is int { panic \"never execute without isolation\"; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("compile-only: isolation unavailable"));
+}
+
+#[test]
+fn doctest_can_import_the_documented_module_as_a_caller() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-self-import-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("api.ok");
+    std::fs::write(&file, "module api;\n// ```okkama\n// import \"api\" as library;\n// main() is int { library.Value().answer(); }\n// ```\n\nobject Value { Value(); answer() is int { 42; } }\n").unwrap();
+    let output = run(&["run", "-t", file.to_str().unwrap()]);
+    assert!(output.status.success(), "{}\n{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("(compile)"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn man_publishing_formats_select_public_declarations_without_running_examples() {
+    let file = TempFile::new("publish.ok", b"module publishing;\n// Reference [Thing.send].\n//\n// ```okkama,run\n// main() is int { panic \"must not execute\"; }\n// ```\n// ```output\n// ```\n\n// Public thing.\nobject Thing {\n// Send an int.\nsend(value is int) is void {}\n// Send a string.\nsend(value is string) is void {}\nhidden secret() is void {}\n}\nhidden object Secret {}\n");
+    for format in ["man", "html", "json"] {
+        let output = man(&[file.path(), "--format", format]);
+        assert!(output.status.success(), "{format}: {}", stderr(&output));
+        let page = stdout(&output);
+        assert!(page.contains("okkama-doc:/publishing#Thing.send"), "{page}");
+        assert!(!page.contains("secret()") && !page.contains("Secret"));
+        let selected = man(&[file.path(), "Thing.send", "--format", format]);
+        assert!(selected.status.success(), "{}", stderr(&selected));
+        assert!(stdout(&selected).contains("send(value is int)") && stdout(&selected).contains("send(value is string)"));
+        assert!(!stdout(&selected).contains("must not execute"));
+    }
+    for args in [&["--all"][..], &["--output"], &["--format", "html", "--output", "out"], &["--all", "--format", "html"], &["--all", "--format", "html", "--output", "out", file.path()], &["--all", "-k", "x"]] {
+        assert_eq!(man(args).status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn man_publishing_builds_all_std_html_man_and_versioned_json() {
+    let root = std::env::temp_dir().join(format!("okkama-publish-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()])
+        .env("OKKAMA_STDLIB_DIR", std_dir()).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
+    let html_dir = root.join("html");
+    let output = export("html", &html_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index = std::fs::read_to_string(html_dir.join("index.html")).unwrap();
+    assert!(index.contains("href=\"io-stdout.html\""));
+    let page = std::fs::read_to_string(html_dir.join("io-stdout.html")).unwrap();
+    assert!(page.contains("id=\"Stdout.writeln\""));
+    let stream = std::fs::read_to_string(html_dir.join("io-stream.html")).unwrap();
+    assert!(stream.contains("id=\"Writing\""));
+    let module_count = std::fs::read_dir(&html_dir).unwrap().count() - 1;
+    assert!(module_count >= 499, "{module_count}");
+    let man_dir = root.join("man3");
+    let output = export("man", &man_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(std::fs::read_to_string(man_dir.join("io-stdout.3ok")).unwrap().starts_with(".TH"));
+    assert_eq!(std::fs::read_dir(&man_dir).unwrap().count(), module_count);
+    let json_dir = root.join("json");
+    let output = export("json", &json_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let bytes = std::fs::read(json_dir.join("reference.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["modules"].as_array().unwrap().len(), module_count);
+    assert!(json_dir.join("schema-v1.json").is_file());
+    let again = export("json", &json_dir);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(std::fs::read(json_dir.join("reference.json")).unwrap(), bytes);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn man_publishing_installs_only_generated_section_three_pages() {
+    let root = std::env::temp_dir().join(format!("okkama-man-install-{}", std::process::id()));
+    let library = root.join("std");
+    let prefix = root.join("prefix with spaces");
+    std::fs::create_dir_all(library.join("io")).unwrap();
+    std::fs::write(library.join("io/stdout.ok"), "module io/stdout;\n// Output reference.\n\n// Public sink.\nobject Sink {}\n").unwrap();
+    let script = std_dir().parent().unwrap().join("tools/install-man.sh");
+    let output = Command::new("bash").arg(&script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
+    assert_eq!(std::fs::read_to_string(prefix.join("lib/okkama/man-pages.txt")).unwrap(), "io-stdout.3ok\n");
+    // A failed generation must not replace an installed page or its manifest.
+    let original = std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap();
+    std::fs::write(library.join("io/stdout.ok"), "module broken; object {").unwrap();
+    let failed = Command::new("bash").arg(script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    assert!(!failed.status.success());
+    assert_eq!(std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
+    let root = std::env::temp_dir().join(format!("okkama-man-package-{}", std::process::id()));
+    let target = root.join("target");
+    std::fs::create_dir_all(target.join("release")).unwrap();
+    for tool in ["okkama", "sparrow", "blade"] {
+        std::fs::copy(env!("CARGO_BIN_EXE_okkama"), target.join("release").join(tool)).unwrap();
+    }
+    let repo = std_dir().parent().unwrap().to_path_buf();
+    let out = root.join("dist");
+    let package = Command::new("bash").arg(repo.join("tools/package.sh"))
+        .args(["--no-build", "--man-pages", "--version", "test-515", "--out"]).arg(&out)
+        .env("CARGO_TARGET_DIR", &target).output().unwrap();
+    assert!(package.status.success(), "{}", stderr(&package));
+    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.to_string_lossy().ends_with(".tar.gz")).unwrap();
+    let unpack = root.join("unpack"); std::fs::create_dir_all(&unpack).unwrap();
+    assert!(Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&unpack).status().unwrap().success());
+    let payload = std::fs::read_dir(unpack).unwrap().next().unwrap().unwrap().path();
+    let prefix = root.join("prefix with spaces");
+    let installed = Command::new("bash").arg(payload.join("install.sh")).arg("--prefix").arg(&prefix).output().unwrap();
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
+    let unrelated = prefix.join("share/man/man3/unrelated.3ok");
+    std::fs::write(&unrelated, "Unrelated package").unwrap();
+    let removed = Command::new("bash").arg(prefix.join("lib/okkama/uninstall.sh")).output().unwrap();
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(!prefix.join("share/man/man3/io-stdout.3ok").exists());
+    assert!(unrelated.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn man_publishing_keeps_doctest_validation_and_missing_docs_lint_separate() {
+    let file = TempFile::new("publish-invalid-example.ok", b"module sample;\n// ```okkama\n// let value is int = \"bad\";\n// ```\n\nobject Undocumented {}\n");
+    for format in ["man", "html", "json"] {
+        let output = man(&[file.path(), "--format", format]);
+        assert!(output.status.success(), "{format}: {}", stderr(&output));
+        assert!(stdout(&output).contains("let value is int"));
+        assert!(!stderr(&output).contains("missing-docs"));
+    }
+    let checked = run(&["run", "-t", file.path()]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert!(stderr(&checked).contains("compilation failed"));
+    let lint = run(&["lint", file.path()]);
+    assert_eq!(lint.status.code(), Some(1));
+    assert!(stdout(&lint).contains("warning[missing-docs]"));
 }

@@ -323,6 +323,23 @@ fn shorthand_accepts_the_grammar_trailing_comma() {
 }
 
 #[test]
+fn enum_cases_accept_the_grammar_trailing_comma() {
+    // enum_cases = enum_case ("," enum_case)* trailing_comma? (#594), like
+    // parameters, arguments and literals.
+    let program = parse_ok("module app v1.0.0; enum State = (open, closed,);");
+    let Item::Enum(decl) = &program.items[0] else { panic!("expected an enum") };
+    let cases: Vec<_> = decl.cases.iter().map(|case| case.text.as_str()).collect();
+    assert_eq!(cases, ["open", "closed"]);
+    let program = parse_ok(
+        "module app v1.0.0; enum Effect = (\n    charge(cents is int,),\n    receipt(text is string),\n);",
+    );
+    let Item::Enum(decl) = &program.items[0] else { panic!("expected an enum") };
+    assert_eq!(decl.cases.len(), 2);
+    assert_eq!(decl.payloads[0].len(), 1);
+    assert_eq!(decl.case_spans.len(), 2);
+}
+
+#[test]
 fn constructor_and_member_errors() {
     for (source, expected) in [
         ("object Foo { Foo(:); }", "Expect field name after \":\"."),
@@ -566,7 +583,7 @@ fn type_references() {
         ),
         (
             "value() is User?;",
-            "Single ? is not supported; use Maybe<T> or Presence<T> for optional types, or ?? / !! for selection.",
+            "Single ? is not supported; use Maybe<T> or Presence<T> for optional types.",
         ),
     ] {
         assert_rejects(
@@ -698,7 +715,8 @@ fn enums() {
         ("enum State is = (a);", "Expect role name after \"is\" in an enum declaration."),
         ("enum state = (a);", "Expect enum name after \"enum\"."),
         ("enum State (a);", "Expect \"=\" after enum name."),
-        ("enum State = (a,);", "Expect enum case name."),
+        ("enum State = (a,,);", "Expect enum case name."),
+        ("enum State = (,);", "Expect enum case name."),
         ("enum State = (Open);", "Expect enum case name."),
         ("enum State = (a)", "Expect \";\" after enum declaration."),
     ] {

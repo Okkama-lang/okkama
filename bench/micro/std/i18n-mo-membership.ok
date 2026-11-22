@@ -1,0 +1,162 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "i18n/gettext" take ParsedMo, GettextCatalog;
+import "i18n/catalog" take MessageKey;
+import "locale/tag" take Locale;
+
+object Bench {
+    has mo is @byte;
+    has catalog is GettextCatalog;
+
+    Bench() {
+        let bytes = [
+            byte(222),
+            byte(18),
+            byte(4),
+            byte(149),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(2),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(28),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(44),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(60),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(3),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(61),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(40),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(65),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(1),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(106),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(0),
+            byte(107),
+            byte(101),
+            byte(121),
+            byte(0),
+            byte(67),
+            byte(111),
+            byte(110),
+            byte(116),
+            byte(101),
+            byte(110),
+            byte(116),
+            byte(45),
+            byte(84),
+            byte(121),
+            byte(112),
+            byte(101),
+            byte(58),
+            byte(32),
+            byte(116),
+            byte(101),
+            byte(120),
+            byte(116),
+            byte(47),
+            byte(112),
+            byte(108),
+            byte(97),
+            byte(105),
+            byte(110),
+            byte(59),
+            byte(32),
+            byte(99),
+            byte(104),
+            byte(97),
+            byte(114),
+            byte(115),
+            byte(101),
+            byte(116),
+            byte(61),
+            byte(85),
+            byte(84),
+            byte(70),
+            byte(45),
+            byte(56),
+            byte(10),
+            byte(0),
+            byte(65),
+            byte(0)
+        ];
+        mo = bytes;
+        catalog = GettextCatalog(bytes, Locale("en"));
+    }
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let changed = mo.slice(0, mo.size() - 2) + [byte(65 + v), byte(0)];
+        let parsed = ParsedMo(changed).document();
+        let key = MessageKey("", if v % 2 == 0 {
+            "key";
+        }
+        else {
+            "missing";
+        });
+        let result = parsed.entries().item(1)::Entry::translations[0].characters()[0].code() + (if catalog.membership(
+            key
+        ) {
+            1;
+        }
+        else {
+            0;
+        });
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

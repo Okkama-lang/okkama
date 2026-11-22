@@ -1,0 +1,4 @@
+10-catchall-rejected.ok:6:38: syntax error at "{": Expect "is" after catch error name.
+  |
+6 |     let text = try { "ok"; } catch e { "anything"; };
+  |                                      ^

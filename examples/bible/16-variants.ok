@@ -1,0 +1,41 @@
+module bible/variants v1.0.0;
+
+// A variant may be generic. Equality compares the enum, the case and the
+// payload; a payload-free enum is also a map key.
+import "io/stdout" take Stdout;
+
+enum Reading<T> = (missing, single(value is T), range(low is T, high is T));
+enum Unit = (celsius, kelvin);
+
+object Sensor {
+    has name is string;
+    has unit is Unit;
+    has reading is Reading<int>;
+    Sensor(:name, :unit, :reading);
+
+    text() is string {
+        let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
+        let shown = match reading {
+            case Reading.missing { "no data"; }
+            case Reading.single(value) { value.string() + suffix; }
+            case Reading.range(low, high) { low.string() + ".." + high.string() + suffix; }
+        };
+        name + ": " + shown;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let sensors is @Sensor = [
+        Sensor(name: "hall", unit: Unit.celsius, reading: Reading.single(21)),
+        Sensor(name: "cellar", unit: Unit.celsius, reading: Reading.range(8, 11)),
+        Sensor(name: "probe", unit: Unit.kelvin, reading: Reading<int>.missing)
+    ];
+    for sensors -> sensor { out.writeln(sensor.text()); }
+    let same = Reading.single(21) == Reading.single(21);
+    let other = Reading.single(21) == Reading.range(21, 21);
+    out.writeln(same.string() + " " + other.string());
+    let units = [Unit.celsius: 2, Unit.kelvin: 1];
+    out.writeln(units.has(Unit.kelvin).string());
+    0;
+}

@@ -1,0 +1,52 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/environment" take Environment;
+import "fs/temp" take TemporaryDirectory;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take Directory;
+
+// A file copied and moved into a new directory; the directory moved; existence checked; both removed.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-fs-");
+        let root = scratch.path();
+        let a = root.child("a.txt");
+        File(path: a, mode: FileMode.writing).text().write("data" + x);
+        let copy = root.child("b.txt");
+        FileEntry(a).copy(copy);
+        let folder = Directory(path: root.child("d"));
+        folder.create();
+        FileEntry(copy).move(root.child("d").child("c.txt"));
+        let gone = if FileEntry(copy).existence() { 1; } else { 0; };
+        folder.move(root.child("e"));
+        let moved = (if Directory(path: root.child("e")).existence() { 2; } else { 0; }) + (if Directory(path: root.child("d")).existence() { 4; } else { 0; });
+        let inside = File(path: root.child("e").child("c.txt")).text().content().length();
+        FileEntry(root.child("e").child("c.txt")).remove();
+        Directory(path: root.child("e")).remove();
+        let kept = if FileEntry(a).existence() { 8; } else { 0; };
+        scratch.close();
+        let total = gone + moved + kept + 16 * inside;
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

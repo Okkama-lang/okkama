@@ -73,11 +73,11 @@ separate process with an OS memory limit.
 ## 3. Programs
 
 **Guaranteed.**
-- On every engine (Tomato, IR and the JVM), `--max-steps`, `--max-memory`,
+- On Sparrow, `--max-steps`, `--max-memory`,
   `--max-output` and `--timeout` stop a runaway program with its own report,
   which `catch` cannot intercept; without them nothing changes and nothing is
-  spent ([#21], [#71], [#237]). Steps are counted alike on all three.
-- Value graphs of the IR engine are freed without recursion ([#28]).
+  spent ([#21], [#71], [#237]). Steps count function entries and loop iterations.
+- Shared native value graphs are freed without recursion ([#28]).
 - A cancelled SQLite query never reaches a closed connection ([#18]); X.509
   path search is bounded ([#17]).
 - Private RSA operations (key generation, PSS and PKCS#1 v1.5 signing, OAEP
@@ -85,8 +85,6 @@ separate process with an OS memory limit.
   ([#70]).
 
 **Not guaranteed.**
-- On the JVM the memory budget is the Java heap and the thread stacks, not
-  the whole process ([#237]).
 - A single native operation (a long BigInt division, a sort) finishes before a
   budget stops the run; the memory budget measures the whole process ([#72]).
 - From the CLI a program has the host access of the user running it: files,
@@ -117,9 +115,7 @@ passed on the same commit ([#26]).
   counting allocator for others). With `memory_scope: MemoryScope::Runtime`
   it measures one runtime instead, so that runtimes in one process keep
   budgets of their own ([#269]): on Tomato its heap (pages, large objects and
-  the Rust memory its objects own), which needs no probe; on the IR engine
-  what the run's thread holds through `Counted`, which must then be the
-  global allocator. Memory a runtime cannot see (native libraries, other
+  the Rust memory its objects own), which needs no probe. Memory a runtime cannot see (native libraries, other
   threads) does not count against it.
 
 **Not guaranteed.**
@@ -129,32 +125,32 @@ passed on the same commit ([#26]).
   runtime ([#40]).
 - `run_worker` is the CLIs' worker entry, not an embedding API.
 
-[#16]: https://github.com/shootnix/okkama/issues/16
-[#269]: https://github.com/shootnix/okkama/issues/269
-[#17]: https://github.com/shootnix/okkama/issues/17
-[#18]: https://github.com/shootnix/okkama/issues/18
-[#19]: https://github.com/shootnix/okkama/issues/19
-[#20]: https://github.com/shootnix/okkama/issues/20
-[#21]: https://github.com/shootnix/okkama/issues/21
-[#22]: https://github.com/shootnix/okkama/issues/22
-[#23]: https://github.com/shootnix/okkama/issues/23
-[#24]: https://github.com/shootnix/okkama/issues/24
-[#25]: https://github.com/shootnix/okkama/issues/25
-[#26]: https://github.com/shootnix/okkama/issues/26
-[#28]: https://github.com/shootnix/okkama/issues/28
-[#29]: https://github.com/shootnix/okkama/issues/29
-[#30]: https://github.com/shootnix/okkama/issues/30
-[#31]: https://github.com/shootnix/okkama/issues/31
-[#32]: https://github.com/shootnix/okkama/issues/32
-[#33]: https://github.com/shootnix/okkama/issues/33
-[#34]: https://github.com/shootnix/okkama/issues/34
-[#39]: https://github.com/shootnix/okkama/issues/39
-[#40]: https://github.com/shootnix/okkama/issues/40
-[#49]: https://github.com/shootnix/okkama/issues/49
-[#50]: https://github.com/shootnix/okkama/issues/50
-[#69]: https://github.com/shootnix/okkama/issues/69
-[#70]: https://github.com/shootnix/okkama/issues/70
-[#71]: https://github.com/shootnix/okkama/issues/71
-[#72]: https://github.com/shootnix/okkama/issues/72
-[#73]: https://github.com/shootnix/okkama/issues/73
-[#237]: https://github.com/shootnix/okkama/issues/237
+[#16]: https://github.com/Okkama-lang/okkama/issues/16
+[#269]: https://github.com/Okkama-lang/okkama/issues/269
+[#17]: https://github.com/Okkama-lang/okkama/issues/17
+[#18]: https://github.com/Okkama-lang/okkama/issues/18
+[#19]: https://github.com/Okkama-lang/okkama/issues/19
+[#20]: https://github.com/Okkama-lang/okkama/issues/20
+[#21]: https://github.com/Okkama-lang/okkama/issues/21
+[#22]: https://github.com/Okkama-lang/okkama/issues/22
+[#23]: https://github.com/Okkama-lang/okkama/issues/23
+[#24]: https://github.com/Okkama-lang/okkama/issues/24
+[#25]: https://github.com/Okkama-lang/okkama/issues/25
+[#26]: https://github.com/Okkama-lang/okkama/issues/26
+[#28]: https://github.com/Okkama-lang/okkama/issues/28
+[#29]: https://github.com/Okkama-lang/okkama/issues/29
+[#30]: https://github.com/Okkama-lang/okkama/issues/30
+[#31]: https://github.com/Okkama-lang/okkama/issues/31
+[#32]: https://github.com/Okkama-lang/okkama/issues/32
+[#33]: https://github.com/Okkama-lang/okkama/issues/33
+[#34]: https://github.com/Okkama-lang/okkama/issues/34
+[#39]: https://github.com/Okkama-lang/okkama/issues/39
+[#40]: https://github.com/Okkama-lang/okkama/issues/40
+[#49]: https://github.com/Okkama-lang/okkama/issues/49
+[#50]: https://github.com/Okkama-lang/okkama/issues/50
+[#69]: https://github.com/Okkama-lang/okkama/issues/69
+[#70]: https://github.com/Okkama-lang/okkama/issues/70
+[#71]: https://github.com/Okkama-lang/okkama/issues/71
+[#72]: https://github.com/Okkama-lang/okkama/issues/72
+[#73]: https://github.com/Okkama-lang/okkama/issues/73
+[#237]: https://github.com/Okkama-lang/okkama/issues/237

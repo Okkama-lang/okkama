@@ -1,6 +1,6 @@
-//! Небольшие natives std — перенос `MiscNatives` JVM: `runtime/crypto`,
+//! Небольшие natives std: `runtime/crypto`,
 //! `runtime/secret`, `runtime/debug`, `runtime/diff`, `runtime/math_aggregate`,
-//! `runtime/url_text`, `runtime/layout`. Тексты отказов — как у Perl-provider.
+//! `runtime/layout`. Тексты отказов — как у Perl-provider.
 use super::support::{
     byte_array, bytes, failure, float, handle, int, int_value, items, new_handle, string, text,
 };
@@ -272,35 +272,6 @@ fn diff_script(left: &[String], right: &[String]) -> Vec<Value> {
     script
 }
 
-// ---- runtime/url_text ----
-
-fn dot_segments(native: Native, source: &str) -> Result<String, Error> {
-    let invalid = |message: &str| failure("core.url_text", "invalid_input", native, message);
-    if length(source) > 8192 {
-        return Err(invalid("invalid bounded dot path"));
-    }
-    let parts: Vec<&str> = source.split('/').collect();
-    if parts.len() > 1024 {
-        return Err(invalid("dot path segment limit exceeded"));
-    }
-    let mut stack: Vec<String> = Vec::new();
-    let mut history = false;
-    for (at, part) in parts.iter().enumerate() {
-        if *part == "." || *part == ".." {
-            if *part == ".." {
-                stack.pop();
-            }
-            if at == parts.len() - 1 && history {
-                stack.push("/".into());
-            }
-        } else {
-            stack.push(format!("{}{part}", if history { "/" } else { "" }));
-            history = true;
-        }
-    }
-    Ok(stack.concat())
-}
-
 // ---- runtime/layout ----
 
 /// Строки с их окончаниями (`\r\n`, `\n`, `\r` или конец текста).
@@ -321,20 +292,6 @@ fn layout_lines(source: &str) -> Vec<(String, String)> {
         }
     }
     out
-}
-
-fn indent(origin: &str, prefix: &str) -> String {
-    layout_lines(origin)
-        .into_iter()
-        .map(|(line, ending)| {
-            let lead = if line.chars().any(|c| !c.is_whitespace()) {
-                prefix
-            } else {
-                ""
-            };
-            format!("{lead}{line}{ending}")
-        })
-        .collect()
 }
 
 fn dedent(origin: &str) -> String {
@@ -368,6 +325,47 @@ fn dedent(origin: &str) -> String {
 
 fn normalized(source: &str) -> String {
     source.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whole words of `source` packed into lines of at most `width` characters; a
+/// longer word stands alone. Linear: the line length is counted, not re-measured.
+fn wrap_text(source: &str, width: i64) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut line = 0i64;
+    for word in source.split_whitespace() {
+        let size = length(word) as i64;
+        if out.is_empty() {
+            line = size;
+        } else if line + 1 + size <= width {
+            out.push(' ');
+            line += 1 + size;
+        } else {
+            out.push('\n');
+            line = size;
+        }
+        out.push_str(word);
+    }
+    out
+}
+
+/// The normalized text if it fits in `width` characters, otherwise its longest
+/// whole-word prefix that fits together with `placeholder`.
+fn shorten_text(source: &str, width: i64, placeholder: &str) -> String {
+    let text_value = normalized(source);
+    if length(&text_value) as i64 <= width {
+        return text_value;
+    }
+    let room = width - length(placeholder) as i64;
+    let (mut used, mut end) = (-1i64, 0usize);
+    for word in text_value.split(' ') {
+        let next = used + 1 + length(word) as i64;
+        if next > room {
+            break;
+        }
+        end = if used < 0 { word.len() } else { end + 1 + word.len() };
+        used = next;
+    }
+    format!("{}{placeholder}", &text_value[..end])
 }
 
 pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Value, Error> {
@@ -467,10 +465,6 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             }
             Ok(Value::Float(value.sqrt()))
         }
-        ("runtime/url_text", "url_dot_segments") => {
-            Ok(text(dot_segments(native, string(&args[0])?)?))
-        }
-        ("runtime/layout", "indent") => Ok(text(indent(string(&args[0])?, string(&args[1])?))),
         ("runtime/layout", "dedent") => Ok(text(dedent(string(&args[0])?))),
         ("runtime/layout", "wrap") => {
             let width = int(&args[1])?;
@@ -482,27 +476,7 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
                     "wrap width must be positive",
                 ));
             }
-            let text_value = normalized(string(&args[0])?);
-            if text_value.is_empty() {
-                return Ok(text(""));
-            }
-            let width = width.to_i64().unwrap_or(i64::MAX);
-            let mut out = Vec::new();
-            let mut current = String::new();
-            for word in text_value.split(' ') {
-                let candidate = if current.is_empty() {
-                    word.to_string()
-                } else {
-                    format!("{current} {word}")
-                };
-                if current.is_empty() || length(&candidate) as i64 <= width {
-                    current = candidate;
-                } else {
-                    out.push(std::mem::replace(&mut current, word.to_string()));
-                }
-            }
-            out.push(current);
-            Ok(text(out.join("\n")))
+            Ok(text(wrap_text(string(&args[0])?, width.to_i64().unwrap_or(i64::MAX))))
         }
         ("runtime/layout", "shorten") => {
             let width = int(&args[1])?;
@@ -515,31 +489,49 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             if length(placeholder) as i64 > width {
                 return Err(invalid("shorten placeholder exceeds width"));
             }
-            let text_value = normalized(string(&args[0])?);
-            if length(&text_value) as i64 <= width {
-                return Ok(text(text_value));
-            }
-            let mut current = String::new();
-            for word in text_value.split(' ') {
-                let candidate = if current.is_empty() {
-                    word.to_string()
-                } else {
-                    format!("{current} {word}")
-                };
-                if (length(&candidate) + length(placeholder)) as i64 > width {
-                    break;
-                }
-                current = candidate;
-            }
-            Ok(text(if current.is_empty() {
-                placeholder.to_string()
-            } else {
-                format!("{current}{placeholder}")
-            }))
+            Ok(text(shorten_text(string(&args[0])?, width, placeholder)))
         }
         _ => Err(Error::Unsupported(format!(
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shorten_text, wrap_text};
+
+    #[test]
+    fn layout_wrap_packs_whole_words_by_characters() {
+        assert_eq!(wrap_text("one two three", 7), "one two\nthree");
+        assert_eq!(wrap_text("a b c d", 5), "a b c\nd");
+        assert_eq!(wrap_text("  spaced \t\n out\u{3000}x ", 20), "spaced out x");
+        assert_eq!(wrap_text("unbreakable word", 4), "unbreakable\nword");
+        assert_eq!(wrap_text("éé éé éé", 5), "éé éé\néé");
+        assert_eq!(wrap_text(" \t ", 3), "");
+        assert_eq!(wrap_text("a b", i64::MAX), "a b");
+    }
+
+    #[test]
+    fn layout_shorten_keeps_whole_words_and_the_placeholder() {
+        assert_eq!(shorten_text("one two three", 10, "..."), "one two...");
+        assert_eq!(shorten_text("one  two", 10, "..."), "one two");
+        assert_eq!(shorten_text("one two three", 13, "..."), "one two three");
+        assert_eq!(shorten_text("one two three", 12, "..."), "one two...");
+        assert_eq!(shorten_text("ééé ü", 4, "…"), "ééé…");
+        assert_eq!(shorten_text("overlong word", 5, "[…]"), "[…]");
+        assert_eq!(shorten_text("", 0, ""), "");
+    }
+
+    #[test]
+    fn layout_wrap_and_shorten_stay_linear_on_one_long_line() {
+        // 200 000 words on one line: the old candidate copies made this quadratic.
+        let source = "word ".repeat(200_000);
+        let wrapped = wrap_text(&source, i64::MAX);
+        assert_eq!(wrapped.len(), source.len() - 1);
+        let width = wrapped.chars().count() as i64 - 1;
+        let expected = format!("{}…", "word ".repeat(199_999).trim_end());
+        assert_eq!(shorten_text(&source, width, "…"), expected);
     }
 }

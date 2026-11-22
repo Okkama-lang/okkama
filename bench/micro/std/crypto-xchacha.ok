@@ -1,0 +1,40 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/chacha20_poly1305" take XChaCha20Poly1305;
+import "crypto/secret" take SecretBytes;
+import "crypto/error" take AuthenticationFailed;
+import "encoding/utf" take Utf8Encoded;
+
+// XChaCha20-Poly1305 with a 24-byte nonce: bytes and text sealed and opened; a flipped ciphertext byte refused.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let key is @byte = (0..32).map() -> k { byte((k * 7 + i) % 256); };
+        let nonce is @byte = (0..24).map() -> k { byte((k + i) % 256); };
+        let cipher = XChaCha20Poly1305(SecretBytes(key));
+        let plain is @byte = (0..(i % 40 + 1)).map() -> k { byte(k); };
+        let aad is @byte = [byte(v)];
+        let sealed = cipher.sealed(nonce, aad, plain);
+        let opened = cipher.opened(nonce, aad, sealed);
+        let words = cipher.sealed(nonce, "a", "w" + v.string());
+        let flipped is @byte = (0..sealed.size()).map() -> k { if k == 0 { byte((sealed[0].int() + 1) % 256); } else { sealed[k]; } };
+        let bad = try { cipher.opened(nonce, aad, flipped).size(); } catch e is AuthenticationFailed { 1000; };
+        let total = sealed.size() + opened[opened.size() - 1].int() + 10 * cipher.opened_text(nonce, "a", words).length() + bad;
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

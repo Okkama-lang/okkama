@@ -1,5 +1,5 @@
 //! Состояние текущего теста (§14), общее для исполнителя тестов, intrinsics
-//! утверждений и natives `runtime/testing` — как `Tests.current` JVM.
+//! утверждений и natives `runtime/testing`.
 use crate::failure::{Failure, Kind};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -74,7 +74,7 @@ impl std::fmt::Debug for Names<'_> {
 }
 
 /// Текст значения в сообщении утверждения: строка — в кавычках, остальное —
-/// как `String.valueOf` коллекционного представления JVM.
+/// в коллекционном представлении значений.
 pub fn show(names: &Names<'_>, value: &Value) -> String {
     match value {
         Value::Str(text) => format!("\"{text}\""),
@@ -157,8 +157,7 @@ pub fn java_double(value: f64) -> String {
 
 
 // ----- test.close, test.text, test.bytes (#187) -----
-// The IR engine and Sparrow write these messages; Tests.java on the JVM
-// writes the same.
+// Sparrow and shared native providers write these messages.
 
 /// `test.close(actual, expected, tolerance)`: within `tolerance` of each
 /// other. A NaN is never close; a negative or NaN tolerance is a failure.
@@ -229,6 +228,89 @@ pub fn bytes_failure(actual: &[u8], expected: &[u8]) -> Option<String> {
     ))
 }
 
+/// A string inside a shown object or variant (#756): in Okkama literal syntax, as an Error payload's text.
+pub fn literal(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    quoted(&chars)
+}
+
+/// The deepest object nesting a test report shows (#756); deeper parts are `…`.
+pub const SHOWN_DEPTH: usize = 8;
+
+/// The source-level name of a type for a test report (#756), from an engine's declaration name: module
+/// qualification is dropped (`time.duration::Duration`, `app.Point`), the kind around a type argument is
+/// unwrapped (`object(…)`, `variant(…)`, `role(…)`, `enum(…)`), `array<T>` is `@T`, and a variant's internal
+/// name (`$variant_Shape_0`) is its enum's (`Shape`). Type arguments stay:
+/// `app::Box<object(time/duration::Duration)>` is `Box<Duration>`, as Tomato's `Box<Duration>`.
+pub fn display_name(raw: &str) -> String {
+    const KINDS: [&str; 4] = ["object", "variant", "role", "enum"];
+    let mut out = String::new();
+    let mut token = String::new();
+    // For each open bracket: whether it is dropped (`object(`, `array<`) with its closing one.
+    let mut dropped: Vec<bool> = Vec::new();
+    let flush = |token: &mut String, out: &mut String| {
+        if !token.is_empty() {
+            out.push_str(&short_name(token));
+            token.clear();
+        }
+    };
+    for c in raw.chars() {
+        match c {
+            '(' if KINDS.contains(&token.as_str()) => {
+                token.clear();
+                dropped.push(true);
+            }
+            '<' if token == "array" => {
+                token.clear();
+                out.push('@');
+                dropped.push(true);
+            }
+            '(' | '<' => {
+                flush(&mut token, &mut out);
+                out.push(c);
+                dropped.push(false);
+            }
+            ')' | '>' => {
+                flush(&mut token, &mut out);
+                if !dropped.pop().unwrap_or(false) {
+                    out.push(c);
+                }
+            }
+            ',' | ' ' => {
+                flush(&mut token, &mut out);
+                out.push(c);
+            }
+            c => token.push(c),
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
+/// One qualified name without its module: the part after the last `::`, then after the last `.`.
+fn short_name(token: &str) -> String {
+    let name = token.rsplit("::").next().unwrap_or(token);
+    let name = name.rsplit('.').next().unwrap_or(name);
+    match name.strip_prefix("$variant_") {
+        // `$variant_<Enum>_<n>`: the enum's name.
+        Some(rest) => match rest.rsplit_once('_') {
+            Some((head, number)) if !head.is_empty() && number.chars().all(|c| c.is_ascii_digit()) => {
+                head.to_string()
+            }
+            _ => rest.to_string(),
+        },
+        None => name.to_string(),
+    }
+}
+
+/// A variant value's name for a test report (#756): `Enum.case` without type arguments, from the enum's
+/// declaration name and the case.
+pub fn variant_name(enum_name: &str, case: &str) -> String {
+    let name = display_name(enum_name);
+    let head = name.split('<').next().unwrap_or(&name);
+    format!("{head}.{case}")
+}
+
 /// Text in double quotes, with \\, \", \n, \r, \t and \u{…} for other controls.
 fn quoted(chars: &[char]) -> String {
     let mut out = String::from("\"");
@@ -250,6 +332,35 @@ fn quoted(chars: &[char]) -> String {
 #[cfg(test)]
 mod checks {
     use super::*;
+
+    /// Both engines' declaration names read as the source names them (#756).
+    #[test]
+    fn shown_names_are_source_names() {
+        for (raw, shown) in [
+            ("Point", "Point"),
+            ("time.duration::Duration", "Duration"),
+            ("app.Point", "Point"),
+            ("time.duration.Duration", "Duration"),
+            ("Box<Duration>", "Box<Duration>"),
+            ("app::Box<object(time/duration::Duration)>", "Box<Duration>"),
+            ("app::Pair<object(app::Point), int>", "Pair<Point, int>"),
+            ("app::Maybe<string>", "Maybe<string>"),
+            ("$variant_Shape_0", "Shape"),
+            ("$variant_Maybe_12", "Maybe"),
+            ("$variant_odd", "odd"),
+            ("Box<@int>", "Box<@int>"),
+            ("app::Box<variant(app::Shape)>", "Box<Shape>"),
+            ("app::Box<array<int>>", "Box<@int>"),
+            ("app::Box<array<object(app::Point)>>", "Box<@Point>"),
+            ("app::Pair<role(app::Shaped), enum(app::Color)>", "Pair<Shaped, Color>"),
+        ] {
+            assert_eq!(display_name(raw), shown, "{raw}");
+        }
+        assert_eq!(variant_name("$variant_Maybe_1", "some"), "Maybe.some");
+        assert_eq!(variant_name("app::Maybe<string>", "none"), "Maybe.none");
+        assert_eq!(variant_name("time.duration::InvalidDuration", "because"), "InvalidDuration.because");
+        assert_eq!(literal("a\"b\\\n\u{1}"), "\"a\\\"b\\\\\\n\\u{1}\"");
+    }
 
     #[test]
     fn messages_name_where_values_part() {

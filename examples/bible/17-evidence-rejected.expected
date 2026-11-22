@@ -1,0 +1,1 @@
+17-evidence-rejected.ok:9:17: semantic error: Cannot infer generic parameter "T" for object "Bucket"

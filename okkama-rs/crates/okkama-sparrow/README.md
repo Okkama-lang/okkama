@@ -9,15 +9,15 @@
 Из `okkama-rs`:
 
 ```sh
-cargo run --offline -p okkama-cli -- run --engine sparrow examples/sparrow-control-flow.ok
-cargo run --offline -p okkama-cli -- build examples/sparrow-control-flow.ok --target sparrow -o out.spb
+cargo run --offline -p okkama-cli -- run examples/sparrow-control-flow.ok
+cargo run --offline -p okkama-cli -- build examples/sparrow-control-flow.ok -o out.spb
 cargo run --offline -p okkama-cli -- exec out.spb
 cargo run --offline -p sparrow-cli -- check out.spb
 cargo run --offline -p sparrow-cli -- out.spb
 ```
 
 Пример возвращает 42 как код выхода процесса. Файл исполняется без исходников
-и Java. Обычный `run` пока исполняет через JVM; `--engine sparrow` — эта VM. Библиотечный исполнитель
+и внешнего рантайма. Обычный `run` исполняет на Sparrow. Библиотечный исполнитель
 возвращает точное целое хосту, а CLI требует результат main в диапазоне 0..255.
 
 Поддерживаются int/bool, +/−/*/%/унарный минус, сравнения, bool not/equality,
@@ -312,13 +312,13 @@ payload dst не может совпадать с назначением found-�
 let program = okkama_compiler::codegen::sparrow::generate(&module)?;
 let bytes = okkama_sparrow::encode(&program)?;
 let loaded = okkama_sparrow::decode(&bytes)?;
-let result = okkama_runtime::sparrow::execute(&loaded)?;
+let result = sparrow_core::run(okkama_sparrow::encode(&loaded)?)?;
 ```
 
 ## Проверки
 
 ```sh
-cargo test --offline -p okkama-sparrow -p okkama-runtime
+cargo test --offline -p okkama-sparrow --lib
 cargo test --offline -p okkama-cli --test cli
 ```
 

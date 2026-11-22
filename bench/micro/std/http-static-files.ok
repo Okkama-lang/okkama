@@ -1,0 +1,65 @@
+// #244: http-static-files; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "fs/path" take Path;
+import "fs/directory" take Directory;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+import "fs/root" take FileRoot;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;import "http/request_context" take HttpRequestContext;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+import "http/static" take StaticFiles, StaticPolicy;
+import "mime/types" take StandardMediaTypes;
+import "random/source" take PcgRandom;
+import "http/message" take Request;
+import "web/routing" take Files;
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }object Context { Context(); value() is HttpRequestContext {
+    let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(local:IpEndpoint(IpAddress("127.0.0.1"),80),remote:IpEndpoint(IpAddress("127.0.0.1"),50000));
+    HttpRequestContext(details:ExchangeDetails(endpoints:ends,version:HttpVersion.http_1_1),cancellation:Cancellation().cancelling());
+} }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    has temporary is TemporaryDirectory;
+Bench() { let scratch=TemporaryDirectory(parent:Directory(Path(".")),prefix:"work244-"); self.temporary=scratch; let file=File(scratch.path().child("index.html"),FileMode.writing); file.text().write("fixture"); file.close(); }
+destroy { temporary.close(); }
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let root = FileRoot(temporary);
+            let static = StaticFiles(root,StandardMediaTypes(),StaticPolicy(),PcgRandom(v),FixedClock());
+            let request = Request(url:"http://example.test/index.html?n="+x);
+            let response = static.file_response(request,"index.html");
+            let handled = await static.handling(request,Context().value());
+            let indexes = static.index([],true);
+            let entry = root.entry(["index.html"]);
+            let companions = static.companions(["index.html"],"index.html",false,entry.stat(),true);
+            let directory = root.entry([]);
+            let listing = static.listing(directory,request);
+            let routes = Files("/assets",root).routes("",[]);
+            let contribution = response.body().length()+handled.response().body().length()+indexes.size()+companions.size()+listing::Head::code+routes.size();
+            response.body().reading().close(); handled.response().body().reading().close();
+            entry.close(); directory.close(); root.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

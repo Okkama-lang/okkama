@@ -36,7 +36,6 @@ import "url/percent" take PercentDecoded, PercentEncoded, UrlComponent, InvalidP
 import "encoding/utf" take Utf8Encoded, Utf8Decoded, InvalidUtf8;
 import "html/entities" take EscapedHtml;
 import "collections/sequence" take Sequencing;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -179,8 +178,8 @@ hidden object StaticCoordinate {
             && name != "."
             && name != ".."
             && Utf8Encoded(name).bytes().size() <= 255
-            && name.split("/").size() == 1
-            && name.split("\\").size() == 1
+            && !name.contains("/")
+            && !name.contains("\\")
             else throw InvalidStaticPath.invalid;
         for Utf8Encoded(name).bytes() -> octet {
             confirm octet.int() >= 32 && octet.int() != 127 else throw InvalidStaticPath.invalid;
@@ -215,8 +214,8 @@ hidden object StaticPath {
         else {
             path;
         };
-        confirm raw.length() <= 8192 && raw.slice(0, 1) == "/" else throw InvalidStaticPath.invalid;
-        let trailing = raw.slice(raw.length() - 1, raw.length()) == "/";
+        confirm raw.length() <= 8192 && raw.starts_with("/") else throw InvalidStaticPath.invalid;
+        let trailing = raw.ends_with("/");
         slash = trailing;
         wire = raw;
         let q is Maybe<string> = if target.kind() == RequestTargetKind.origin {
@@ -629,8 +628,8 @@ object StaticFiles does Handling {
                 );
                 pieces = pieces.following(
                     StaticPiece(
-                        start: part.start().int(),
-                        size: part.size().int()
+                        start: part.start(),
+                        size: part.size()
                     )
                 );
             }
@@ -653,8 +652,8 @@ object StaticFiles does Handling {
                     );
                     pieces = pieces.following(
                         StaticPiece(
-                            start: part.start().int(),
-                            size: part.size().int()
+                            start: part.start(),
+                            size: part.size()
                         )
                     );
                     pieces = pieces.following(StaticPiece("\r\n"));
@@ -1066,7 +1065,7 @@ hidden object StaticRanges {
                     origin: fields.item(0),
                     limits: ConditionalLimits(8192, maximum)
                 ).ranges(
-                    BigInt(size)
+                    size
                 );
                 accepted.replace(true);
                 (0..entries.size()).map() -> index {
@@ -1147,8 +1146,8 @@ hidden object StaticBody does BodyOpening {
         opened = Atomic(false);
     }
 
-    length() is BigInt {
-        BigInt(size);
+    length() is int {
+        size;
     }
 
     replayable() is bool {

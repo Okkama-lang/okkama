@@ -1,0 +1,61 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "logging/record" take LogRecord, LogContext;
+import "logging/level" take LogLevel;
+import "logging/name" take LogName;
+import "logging/field" take LogFields;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+import "json" take JsonField;
+import "logging/queue" take QueuedLogs, LogOverflow;
+import "logging/write" take CollectedLogs;
+import "async/scope" take FutureScope, Supervising;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let delivered = await FutureScope(action: QueueRound(i).run).outcome();
+            sum = sum.add(delivered % 7);
+        }
+        sum.total();
+    }
+}
+
+// Writes a few records through a queue inside the scope and counts them.
+object QueueRound {
+    has round is int;
+    QueueRound(round is int) { self.round = round; }
+    async run(scope is Supervising<int>) is int {
+        let collected = CollectedLogs();
+        let queued = QueuedLogs(origin: collected, capacity: 8, overflow: LogOverflow.reject, scope: scope);
+        let context = LogContext(name: LogName("app"), fields: LogFields(JsonField("n", round)), process: 1);
+        for (0..1 + round % 3) -> k {
+            queued.write(LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000)), level: LogLevel.info, message: "m" + k.string(), context: context));
+        }
+        await queued.drain();
+        queued.close();
+        collected.size();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

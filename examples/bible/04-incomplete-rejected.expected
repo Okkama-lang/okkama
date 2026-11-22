@@ -1,0 +1,1 @@
+04-incomplete-rejected.ok:9:8: semantic error: Object "Square" does role "Shape" but does not implement action "perimeter"

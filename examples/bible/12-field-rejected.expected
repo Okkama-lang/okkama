@@ -1,0 +1,1 @@
+12-field-rejected.ok:9:20: semantic error: Field "cents" of object "Cash" is private; call an action instead

@@ -1,0 +1,18 @@
+== 1 native
+xml-small 13.38 us 15890 | xml-medium 983.5 us 3000 | xml-large 191.50 ms 10
+   plist-small 33.32 us 5000 | plist-medium 1070.5 us 300 | plist-large 22.01 ms 10
+== 1 okkama
+xml-small 13.91 us 15890 | xml-medium 1003.9 us 3000 | xml-large 207.20 ms 10
+   plist-small 36.18 us 5000 | plist-medium 1105.0 us 300 | plist-large 25.02 ms 10
+== 2 native
+xml-small 14.03 us 15890 | xml-medium 915.2 us 3000 | xml-large 174.67 ms 10
+   plist-small 32.56 us 5000 | plist-medium 1048.4 us 300 | plist-large 21.12 ms 10
+== 2 okkama
+xml-small 13.89 us 15890 | xml-medium 968.6 us 3000 | xml-large 207.81 ms 10
+   plist-small 34.84 us 5000 | plist-medium 1100.1 us 300 | plist-large 24.63 ms 10
+== 3 native
+xml-small 13.83 us 15890 | xml-medium 1012.5 us 3000 | xml-large 190.56 ms 10
+   plist-small 34.06 us 5000 | plist-medium 1055.3 us 300 | plist-large 22.41 ms 10
+== 3 okkama
+xml-small 13.14 us 15890 | xml-medium 973.9 us 3000 | xml-large 202.19 ms 10
+   plist-small 35.20 us 5000 | plist-medium 1049.2 us 300 | plist-large 22.85 ms 10

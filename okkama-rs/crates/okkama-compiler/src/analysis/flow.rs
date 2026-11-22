@@ -11,6 +11,12 @@
 //! погашение внутри тела не снимает внешнее обязательство. `throw` и `panic`
 //! вправе бросить обязательства: действие не завершилось успешно.
 //!
+//! **Future async successor (#754).** Вызов async successor даёт
+//! `Future<^C>` с новым обязательством; привязки держат его так же, `await`
+//! гасит его и даёт результату своё, передача (аргумент, поле, агрегат,
+//! возврат, `spawn`) уносит его, явный `cancel()` гасит. `done()` и
+//! `cancelled()` только читают.
+//!
 //! **Значения-действия (§11.1, #322, #324).** Анонимное действие несёт
 //! непогашенные обязательства тех захваченных привязок, которые его тело
 //! использует на всех нормальных путях (повторный тихий проход тела с
@@ -31,7 +37,7 @@ use std::collections::BTreeSet;
 
 use super::registry::{CtorShape, Registry};
 use super::thir::{
-    ArrayPart, Block, Body, BodyOwner, Callee, CastPart, Coercion, Expr, ExprKind, Fallback,
+    ArrayPart, Block, Body, BodyOwner, Builtin, Callee, CastPart, Coercion, Expr, ExprKind, Fallback,
     LocalId, Source, Stmt, StmtKind,
 };
 use super::ty::Ty;
@@ -165,6 +171,28 @@ fn literal(expr: &Expr) -> Option<bool> {
         ExprKind::Constant(super::thir::Constant::Bool(value)) => Some(*value),
         _ => None,
     }
+}
+
+/// `Future<^C>`: результат вызова async successor несёт его обязательство до
+/// `await` (#754).
+fn successor_future(ty: Option<&Ty>) -> bool {
+    matches!(ty, Some(Ty::Future(Some(inner))) if inner.is_successor())
+}
+
+/// Передача уносит обязательства значения: значения-действия (#322) и
+/// `Future<^C>`, в том числе под приведением к роли или `any` (#754).
+fn carries(expr: &Expr) -> bool {
+    if matches!(expr.ty, Some(Ty::Action(_))) {
+        return true;
+    }
+    let mut value = expr;
+    while let ExprKind::Coerce { coercion, value: inner } = &value.kind {
+        if *coercion == Coercion::Take {
+            break;
+        }
+        value = inner;
+    }
+    successor_future(value.ty.as_ref())
 }
 
 fn initial_fields(
@@ -593,11 +621,20 @@ impl<'r> Flow<'r, '_> {
         if expr.diverges {
             return None;
         }
-        // Вызов, дающий `^C`, создаёт новое обязательство.
-        let produces = matches!(
-            expr.kind,
-            ExprKind::Call { .. } | ExprKind::CallValue { .. } | ExprKind::Await(_)
-        ) && matches!(expr.ty, Some(Ty::Successor(_)));
+        // Вызов, дающий `^C`, создаёт новое обязательство; вызов async
+        // successor — тоже: его несёт `Future<^C>` до `await` (#754).
+        // `cancel()` возвращает тот же Future: не новый.
+        let produces = match &expr.kind {
+            ExprKind::Call {
+                callee: Callee::Builtin { .. },
+                ..
+            } => matches!(expr.ty, Some(Ty::Successor(_))),
+            ExprKind::Call { .. } | ExprKind::CallValue { .. } => {
+                matches!(expr.ty, Some(Ty::Successor(_))) || successor_future(expr.ty.as_ref())
+            }
+            ExprKind::Await(_) => matches!(expr.ty, Some(Ty::Successor(_))),
+            _ => false,
+        };
         if produces {
             let ob = self.fresh();
             state.pending.insert(ob);
@@ -618,10 +655,11 @@ impl<'r> Flow<'r, '_> {
     }
 
     /// Значение в передающей позиции (аргумент, элемент агрегата, поле):
-    /// значение-действие уносит обязательства своих захватов (#322).
+    /// значение-действие уносит обязательства своих захватов (#322),
+    /// `Future<^C>` — обязательство successor (#754).
     fn transfer(&mut self, expr: &'r Expr, state: &mut State) -> Option<()> {
         let held = self.expr(expr, true, state)?;
-        if matches!(expr.ty, Some(Ty::Action(_))) {
+        if carries(expr) {
             for ob in &held {
                 state.pending.remove(ob);
             }
@@ -876,13 +914,24 @@ impl<'r> Flow<'r, '_> {
                     Callee::Method { receiver, .. } | Callee::Role { receiver, .. } => {
                         self.expr(receiver, true, state)?;
                     }
-                    Callee::Builtin { receiver, .. } => {
-                        self.expr(receiver, true, state)?;
+                    Callee::Builtin { receiver, op } => {
+                        let held = self.expr(receiver, true, state)?;
+                        if successor_future(receiver.ty.as_ref()) {
+                            if *op == Builtin::FutureCancel {
+                                // Явная отмена — решение о переходе: гасит (#754).
+                                for ob in &held {
+                                    state.pending.remove(ob);
+                                }
+                            } else {
+                                // `done()`/`cancelled()` только читают: временный
+                                // `Future<^C>` здесь теряется (#754).
+                                self.discard(state, &held, receiver.span);
+                            }
+                        }
                     }
                     Callee::Ctor { .. }
                     | Callee::Native(_)
-                    | Callee::Test(_)
-                    | Callee::FakeStorage(_) => {}
+                    | Callee::Test(_) => {}
                 }
                 self.transfers(args, state)?;
                 none()
@@ -950,8 +999,26 @@ impl<'r> Flow<'r, '_> {
                 }
                 none()
             }
-            ExprKind::Unpack(value) | ExprKind::Spawn(value) | ExprKind::Await(value) => {
+            ExprKind::Unpack(value) => {
                 self.expr(value, true, state)?;
+                none()
+            }
+            // Задача несёт обязательство `Future<^C>`, который она исполняет
+            // (#754); синхронный `spawn` (worker) — как прежде.
+            ExprKind::Spawn(value) => {
+                let held = self.expr(value, true, state)?;
+                if successor_future(value.ty.as_ref()) {
+                    return Some(held);
+                }
+                none()
+            }
+            // `await` передаёт обязательство `Future<^C>` своему результату
+            // (§11.1): результат получает новое в [`Flow::expr`] (#754).
+            ExprKind::Await(value) => {
+                let held = self.expr(value, true, state)?;
+                for ob in &held {
+                    state.pending.remove(ob);
+                }
                 none()
             }
             ExprKind::Pack { items, spread } => {

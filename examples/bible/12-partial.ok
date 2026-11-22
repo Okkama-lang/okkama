@@ -1,0 +1,54 @@
+module bible/partial v1.0.0;
+
+// A constructor that fails halfway. Whatever it already bound to fields is
+// released, newest first, after the temporaries of its body; the object never
+// existed, so its own destroy does not run.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (tooLarge(size is int));
+
+object Area {
+    has name is string;
+    Area(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Upload {
+    has staging is Area;
+    has lock is Area;
+    has size is int;
+
+    Upload(size is int) {
+        staging = Area(name: "staging");
+        if size > 0 {
+            lock = Area(name: "lock");
+        } else {
+            lock = Area(name: "empty lock");
+        }
+        let scratch = Area(name: "scratch");
+        confirm size <= 1000 else throw Refused.tooLarge(size);
+        self.size = size;
+    }
+
+    size() is int { size; }
+
+    destroy { Stdout().writeln("upload of " + size.string() + " done"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let outcome = try {
+        let upload = Upload(5000);
+        "built " + upload.size().string();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    out.writeln("--");
+    {
+        let upload = Upload(300);
+        out.writeln("built " + upload.size().string());
+    }
+    0;
+}

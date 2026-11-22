@@ -20,7 +20,6 @@ import "collections/deque" take Deque;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
 import "async/scope" take Supervising, FutureScope;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "io/stream" take Closing;
 
@@ -81,9 +80,9 @@ object SynchronousLogDelivery does LogDelivering {
 
 hidden object QueuedLogRecord {
     has record is LogRecord;
-    has sequence is BigInt;
+    has sequence is int;
 
-    QueuedLogRecord(record is LogRecord, sequence is BigInt) {
+    QueuedLogRecord(record is LogRecord, sequence is int) {
         self.record = record;
         self.sequence = sequence;
     }
@@ -92,7 +91,7 @@ hidden object QueuedLogRecord {
         record;
     }
 
-    sequence() is BigInt {
+    sequence() is int {
         sequence;
     }
 }
@@ -101,7 +100,7 @@ hidden object LogQueueState {
     has origin is LogDelivering;
     has options is LogQueueOptions;
     has queued is Atomic<Deque<QueuedLogRecord>>;
-    has accepted, dropped is Atomic<BigInt>;
+    has accepted, dropped is Atomic<int>;
     has inflight is Atomic<@QueuedLogRecord>;
     has delivery is Atomic<@Future<int>>;
     has failures is Atomic<@Error>;
@@ -118,8 +117,8 @@ hidden object LogQueueState {
         delivery = Atomic(futures);
         let errors is @Error = [];
         failures = Atomic(errors);
-        accepted = Atomic(BigInt(0));
-        dropped = Atomic(BigInt(0));
+        accepted = Atomic((0));
+        dropped = Atomic((0));
         finished = Atomic(false);
         started = Atomic(false);
         changed = Atomic(Event());
@@ -139,7 +138,7 @@ hidden object LogQueueState {
             }
             queued.replace(items.tail());
         }
-        let sequence = (accepted.value() + BigInt(1));
+        let sequence = (accepted.value() + 1);
         accepted.replace(sequence);
         queued.replace(queued.value().suffix(QueuedLogRecord(record: record, sequence: sequence)));
         self.signal();
@@ -217,7 +216,7 @@ hidden object LogQueueState {
         }
     }
 
-    dropped_records() is BigInt {
+    dropped_records() is int {
         dropped.value();
     }
 
@@ -253,7 +252,7 @@ hidden object LogQueueState {
     }
 
     hidden loss(count is int) is void {
-        dropped.replace((dropped.value() + BigInt(count)));
+        dropped.replace((dropped.value() + count));
     }
 
     hidden completed() is void {
@@ -316,7 +315,7 @@ object QueuedLogs does LogWriting, LogDraining, Closing {
     }
 
     // How many records were dropped.
-    dropped_records() is BigInt {
+    dropped_records() is int {
         state.dropped_records();
     }
 

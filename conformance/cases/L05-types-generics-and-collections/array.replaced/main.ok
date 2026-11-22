@@ -22,7 +22,7 @@ main() is int {
     Stdout().writeln(t.ints(one) + " " + t.ints(chain));
     let names = ["a", "b"];
     let renamed = names.replaced(0, "z");
-    Stdout().writeln(renamed.join(",") + " " + (names[0] == "a" ?? "x" !! "changed"));
+    Stdout().writeln(renamed.join(",") + " " + (if names[0] == "a" { "x"; } else { "changed"; }));
     let nested = [[1], [2, 3]].replaced(0, [7, 8, 9]);
     Stdout().writeln(t.ints(nested[0]) + "|" + t.ints(nested[1]) + " " + [[1]].replaced(0, []).size().string());
     let bytes = [byte(1), byte(2)].replaced(1, byte(9));

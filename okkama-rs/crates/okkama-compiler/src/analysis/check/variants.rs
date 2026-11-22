@@ -161,12 +161,7 @@ impl Checker<'_, '_> {
                     self.error(pattern.span, "Expected an enum variant pattern");
                     continue;
                 };
-                let receiver = if matches!(&object.kind, ast::ExprKind::Name(n) if n.text == "$choice")
-                {
-                    Some((id, None))
-                } else {
-                    self.variant_receiver(object)
-                };
+                let receiver = self.variant_receiver(object);
                 match receiver {
                     Some((other, explicit)) if other == id => {
                         if let Some(explicit) = explicit {
@@ -243,6 +238,10 @@ impl Checker<'_, '_> {
             self.pop_scope();
         }
         let exhaustive = seen.iter().all(|b| *b);
+        // #286: an `else` after cases that cover every variant can never run.
+        if exhaustive && let Some(block) = &body.else_block {
+            self.error(block.span, "Unreachable else: the cases already cover every value");
+        }
         if !exhaustive && body.else_block.is_none() {
             let missing: Vec<_> = decl
                 .cases

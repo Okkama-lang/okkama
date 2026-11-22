@@ -1,0 +1,45 @@
+module suite v1.0.0;
+
+// Run by tests/test_workers.rs (#938) with --workers: every way a test in a
+// process worker can end. "slow" finishes last although it is declared first,
+// so the report's order must come from the declarations.
+import "io/stdout" take Stdout, Stderr;
+import "os/run" take Run;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
+
+async test "slow" {
+    await SystemClock().wait(Duration(milliseconds: 600));
+    Stdout().writeln("slow done");
+    test.ok(true);
+}
+
+test "passes" {
+    Stdout().writeln("to stdout");
+    Stderr().writeln("to stderr");
+    test.is(1 + 1, 2);
+}
+
+test "fails" {
+    Stdout().writeln("before the check");
+    test.is(2 + 2, 5);
+}
+
+test "skips" {
+    test.skip("not here");
+}
+
+test "floods" {
+    Stdout().write("x".repeat(200000));
+    test.ok(false);
+}
+
+test "hangs" {
+    loop {
+        last if 1 == 2;
+    }
+}
+
+async test "crashes" {
+    await Run("sh", ["-c", "kill -9 $PPID"]).completion();
+}

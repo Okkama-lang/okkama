@@ -20,36 +20,7 @@ pub const UNBOUND: Word = 0;
 /// or scalar value uses).
 pub const UNBOUND_RAW: Word = 0x7ff8_dead_beef_0001;
 
-/// How a word of a given static type is traced and converted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum Repr {
-    /// Tagged small integer or BigInt pointer.
-    Int = 0,
-    /// Raw bits: float, bool, byte, char.
-    Raw = 1,
-    /// Pointer to a heap object (or [`UNBOUND`]).
-    Ref = 2,
-}
-
-impl Repr {
-    pub(crate) fn from_bits(bits: u64) -> Self {
-        match bits {
-            0 => Self::Int,
-            1 => Self::Raw,
-            _ => Self::Ref,
-        }
-    }
-    /// The heap object a word of this representation points to, if any.
-    #[inline]
-    pub fn pointer(self, word: Word) -> Option<Word> {
-        match self {
-            Self::Int if word & 1 == 0 && word != UNBOUND => Some(word),
-            Self::Ref if word != UNBOUND => Some(word),
-            _ => None,
-        }
-    }
-}
+pub use okkama_sparrow::layout::Repr;
 
 /// Largest and smallest integers stored inline.
 pub const SMALL_MAX: i64 = (1 << 62) - 1;

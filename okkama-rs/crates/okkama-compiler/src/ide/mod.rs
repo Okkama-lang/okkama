@@ -16,7 +16,7 @@ mod index;
 mod lint;
 pub(crate) mod outline;
 mod std_paths;
-pub use std_paths::{StdCompletion, StdKind, std_completions};
+pub use std_paths::{StdCompletion, StdKind, std_completions, std_completions_with_overlay};
 
 pub use complete::{Context, builtin_members, keywords};
 pub use index::build;
@@ -33,6 +33,11 @@ pub fn has_tests(source: &SourceFile) -> bool {
     let Ok(program) = syntax::parse(source, &ParseOptions::default()) else {
         return true;
     };
+    program_has_tests(&program)
+}
+
+/// Есть ли в разобранном файле тесты или fakes — код тестового режима (§14).
+pub fn program_has_tests(program: &ast::Program) -> bool {
     program.items.iter().any(|item| match item {
         ast::Item::Test(_) => true,
         ast::Item::Object(decl) => decl
@@ -332,35 +337,8 @@ pub(crate) fn hover_text(signature: &str, doc: &str) -> String {
     if doc.trim().is_empty() {
         format!("```okkama\n{signature}\n```")
     } else {
-        format!("```okkama\n{signature}\n```\n\n{}", doc_markdown(doc))
+        format!("```okkama\n{signature}\n```\n\n{}", doc)
     }
-}
-
-/// Комментарии std используют отступ в четыре пробела для примеров: это уже
-/// блок кода markdown; остальное — абзацы.
-fn doc_markdown(doc: &str) -> String {
-    let mut out = String::new();
-    let mut in_code = false;
-    for line in doc.lines() {
-        let code = line.starts_with("    ");
-        if code && !in_code {
-            out.push_str("```okkama\n");
-            in_code = true;
-        } else if !code && in_code && !line.trim().is_empty() {
-            out.push_str("```\n");
-            in_code = false;
-        }
-        if in_code {
-            out.push_str(line.strip_prefix("    ").unwrap_or(line));
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    if in_code {
-        out.push_str("```\n");
-    }
-    out.trim_end().to_string()
 }
 
 #[cfg(test)]

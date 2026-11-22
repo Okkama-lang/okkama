@@ -5,6 +5,7 @@ module http/body v1.0.0;
 //     Response(status: Status.ok, content: TextBody(text: "hello"));
 //     Response(status: Status.ok, content: JsonBody(Json(JsonField("id", 7))));
 //     Response(status: Status.ok, content: BytesBody(bytes: image, media_type: "image/png"));
+//     Request(url: url, method: Method.post, content: FormBody(QueryParameters(QueryParameter(name: "q", value: "tea"))));
 //
 //     let reading = request.body().reading();
 //     let chunk = await reading.bytes(8192);      // [] at the end
@@ -21,8 +22,9 @@ module http/body v1.0.0;
 
 import "http/header" take Headers;
 import "json" take Json;
+import "url/query" take QueryParameters;
+import "url/form" take FormUrlEncoded;
 import "encoding/utf" take Utf8Encoded;
-import "numbers/bigint" take BigInt;
 import "io/stream" take AsyncReading, Closing, InvalidReadLimit;
 import "io/decorators" take InvalidReading;
 import "async/atomic" take Atomic;
@@ -34,7 +36,7 @@ import "async/scope" take FutureGroup;
 // Unknown length is explicit and never represented by a negative sentinel.
 role BodyOpening {
     // Its length in bytes; UnknownBodyLength when it is not known.
-    length() is BigInt;
+    length() is int;
     // Whether reading() may be called more than once.
     replayable() is bool;
     // Starts reading the body.
@@ -66,8 +68,8 @@ object ByteBody does BodyOpening {
     }
 
     // The number of bytes.
-    length() is BigInt {
-        BigInt(origin.size().string());
+    length() is int {
+        origin.size();
     }
 
     // true.
@@ -204,14 +206,35 @@ object BytesBody does Content {
     }
 }
 
+// An HTML form as a body, `application/x-www-form-urlencoded` (url/form:
+// spaces as `+`, the rest percent-encoded).
+object FormBody does Content {
+    has fields is QueryParameters;
+
+    // fields, in order; a name may repeat.
+    FormBody(fields is QueryParameters) {
+        self.fields = fields;
+    }
+
+    // `application/x-www-form-urlencoded`.
+    media_type() is string {
+        "application/x-www-form-urlencoded";
+    }
+
+    // The body to send.
+    opening() is BodyOpening {
+        ByteBody(FormUrlEncoded(fields).bytes());
+    }
+}
+
 // A body with no bytes.
 object EmptyBody does BodyOpening {
     // The empty body.
     EmptyBody();
 
     // 0.
-    length() is BigInt {
-        BigInt(0);
+    length() is int {
+        0;
     }
 
     // true.
@@ -245,7 +268,7 @@ object OneShotBody does BodyOpening {
     }
 
     // UnknownBodyLength.
-    length() is BigInt {
+    length() is int {
         throw UnknownBodyLength.unknown;
     }
 

@@ -1,0 +1,34 @@
+module bible/lock v1.0.0;
+
+// A Lock gives one task at a time a guard; a second task asking for it waits
+// until the first closes its guard, even across a suspension.
+import "async/lock" take Lock;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object User {
+    has name is string;
+    has device is Lock;
+    has gate is Event;
+    User(:name, :device, :gate);
+    async run() is void {
+        let guard = await device.guard();
+        defer guard.close();
+        Stdout().writeln(name + " enters");
+        await gate.wait();
+        Stdout().writeln(name + " leaves");
+    }
+}
+
+async main() is int {
+    let device = Lock();
+    let gate = Event();
+    let a = spawn User(name: "a", device: device, gate: gate).run();
+    let b = spawn User(name: "b", device: device, gate: gate).run();
+    Stdout().writeln("locked " + device.locked().string());
+    gate.set();
+    await a;
+    await b;
+    Stdout().writeln("locked " + device.locked().string());
+    0;
+}

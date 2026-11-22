@@ -28,7 +28,6 @@ import "http/internal/hpack" take HpackBudget;
 import "http/internal/hpack_tables" take HpackField;
 import "io/stream" take AsyncReading, AsyncWriting, Closing, InvalidReadLimit;
 import "io/decorators" take InvalidReading;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "collections/sequence" take Sequencing;
@@ -216,7 +215,7 @@ hidden object Http2SessionState does Http2ReceivingEvents, Http2BodyEvents {
     }
 
     body_limit() is int {
-        limits.body_bytes().int();
+        limits.body_bytes();
     }
 
     local_window() is int {
@@ -337,7 +336,7 @@ hidden object Http2SessionState does Http2ReceivingEvents, Http2BodyEvents {
         self.wake();
     }
 
-    async admit(position is int, request is Request, known is @BigInt, declared is @BigInt) is Http2StreamHolding {
+    async admit(position is int, request is Request, known is @int, declared is @int) is Http2StreamHolding {
         loop {
             confirm !self.closed() else throw Http2SessionClosed.closed;
             confirm !going.ready() else throw Http2Unprocessed.stream(0);
@@ -583,7 +582,7 @@ hidden object Http2StreamHolding {
     has owner is Http2SessionState;
     has stream is int;
     has request is Request;
-    has known, declared is @BigInt;
+    has known, declared is @int;
     has ready, released, preserved is Event;
     has origin is Atomic<@Http2StreamEntry>;
     has group is FutureGroup<bool>;
@@ -592,8 +591,8 @@ hidden object Http2StreamHolding {
         owner is Http2SessionState,
         stream is int,
         request is Request,
-        known is @BigInt,
-        declared is @BigInt
+        known is @int,
+        declared is @int
     ) {
         self.owner = owner;
         self.stream = stream;
@@ -735,16 +734,16 @@ hidden object Http2SessionExchange {
 
     async run() is Http2Exchange {
         let declared = Http2BodyLength(origin: request::Head::headers, stream: 1).known();
-        let known is @BigInt = try {
+        let known is @int = try {
             [request.body().length()];
         }
         catch e is UnknownBodyLength {
-            let empty is @BigInt = [];
+            let empty is @int = [];
             empty;
         };
         for known -> length {
             confirm length.sign() >= 0
-                && length.order(BigInt(owner.body_limit().string())) != Order.greater
+                && length.order((owner.body_limit())) != Order.greater
                 else throw InvalidHttpMessage.because("outgoing body length limit");
             for declared -> advertised {
                 confirm advertised.order(length) == Order.equal
@@ -793,12 +792,12 @@ hidden object Http2StreamEntry does Closing {
     has owner is Http2SessionState;
     has stream is int;
     has request is Request;
-    has known, declared is @BigInt;
+    has known, declared is @int;
     has body is Http2BodyBuffer;
     has life is Atomic<Http2StreamLife>;
     has response is Atomic<@ParsedHttp2Response>;
     has information is Atomic<@Response>;
-    has lengths is Atomic<@BigInt>;
+    has lengths is Atomic<@int>;
     has ready, claimed, consumption, stopped, written is Event;
     has failures is Atomic<@Error>;
     has sending is FutureGroup<bool>;
@@ -808,8 +807,8 @@ hidden object Http2StreamEntry does Closing {
         owner is Http2SessionState,
         stream is int,
         request is Request,
-        known is @BigInt,
-        declared is @BigInt
+        known is @int,
+        declared is @int
     ) {
         self.owner = owner;
         self.stream = stream;
@@ -831,7 +830,7 @@ hidden object Http2StreamEntry does Closing {
         response = Atomic(heads);
         let info is @Response = [];
         information = Atomic(info);
-        let empty is @BigInt = [];
+        let empty is @int = [];
         lengths = Atomic(empty);
         ready = Event();
         claimed = Event();
@@ -874,7 +873,7 @@ hidden object Http2StreamEntry does Closing {
         response.value()[0];
     }
 
-    lengths() is @BigInt {
+    lengths() is @int {
         lengths.value();
     }
 
@@ -996,7 +995,7 @@ hidden object Http2StreamEntry does Closing {
             || status == Status.not_modified;
         body.configure(known, empty);
         lengths.replace(if empty || block.end_stream() {
-            [BigInt(0)];
+            [0];
         }
         else {
             known;
@@ -1113,15 +1112,15 @@ hidden object Http2RequestBodySending {
     has entry is Http2StreamEntry;
     has sender is Http2DataScheduler;
     has opening is BodyOpening;
-    has declared, known is @BigInt;
+    has declared, known is @int;
     has maximum is int;
 
     Http2RequestBodySending(
         entry is Http2StreamEntry,
         sender is Http2DataScheduler,
         opening is BodyOpening,
-        declared is @BigInt,
-        known is @BigInt,
+        declared is @int,
+        known is @int,
         maximum is int
     ) {
         self.entry = entry;
@@ -1152,20 +1151,20 @@ hidden object Http2RequestBodySending {
             confirm total <= maximum
                 else throw InvalidHttpMessage.because("outgoing body byte limit");
             for declared -> length {
-                confirm BigInt(total).order(length) != Order.greater
+                confirm total.order(length) != Order.greater
                     else throw InvalidHttpMessage.because("outgoing Content-Length overflow");
             }
             for known -> length {
-                confirm BigInt(total).order(length) != Order.greater
+                confirm total.order(length) != Order.greater
                     else throw InvalidHttpMessage.because("outgoing body exceeds source length");
             }
             if bytes.size() == 0 {
                 for declared -> length {
-                    confirm BigInt(total).order(length) == Order.equal
+                    confirm total.order(length) == Order.equal
                         else throw InvalidHttpMessage.because("outgoing Content-Length underflow");
                 }
                 for known -> length {
-                    confirm BigInt(total).order(length) == Order.equal
+                    confirm total.order(length) == Order.equal
                         else throw InvalidHttpMessage.because("outgoing source length underflow");
                 }
             }
@@ -1189,7 +1188,7 @@ hidden object Http2SessionBody does BodyOpening {
         entry.claim();
     }
 
-    length() is BigInt {
+    length() is int {
         let lengths = entry.lengths();
         confirm lengths.size() == 1 else throw UnknownBodyLength.unknown;
         lengths[0];
@@ -1294,6 +1293,6 @@ hidden object Http2SessionSettlement<T> {
 // The session was used after it closed.
 enum Http2SessionClosed is Error = (closed);
 
-// The stream was not processed: the connection was going away (GOAWAY) before
+// The stream was not processed: the connection was going away GOAWAY before
 // it; it is safe to send again.
 enum Http2Unprocessed is Error = (stream(stream is int));

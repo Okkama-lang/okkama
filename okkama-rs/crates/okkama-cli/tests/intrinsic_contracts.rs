@@ -19,7 +19,7 @@ fn compiled(case: &str) -> okkama_sparrow::Program {
         case.replace('/', "-")
     ));
     let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["build", "--target", "sparrow"])
+        .args(["build"])
         .arg(&source)
         .arg("-o")
         .arg(&out)

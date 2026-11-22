@@ -1,5 +1,5 @@
 //! `runtime/database` (provider `optional.sqlite`) — перенос `SqliteNatives`
-//! JVM contract, backed by rusqlite and its bundled SQLite. Each connection
+//! Shared native contract, backed by rusqlite and its bundled SQLite. Each connection
 //! обслуживает свой рабочий поток; операции идут по очереди, их исход
 //! приходит событием цикла. Ответ — `ok` и данные либо отказ `kind`/`code`.
 #![allow(unsafe_code)]
@@ -1893,11 +1893,10 @@ mod reply_lifetime_tests {
         });
         let value = new_handle(reply.clone());
         let future = sched::resolved(Ok(value.clone()));
-        sched::register(&future);
         let cells = execute(Native::DatabaseSqliteReplyCells, &[value.clone(), Value::Int(IntValue::from_i64(0))]).unwrap();
         execute(Native::DatabaseSqliteReplyClose, std::slice::from_ref(&value)).unwrap();
         // The outcome is still cached, but its closed native resource owns no payload.
-        let again = sched::await_future(&future).unwrap();
+        let again = future.outcome().unwrap();
         assert!(Rc::ptr_eq(handle::<Rc<Reply>>(&again).unwrap(), &reply));
         let data = reply.data.borrow();
         assert!(data.rows.is_none() && data.bytes.is_none() && data.names.is_none());

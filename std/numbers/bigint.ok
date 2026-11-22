@@ -1,6 +1,7 @@
 module numbers/bigint v1.0.0;
 
-// An immutable integer of any size, for the std APIs that hand one out.
+// An explicit integer wrapper with validated decimal parsing and numeric algorithms.
+// Ordinary std integer quantities use int directly (#511).
 //
 //     let count = BigInt("18446744073709551616");
 //     let seven = BigInt(7);
@@ -166,28 +167,164 @@ object BigInt does Comparing<BigInt>, Adding<BigInt, BigInt>, Subtracting<BigInt
 
     // self^exponent with at most maximum_bits result bits; 0^0 is 1.
     power(exponent is int, maximum_bits is int) is BigInt {
+        BigInt(BoundedPower(base: value).int(exponent, maximum_bits));
+    }
+}
+
+// An exact int power with an explicit result-bit budget. BigInt.power and
+// untrusted std parsers share this operation; no oversized product is made.
+//
+//     BoundedPower(base: 10).int(100, 4096);
+object BoundedPower {
+    has base is int;
+
+    // Binds the base; int() validates the exponent and bit budget.
+    BoundedPower(base is int) {
+        self.base = base;
+    }
+
+    // base^exponent, at most maximum_bits bits; 0^0 is 1.
+    int(exponent is int, maximum_bits is int = 1048576) is int {
         confirm exponent >= 0 else throw InvalidBigExponent.exponent(exponent);
         confirm maximum_bits > 0 else throw InvalidBigPowerLimit.maximum_bits(maximum_bits);
         if exponent == 0 {
-            return BigInt(1);
+            return 1;
         }
-        let magnitude = value.abs();
-        if magnitude <= 1 {
-            return BigInt(value.pow(exponent));
+        let magnitude = base.abs();
+        if magnitude == 0 {
+            return 0;
         }
-        // |self|^exponent has at least (bits - 1) * exponent + 1 bits: refuse
-        // before computing when even that is over the budget.
-        confirm (self.bits() - 1) * exponent + 1 <= maximum_bits
+        if magnitude == 1 {
+            return if base < 0 && exponent % 2 != 0 {
+                -1;
+            }
+            else {
+                1;
+            };
+        }
+        // At least exponent + 1 bits. Reject huge exponents before allocating.
+        confirm exponent < maximum_bits
             else throw BigPowerLimitExceeded.maximum_bits(maximum_bits);
-        let result = value.pow(exponent);
-        confirm result.abs() < 2.pow(maximum_bits)
+        let bits = if magnitude <= 9223372036854775807 {
+            64 - magnitude.leading_zeros();
+        }
+        else {
+            bigint_bits(magnitude.string());
+        };
+        confirm (bits - 1) * exponent + 1 <= maximum_bits
             else throw BigPowerLimitExceeded.maximum_bits(maximum_bits);
-        BigInt(result);
+        let upper_bits = bits * exponent;
+        // If the upper bound fits, the native power cannot exceed the budget.
+        if upper_bits <= maximum_bits {
+            return base.pow(exponent);
+        }
+        let ceiling = 2.pow(maximum_bits) - 1;
+        let factor = Atomic(magnitude);
+        let power = Atomic(exponent);
+        let result = Atomic(1);
+        loop {
+            last if power.value() == 0;
+            if power.value() % 2 != 0 {
+                confirm result.value() <= (ceiling / factor.value()).int()
+                    else throw BigPowerLimitExceeded.maximum_bits(maximum_bits);
+                result.replace(result.value() * factor.value());
+            }
+            power.replace((power.value() / 2).int());
+            if power.value() > 0 {
+                confirm factor.value() <= (ceiling / factor.value()).int()
+                    else throw BigPowerLimitExceeded.maximum_bits(maximum_bits);
+                factor.replace(factor.value() * factor.value());
+            }
+        }
+        if base < 0 && exponent % 2 != 0 {
+            -result.value();
+        }
+        else {
+            result.value();
+        }
     }
 }
 
 // Text that is not an integer.
 enum InvalidBigInt is Error = (invalid);
+
+test "511 int quotient and remainder agree with BigInt for every sign" {
+    for [7, -7, 123456789012345678901234567891, -123456789012345678901234567891] -> a {
+        for [2, -2] -> b {
+            let q = (a / b).int();
+            let r = a % b;
+            test.is(q, BigInt(a).divided(BigInt(b)).int());
+            test.is(r, BigInt(a).remainder(BigInt(b)).int());
+            test.is(a, q * b + r);
+            test.ok(r == 0 || r.sign() == a.sign());
+        }
+    }
+    test.is((7 / 2).int(), 3);
+    test.is((-7 / 2).int(), -3);
+    test.is((7 / -2).int(), -3);
+    test.is((-7 / -2).int(), 3);
+    test.ok(try {
+        BigInt(7).divided(BigInt(0));
+        false;
+    }
+    catch error is BigDivisionByZero {
+        true;
+    });
+    test.ok(try {
+        BigInt(7).remainder(BigInt(0));
+        false;
+    }
+    catch error is BigDivisionByZero {
+        true;
+    });
+}
+
+test "511 bounded powers keep every parser budget and reject oversized products" {
+    for [129, 1100, 1400, 4096, 8192, 1048576] -> budget {
+        test.is(BoundedPower(base: 2).int(100, budget), 1267650600228229401496703205376);
+        test.ok(try {
+            BoundedPower(base: 2).int(budget, budget);
+            false;
+        }
+        catch BigPowerLimitExceeded.maximum_bits(bits) {
+            bits == budget;
+        });
+    }
+    test.is(BoundedPower(base: 2).int(128, 129), 340282366920938463463374607431768211456);
+    test.is(BoundedPower(base: 3).int(5, 8), 243);
+    test.ok(try {
+        BoundedPower(base: 3).int(6, 9);
+        false;
+    }
+    catch BigPowerLimitExceeded.maximum_bits(bits) {
+        bits == 9;
+    });
+    test.is(BoundedPower(base: -3).int(5, 8), -243);
+    test.is(BoundedPower(base: 0).int(0, 1), 1);
+    test.is(BoundedPower(base: 0).int(1000000000000000000000000000000, 1), 0);
+    test.is(BoundedPower(base: -1).int(1000000000000000000000000000001, 1), -1);
+    test.ok(try {
+        BoundedPower(base: 10).int(1000000000000000000000000000000, 4096);
+        false;
+    }
+    catch error is BigPowerLimitExceeded {
+        true;
+    });
+    test.ok(try {
+        BoundedPower(base: 2).int(-1, 8);
+        false;
+    }
+    catch error is InvalidBigExponent {
+        true;
+    });
+    test.ok(try {
+        BoundedPower(base: 2).int(0, 0);
+        false;
+    }
+    catch error is InvalidBigPowerLimit {
+        true;
+    });
+}
 
 // Division or remainder by zero.
 enum BigDivisionByZero is Error = (by_zero);

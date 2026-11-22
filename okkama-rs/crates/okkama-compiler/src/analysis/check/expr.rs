@@ -102,81 +102,6 @@ impl Checker<'_, '_> {
             ast::ExprKind::Literal(literal) => self.literal(literal, span),
             ast::ExprKind::Name(name) => self.read_name(name),
             ast::ExprKind::SelfValue => self.self_expr(span),
-            ast::ExprKind::Choice(inner) => {
-                if let ast::ExprKind::If {
-                    condition,
-                    then_block,
-                    else_block,
-                } = &inner.kind
-                {
-                    let check = self.value(condition, Some(&Ty::Bool));
-                    self.expect(&check, &Ty::Bool, condition.span, "Choice condition");
-                    let yes = self.block(then_block, true, expected);
-                    let no = self.block(else_block, true, expected);
-                    let (ty, joined) = self.join(&[&yes, &no], true, span);
-                    if ty.is_none() && !joined {
-                        self.error(
-                            span,
-                            "Compact choice branches must produce a value or diverge",
-                        );
-                    }
-                    // A literal condition selects the branch that runs, as in lowering.
-                    let diverges = match literal_condition(condition) {
-                        Some(true) => yes.diverges,
-                        Some(false) => no.diverges,
-                        None => joined,
-                    };
-                    return Expr {
-                        diverges: check.diverges || diverges,
-                        kind: ExprKind::If {
-                            condition: Box::new(check),
-                            then_block: self.block_of(yes),
-                            else_block: Some(self.block_of(no)),
-                        },
-                        ty,
-                        span,
-                    };
-                }
-                let result = self.expr(inner, true, expected);
-                // A compact match that leaves cases out has no value for
-                // them: one error, that names them when it can (#291).
-                let partial = match &result.kind {
-                    ExprKind::Match(found) if !found.exhaustive && found.else_block.is_none() => Some(
-                        self.uncovered_message(found, "a `_:` branch")
-                            .unwrap_or_else(|| "Non-exhaustive compact match".to_string()),
-                    ),
-                    _ => None,
-                };
-                let valueless = partial.is_none() && result.ty.is_none() && !result.diverges;
-                if valueless {
-                    self.error(
-                        span,
-                        "Compact choice branches must produce a value or diverge",
-                    );
-                }
-                if let ast::ExprKind::Match(body) = &inner.kind {
-                    let mut names = std::collections::HashSet::new();
-                    for arm in &body.cases {
-                        if let ast::ExprKind::Get { name, .. } = &arm.patterns[0].kind
-                            && !names.insert(&name.text) {
-                                self.error(name.span, "Duplicate variant pattern");
-                            }
-                    }
-                    if let ExprKind::Match(found) = &result.kind
-                        && !matches!(Self::ty_of(&found.subject), Ty::Enum(_)) {
-                            self.error(span, "Compact patterns require an enum value");
-                        }
-                }
-                // Reported once here: the value it lacks is not reported again.
-                if let Some(message) = partial {
-                    self.error(span, message);
-                    return Self::poisoned(span);
-                }
-                if valueless {
-                    return Self::poisoned(span);
-                }
-                result
-            }
             ast::ExprKind::Grouping(inner) => self.expr(inner, want, expected),
             ast::ExprKind::Unary { op, operand, .. } => self.unary(*op, operand, span),
             ast::ExprKind::Binary {
@@ -188,20 +113,13 @@ impl Checker<'_, '_> {
             ast::ExprKind::Binary {
                 op, left, right, ..
             } => {
-                // `fake.storage.get(k)` операнд получает тип другого операнда.
-                if is_fake_get(left) && !is_fake_get(right) {
-                    let rhs = self.value(right, None);
-                    let ty = Self::ty_of(&rhs).taken();
-                    let lhs = self.value(left, Some(&ty));
-                    return self.binary_values(*op, lhs, rhs, span);
-                }
                 let lhs = self.value(left, None);
                 // An object, a role or a role-bounded type on the left: the
                 // operator role it declares (#215).
                 if Self::operator_operand(*op, &lhs) {
                     return self.operator_call(*op, lhs, right, span);
                 }
-                let rhs = if is_fake_get(right) || matches!(lhs.ty, Some(Ty::Variant(..))) {
+                let rhs = if matches!(lhs.ty, Some(Ty::Variant(..))) {
                     let ty = Self::ty_of(&lhs).taken();
                     self.value(right, Some(&ty))
                 } else {
@@ -991,45 +909,43 @@ impl Checker<'_, '_> {
         }
         let mut cases = Vec::new();
         let mut arms: Vec<Expr> = Vec::new();
+        // #286: a repeated enum case or literal value can never be chosen.
+        let mut seen_patterns: Vec<String> = Vec::new();
         for case in &body.cases {
             let mut patterns = Vec::new();
             for pattern in &case.patterns {
-                let value = if let (Ty::Enum(id), ast::ExprKind::Get { object, name }) =
-                    (&subject_ty, &pattern.kind)
-                {
-                    if matches!(&object.kind, ast::ExprKind::Name(n) if n.text == "$choice") {
-                        if let Some(case) = self.reg.enums[id.0]
-                            .cases
-                            .iter()
-                            .position(|c| c == &name.text)
-                        {
-                            Self::typed(
-                                ExprKind::EnumCase { ty: *id, case },
-                                subject_ty.clone(),
-                                pattern.span,
-                            )
-                        } else {
-                            self.error(pattern.span, "Unknown enum variant");
-                            Self::poisoned(pattern.span)
-                        }
-                    } else {
-                        self.value(pattern, Some(&subject_ty))
-                    }
-                } else {
-                    self.value(pattern, Some(&subject_ty))
-                };
+                let value = self.value(pattern, Some(&subject_ty));
                 // Совпадение — тот же `==`, что и в выражениях.
                 let probe =
                     Self::typed(ExprKind::Unreachable, subject_ty.clone(), body.subject.span);
                 let _ =
                     self.binary_values(ast::BinaryOp::Equal, probe, value.clone(), pattern.span);
+                let key = match &value.kind {
+                    ExprKind::EnumCase { case, .. } => Some((format!("case {case}"), "Duplicate variant pattern")),
+                    ExprKind::Constant(constant) if !matches!(constant, Constant::Float(_)) => {
+                        Some((format!("{constant:?}"), "Duplicate case pattern"))
+                    }
+                    _ => None,
+                };
+                if let Some((key, message)) = key {
+                    if seen_patterns.contains(&key) {
+                        self.error(pattern.span, message);
+                    } else {
+                        seen_patterns.push(key);
+                    }
+                }
                 patterns.push(value);
             }
             let out = self.block(&case.body, want, expected);
             arms.push(out.clone());
             cases.push((patterns, self.block_of(out)));
         }
-        let exhaustive = body.else_block.is_none() && self.covers(&subject_ty, &body.cases);
+        let covered = self.covers(&subject_ty, &body.cases);
+        let exhaustive = body.else_block.is_none() && covered;
+        // #286: an `else` after cases that cover every value can never run.
+        if covered && let Some(block) = &body.else_block {
+            self.error(block.span, "Unreachable else: the cases already cover every value");
+        }
         let else_value = body
             .else_block
             .as_ref()
@@ -1071,8 +987,7 @@ impl Checker<'_, '_> {
                     if let ast::ExprKind::Get { object, name } = &strip_grouping(pattern).kind
                         && let ast::ExprKind::Name(enum_name) = &strip_grouping(object).kind
                             && self.local(&enum_name.text).is_none()
-                                && (enum_name.text == "$choice"
-                                    || self.enum_named(&enum_name.text) == Some(*id))
+                                && self.enum_named(&enum_name.text) == Some(*id)
                                 && let Some(case) = self.reg.enums[id.0]
                                     .cases
                                     .iter()
@@ -2091,26 +2006,6 @@ fn holds_any(ty: &Ty) -> bool {
         Ty::Map(key, value) => holds_any(key) || holds_any(value),
         _ => false,
     }
-}
-
-/// `fake.storage.get(...)`: тип чтения хранилища fake даёт контекст.
-fn is_fake_get(expr: &ast::Expr) -> bool {
-    let ast::ExprKind::Call { callee, .. } = &strip_grouping(expr).kind else {
-        return false;
-    };
-    let ast::ExprKind::Get { object, name } = &strip_grouping(callee).kind else {
-        return false;
-    };
-    let ast::ExprKind::Get {
-        object: inner,
-        name: view,
-    } = &strip_grouping(object).kind
-    else {
-        return false;
-    };
-    name.text == "get"
-        && view.text == "storage"
-        && matches!(&strip_grouping(inner).kind, ast::ExprKind::Name(fake) if fake.text == "fake")
 }
 
 /// Первый тип, не пересекающий границу процесса-воркера (§18.1).

@@ -12,7 +12,6 @@ native object JsonParseState;
 native object JsonNodeState;
 
 // JSON text being written.
-native object JsonOutputState;
 
 // JSON items cut from a stream (#136).
 native object JsonSplitState;
@@ -66,43 +65,11 @@ native json_node_size(origin is JsonNodeState) is int;
 // The item at index of an array.
 native json_node_item(origin is JsonNodeState, index is int) is JsonNodeState;
 
-// The name of member index of an object.
-native json_member_name(origin is JsonNodeState, index is int) is string;
-
 // The value of member index of an object.
 native json_member_value(origin is JsonNodeState, index is int) is JsonNodeState;
 
 // The index of the member called name, or -1.
 native json_member_position(origin is JsonNodeState, name is string) is int;
-
-// JSON string literal of any string: '"' and '\' escaped, \n, \r, \t by name,
-// the other controls U+0000..U+001F as lowercase \u00xx, everything else as is.
-native json_quote(origin is string) is string;
-
-// JSON spelling of a decimal number text: positional for integers up to 21
-// digits and fractions down to 1e-6, the canonical Decimal form beyond them.
-native json_number_text(origin is string) is string;
-
-// JSON text being written, appended at the end. Each append answers the UTF-8
-// size of the whole text so far. json_output_text appends a string literal,
-// json_output_number the json_number_text of a decimal, and
-// json_output_member a member name with its colon, after a comma unless first.
-native json_output() is JsonOutputState;
-
-// Appends text as it is; the length so far.
-native json_output_raw(origin is JsonOutputState, text is string) is int;
-
-// Appends text as a JSON string; the length so far.
-native json_output_text(origin is JsonOutputState, text is string) is int;
-
-// Appends a number; the length so far.
-native json_output_number(origin is JsonOutputState, number is string) is int;
-
-// Appends a member name, with a comma unless first; the length so far.
-native json_output_member(origin is JsonOutputState, name is string, first is bool) is int;
-
-// The text written.
-native json_output_string(origin is JsonOutputState) is string;
 
 // The first index whose name repeats an earlier one, or the number of names.
 native json_repeated_name(names is @string) is int;
@@ -144,8 +111,10 @@ native json_object_node(names is @string, values is @JsonNodeState) is JsonNodeS
 
 // JSON text of a node: compact for a negative indentation, otherwise one
 // member or element per line, level * indentation spaces, ": " after names,
-// [] and {} for empty containers and no final line break. Numbers are written
-// as json_number_text, strings as json_quote.
+// [] and {} for empty containers and no final line break. A number is written
+// positionally for integers up to 21 digits and fractions down to 1e-6, in the
+// canonical Decimal form beyond them; a string with '"' and '\' escaped, \n,
+// \r, \t by name and the other controls U+0000..U+001F as lowercase \u00xx.
 native json_node_write(origin is JsonNodeState, indentation is int) is string;
 
 // The RFC 6901 pointer of target inside root (the same node, found depth
@@ -181,7 +150,7 @@ test "JSON native scalar children and ordered members" {
     test.is(json_node_number(json_node_item(root, 1)), "12");
     test.is(json_node_text(json_node_item(root, 2)), "x");
     let table = json_node_item(root, 3);
-    test.is(json_member_name(table, 0), "a");
+    test.is(json_member_names(table)[0], "a");
     test.is(json_node_kind(json_member_value(table, 0)), 0);
 }
 
@@ -225,16 +194,6 @@ test "JSON invalid observations use portable native failure codes" {
         );
         test.is(
             try {
-                json_member_name(table, index);
-                "";
-            }
-            catch failure is NativeFailure {
-                failure.code();
-            },
-            "invalid_input"
-        );
-        test.is(
-            try {
                 json_member_value(table, index);
                 "";
             }
@@ -263,10 +222,13 @@ test "JSON member positions and quoted strings" {
         },
         "invalid_input"
     );
-    test.is(json_quote(""), "\"\"");
-    test.is(json_quote("é🙂/\u{7f}"), "\"é🙂/\u{7f}\"");
-    test.is(json_quote("\"\\\n\r\t"), "\"\\\"\\\\\\n\\r\\t\"");
-    test.is(json_quote("\u{0}\u{8}\u{c}\u{1b}\u{1f}"), "\"\\u0000\\u0008\\u000c\\u001b\\u001f\"");
+    test.is(json_node_write(json_text_node(""), 0), "\"\"");
+    test.is(json_node_write(json_text_node("é🙂/\u{7f}"), 0), "\"é🙂/\u{7f}\"");
+    test.is(json_node_write(json_text_node("\"\\\n\r\t"), 0), "\"\\\"\\\\\\n\\r\\t\"");
+    test.is(
+        json_node_write(json_text_node("\u{0}\u{8}\u{c}\u{1b}\u{1f}"), 0),
+        "\"\\u0000\\u0008\\u000c\\u001b\\u001f\""
+    );
     for [
         ["404", "404"],
         ["1e3", "1000"],
@@ -283,32 +245,11 @@ test "JSON member positions and quoted strings" {
         ["1e1000000", "1e1000000"],
         ["12.50", "12.5"]
     ] -> pair {
-        test.is(json_number_text(pair[0]), pair[1]);
+        test.is(json_node_write(json_number_node(pair[0]), 0), pair[1]);
     }
     test.is(
         try {
-            json_number_text("x");
-            "";
-        }
-        catch failure is NativeFailure {
-            failure.code();
-        },
-        "invalid_input"
-    );
-}
-
-test "JSON output appends literals and answers its UTF-8 size" {
-    let output = json_output();
-    test.is(json_output_raw(output, "{"), 1);
-    test.is(json_output_member(output, "é", true), 6);
-    test.is(json_output_text(output, "a\"\u{1}🙂"), 21);
-    test.is(json_output_member(output, "n", false), 26);
-    test.is(json_output_number(output, "1.25e1"), 30);
-    test.is(json_output_raw(output, "}"), 31);
-    test.is(json_output_string(output), "{\"é\":\"a\\\"\\u0001🙂\",\"n\":12.5}");
-    test.is(
-        try {
-            json_output_number(output, "x");
+            json_number_node("x");
             "";
         }
         catch failure is NativeFailure {

@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
+import "mime/part" take MimePart, TextBody, BinaryBody, MultipartBody, ParsedMime, MimeContent;
+
+// One header.
+hidden object Header {
+    Header();
+    of(name is string, value is string) is MessageHeader { MessageHeader(name: MessageHeaderName(name), value: value); }
+}
+
+// A multipart/mixed message built from a text and a binary part (and the same body wrapped as a part), written out and parsed back.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let h = Header();
+        let text = MimePart(headers: MessageHeaders(h.of("Content-Type", "text/plain; charset=utf-8")), body: TextBody(origin: "hi " + x, charset: "utf-8"));
+        let raw = MimePart(headers: MessageHeaders(h.of("Content-Type", "application/octet-stream"), h.of("Content-Transfer-Encoding", "base64")),
+            body: BinaryBody((0..v).map() -> k { byte(k); }));
+        let body = MultipartBody(subtype: "mixed", boundary: "b" + x, parts: [text, raw]);
+        let kind = MessageHeaders(h.of("Content-Type", "multipart/mixed; boundary=b" + x));
+        let extra = body.part(kind);
+        let outer = MimePart(headers: kind, body: MultipartBody(subtype: "mixed", boundary: "b" + x, parts: [text])).multipart(body);
+        let back = ParsedMime(outer.bytes()).node();
+        let total = back.children().size() + 10 * back.children()[1].part().body().bytes().size() + 100 * outer.headers().entries().size()
+            + (if MimeContent(text).type().string().starts_with("text/plain") { 1000; } else { 0; }) + 10000 * (if body.bytes().size() > 0 { 1; } else { 0; })
+            + 100000 * extra.headers().entries().size();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
