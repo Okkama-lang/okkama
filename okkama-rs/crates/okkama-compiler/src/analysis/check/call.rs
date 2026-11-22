@@ -158,6 +158,8 @@ impl Checker<'_, '_> {
         out
     }
 
+    /// The argument types of a call for a message, the spread last as
+    /// `@T...`: it is often the argument that did not fit (#959).
     pub(super) fn type_list(&self, call: &CallArgs) -> String {
         call.values
             .iter()
@@ -168,6 +170,9 @@ impl Checker<'_, '_> {
                     None => ty,
                 }
             })
+            .chain(call.spread.iter().map(|(array, _)| {
+                format!("{}...", self.type_name(&Self::ty_of(array).taken()))
+            }))
             .collect::<Vec<_>>()
             .join(", ")
     }

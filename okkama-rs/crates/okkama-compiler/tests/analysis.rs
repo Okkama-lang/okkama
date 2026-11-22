@@ -1432,3 +1432,30 @@ fn a_match_over_other_values_without_else_names_the_missing_else() {
         assert_eq!(located(&wrap(subject, ty, body)), [], "{body}");
     }
 }
+
+/// #959: the argument list of a no-match or ambiguity message shows the
+/// spread, last, as `@T...`; it is often the argument that did not fit.
+#[test]
+fn call_messages_list_the_spread_argument() {
+    let decls = "object K { K() { } join(values is ...string) is string { \"x\"; } \
+                 pick(values is ...int) is int { 0; } pick(first is int, values is ...int) is int { first; } } \
+                 object B { B(values is ...string) { } B(n is int, values is ...string) { } }";
+    let first = |body: &str| {
+        messages(&format!("{decls} main() is int {{ let nums = [1, 2]; {body} 0; }}"))
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    };
+    for (body, expected) in [
+        ("K().join(\"a\", nums...);", "No action \"join\" on object \"K\" accepts (string, @int...)"),
+        ("K().join(nums...);", "No action \"join\" on object \"K\" accepts (@int...)"),
+        ("let b = B(true, nums...);", "No constructor of \"B\" accepts (bool, @int...)"),
+        ("K().pick(1, nums...);", "Ambiguous call of action \"pick\" on object \"K\" with (int, @int...)"),
+    ] {
+        let message = first(body);
+        assert!(message.starts_with(expected), "{body}: {message}");
+    }
+    // Without a spread the list is the plain arguments; a fitting spread is fine.
+    assert!(first("K().join(\"a\", K());").starts_with("No action \"join\" on object \"K\" accepts (string, K)"));
+    assert_eq!(first("let words is @string = [\"a\"]; K().join(\"b\", words...);"), "");
+}
