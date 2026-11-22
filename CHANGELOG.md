@@ -11,7 +11,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the
   compiler's tokens. Every chapter was checked against the 0.6.2 source, and its 246 examples run with
   `build.py --check`. The defects and doubts found are in the milestone "Bible findings" (#952–#959,
-  #964–#968).
+  #964–#970).
+- **The Okkama Book (EN/RU)** checked against the 0.6.2 source as well: the Rust implementation and Sparrow
+  instead of the retired Perl interpreter, static errors no longer called runtime errors, removed modules and
+  natives replaced by the current std (`math/decimal`, `regex/pattern`, `debug/dumper`, `testing/check`),
+  `Iterating`/`item`/`successor`, and the roadmap's delivered items marked as delivered.
 
 ## [0.6.2] — 2026-11-22
 
