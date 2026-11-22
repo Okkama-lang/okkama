@@ -39,7 +39,7 @@ object Http2RequestFields {
             Http2HostAgreement(
                 fields: request::Head::headers,
                 scheme: "",
-                authority: target.string(),
+                authority: target.authority(),
                 stream: stream
             );
             [
@@ -105,7 +105,7 @@ hidden object Http2RequestControl {
         Http2HostAgreement(
             fields: request::Head::headers,
             scheme: parts::Parts::scheme,
-            authority: authority,
+            authority: parts,
             stream: stream
         );
         let target = request::Head::target;
@@ -169,6 +169,27 @@ hidden object Http2HostAgreement {
                 );
         }
     }
+
+    // Outbound coordinates have already been parsed and validated (#943).
+    Http2HostAgreement(fields is Headers, scheme is string, authority is UrlParts, stream is int) {
+        let hosts = fields.values(HeaderName("Host"));
+        confirm hosts.size() <= 1
+            else throw Http2Fault.detailed(Http2FaultScope.stream, 1, stream, "duplicate Host");
+        let expected = Http2AuthorityCoordinates(
+            scheme: scheme,
+            authority: authority,
+            stream: stream
+        ).string();
+        if hosts.size() == 1 {
+            confirm Http2AuthorityKey(scheme: scheme, origin: hosts.item(0), stream: stream).string() == expected
+                else throw Http2Fault.detailed(
+                    Http2FaultScope.stream,
+                    1,
+                    stream,
+                    "Host disagrees with authority"
+                );
+        }
+    }
 }
 
 hidden object Http2AuthorityKey {
@@ -184,6 +205,27 @@ hidden object Http2AuthorityKey {
         confirm authority::Parts::path == ""
             && authority::Parts::query == Maybe<string>.none
             && (authority::Parts::host else "") != ""
+            && authority::Parts::userinfo == Maybe<string>.none
+            else throw Http2Fault.detailed(
+                Http2FaultScope.stream,
+                1,
+                stream,
+                "authority without host or with userinfo"
+            );
+        key = Http2AuthorityCoordinates(scheme: scheme, authority: authority, stream: stream).string();
+    }
+
+    string() is string {
+        key;
+    }
+}
+
+// The canonical host/port of an already parsed URL, without a text round trip.
+hidden object Http2AuthorityCoordinates {
+    has key is string;
+
+    Http2AuthorityCoordinates(scheme is string, authority is UrlParts, stream is int) {
+        confirm (authority::Parts::host else "") != ""
             && authority::Parts::userinfo == Maybe<string>.none
             else throw Http2Fault.detailed(
                 Http2FaultScope.stream,
@@ -671,4 +713,39 @@ test "response pseudo-status stays outside ordinary Headers" {
     );
     test.is(response.status(), Status.ok);
     test.is(response.headers().entries().size(), 0);
+}
+
+test "outbound authority agrees with Host using effective ports and IPv6" {
+    for ["https://example.test/a?q", "http://example.test:8080/a", "https://[::1]/a"] -> text {
+        let url = ParsedUrl(text).parts();
+        let request = Request(url: text, headers: Headers(Header("Host", url.authority())));
+        let fields = Http2RequestFields(request, 1).fields();
+        test.is(fields[2].value(), url.authority());
+        test.is(fields[3].value(), "/a" + (if text.ends_with("?q") {
+            "?q";
+        }
+        else {
+            "";
+        }));
+    }
+    let request = Request(
+        url: "https://example.test/a",
+        headers: Headers(Header("Host", "EXAMPLE.test:443"))
+    );
+    test.is(Http2RequestFields(request, 1).fields()[2].value(), "example.test");
+    test.throws(Http2Fault) {
+        Http2RequestFields(
+            Request(
+                url: "https://example.test",
+                headers: Headers(Header("Host", "example.test:80"))
+            ),
+            1
+        );
+    };
+    test.throws(Http2Fault) {
+        Http2RequestFields(
+            Request(url: "https://example.test", headers: Headers(Header("Host", "other.test"))),
+            1
+        );
+    };
 }

@@ -94,7 +94,13 @@ object CookieOrigin {
         };
         let registrable = if dns {
             try {
-                PublicSuffixList().registrable(HostName(canonical)).ascii();
+                let host = if raw == canonical {
+                    parts.host_name();
+                }
+                else {
+                    HostName(canonical);
+                };
+                PublicSuffixList().registrable(host).ascii();
             }
             catch e is MissingRegistrableDomain {
                 canonical;
@@ -551,4 +557,17 @@ test "Set-Cookie keeps explicit context and precedence" {
     ).cookie();
     test.ok(cookie.attributes()::Attributes::path == "/a");
     test.ok(cookie.attributes().expiry().instant().unix_duration()::Span::seconds == 10.rat());
+}
+
+test "cookie sites retain trailing dot and private suffix policy" {
+    for ["https://a.example.com", "https://a.example.com."] -> text {
+        let origin = CookieOrigin(ParsedUrl(text).parts());
+        test.is(origin::Origin::domain, "a.example.com");
+        test.is(origin::Origin::site, "https://example.com");
+    }
+    test.is(
+        CookieOrigin(ParsedUrl("https://a.github.io").parts())::Origin::site,
+        "https://a.github.io"
+    );
+    test.is(CookieOrigin(ParsedUrl("http://127.0.0.1").parts())::Origin::site, "http://127.0.0.1");
 }

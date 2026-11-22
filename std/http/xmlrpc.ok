@@ -1409,18 +1409,23 @@ hidden object XmlRpcResultWire {
 // DTD/PI/attributes/extension tags are rejected by this protocol grammar.
 hidden object XmlRpcXmlCharacters {
     XmlRpcXmlCharacters(origin is string) {
-        for (0..32) -> code {
-            if code == 9 || code == 10 || code == 13 {
-                next;
+        // One scan, retaining control-before-noncharacter error precedence.
+        let verdict = origin.characters().reduce(0) -> state, character {
+            let code = character.code();
+            if code < 32 && code != 9 && code != 10 && code != 13 {
+                2;
             }
-            let character = Utf8Decoded([code.byte()]).string();
-            confirm !origin.contains(character)
-                else throw InvalidXmlRpc.because("XML control character");
-        }
-        for [[239.byte(), 191.byte(), 190.byte()], [239.byte(), 191.byte(), 191.byte()]] -> bytes {
-            confirm origin.split(Utf8Decoded(bytes).string()).size() == 1
-                else throw InvalidXmlRpc.because("XML noncharacter");
-        }
+            else {
+                if state == 0 && (code == 65534 || code == 65535) {
+                    1;
+                }
+                else {
+                    state;
+                }
+            }
+        };
+        confirm verdict != 2 else throw InvalidXmlRpc.because("XML control character");
+        confirm verdict != 1 else throw InvalidXmlRpc.because("XML noncharacter");
     }
 }
 
@@ -1478,6 +1483,7 @@ hidden object XmlRpcXmlDecoded {
 
 hidden object XmlRpcParsing {
     has source is PlistXmlSource;
+    has lookahead is Atomic<@PlistXmlToken>;
     has position is Atomic<int>;
     has usage is XmlRpcUsage;
 
@@ -1499,6 +1505,8 @@ hidden object XmlRpcParsing {
         XmlRpcXmlCharacters(text);
         source = PlistXmlSource(source: text, base: 0);
         position = Atomic(0);
+        let empty is @PlistXmlToken = [];
+        lookahead = Atomic(empty);
         usage = XmlRpcUsage(limits);
         let first = try {
             let token = self.source.token(0);
@@ -1514,9 +1522,16 @@ hidden object XmlRpcParsing {
     }
 
     token() is PlistXmlToken {
+        let at = position.value();
+        let saved = lookahead.value();
+        if saved.size() == 1 && saved[0].start() == at {
+            return saved[0];
+        }
         try {
-            let token = source.token(position.value());
+            let token = source.token(at);
             confirm token.kind() != "doctype" else throw InvalidXmlRpc.because("DTD disabled");
+            // peek/open/close may inspect the same token more than once (#943).
+            lookahead.replace([token]);
             token;
         }
         catch e is Error {
@@ -2326,4 +2341,55 @@ test "arrays, structs and calls read by position and name (#517)" {
     test.throws(WrongXmlRpcValue) {
         call.parameter(2);
     };
+}
+
+test "XMLRPC lookahead advances across comments empty and nested values" {
+    let wire = "<methodCall><!--a--><methodName>sum</methodName><params><param><value><array><data><value><string/></value><value><int>7</int></value></data></array></value></param></params></methodCall>";
+    let call = ParsedXmlRpcCall(Utf8Encoded(wire).bytes(), XmlRpcLimits()).call();
+    test.is(call.method(), "sum");
+    test.is(call.parameter(0).item(0).text(), "");
+    test.is(call.parameter(0).item(1).int(), 7);
+    test.throws(InvalidXmlRpc) {
+        ParsedXmlRpcCall(Utf8Encoded(wire + "<extra/>").bytes(), XmlRpcLimits()).call();
+    };
+}
+
+test "XMLRPC joins scalar pieces and writes values in document order" {
+    let text = "<methodCall><methodName>s<![CDATA[u]]><!--gap-->m</methodName><params><param><value><string>a<![CDATA[b]]>&amp;c</string></value></param><param><value><int>9</int></value></param></params></methodCall>";
+    let call = ParsedXmlRpcCall(Utf8Encoded(text).bytes(), XmlRpcLimits()).call();
+    test.is(call.method(), "sum");
+    test.is(call.parameter(0).text(), "ab&c");
+    let wire = XmlRpcCallWire(call, XmlRpcLimits()).bytes();
+    let again = ParsedXmlRpcCall(wire, XmlRpcLimits()).call();
+    test.is(again.method(), "sum");
+    test.is(again.parameter(0).text(), "ab&c");
+    test.is(again.parameter(1).int(), 9);
+}
+
+test "XMLRPC scalar checks preserve legal whitespace and error precedence" {
+    XmlRpcXmlCharacters("x\t\n\ré");
+    test.throws(InvalidXmlRpc) {
+        XmlRpcXmlCharacters("x" + 0.char().string());
+    };
+    let noncharacter = 65535.char().string();
+    test.is(
+        try {
+            XmlRpcXmlCharacters(noncharacter);
+            "accepted";
+        }
+        catch InvalidXmlRpc.because(reason) {
+            reason;
+        },
+        "XML noncharacter"
+    );
+    test.is(
+        try {
+            XmlRpcXmlCharacters(noncharacter + 0.char().string());
+            "accepted";
+        }
+        catch InvalidXmlRpc.because(reason) {
+            reason;
+        },
+        "XML control character"
+    );
 }

@@ -17,6 +17,7 @@ module mail/imap_response v1.0.0;
 // 8 KiB, a literal 16 MiB, a response 32 MiB and 100 literals.
 
 import "collections/sequence" take Sequencing;
+import "collections/list" take List, EmptyList;
 import "mime/media_type" take MimeItems, MimePosition;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/single_byte" take AsciiDecoded;
@@ -275,7 +276,9 @@ enum MissingImapTag is Error = (missing);
 // A response being read; used inside mail/imap_response.
 object ImapResponseProgress {
     has limits is ImapResponseLimits;
-    has pending, first is string;
+    has first is string;
+    // Reversed line bytes: accepting a byte never copies the preceding line (#943).
+    has pending is List<byte>;
     has parts is MimeItems<ImapResponsePart>;
     has pieces is MimeItems<ByteSnapshot>;
     has remaining, used, literals is int;
@@ -284,7 +287,8 @@ object ImapResponseProgress {
     // Nothing read yet, within limits.
     ImapResponseProgress(limits is ImapResponseLimits) {
         self.limits = limits;
-        pending = "";
+        let no_bytes is List<byte> = EmptyList();
+        pending = no_bytes;
         first = "";
         let empty is MimeItems<ImapResponsePart> = MimeItems();
         parts = empty;
@@ -367,18 +371,25 @@ object ImapResponseProgress {
             else throw InvalidState.because("IMAP response expects literal bytes or is complete");
         confirm used < limits::Limits::wire_bytes
             else throw ImapResponseLimitExceeded.kind("wire_bytes");
-        confirm pending.length() < limits::Limits::line_bytes
+        confirm pending.size() < limits::Limits::line_bytes
             else throw ImapResponseLimitExceeded.kind("line_bytes");
         let code = octet.int();
-        let cr = pending.length() > 0
-            && pending.ends_with("\r");
+        let cr = pending.size() > 0
+            && pending.first().int() == 13;
         if cr {
             confirm code == 10
                 else throw InvalidImapResponse.located(used, "CR must be followed by LF");
         }
         if code == 10 {
             confirm cr else throw InvalidImapResponse.located(used, "bare LF");
-            let line = pending.slice(0, pending.length() - 1);
+            let reversed is @byte = pending.map() -> octet {
+                octet;
+            };
+            let bytes is @byte = (0..reversed.size()).map() -> index {
+                reversed[reversed.size() - index - 1];
+            };
+            let text = AsciiDecoded(bytes).string();
+            let line = text.slice(0, text.length() - 1);
             let initial = if first == "" {
                 line;
             }
@@ -386,7 +397,7 @@ object ImapResponseProgress {
                 first;
             };
             let header = ImapResponseHeader(initial);
-            let start = used - pending.length();
+            let start = used - pending.size();
             let marker = ImapResponseLine(
                 origin: line,
                 offset: start,
@@ -396,7 +407,7 @@ object ImapResponseProgress {
             let extended = parts.following(
                 ImapResponsePart(
                     kind: ImapResponsePartKind.text,
-                    value: Utf8Encoded(pending + "\n").bytes()
+                    value: bytes + [10.byte()]
                 )
             );
             if marker.present() {
@@ -421,13 +432,14 @@ object ImapResponseProgress {
                 ^done = true;
             }
             ^parts = extended;
-            ^pending = "";
+            let no_bytes is List<byte> = EmptyList();
+            ^pending = no_bytes;
             ^first = initial;
         }
         else {
             confirm code == 13 || code == 9 || (code >= 32 && code <= 126)
                 else throw InvalidImapResponse.located(used, "invalid ASCII response byte");
-            ^pending = pending + AsciiDecoded([octet]).string();
+            ^pending = pending.prefix(octet);
         }
         ^used = used + 1;
     }
@@ -788,4 +800,19 @@ test "IMAP zero literal still requires final CRLF" {
     test.ok(!decoder.complete());
     decoder = decoder.fed(Utf8Encoded("\r\n").bytes());
     test.is(decoder.finish().parts().size(), 3);
+}
+
+test "response line assembly retains ASCII and fragmented CRLF" {
+    let wire = Utf8Encoded("* OK printable !~\ttext\r\n").bytes();
+    let decoder = ImapResponseDecoder();
+    for wire -> octet {
+        decoder = decoder.fed([octet]);
+    }
+    test.is(decoder.finish().bytes(), wire);
+    test.throws(InvalidImapResponse) {
+        ParsedImapResponse([42.byte(), 32.byte(), 128.byte()]).response();
+    };
+    test.throws(InvalidImapResponse) {
+        ParsedImapResponse(Utf8Encoded("* OK x\rX").bytes()).response();
+    };
 }
