@@ -13,7 +13,8 @@ object Guard {
     destroy { Stdout().writeln("destroy " + name); }
 }
 
-// An async destroy: scopes of async actions close through `region.settle`.
+// An async destroy: a scope of an async action holding two closes through `region.settle`; a guard alone in
+// its scope settles directly (`resource.settle`, #329).
 object Flush {
     has name is string;
     Flush(name is string) { self.name = name; }
@@ -33,7 +34,12 @@ object Flushing {
     Flushing();
     async run() is int {
         let flush = Flush("scope");
+        let second = Flush("second");
         1;
+    }
+    async alone() is int {
+        let flush = Flush("alone");
+        2;
     }
 }
 
@@ -116,6 +122,7 @@ async main() is int {
     let add = work.adder(10);
     out.writeln(add(5).string());
     out.writeln((await Flushing().run()).string());
+    out.writeln((await Flushing().alone()).string());
     let squares = (0..20000).map()->i{ Square(i); };
     out.writeln(squares.size().string());
     let steps = (0..100000).reduce(0)->sum,i{ sum + i % 3; };
