@@ -322,6 +322,15 @@ fn gzip_header(bytes: &[u8]) -> Result<Option<usize>, Fail> {
         if bytes.len() < at {
             return Ok(None);
         }
+        // FHCRC: the low 16 bits of the CRC-32 of the header before it (#990).
+        let stored = u16::from_le_bytes([bytes[at - 2], bytes[at - 1]]);
+        if stored != crc32(0, &bytes[..at - 2]) as u16 {
+            return Err(invalid("The gzip header checksum does not match"));
+        }
+    }
+    // The limit holds for a complete header too, not only a partial one (#990).
+    if at > HEADER_LIMIT {
+        return Err(invalid("The gzip header is too long"));
     }
     Ok(Some(at))
 }
@@ -627,6 +636,27 @@ mod tests {
         }
         assert!(decompressor.finish().is_ok());
         plain
+    }
+
+    /// #990: FHCRC is compared, and a complete header past the limit is
+    /// refused like a partial one.
+    #[test]
+    fn gzip_header_checks_its_crc_and_its_limit() {
+        let mut header = vec![0x1f, 0x8b, 8, 2, 0, 0, 0, 0, 0, 3];
+        let crc = crc32(0, &header) as u16;
+        let mut good = header.clone();
+        good.extend(crc.to_le_bytes());
+        assert_eq!(gzip_header(&good).ok().flatten(), Some(12));
+        header.extend((crc ^ 1).to_le_bytes());
+        assert!(gzip_header(&header).is_err());
+
+        let mut long = vec![0x1f, 0x8b, 8, 8, 0, 0, 0, 0, 0, 3];
+        long.extend(std::iter::repeat_n(b'a', HEADER_LIMIT));
+        long.push(0);
+        assert!(gzip_header(&long).is_err());
+        let mut short = vec![0x1f, 0x8b, 8, 8, 0, 0, 0, 0, 0, 3];
+        short.extend(b"name\0");
+        assert_eq!(gzip_header(&short).ok().flatten(), Some(15));
     }
 
     #[test]

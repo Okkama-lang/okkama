@@ -576,7 +576,13 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             string(&args[0])?,
             &items(&args[1])?,
         )?)),
-        "statistics_mean" => Ok(Value::Float(mean(&numbers(&args[0])?))),
+        "statistics_mean" => {
+            let values = numbers(&args[0])?;
+            if values.is_empty() {
+                return Err(failed(native));
+            }
+            Ok(Value::Float(mean(&values)))
+        }
         "statistics_geometric_mean" => {
             let values = numbers(&args[0])?;
             if values.contains(&0.0) {
@@ -596,6 +602,9 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
         }
         "statistics_median" => {
             let ordered = sorted(&numbers(&args[0])?);
+            if ordered.is_empty() {
+                return Err(failed(native));
+            }
             let middle = ordered.len() / 2;
             if ordered.len() % 2 == 1 {
                 return Ok(Value::Float(ordered[middle]));
@@ -612,6 +621,9 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             let count = int(&args[1])?.to_i64().unwrap_or(0);
             let method = string(&args[2])?;
             let length = ordered.len() as i64;
+            if length < 2 {
+                return Err(failed(native));
+            }
             let mut result = Vec::new();
             match method {
                 "inclusive" => {
@@ -631,11 +643,16 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
                     let span = length + 1;
                     for index in 1..count {
                         let scaled = index * span;
-                        let position = (scaled / count).clamp(1, length - 1) as usize;
+                        let position = (scaled / count).clamp(1, length - 1);
+                        // Past the ends the weight leaves [0, 1] and the cut
+                        // extrapolates, as Python's statistics does; the
+                        // remainder of the unclamped position is wrong there (#990).
+                        let part = scaled - position * count;
+                        let position = position as usize;
                         result.push(Value::Float(interpolate(
                             ordered[position - 1],
                             ordered[position],
-                            scaled % count,
+                            part,
                             count,
                         )));
                     }
@@ -797,10 +814,17 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             }
             Ok(Value::Float(value.ln()))
         }
-        "distribution_exp" => Ok(Value::Float(float(&args[0])?.exp())),
+        "distribution_exp" => {
+            // Language floats are finite: an overflowing exp is refused (#990).
+            let value = float(&args[0])?.exp();
+            if !value.is_finite() {
+                return Err(failed(native));
+            }
+            Ok(Value::Float(value))
+        }
         "distribution_sqrt" => {
             let value = float(&args[0])?;
-            if value < 0.0 {
+            if !(value >= 0.0) {
                 return Err(failed(native));
             }
             Ok(Value::Float(value.sqrt()))
@@ -833,3 +857,52 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
         ))),
     }
 }
+
+#[cfg(test)]
+mod statistics_tests {
+    use super::*;
+
+    fn floats(value: Value) -> Vec<f64> {
+        match value {
+            Value::Array(array) => (0..array.len())
+                .map(|index| match array.get(index) {
+                    Some(Value::Float(value)) => value,
+                    other => panic!("not a float: {other:?}"),
+                })
+                .collect(),
+            other => panic!("not an array: {other:?}"),
+        }
+    }
+
+    /// #990: exclusive cut points of a sparse sample extrapolate past the ends
+    /// and stay ordered, as Python's statistics.quantiles gives them.
+    #[test]
+    fn exclusive_quantiles_of_a_sparse_sample_are_ordered() {
+        let call = |values: Vec<f64>, count: i64| {
+            let values = array(values.into_iter().map(Value::Float).collect());
+            execute(
+                Native::StatisticsStatisticsQuantiles,
+                &[values, Value::Int(IntValue::from_i64(count)), Value::Str("exclusive".into())],
+                &Context::default(),
+            )
+        };
+        assert_eq!(
+            floats(call(vec![1.0, 2.0], 8).expect("quantiles")),
+            vec![0.375, 0.75, 1.125, 1.5, 1.875, 2.25, 2.625]
+        );
+        assert_eq!(floats(call(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 4).expect("quantiles")), vec![2.25, 4.5, 6.75]);
+        assert!(call(vec![1.0], 4).is_err());
+    }
+
+    /// #990: an empty sample has no mean or median, and exp past the float
+    /// range is refused rather than infinite.
+    #[test]
+    fn empty_samples_and_overflowing_exp_are_refused() {
+        let empty = || array(Vec::new());
+        assert!(execute(Native::StatisticsStatisticsMean, &[empty()], &Context::default()).is_err());
+        assert!(execute(Native::StatisticsStatisticsMedian, &[empty(), Value::Str("middle".into())], &Context::default()).is_err());
+        assert!(execute(Native::RandomDistributionDistributionExp, &[Value::Float(1000.0)], &Context::default()).is_err());
+        assert!(execute(Native::RandomDistributionDistributionExp, &[Value::Float(1.0)], &Context::default()).is_ok());
+    }
+}
+

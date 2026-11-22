@@ -272,7 +272,8 @@ impl Parser<'_> {
             let zeros = digits.len() - digits.trim_end_matches('0').len();
             exponent = crate::integer::add(&exponent, &IntValue::from_i64(zeros as i64));
         }
-        if exponent.to_i64().is_none() {
+        // A zero is zero at any exponent, as decimal_valid reads it (#990).
+        if !digits.is_empty() && exponent.to_i64().is_none() {
             return Err(ParseError {
                 offset: start,
                 message: "JSON number exponent is outside supported range".into(),
@@ -551,14 +552,16 @@ fn push_quoted(quoted: &mut String, origin: &str) {
 fn number_text(parts: &super::numbers::Decimal) -> String {
     let sign = if parts.sign < 0 { "-" } else { "" };
     let digits = parts.digits.as_str();
-    let length = digits.len() as i64;
-    if parts.exponent >= 0 {
-        if length + parts.exponent <= 21 {
+    // In i128: a parsed exponent may sit near the i64 ends (#990).
+    let length = digits.len() as i128;
+    let exponent = i128::from(parts.exponent);
+    if exponent >= 0 {
+        if length + exponent <= 21 {
             return format!("{sign}{digits}{}", "0".repeat(parts.exponent as usize));
         }
         return super::numbers::canonical(parts);
     }
-    let point = length + parts.exponent;
+    let point = length + exponent;
     if point > 0 {
         let (whole, fraction) = digits.split_at(point as usize);
         format!("{sign}{whole}.{fraction}")
@@ -866,5 +869,37 @@ pub fn execute(native: Native, args: &[Value], arrays: &ArrayHeap) -> Result<Val
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod number_tests {
+    use super::*;
+
+    fn number_of(text: &str) -> Parsed<String> {
+        let source: Vec<char> = text.chars().collect();
+        let depth = IntValue::from_i64(64);
+        let mut parser = Parser { source: &source, maximum_depth: &depth, position: 0, scratch: String::new() };
+        parser.number()
+    }
+
+    /// #990: a zero is zero at any exponent, as decimal_valid reads it; a
+    /// non-zero exponent past i64 is still refused.
+    #[test]
+    fn a_zero_with_a_huge_exponent_is_a_number() {
+        assert!(number_of("0e999999999999999999999").is_ok());
+        assert!(super::super::numbers::components("0e999999999999999999999").is_some());
+        assert!(number_of("1e999999999999999999999").is_err());
+    }
+
+    /// #990: writing an exponent near the i64 end does not overflow.
+    #[test]
+    fn writing_an_extreme_exponent_does_not_overflow() {
+        let parts = super::super::numbers::components("1e9223372036854775807").expect("decimal");
+        assert_eq!(number_text(&parts), "1e9223372036854775807");
+        let parts = super::super::numbers::components("12e-9223372036854775807").expect("decimal");
+        assert_eq!(number_text(&parts), "1.2e-9223372036854775806");
+        let parts = super::super::numbers::components("125e-2").expect("decimal");
+        assert_eq!(number_text(&parts), "1.25");
     }
 }

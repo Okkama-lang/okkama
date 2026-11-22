@@ -19,12 +19,11 @@ fn length(text: &str) -> usize {
 
 // ---- runtime/crypto ----
 
-fn digest_with(native: Native, algorithm: &str, key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
-    let unsupported = || {
-        let what = if key.is_empty() { "digest" } else { "HMAC" };
-        failure("core.crypto", "unsupported", native, format!("Unsupported {what} algorithm"))
-    };
-    let mut hasher = okkama_native::Hasher::new(algorithm, key, 0).map_err(|_| unsupported())?;
+/// HMAC is std code over `digest/host` (`crypto/hmac`); no ABI symbol reaches a
+/// keyed provider here (#990).
+fn digest_with(native: Native, algorithm: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
+    let unsupported = || failure("core.crypto", "unsupported", native, "Unsupported digest algorithm");
+    let mut hasher = okkama_native::Hasher::new(algorithm, &[], 0).map_err(|_| unsupported())?;
     hasher.update(data);
     hasher.finish(0).map_err(|_| unsupported())
 }
@@ -396,29 +395,7 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
                     ));
                 }
             };
-            Ok(byte_array(digest_with(native, name, &[], &bytes(&args[1])?)?))
-        }
-        ("runtime/crypto", "hmac") => {
-            let algorithm = string(&args[0])?;
-            if !matches!(algorithm, "sha256" | "sha384" | "sha512") {
-                return Err(failure(
-                    "core.crypto",
-                    "unsupported",
-                    native,
-                    "Unsupported HMAC algorithm",
-                ));
-            }
-            let mut key = bytes(&args[1])?;
-            // Пустой ключ HMAC дополняется нулями, как и ключ из одного нуля.
-            if key.is_empty() {
-                key.push(0);
-            }
-            Ok(byte_array(digest_with(
-                native,
-                &format!("hmac-{algorithm}"),
-                &key,
-                &bytes(&args[2])?,
-            )?))
+            Ok(byte_array(digest_with(native, name, &bytes(&args[1])?)?))
         }
         ("runtime/crypto", "secure_equal") => {
             let (left, right) = (bytes(&args[0])?, bytes(&args[1])?);

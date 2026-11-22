@@ -1,6 +1,6 @@
 //! `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части
-//! Целые произвольной точности — свой `Big`
-//! (основание 10^9), без внешних зависимостей. Неверная запись операнда —
+//! `DecimalNatives`. Целые произвольной точности — `crate::bignum::Big`,
+//! обёртка над `num_bigint::BigInt`. Неверная запись операнда —
 //! `Native invocation "…" failed`; ожидаемые сбои — `NativeFailure`
 //! (`core.bigint`).
 

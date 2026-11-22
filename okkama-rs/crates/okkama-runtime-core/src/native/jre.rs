@@ -176,6 +176,10 @@ pub fn parse_double(text: &str) -> Option<f64> {
         Some(b'+') => (false, &text[1..]),
         _ => (false, text),
     };
+    // One sign only: `+-1` and `-+1` are not numbers (#990).
+    if body.starts_with(['+', '-']) {
+        return None;
+    }
     let signed = |value: f64| if negative { -value } else { value };
     match body {
         "NaN" => return Some(f64::NAN),
@@ -200,7 +204,8 @@ pub fn parse_double(text: &str) -> Option<f64> {
         }
         // Значащие биты с липким битом для корректного округления.
         let mut value: u128 = 0;
-        let mut shift = exponent - 4 * fraction.len() as i64;
+        // An exponent near the i64 ends must not wrap (#990).
+        let mut shift = exponent.checked_sub(4 * fraction.len() as i64)?;
         let mut sticky = false;
         for (index, digit) in digits.bytes().enumerate() {
             let nibble = u128::from((digit as char).to_digit(16).expect("hex"));
@@ -212,7 +217,7 @@ pub fn parse_double(text: &str) -> Option<f64> {
             }
         }
         let value = (value << 1) | u128::from(sticky);
-        shift -= 1;
+        shift = shift.checked_sub(1)?;
         return Some(signed(scaled(value, shift)));
     }
     let valid = !body.is_empty()
@@ -246,13 +251,28 @@ fn scaled(value: u128, shift: i64) -> f64 {
             mantissa += 1;
         }
     }
-    let shift = shift + drop.max(0) - (-drop).max(0);
-    (mantissa as f64) * 2f64.powi(shift as i32)
+    let shift = (shift + drop.max(0) - (-drop).max(0)).clamp(-4400, 4400) as i32;
+    // In two halves: 2^shift alone underflows to zero for a subnormal result,
+    // while the product is exact (#990).
+    (mantissa as f64) * 2f64.powi(shift / 2) * 2f64.powi(shift - shift / 2)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{parse_double, split};
+
+    /// #990: hex floats reach the subnormals, extreme exponents do not wrap,
+    /// and a second sign is refused.
+    #[test]
+    fn parse_double_hex_subnormals_and_signs() {
+        assert_eq!(parse_double("0x1p-1022"), Some(f64::MIN_POSITIVE));
+        assert_eq!(parse_double("0x1p-1074"), Some(f64::from_bits(1)));
+        assert_eq!(parse_double("0x1.8p1"), Some(3.0));
+        assert_eq!(parse_double("0x1.0p-9223372036854775808"), None);
+        assert_eq!(parse_double("+-1"), None);
+        assert_eq!(parse_double("-+1"), None);
+        assert_eq!(parse_double("-1.5"), Some(-1.5));
+    }
 
     #[test]
     fn split_follows_java_trailing_rules() {
