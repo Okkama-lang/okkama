@@ -379,6 +379,88 @@ fn a_destroy_failing_on_the_failure_path_stays_secondary_to_the_failure_in_fligh
     support::assert_value(&module, "7");
 }
 
+/// #329: an async-destroy guard alone in its scope settles directly (`resource.settle`), with no region.
+fn is_settled_static(module: &ir::Module, symbol: &str) -> bool {
+    let function = module.functions.iter().find(|function| function.symbol == symbol).expect(symbol);
+    let text = ir::print::function_text(module, function);
+    text.contains("resource.pin") && text.contains("resource.settle") && !text.contains("region.")
+}
+
+/// The header `lower` adds itself; a CLI run needs it in the file.
+const ASYNC_HEADER: &str = "module app v1.0.0;\nimport \"async/atomic\" take Atomic;\n";
+
+const ASYNC_GUARDS: &str = r#"
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+enum Stop is Error = (now(code is int));
+object Guard {
+    has name is string;
+    has log is Atomic<string>;
+    has gate is Event;
+    has fails is bool;
+    Guard(:name, :log, :gate, :fails);
+    async destroy {
+        await gate.wait();
+        log.replace(log.value() + name);
+        confirm !fails else throw Stop.now(9);
+    }
+}
+object Work {
+    Work();
+    async use(log is Atomic<string>, gate is Event, fails is bool, stop is bool) is int {
+        let guard = Guard(name: "g", log: log, gate: gate, fails: fails);
+        defer log.replace(log.value() + "d");
+        confirm !stop else throw Stop.now(7);
+        1;
+    }
+}
+"#;
+
+/// #329: a guard with an async destroy alone in its scope is static: it settles at the scope's exit after the
+/// defers, exactly once, on the normal path, on the failure path and under cancellation, and the scope waits for
+/// a destroy that suspends.
+#[test]
+fn an_async_destroy_guard_settles_statically_like_its_region_did() {
+    let program = format!("{ASYNC_GUARDS}{}", r#"
+async main() is int {
+    let log = Atomic("");
+    let work = Work();
+    confirm await work.use(log, Event(ready: true), false, false) == 1;
+    let gate = Event();
+    let task = spawn Work().use(log, gate, false, false);
+    confirm log.value() == "dgd";
+    task.cancel();
+    gate.set();
+    confirm await task == 1;
+    let code = try { await work.use(log, Event(ready: true), false, true); } catch Stop.now(code) { code; };
+    Stdout().writeln(log.value() + " " + code.string());
+    0;
+}
+"#);
+    let module = lower(&program);
+    assert!(is_settled_static(&module, "Work.use"), "the guard never leaves use");
+    assert_eq!(stdout_of("async-static-guard", &format!("{ASYNC_HEADER}{program}")), "dgdgdg 7\n");
+}
+
+/// #329: a failing async destroy of a static guard fails its scope on the normal path, and stays secondary to a
+/// failure in flight.
+#[test]
+fn a_failing_async_destroy_of_a_static_guard_fails_its_scope_or_rides_along() {
+    let program = format!("{ASYNC_GUARDS}{}", r#"
+async main() is int {
+    let log = Atomic("");
+    let work = Work();
+    let normal = try { await work.use(log, Event(ready: true), true, false); } catch Stop.now(code) { code; };
+    let failing = try { await work.use(log, Event(ready: true), true, true); } catch Stop.now(code) { code; };
+    Stdout().writeln(log.value() + " " + normal.string() + " " + failing.string());
+    0;
+}
+"#);
+    let module = lower(&program);
+    assert!(is_settled_static(&module, "Work.use"));
+    assert_eq!(stdout_of("async-static-guard-fails", &format!("{ASYNC_HEADER}{program}")), "dgdg 9 7\n");
+}
+
 /// Run `program` through the CLI binary; its standard output.
 fn stdout_of(name: &str, program: &str) -> String {
     let dir = std::env::temp_dir().join(format!("tweed-{name}-{}", std::process::id()));

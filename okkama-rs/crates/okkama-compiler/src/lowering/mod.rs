@@ -888,7 +888,8 @@ fn dev_ir(stage: &'static str, module: &ir::Module) {
             instructions += block.insts.len() as u64;
             for inst in &block.insts {
                 if matches!(inst.kind, ir::InstKind::ResourcePin { .. } | ir::InstKind::ResourceLeave { .. }
-                    | ir::InstKind::ResourceUnwind { .. })
+                    | ir::InstKind::ResourceUnwind { .. } | ir::InstKind::ResourceSettle { .. }
+                    | ir::InstKind::ResourceSettleUnwind { .. })
                 {
                     *regions.entry("resource (static)").or_default() += 1;
                     ops += 1;

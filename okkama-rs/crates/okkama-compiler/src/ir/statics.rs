@@ -6,9 +6,11 @@
 //! worker, an atomic or a failure. On top of that this pass takes a value only when everything else is plain to
 //! see:
 //!
-//! - it is the result of a call (a constructor or a factory) typed as an object with a synchronous destroy of
-//!   its own, not builtin, whose fields are all plain (no other identity can hang off it); in an async body
-//!   too, unless its region settles (an async destroy elsewhere in the program);
+//! - it is the result of a call (a constructor or a factory) typed as an object with a destroy of its own, not
+//!   builtin, whose fields are all plain (no other identity can hang off it). A synchronous destroy: in a sync
+//!   or async body, unless its region settles (an async destroy elsewhere in the program). An async destroy
+//!   (#329): in an async body whose region settles, alone in that region; its exits become `resource.settle`
+//!   and `resource.settle_unwind`, which await the destroy as `region.settle` does;
 //! - its region operations are `region.track`/`region.adopt` into one region R, and R holds nothing else: no
 //!   other member, no transfer, no keep that could reach a resource, R not passed around;
 //! - every block reachable from its creation before R's exits is dominated by the code right after the creation
@@ -100,6 +102,7 @@ fn region_of(function: &Function, value: ValueId) -> Option<ValueId> {
 
 /// The type and region conditions (no control flow yet).
 fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId) -> Result<Vec<ValueId>, &'static str> {
+    let settles = settles(module, function, value);
     let Some((block, index)) = definition(function, value) else { return Err("no definition") };
     if !matches!(function.blocks[block].insts[index].kind, InstKind::Call { .. }) {
         return Err("not a call");
@@ -109,8 +112,11 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
     let Type::Object(object) = function.values[value.0] else { return Err("not an object type") };
     let declaration = &module.objects[object.0];
     let Some(destroy) = declaration.destroy else { return Err("no destroy of its own") };
-    if declaration.builtin || module.functions[destroy.0].is_async() {
-        return Err("builtin or async destroy");
+    if declaration.builtin {
+        return Err("builtin");
+    }
+    if module.functions[destroy.0].is_async() && !function.is_async() {
+        return Err("async destroy outside an async body");
     }
     if !declaration.fields.iter().all(|field| plain.ty(&field.ty)) {
         return Err("a field may hold a resource");
@@ -138,13 +144,24 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
                     }
                 }
                 InstKind::RegionLeave { region: r, keep } => {
+                    if *r == region && settles {
+                        return Err("an async destroy in a region that does not settle");
+                    }
                     if *r == region && keep.is_some_and(|keep| !plain.ty(&function.values[keep.0])) {
                         return Err("region keeps a value");
                     }
                 }
                 InstKind::RegionUnwind { .. } => {}
-                InstKind::RegionSettle { region: r, .. } | InstKind::RegionSettleUnwind { region: r, .. } => {
-                    if *r == region {
+                InstKind::RegionSettle { region: r, keep } => {
+                    if *r == region && !settles {
+                        return Err("region settles");
+                    }
+                    if *r == region && keep.is_some_and(|keep| !plain.ty(&function.values[keep.0])) {
+                        return Err("region keeps a value");
+                    }
+                }
+                InstKind::RegionSettleUnwind { region: r, .. } => {
+                    if *r == region && !settles {
                         return Err("region settles");
                     }
                 }
@@ -162,7 +179,16 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
             return Err("region passed");
         }
     }
+    if settles && !others.is_empty() {
+        return Err("an async destroy sharing its region");
+    }
     Ok(others)
+}
+
+/// Whether the value's destroy is async: its scope's exits then settle (await the destroy).
+fn settles(module: &Module, function: &Function, value: ValueId) -> bool {
+    let Type::Object(object) = function.values[value.0] else { return false };
+    module.objects[object.0].destroy.is_some_and(|destroy| module.functions[destroy.0].is_async())
 }
 
 /// Split the creating block right after the creation, so the creation's own failure keeps the old handler.
@@ -181,6 +207,8 @@ fn split_after_definition(function: &mut Function, value: ValueId) {
 
 struct Plan {
     region: ValueId,
+    /// The destroy is async (#329): `resource.settle`/`resource.settle_unwind` instead of leave/unwind.
+    settles: bool,
     /// R keeps newer members: they close first, then the value.
     shared: bool,
     /// Blocks whose `region.leave R` the value reaches.
@@ -200,10 +228,17 @@ fn can_fail(block: &Block) -> bool {
 
 fn has(block: &Block, region: ValueId, leave: bool) -> bool {
     block.insts.iter().any(|inst| match &inst.kind {
-        InstKind::RegionLeave { region: r, .. } => leave && *r == region,
-        InstKind::RegionUnwind { region: r, .. } => !leave && *r == region,
+        InstKind::RegionLeave { region: r, .. } | InstKind::RegionSettle { region: r, .. } => leave && *r == region,
+        InstKind::RegionUnwind { region: r, .. } | InstKind::RegionSettleUnwind { region: r, .. } => {
+            !leave && *r == region
+        }
         _ => false,
     })
+}
+
+/// `region.leave R` or `region.settle R`.
+fn is_leave(kind: &InstKind, region: ValueId) -> bool {
+    matches!(kind, InstKind::RegionLeave { region: r, .. } | InstKind::RegionSettle { region: r, .. } if *r == region)
 }
 
 /// The control-flow conditions, after the split: the blocks to rewrite, or `None`.
@@ -226,7 +261,7 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Result<Plan,
     let handler = |block: usize| has(&function.blocks[block], region, false);
     // A handler closes R first: whatever it closed before would have to die before the value.
     let closes_first = |block: usize| matches!(function.blocks[block].insts.first().map(|inst| &inst.kind),
-        Some(InstKind::RegionUnwind { region: r, .. }) if *r == region);
+        Some(InstKind::RegionUnwind { region: r, .. } | InstKind::RegionSettleUnwind { region: r, .. }) if *r == region);
     // The creating block's own successor is the split-off rest; the walk starts there.
     let TermKind::Br(first) = &function.blocks[start].term.kind else { return Err("split") };
     let shared = !others.is_empty();
@@ -252,7 +287,9 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Result<Plan,
         }
     };
     let closes_first = |block: usize| closes_first(block) && (!shared || simple(block));
-    let mut plan = Plan { region, shared, leaves: Vec::new(), unwinds: Vec::new(), branches: Vec::new() };
+    let settles = function.blocks.iter().flat_map(|block| &block.insts)
+        .any(|inst| matches!(&inst.kind, InstKind::RegionSettle { region: r, .. } | InstKind::RegionSettleUnwind { region: r, .. } if *r == region));
+    let mut plan = Plan { region, settles, shared, leaves: Vec::new(), unwinds: Vec::new(), branches: Vec::new() };
     let mut seen = HashSet::new();
     // The value exists only after its creation: a block is in its reach when the split-off rest dominates it. The
     // creating block itself dominates its own handlers too, but along its unwind edge the value was never made.
@@ -271,8 +308,7 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Result<Plan,
         let body = &function.blocks[block];
         if has(body, region, true) {
             // Nothing before `region.leave R` may fail into a handler that does not close R.
-            let first_leave = body.insts.iter().position(|inst| matches!(&inst.kind,
-                InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
+            let first_leave = body.insts.iter().position(|inst| is_leave(&inst.kind, region)).expect("leave");
             if first_leave > 0 && (shared || !body.unwind.as_ref().is_some_and(|unwind| handler(unwind.block.0))) {
                 return Err("work before the leave");
             }
@@ -330,10 +366,10 @@ fn apply(function: &mut Function, value: ValueId, plan: Plan) {
             continue;
         }
         let insts = &mut function.blocks[block].insts;
-        let at = insts.iter().position(|inst| matches!(&inst.kind,
-            InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
+        let at = insts.iter().position(|inst| is_leave(&inst.kind, region)).expect("leave");
         let span = insts[at].span;
-        insts.insert(at, Inst { result: None, kind: InstKind::ResourceLeave { value }, span });
+        let kind = if plan.settles { InstKind::ResourceSettle { value } } else { InstKind::ResourceLeave { value } };
+        insts.insert(at, Inst { result: None, kind, span });
     }
     // One forwarding block per handler: close the value, then the handler as before.
     let mut forwarders: Vec<(usize, usize)> = Vec::new();
@@ -360,7 +396,15 @@ fn apply(function: &mut Function, value: ValueId, plan: Plan) {
         function.blocks.push(Block {
             params: params.clone(),
             unwind: None,
-            insts: vec![Inst { result: Some(closed), kind: InstKind::ResourceUnwind { value, failure: *failure }, span }],
+            insts: vec![Inst {
+                result: Some(closed),
+                kind: if plan.settles {
+                    InstKind::ResourceSettleUnwind { value, failure: *failure }
+                } else {
+                    InstKind::ResourceUnwind { value, failure: *failure }
+                },
+                span,
+            }],
             term: Terminator { kind: TermKind::Br(Target { block: BlockId(handler), args }), span },
         });
         let made = function.blocks.len() - 1;

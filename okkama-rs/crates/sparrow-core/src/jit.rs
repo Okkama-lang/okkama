@@ -142,6 +142,7 @@ helpers! {
     await_take = crate::tasks::rt_await_take as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     region_settle = crate::tasks::rt_region_settle as (ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64; [Allocates, Collects, Reenters, Fails];
+    resource_settle = crate::tasks::rt_resource_settle as (ctx, this: Word, object: Word, failure: Word) -> u64; [Allocates, Collects, Reenters, Fails];
     complete = crate::tasks::rt_complete as (ctx, frame: Word, value: Word); [Collects, Reenters];
     spawn = crate::tasks::rt_spawn as (ctx, future: Word) -> Word; [Reenters, Fails];
     fut = crate::tasks::rt_fut as (ctx, op: u64, future: Word) -> Word; [Reenters, Fails];
@@ -2222,6 +2223,19 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.suspend_unless_ready(pc, outcome, dst);
             }
+            I::ResourceSettle { .. } | I::ResourceSettleUnwind { .. } if self.frame.is_some() => {
+                let this = self.builder.use_var(self.frame.expect("frame"));
+                let unbound = self.iconst(word::UNBOUND as i64);
+                let (value, failure, dst) = match instruction {
+                    I::ResourceSettle { value } => (*value, unbound, None),
+                    I::ResourceSettleUnwind { dst, value, failure } => (*value, self.get(failure), Some(*dst)),
+                    _ => unreachable!("matched above"),
+                };
+                let object = self.word(&value);
+                let outcome = self.helper(|h| h.resource_settle, &[ctx, this, object, failure]).expect("result");
+                self.check(pc);
+                self.suspend_unless_ready(pc, outcome, dst);
+            }
             I::Await { dst, future } | I::AwaitTake { dst, future } if self.frame.is_some() => {
                 let this = self.builder.use_var(self.frame.expect("frame"));
                 let future = self.get(future);
@@ -3145,7 +3159,15 @@ mod frame_resident_tests {
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
 fn suspends(instruction: &I) -> bool {
-    matches!(instruction, I::Await { .. } | I::AwaitTake { .. } | I::RegionSettle { .. } | I::RegionSettleUnwind { .. })
+    matches!(
+        instruction,
+        I::Await { .. }
+            | I::AwaitTake { .. }
+            | I::RegionSettle { .. }
+            | I::RegionSettleUnwind { .. }
+            | I::ResourceSettle { .. }
+            | I::ResourceSettleUnwind { .. }
+    )
 }
 
 fn failure_or_region(instruction: &I) -> bool {

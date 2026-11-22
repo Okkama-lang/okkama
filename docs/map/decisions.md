@@ -209,3 +209,13 @@ implementation instruction of 2026-11-22:
   a bound Future in an admissible selection.
 - **#732.** The loader reconstructs static selections after generation. Codegen's count is only a draft.
 - **D1, async destroy.** Ruling PR-K is still only proposed; async destroy is unsupported on Champ.
+
+- **2026-11-22. #329: static async-destroy guards (owner: option (a)).** A frame-owned guard with an own async
+  destroy, alone in its scope's region of an async body, is a static resource: `resource.pin` after the
+  creation, `resource.settle` / `resource.settle_unwind` (ISA 161/162, SPB 16 additive) at the exits instead of
+  `region.track` + `region.adopt` + `region.settle`. The runtime closes the identity once (a pin holder may take
+  it), runs the destroy SHIELDED | OBSERVED like `rt_region_settle`, and parks a still-running destroy per
+  awaiting frame (`Resources::static_settling`, a GC root; the heap does not move). A guard sharing its region
+  stays dynamic. Guard benchmark (2M calls, mode hoisted out of the loop): destroy 0.333 → 0.186 s against a
+  deferred close of 0.181 s.
+

@@ -415,6 +415,11 @@ instructions! {
     ResourceLeave = 159, "resource.leave" { value: Register }
     /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
     ResourceUnwind = 160, "resource.unwind" { dst: Dst, value: Register, failure: Register }
+    /// #329: `resource.leave` of a static resource with an async destroy: a suspension point like
+    /// `region.settle` (the destroy is awaited shielded); a destroy failure fails the instruction.
+    ResourceSettle = 161, "resource.settle" { value: Register }
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceSettleUnwind = 162, "resource.settle_unwind" { dst: Dst, value: Register, failure: Register }
 
     Jump = 140, "jmp" { target: Target }
     Branch = 141, "br" { condition: Register, then_target: Target, else_target: Target }

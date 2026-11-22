@@ -159,6 +159,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **An `async destroy` guard costs what a deferred close costs (#329, step 4).** A guard with its own async destroy,
+  created and ending in one scope of an async action, is now destroyed directly at the scope's exits, awaited
+  shielded as before, without a cleanup region: 2 million guarded calls take 0.186 s instead of 0.333 s, against
+  0.181 s for `defer await guard.close()`. Cancellation, failure linking and destroys that suspend behave as
+  before; guards that share a scope keep the region.
 - **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
   secret scalar alone, still with RFC 6979 deterministic nonces: a P-256 signature plus two verifications takes
   178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. Locale tags no longer

@@ -1352,6 +1352,16 @@ pub enum InstKind {
         value: ValueId,
         failure: ValueId,
     },
+    /// #329: `resource.leave` of a static resource with an async destroy, in an async function: a suspension point
+    /// that awaits the destroy shielded, as `region.settle` does; a destroy failure is raised.
+    ResourceSettle {
+        value: ValueId,
+    },
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceSettleUnwind {
+        value: ValueId,
+        failure: ValueId,
+    },
     /// Отказ cleanup `cleanup` при идущем отказе `primary`: вторичный.
     FailSecondary {
         primary: ValueId,
@@ -1644,8 +1654,12 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![*region, *failure],
             InstKind::FailSecondary { primary, cleanup } => vec![*primary, *cleanup],
-            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => vec![*value],
-            InstKind::ResourceUnwind { value, failure } => vec![*value, *failure],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
+                vec![*value]
+            }
+            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
+                vec![*value, *failure]
+            }
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![*value],
             InstKind::Bits { value, count, .. } => std::iter::once(*value)
                 .chain(count.iter().copied())
@@ -1774,8 +1788,12 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![region, failure],
             InstKind::FailSecondary { primary, cleanup } => vec![primary, cleanup],
-            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => vec![value],
-            InstKind::ResourceUnwind { value, failure } => vec![value, failure],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
+                vec![value]
+            }
+            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
+                vec![value, failure]
+            }
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![value],
             InstKind::Bits { value, count, .. } => {
                 std::iter::once(value).chain(count.iter_mut()).collect()
