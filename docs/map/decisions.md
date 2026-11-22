@@ -307,3 +307,32 @@ no valid program changes meaning. Enforced in `analysis/check/call.rs`
 rebind `p = …` is valid only when the value is a successor of the object bound
 to `p` (`p = p.move()`). A fresh object, another local or any other value is
 refused, whether or not the type has successor actions.
+
+## defer on early exits (#997, lead decision, 2026-11-23)
+
+`return`, `next` and `last` run the defers of every scope they leave, inner
+scopes first and, within a scope, in reverse registration order, each once.
+`throw` is unchanged: obligations are legitimately dropped on it. The flow
+check (`analysis/flow.rs`, `run_defers_from`) reports a defer's own error once
+however many exits run it.
+
+## Name< in an expression (#1004, lead decision, 2026-11-23)
+
+`Name<` opens type arguments only when what follows parses as type arguments
+closed by `>`; otherwise `<` compares, so a capitalised binding compares
+(`let Count = 2; Count < 3`). `A < B > c` stays a type, as before: read as
+comparisons it would order a bool, which is never valid. Bible appendix A.
+
+## Floats past the range saturate (#986, lead decision, 2026-11-23)
+
+The runtime never produces an infinite float from text: `float_parse` gives
+±f64::MAX for a literal past the range (std's `Decimal.float` relies on a value
+above 1e308 for 1e400), binary32 encoding refuses a value it cannot hold, and
+`exp` past the range is refused.
+
+## Reserved system type names (#987, 2026-11-23)
+
+A role or an enum named `Error`, `Maybe` or `Presence` gets "… is the name of the
+system role/enum" instead of "already declared". An object named `Maybe` or
+`Presence` still shadows the system enum: whether to reserve these names for
+every declaration is open (#1005, owner decision).

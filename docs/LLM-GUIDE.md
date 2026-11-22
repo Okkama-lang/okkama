@@ -350,6 +350,10 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.4 against 0.6.3 (report
+  `okkama-docs/benchmarks/reports/2026-11-23-v0.6.4/micro.html`): Sparrow
+  −0.4% over 51 reliable pairs, interleaved candidate, base, candidate, base on
+  75 programs in one session; every program within the noise band.
 - Micro, 0.6.3 against 0.6.2 (report
   `okkama-docs/benchmarks/reports/2026-11-22-v0.6.3/micro.html`): Sparrow
   −4.1% over 47 reliable pairs, all within the noise band — whichever version

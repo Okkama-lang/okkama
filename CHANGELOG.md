@@ -6,6 +6,65 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-11-23
+
+0.6.4 is a hotfix release: every finding of reading the 0.6.3 source end to end (the milestone "Hotfixes TBD",
+#973–#1004) is fixed, tested with a mutation check, and measured over std, t/, examples and conformance; the
+few that need a decision or are refactors are filed (#1005, #1006).
+- **Silent wrong results fixed.** A rebind nested in an expression was lost after a loop or in a `catch`
+  (#1001); `Sample.quantiles` gave unordered cut points for sparse samples (#990); a time zone name that was a
+  bundle metadata file was accepted (#990).
+- **Crashes fixed.** A float literal past the float range printed as infinity and crashed Sparrow (#986);
+  `any`/`all`/`find` over an untyped `[]` (#1002), `return;` in a constant initializer (#987), and a damaged
+  module in the IR printer (#1003) were internal errors; `test.is(1, "x")` aborted at run time and is now
+  "Cannot compare int and string" at compile time (#991); a string longer than 4 GiB wrapped its length (#985).
+- **A rule the owner settled.** A rebind takes a successor of the bound object itself, not of a constructor
+  (#984).
+- Release report: micro A/B 0.6.3 → 0.6.4 (Linux containers, both built as the packages, one session,
+  interleaved candidate, base, candidate, base): Sparrow −0.4% over 51 reliable pairs, every program within the
+  noise band (−10.3% … +2.2% among reliable pairs); the new checks cost nothing measurable.
+
+### Changed
+- **A rebind takes only a successor of the bound object itself (#984, owner decision).** `x = C().inc();` where
+  `x` holds another `C` is a compile-time error; std's MIME part, tar archive and IMAP data code follow the rule.
+- **`defer` counts on every exit that runs it (#997).** `return`, `next` and `last` run the defers of the scopes
+  they leave, inner first, each once; a defer that consumes a successor no longer reports a false "can leave
+  scope without consumption" on an early return, and lowers to valid IR on the failure path.
+- **`Name<` opens type arguments only when they parse and close with `>` (#1004).** `let Count = 2; Count < 3`
+  compares; `Maybe<int>.none` and every other type application read as before (Bible, appendix A).
+- **Parser (#977, #978, #987).** `try?`/`try!` count against the nesting limit; `return if`/`throw if` decide
+  value-or-condition once per position (linear); "Too many syntax errors." is reported; a `match` `else` before
+  a `case` is an error (fmt refused such programs); `spawn (f())` is the spawn operator; a variadic parameter
+  takes any element type, action types too; a native's variadic parameter is named as such at any position.
+- **Analysis (#982, #983, #987, #992–#996, #998).** An overload without defaults beats one that needs them;
+  constant enum patterns count toward match coverage; loop
+  exits meet like branch values; `find` coerces to an expected `Maybe` element; one wording for wrong arguments
+  of the functional operations; `once let` treats locale, signal, snapshot and input-state natives as effects;
+  `Error`, `Maybe` and `Presence` as role or enum names say they are reserved; a fake's constructor advice can be
+  followed; no conformance cascade from a type that already failed; natives refuse action values at any depth.
+- **SPB verifier (#974).** Out-of-range global types, non-finite float constants, ordered `val.cmp`, sync
+  `resource.settle` and destroys with a result are errors.
+
+### Performance
+- **fmt measures each list item's one-line width once (#979)**; `confirm` no longer recounts the whole output
+  (#988). Both were quadratic on large files.
+- **One `region.adopt` after a bound `await` (#999)** instead of two.
+
+### Fixed
+- **Providers keep their contract (#986, #990).** Float parsing saturates at the float range instead of giving
+  infinity; ASCII/Latin-1 encode refuse unrepresentable characters instead of truncating; binary32 refuses values
+  it cannot hold; a bad regex range is an argument error; mean/median of an empty sample and an overflowing `exp`
+  are refused; JSON numbers with extreme exponents; JRE hex floats reach the subnormals; gzip checks FHCRC and
+  the header limit; the allocation counter counts only memory handed out.
+- **IDNA (#981)**: the prefix check works on bytes and every ContextJ joiner is justified.
+- **Sparrow (#975, #976, #985).** A session merge refuses a name the fresh program repeats; heap header lengths
+  are checked; devtrace prints its summary and warns about unknown categories; ABI handles are unambiguous.
+- **fmt keeps comments inside empty role, cap, object and fake bodies (#988)** and a version written with a space
+  inside (#980).
+- **Smaller fixes**: `sparrow help` names the current SPB format (#973); `OKKAMA_IR_PASSES` warns about unknown
+  names (#999); stale documentation and dead code across the compiler, Sparrow and runtime-core (#989, #1003);
+  tests for four untested lowering diagnostics (#999).
+
 ## [0.6.3] — 2026-11-22
 
 0.6.3 is the release of the Bible: every finding of checking the Okkama Bible and the Book against the source
@@ -8482,7 +8541,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/Okkama-lang/okkama/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/Okkama-lang/okkama/compare/v0.6.0...v0.6.1

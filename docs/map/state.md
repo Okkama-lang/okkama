@@ -1,5 +1,17 @@
 # State (update at the end of every task)
 
+## Release 0.6.4 (2026-11-23, release/064)
+
+- [x] Hotfixes from reading 0.6.3 end to end (milestone "Hotfixes TBD", board project 1): #973–#1004
+  fixed, each with a unit test and a mutation check, blast radius measured over std, t/, examples and
+  conformance; CI waves 1–7 on release/064.
+- [x] Deferred: #1000 (macOS TLS flake, not reproducible), #1005 (owner decision: overload names,
+  object named Maybe), #1006 (refactors, Unicode version contract, formatter width and std fmt-clean).
+- [x] wave/rel064 green (it caught t/gen against #984 and a clippy lint, fixed in b09f9dfa8); release CI
+  green; micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
+  (okkama-docs reports/2026-11-23-v0.6.4/micro.html); version 0.6.4.
+- [ ] Tag v0.6.4 (owner pushes), Packages and GitHub Release, install-pgo, man site, cleanup.
+
 ## Release 0.6.3 (2026-11-22, release/063)
 
 - [x] Bible findings #952–#971, #954, #956, #967; #957 (Cell stays synchronous, local rule); security
