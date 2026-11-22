@@ -5749,22 +5749,6 @@
       "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
     },
     {
-      "id": "STD.RUNTIME.CSV_STATE",
-      "title": "std runtime/csv_state public contract (no public declarations)",
-      "family": "Standard library: runtime",
-      "spec_refs": [
-        "std/runtime/csv_state.ok"
-      ],
-      "status": "informative",
-      "aspects": {
-        "normal": "required",
-        "boundary": "n/a: module owns no public declarations",
-        "invalid": "n/a: module owns no public declarations",
-        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-      },
-      "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
-    },
-    {
       "id": "STD.RUNTIME.DATABASE",
       "title": "std runtime/database public contract (no public declarations)",
       "family": "Standard library: runtime",

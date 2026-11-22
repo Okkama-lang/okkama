@@ -1,0 +1,65 @@
+std/csv
+=== RUN   default field and record representations
+--- PASS: default field and record representations
+=== RUN   default grammar empty trailing quoted and multiline fields
+--- PASS: default grammar empty trailing quoted and multiline fields
+=== RUN   malformed CSV reports original scalar offset
+--- PASS: malformed CSV reports original scalar offset
+=== RUN   read budgets are scalar decoded and document bounded
+--- PASS: read budgets are scalar decoded and document bounded
+=== RUN   snapshot and output bounds repeat without partial results
+--- PASS: snapshot and output bounds repeat without partial results
+=== RUN   custom grammar has independent wire fixtures
+--- PASS: custom grammar has independent wire fixtures
+=== RUN   dialect validation and bounded records
+--- PASS: dialect validation and bounded records
+=== RUN   records read their fields by column name
+--- PASS: records read their fields by column name
+=== RUN   records stream from an upload as they come
+--- PASS: records stream from an upload as they come
+=== RUN   CSV scalar spans preserve BOM controls escapes and quoted line endings
+--- PASS: CSV scalar spans preserve BOM controls escapes and quoted line endings
+=== RUN   CSV default error precedence includes EOF and pending CR
+--- PASS: CSV default error precedence includes EOF and pending CR
+PASS
+
+
+std/csv/stream
+=== RUN   rows come one at a time, then the end, stable until close
+--- PASS: rows come one at a time, then the end, stable until close
+=== RUN   a quoted field may span reads and lines; a bad quote is an error
+--- PASS: a quoted field may span reads and lines; a bad quote is an error
+=== RUN   limits are checked; bad limits are refused
+--- PASS: limits are checked; bad limits are refused
+=== RUN   a stream reads rows of text
+--- PASS: a stream reads rows of text
+=== RUN   rows stream from an upload with for await
+--- PASS: rows stream from an upload with for await
+=== RUN   CSV stream accepts every byte cut through quotes CRLF and Unicode
+--- PASS: CSV stream accepts every byte cut through quotes CRLF and Unicode
+=== RUN   CSV stream error offsets survive split invalid UTF8 and repeated reads
+--- PASS: CSV stream error offsets survive split invalid UTF8 and repeated reads
+=== RUN   CSV stream exact byte scalar field and row budgets
+--- PASS: CSV stream exact byte scalar field and row budgets
+=== RUN   CSV stream each decoded limit rejects excess and remains stable
+--- PASS: CSV stream each decoded limit rejects excess and remains stable
+PASS
+
+
+std/csv/input
+=== RUN   resource decoding and repeated EOF
+--- PASS: resource decoding and repeated EOF
+=== RUN   empty and blank documents differ
+--- PASS: empty and blank documents differ
+=== RUN   custom grammar and exact byte bound
+--- PASS: custom grammar and exact byte bound
+=== RUN   byte budgets and invalid configuration
+--- PASS: byte budgets and invalid configuration
+=== RUN   strict UTF-8 and scalar syntax coordinates
+--- PASS: strict UTF-8 and scalar syntax coordinates
+=== RUN   scalar and structural limits retain typed errors
+--- PASS: scalar and structural limits retain typed errors
+=== RUN   borrowed source lifetime and external closure
+--- PASS: borrowed source lifetime and external closure
+PASS
+
