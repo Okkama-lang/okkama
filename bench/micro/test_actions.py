@@ -168,5 +168,57 @@ class ActionTests(unittest.TestCase):
             self.assertEqual(len(list(root.iterdir())), 2)
 
 
+
+class ClassifyTests(unittest.TestCase):
+    """#244 (owner, 2026-11-22): work actions need a benchmark; the rest is covered through callers."""
+
+    def owner(self, *members, node="ObjectDecl"):
+        return {"node": node, "name": "Thing", "members": list(members)}
+
+    def action(self, name, statements):
+        return {"node": "ActionDecl", "name": name, "params": [], "result": {"node": "NamedType", "path": ["int"], "args": []},
+                "body": {"node": "Block", "statements": statements}}
+
+    def call(self):
+        return {"node": "ExpressionStatement", "expression": {"node": "Call", "callee": {"node": "NameExpression", "name": "f"}, "arguments": []}}
+
+    def test_classes(self):
+        field = {"node": "ExpressionStatement", "expression": {"node": "NameExpression", "name": "n"}}
+        branch = {"node": "IfStatement", "condition": {"node": "BoolLiteral", "value": True}}
+        signature = {"node": "ActionSignature", "name": "s", "params": [], "result": {"node": "NamedType", "path": ["int"], "args": []}}
+        tree = {"items": [self.owner(
+            self.action("field", [field]),
+            self.action("delegate", [self.call()]),
+            self.action("two", [self.call(), self.call()]),
+            self.action("branch", [branch]),
+            signature,
+        ), {"node": "RoleDecl", "name": "Role", "members": [self.action("r", [self.call(), self.call()])]}]}
+        classes = actions.classify_ast(tree)
+        self.assertEqual(classes, {"Thing.field": "accessor", "Thing.delegate": "wrapper", "Thing.two": "work",
+                                   "Thing.branch": "work", "Thing.s": "signature", "Role.r": "signature"})
+
+    def test_an_overload_with_work_makes_the_target_work(self):
+        tree = {"items": [self.owner(self.action("x", []), self.action("x", [self.call(), self.call()]))]}
+        self.assertEqual(actions.classify_ast(tree), {"Thing.x": "work"})
+
+    def test_todo_lists_unmeasured_work_only(self):
+        modules = {"m": {"A.work": ["sig"], "A.done": ["sig"], "A.get": ["sig"]}}
+        classes = {"m": {"A.work": "work", "A.done": "work", "A.get": "accessor"}}
+        manifest = {"p": {"actions": ["m:A.done"], "targets": ["m"]}}
+        self.assertEqual(actions.todo(modules, manifest, classes), ["m:A.work"])
+        text = actions.report(modules, manifest, classes)
+        self.assertIn("Work actions: 1 of 2 measured, 0 excluded", text)
+        self.assertIn("| `m:A.get` | accessor | `sig` | via callers |", text)
+        self.assertIn("| `m:A.work` | work | `sig` | — |", text)
+
+    def test_excluded_targets_leave_the_todo_with_their_reason(self):
+        modules = {"net/tcp": {"Tcp.connect": ["sig"]}, "db/postgres/wire": {"Wire.read": ["sig"]}, "m": {"A.x": ["sig"]}}
+        classes = {"net/tcp": {"Tcp.connect": "work"}, "db/postgres/wire": {"Wire.read": "work"}, "m": {"A.x": "work"}}
+        excluded = {"net/tcp": "opens sockets", "db/postgres/*": "needs a PostgreSQL server"}
+        self.assertEqual(actions.todo(modules, {}, classes, excluded), ["m:A.x"])
+        text = actions.report(modules, {}, classes, excluded)
+        self.assertIn("Work actions: 0 of 3 measured, 2 excluded", text)
+        self.assertIn("excluded: needs a PostgreSQL server", text)
+
 if __name__ == "__main__":
     unittest.main()

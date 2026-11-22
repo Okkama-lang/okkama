@@ -1,0 +1,23 @@
+{
+  "db/postgres": "needs a PostgreSQL server",
+  "db/postgres/*": "needs a PostgreSQL server",
+  "fs/watch": "waits for file-system events in real time",
+  "http/client": "talks to a server over sockets",
+  "http/server": "listens on sockets",
+  "io/stdin": "reads the process's standard input",
+  "io/stdout": "writes the protocol's own standard output",
+  "locale/collation": "needs the pinned ICU library",
+  "logging/syslog": "sends to a syslog socket",
+  "net/dns": "asks the system resolver",
+  "net/tcp": "opens sockets",
+  "net/tcp_racing": "opens sockets",
+  "net/tls": "opens sockets",
+  "net/udp": "opens sockets",
+  "net/unix": "opens sockets",
+  "os/account": "reads host accounts",
+  "os/signal": "waits for process signals",
+  "os/storage": "reads host storage",
+  "terminal/*": "needs a terminal",
+  "testing/*": "needs the test context of okkama run -t",
+  "web/app": "listens on sockets"
+}

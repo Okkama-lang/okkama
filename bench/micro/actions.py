@@ -75,6 +75,64 @@ def parse_ast(tree):
     return {name: sorted(signatures) for name, signatures in sorted(actions.items())}
 
 
+# #244 (owner, 2026-11-22): every action that does real work gets a benchmark; accessors, one-call wrappers and
+# signatures without a body are covered through the benchmarks of their callers.
+CLASS_ORDER = ["signature", "accessor", "wrapper", "work"]
+CONTROL = {"IfStatement", "IfExpression", "ForStatement", "LoopExpression", "TryStatement", "TryExpression",
+           "MatchStatement", "MatchExpression", "DeferStatement", "Await", "Functional", "AnonymousAction", "Select"}
+
+
+def _count(node, names):
+    if isinstance(node, dict):
+        return (node.get("node") in names) + sum(_count(value, names) for value in node.values())
+    if isinstance(node, list):
+        return sum(_count(value, names) for value in node)
+    return 0
+
+
+def classify_member(owner, member):
+    """signature (no body: role signature, shorthand constructor, enum payload case), accessor (no call, no
+    control flow), wrapper (one statement with at most one call, no control flow) or work."""
+    if owner["node"] == "RoleDecl" or member["node"] in {"ActionSignature", "ShorthandConstructor", "EnumVariant"}:
+        return "signature"
+    body = member.get("body")
+    calls, control = _count(body, {"Call"}), _count(body, CONTROL)
+    statements = len(body.get("statements", [])) if isinstance(body, dict) else 0
+    if calls == 0 and control == 0:
+        return "accessor"
+    if calls <= 1 and control == 0 and statements <= 1:
+        return "wrapper"
+    return "work"
+
+
+def classify_ast(tree):
+    """Owner.action -> its class; overloads take the most demanding class."""
+    classes = {}
+    for owner in tree["items"]:
+        if not public(owner) or owner["node"] not in {"ObjectDecl", "RoleDecl", "EnumDecl"}:
+            continue
+        for member in owner.get("members", []) + owner.get("variants", []):
+            if not public(member):
+                continue
+            kind = member["node"]
+            if kind in {"FullConstructor", "ShorthandConstructor"}:
+                action = "new"
+            elif kind in {"ActionDecl", "ActionSignature"}:
+                action = member["name"]
+            elif kind == "EnumVariant" and member.get("fields"):
+                action = member["name"]
+            else:
+                continue
+            name = owner["name"] + "." + action
+            found = classify_member(owner, member)
+            if name not in classes or CLASS_ORDER.index(found) > CLASS_ORDER.index(classes[name]):
+                classes[name] = found
+    return classes
+
+
+_CLASSES = {}
+
+
 def read_module(binary, path):
     command = [binary, "ast", str(path), "--format", "json", "--mode", "production", "--prune-tests"]
     try:
@@ -84,7 +142,9 @@ def read_module(binary, path):
     if result.returncode:
         raise ValueError(f"AST failed for {path}: {result.stderr.strip()}")
     try:
-        return parse_ast(json.loads(result.stdout))
+        tree = json.loads(result.stdout)
+        _CLASSES[Path(path).resolve()] = classify_ast(tree)
+        return parse_ast(tree)
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError(f"invalid AST for {path}: {error}") from error
 
@@ -96,7 +156,31 @@ def inventory(binary, stdlib):
     return {p.relative_to(stdlib).with_suffix("").as_posix(): read_module(binary, p) for p in paths}
 
 
-def report(modules, manifest):
+def inventory_classes(stdlib):
+    """module -> Owner.action -> class, for the modules `inventory` read."""
+    stdlib = Path(stdlib).resolve()
+    return {path.relative_to(stdlib).with_suffix("").as_posix(): classes
+            for path, classes in _CLASSES.items() if stdlib in path.parents}
+
+
+def excluded_reason(target, excluded):
+    """Why a target cannot be measured in a self-contained benchmark (a module or a target key), or None."""
+    module = target.partition(":")[0]
+    for key in (target, module) + tuple("/".join(module.split("/")[:n]) + "/*" for n in range(len(module.split("/")), 0, -1)):
+        if key in excluded:
+            return excluded[key]
+    return None
+
+
+def todo(modules, manifest, classes, excluded=None):
+    """Work actions no benchmark measures yet and not excluded, module by module."""
+    measured = {target for entry in manifest.values() for target in entry.get("actions", [])}
+    return [module + ":" + action for module, actions in sorted(modules.items()) for action in sorted(actions)
+            if classes.get(module, {}).get(action) == "work" and module + ":" + action not in measured
+            and excluded_reason(module + ":" + action, excluded or {}) is None]
+
+
+def report(modules, manifest, classes=None, excluded=None):
     measured = {}
     for program, entry in sorted(manifest.items()):
         actions = entry.get("actions", [])
@@ -116,8 +200,22 @@ def report(modules, manifest):
                 raise ValueError(f"{program}: action module {module} missing from targets")
             measured.setdefault(target, []).append(program)
     total = sum(len(actions) for actions in modules.values())
+    excluded = excluded or {}
+    kind = lambda module, action: (classes or {}).get(module, {}).get(action, "work")
+    outside = lambda module, action: module + ":" + action not in measured and excluded_reason(module + ":" + action, excluded)
     lines = ["# std public actions (generated by actions.py; do not edit)", "",
-             f"{len(measured)} of {total} public action targets measured across {len(modules)} non-runtime modules.", "",
+             f"{len(measured)} of {total} public action targets measured across {len(modules)} non-runtime modules.", ""]
+    if classes is not None:
+        work = [(m, a) for m, actions in modules.items() for a in actions if kind(m, a) == "work"]
+        done = sum(m + ":" + a in measured for m, a in work)
+        out = sum(bool(outside(m, a)) for m, a in work)
+        trivial = total - len(work)
+        lines += [f"Work actions: {done} of {len(work)} measured, {out} excluded (they need a server, a socket, a "
+                  "terminal, a test context or a host resource; reasons in excluded.json). "
+                  f"{trivial} accessors, one-call wrappers and signatures without a body are covered through the "
+                  "benchmarks of their callers (#244, owner 2026-11-22); `--todo` lists the work actions still to "
+                  "measure.", ""]
+    lines += [
              "Targets group overloads by name; a measured target does not imply all overloads are measured. "
              "Object constructors use `Object.new`; payload enum constructors use `Enum.case`. "
              "Role signatures are listed separately from implementations. Hidden declarations, caps, "
@@ -126,12 +224,24 @@ def report(modules, manifest):
              "or transitive implementation calls. Missing targets are a work list, not a correctness failure.", ""]
     for module, actions in sorted(modules.items()):
         count = sum(module + ":" + action in measured for action in actions)
-        lines += [f"## {module} — {count}/{len(actions)} measured", "", "| target | public signatures | measured by |", "|---|---|---|"]
+        if classes is None:
+            lines += [f"## {module} — {count}/{len(actions)} measured", "", "| target | public signatures | measured by |", "|---|---|---|"]
+        else:
+            work = [a for a in actions if kind(module, a) == "work"]
+            done = sum(module + ":" + a in measured for a in work)
+            lines += [f"## {module} — {count}/{len(actions)} measured, work {done}/{len(work)}", "",
+                      "| target | class | public signatures | measured by |", "|---|---|---|---|"]
         for action, signatures in sorted(actions.items()):
             target = module + ":" + action
             # Escape Markdown table syntax even inside code spans.
             sig = "<br>".join("`" + s.replace("|", "&#124;").replace("`", "&#96;") + "`" for s in sorted(signatures))
-            lines.append(f"| `{target}` | {sig} | {', '.join(sorted(measured.get(target, []))) or '—'} |")
+            reason = outside(module, action)
+            by = ', '.join(sorted(measured.get(target, []))) or ('excluded: ' + reason if reason and kind(module, action) == "work"
+                                                                 else '—' if kind(module, action) == "work" else 'via callers')
+            if classes is None:
+                lines.append(f"| `{target}` | {sig} | {', '.join(sorted(measured.get(target, []))) or '—'} |")
+            else:
+                lines.append(f"| `{target}` | {kind(module, action)} | {sig} | {by} |")
         lines.append("")
     return "\n".join(lines)
 
@@ -169,9 +279,11 @@ def main(argv=None):
     parser.add_argument("--stdlib", type=Path, default=ROOT / "std")
     parser.add_argument("--manifest", type=Path, default=HERE / "manifest.json")
     parser.add_argument("--output", type=Path, default=HERE / "STD-ACTIONS.md")
+    parser.add_argument("--excluded", type=Path, default=HERE / "excluded.json")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--scaffold", metavar="MODULE:Object.action")
+    mode.add_argument("--todo", action="store_true", help="print the work actions no benchmark measures yet")
     args = parser.parse_args(argv)
     try:
         binary = shutil.which(args.okkama)
@@ -182,7 +294,14 @@ def main(argv=None):
             for path in scaffold(args.scaffold, modules):
                 print(path)
             return 0
-        text = report(modules, json.loads(args.manifest.read_text(encoding="utf-8")))
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        classes = inventory_classes(args.stdlib)
+        excluded = json.loads(args.excluded.read_text(encoding="utf-8")) if args.excluded.exists() else {}
+        if args.todo:
+            for target in todo(modules, manifest, classes, excluded):
+                print(target)
+            return 0
+        text = report(modules, manifest, classes, excluded)
         if args.check:
             if not args.output.exists() or args.output.read_text(encoding="utf-8") != text:
                 print(f"stale: {args.output}; regenerate with actions.py", file=sys.stderr)
