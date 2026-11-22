@@ -1,0 +1,67 @@
+// #244: http-exchange-body; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "http/cache_memory" take CachedHttpEntry, MemoryHttpCache;
+import "http/cache_freshness" take CacheResponseTiming, CacheFreshness;
+import "http/cache_validation" take CacheValidation, CacheRequestFreshness;
+import "http/message" take Request, Response;
+import "http/exchange" take ExchangeDetails, ClientResponse;
+import "http/header" take Headers, Header;
+import "http/status" take Status;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "http/body" take JsonBody;
+import "json" take Json, JsonField;
+import "http/exchange" take PlainHttpHasNoTls;
+import "http/message" take RequestHead, RequestCoordinates;
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let clock = FixedClock();
+            let now = clock.monotonic_instant();
+            let timing = CacheResponseTiming(clock.instant(),now,now);
+            let endpoint = IpEndpoint(IpAddress("127.0.0.1"),80);
+            let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(endpoint,endpoint);
+            let details = ExchangeDetails(ends,HttpVersion.http_1_1);
+            let request = Request(url:"http://example.test/"+x);
+            let fields = Headers(Header("Cache-Control","max-age=600"),Header("ETag", "\""+x+"\""));
+            let response = ClientResponse(request,Response(status:Status.ok,headers:fields),details);
+            let entry = CachedHttpEntry(request,response,timing,[v.byte()],Headers());
+
+            let body = JsonBody(Json(JsonField("n",v)));
+            let result = ClientResponse(request,Response(status:Status.ok,content:body),details);
+            let reading = result.reading();
+            let content = await reading.bytes(128);
+            reading.close();
+            let bytes = await result.bytes();
+            let json = await result.json();
+            let plain = try { details.tls(); 0; } catch e is PlainHttpHasNoTls { 1; };
+            let coordinates = RequestCoordinates(request::Head::method,request::Head::target);
+            let head = RequestHead(target:coordinates.target());
+            let contribution = content.size()+bytes.size()+json.int("n")+plain+head::Head::target.string().length();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

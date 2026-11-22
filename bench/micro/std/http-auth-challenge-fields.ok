@@ -1,0 +1,27 @@
+// #244: http-auth-challenge-fields; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/auth_challenge" take AuthenticationChallenge, AuthenticationParameter;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let parameter = AuthenticationParameter("Realm","a"+x,true);
+        let challenge = AuthenticationChallenge("Basic",[parameter],"");
+        let contribution = challenge.parameter("realm").length() + (if challenge.present("REALM") && challenge.quoted("realm") { v; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

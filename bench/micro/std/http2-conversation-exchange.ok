@@ -1,0 +1,74 @@
+// #244: http2-conversation-exchange; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;import "http/request_context" take HttpRequestContext;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+import "http/handler" take Handling, HandlingResult, ResponseHandling;
+import "http/message" take Request, Response, Responding;
+import "http/status" take Status, StatusCode, StatusClass;
+import "http/method" take Method;
+import "async/event" take Event;
+import "async/scope" take FutureGroup;
+import "http/http2_settings" take Http2Settings, Http2SettingsWire;
+import "http/internal/http2_settings" take Http2PeerSettings, ReceivedHttp2Settings;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader;
+import "http/internal/http2_headers" take Http2HeaderBlockReading, Http2HeaderBlockWriting;
+import "http/internal/http2_output" take Http2ConnectionOutput;
+import "http/internal/http2_preface" take Http2ServerPreface;
+import "http/internal/hpack" take HpackDecoder, HpackBudget, HpackEncoded;
+import "http/internal/hpack_tables" take HpackField;
+import "http/http2_session" take Http2Session, Http2Exchange;
+import "http/conversation" take Http2Conversation;
+import "http/client_policy" take HttpLimits;
+import "http/http2_server" take Http2ServerSession;
+import "http/server_policy" take ServerPolicy, ServerTimeouts;
+import "collections/set" take OrderedSet;
+import "io/stream" take AsyncReading, Closing;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }object Input does AsyncReading, Closing { has source is ByteBodyInput; has stop is Event; Input(bytes is @byte) { source=ByteBodyInput(bytes); stop=Event(); } async bytes(limit is int) is @byte { let bytes=await source.bytes(limit); if bytes.size()>0 { return bytes; } await stop.wait(); []; } close() is void { source.close(); stop.set(); } closed() is bool { stop.ready(); } }object GateInput does AsyncReading, Closing { has origin is Input; has gate is Event; GateInput(bytes is @byte,gate is Event) { origin=Input(bytes); self.gate=gate; } async bytes(limit is int) is @byte { await gate.wait(); await origin.bytes(limit); } close() is void { gate.set(); origin.close(); } closed() is bool { origin.closed(); } }
+object GateSink does AsyncWriting { has gate is Event; GateSink(gate is Event) { self.gate=gate; } async write(bytes is @byte) is AsyncWriting { gate.set(); self; } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let gate = Event();
+            let input = GateInput(Http2Frame(Http2FrameHeader(1.byte(),5.byte(),1,1),[136.byte()]).bytes(),gate);
+            let session = Http2Session(input,GateSink(gate),input,Http2Settings(),Http2PeerSettings(),HttpLimits());
+            let conversation = Http2Conversation(session);
+            let result = await conversation.exchange(Request(url:"http://example.test/"+x));
+            let status = result.response()::Head::code;
+            result.close();
+            session.close();
+            let settled = await session.settled();
+            let all = await conversation.settled();
+            let exchange = Http2Exchange(Request(url:"http://example.test/"+x),Response(status:Status.ok),[],input);
+            exchange.close();
+            let contribution = status+(if settled && all && exchange.closed() { v; } else { 0; });
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

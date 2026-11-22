@@ -1,0 +1,38 @@
+// #244: http-sse-read; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/sse" take ServerEvents;
+import "http/body" take ByteBody;
+import "encoding/utf" take Utf8Encoded;
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let events = ServerEvents(ByteBody(Utf8Encoded("data: "+x+"\n\ndata: "+x+"\n\nend\n").bytes()).reading());
+            let one = await events.event();
+            let two = await events.read();
+            let line = await events.line();
+            events.close();
+            let settled = await events.settled();
+            let contribution = one::Event::data.length()+two::Event::data.length()+line.length()+(if events.closed() && settled { 1; } else { 0; });
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

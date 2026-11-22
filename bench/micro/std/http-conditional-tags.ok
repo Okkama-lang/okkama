@@ -1,0 +1,31 @@
+// #244: http-conditional-tags; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/conditional" take EntityTag, EntityTags, ConditionalLimits, ConditionalItems;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let tag = EntityTag(x,false);
+        let weak = EntityTag(x,true);
+        let items is ConditionalItems<EntityTag> = ConditionalItems();
+        items = items.following(tag);
+        let tags = EntityTags(items.values(),ConditionalLimits(bytes:128,entries:4));
+        let contribution = tag.string().length()+tags.string().length()
+         + (if tag.strong_matches(tag) && tag.weak_matches(weak) && !tag.strong_matches(weak) { v; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

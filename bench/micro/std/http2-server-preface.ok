@@ -1,0 +1,68 @@
+// #244: http2-server-preface; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;import "http/request_context" take HttpRequestContext;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+import "http/handler" take Handling, HandlingResult, ResponseHandling;
+import "http/message" take Request, Response, Responding;
+import "http/status" take Status, StatusCode, StatusClass;
+import "http/method" take Method;
+import "async/event" take Event;
+import "async/scope" take FutureGroup;
+import "http/http2_settings" take Http2Settings, Http2SettingsWire;
+import "http/internal/http2_settings" take Http2PeerSettings, ReceivedHttp2Settings;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader;
+import "http/internal/http2_headers" take Http2HeaderBlockReading, Http2HeaderBlockWriting;
+import "http/internal/http2_output" take Http2ConnectionOutput;
+import "http/internal/http2_preface" take Http2ServerPreface;
+import "http/internal/hpack" take HpackDecoder, HpackBudget, HpackEncoded;
+import "http/internal/hpack_tables" take HpackField;
+import "http/http2_session" take Http2Session, Http2Exchange;
+import "http/conversation" take Http2Conversation;
+import "http/client_policy" take HttpLimits;
+import "http/http2_server" take Http2ServerSession;
+import "http/server_policy" take ServerPolicy, ServerTimeouts;
+import "collections/set" take OrderedSet;
+import "io/stream" take AsyncReading, Closing;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let payload = Http2SettingsWire(Http2Settings(4096,65535,16384,v),true).bytes();
+            let frame = Http2Frame(Http2FrameHeader(4.byte(),0.byte(),0,payload.size()),payload);
+            let input = ByteBodyInput(Utf8Encoded("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").bytes()+frame.bytes());
+            let sink = Sink();
+            let peer = await Http2ServerPreface(input,sink,Http2Settings()).settings();
+            let decoded = ReceivedHttp2Settings(frame,Http2PeerSettings(),false).settings();
+            let contribution = peer.streams()+decoded.streams();
+            input.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}
