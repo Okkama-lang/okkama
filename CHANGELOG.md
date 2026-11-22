@@ -37,6 +37,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   after copying it whole; it now stops at the limit and stores an admitted input at its exact size.
 
 ### Fixed
+- **The ownership linearity check settles on large functions (#972).** With `OKKAMA_VERIFY_OWNERSHIP=1` (and in
+  debug builds) `http/redirect`, `http/cache` and `http/http2_server` — and every program importing them — stopped
+  with "internal compiler error: … the data flow does not settle": the check gave up after a fixed 64 visits per
+  block, but a function with many resources legitimately needs more. The bound is now the lattice's own (three
+  states per value), and the states are dense vectors: `okkama check` of `http/redirect` in a debug build takes
+  4.8 s instead of failing after 22 s (the check alone 46.8 s → 1.4 s once it runs to the end).
 - **`order()` and `cursor()` name the import they need (#952).** Without `Order` (or an array's `Cursor`)
   loaded, the compiler said the action did not exist; it now says which module to import.
 
