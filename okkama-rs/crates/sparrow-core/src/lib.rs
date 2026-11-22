@@ -172,7 +172,7 @@ pub fn run_executable(
         }
         if program.has_tests() && let Some(out) = tests
         {
-            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out)).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
+            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
@@ -345,8 +345,8 @@ pub fn run_test_report(
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         match progress {
-            Some(out) => test_profile(program, plan, Some(out)),
-            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None)),
+            Some(out) => test_profile(program, plan, Some(out), Vec::new()),
+            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, Vec::new())),
         }
     })
 }
@@ -357,9 +357,10 @@ fn test_profile(
     program: DecodedProgram,
     plan: test_report::TestPlan,
     out: Option<Box<dyn std::io::Write + Send>>,
+    worker_command: Vec<std::ffi::OsString>,
 ) -> Result<test_report::TestReport, Error> {
     match program {
-        DecodedProgram::Legacy(program) => test_program(program, plan, out),
+        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command),
     }
 }
 
@@ -367,6 +368,7 @@ fn test_program(
     program: okkama_sparrow::Program,
     plan: test_report::TestPlan,
     out: Option<Box<dyn std::io::Write + Send>>,
+    worker_command: Vec<std::ffi::OsString>,
 ) -> Result<test_report::TestReport, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
@@ -386,6 +388,7 @@ fn test_program(
         let only = plan.only.get(&names[index]).cloned();
         let filtered = only.is_some();
         let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
+        runtime.worker_command = worker_command.clone();
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
             host.test_cases = test_report::SubCaseState::new(only);
@@ -578,6 +581,58 @@ pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi
     })
 }
 
+/// Internal CLI worker transport. One-shot spawn keeps its EOF protocol;
+/// run-local pools use a duplex control socket, separate from program output.
+#[doc(hidden)]
+pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<(), Error> {
+    use std::io::{Read, Write};
+    #[cfg(unix)]
+    if std::env::var_os("SPARROW_INTERNAL_WORKER_POOL").is_some() {
+        use std::os::fd::AsFd;
+        let fd = std::io::stdin()
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|e| Error(e.to_string()))?;
+        let mut control = std::fs::File::from(fd);
+        // Language stdin is EOF, as with an ordinary spawn after its request.
+        rustix::stdio::dup2_stdin(std::fs::File::open("/dev/null").map_err(|e| Error(e.to_string()))?)
+            .map_err(|e| Error(e.to_string()))?;
+        loop {
+            let mut length = [0; 8];
+            match control.read(&mut length[..1]) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(e) => return Err(Error(e.to_string())),
+            }
+            control.read_exact(&mut length[1..]).map_err(|e| Error(e.to_string()))?;
+            let length = usize::try_from(u64::from_be_bytes(length)).map_err(|e| Error(e.to_string()))?;
+            let mut request = Vec::new();
+            request.try_reserve_exact(length).map_err(|e| Error(e.to_string()))?;
+            request.resize(length, 0);
+            control.read_exact(&mut request).map_err(|e| Error(e.to_string()))?;
+            // Fresh VM, heap, globals, receiver and host session for EVERY item.
+            let response = run_worker(bytes.clone(), request, worker_command.clone())?;
+            stdout::flush().map_err(|e| Error(e.to_string()))?;
+            std::io::stdout().flush().map_err(|e| Error(e.to_string()))?;
+            std::io::stderr().flush().map_err(|e| Error(e.to_string()))?;
+            control
+                .write_all(&(response.len() as u64).to_be_bytes())
+                .and_then(|()| control.write_all(&response))
+                .and_then(|()| control.flush())
+                .map_err(|e| Error(e.to_string()))?;
+        }
+    }
+    let mut request = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut request)
+        .map_err(|e| Error(format!("worker request: {e}")))?;
+    let response = run_worker(bytes, request, worker_command)?;
+    stdout::flush().map_err(|e| Error(e.to_string()))?;
+    let mut out = std::io::stdout().lock();
+    out.write_all(&response)
+        .and_then(|()| out.flush())
+        .map_err(|e| Error(format!("worker response: {e}")))
+}
 fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
     std::thread::Builder::new()
         .name("sparrow-core".into())
@@ -585,7 +640,7 @@ fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Sen
         .spawn(move || {
             // The program's cwd and environment live as long as this run (#40).
             let _host = okkama_runtime_core::host::enter(
-                okkama_runtime_core::host::Context::process().without("SPARROW_INTERNAL_WORKER"),
+                okkama_runtime_core::host::Context::process().without("SPARROW_INTERNAL_WORKER").without("SPARROW_INTERNAL_WORKER_POOL"),
             );
             body()
         })

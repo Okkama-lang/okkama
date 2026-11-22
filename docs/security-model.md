@@ -186,6 +186,18 @@ panics crossing another `extern "C"` helper ([#23], [#31]). Memory accounting an
 make all host state runtime-local; environment/default-directory isolation remains a separate embedding
 concern ([#40]). `run_worker` is the CLI worker entry, not the recommended untrusted-input embedding API.
 
+**Parallel map workers (#946).** On Unix, `parallel/map` reuses worker processes only for one
+`results()` call. Each item still gets a fresh Runtime, heap, language globals, host context and receiver
+reconstructed from declared fields (never its `once` cache). Native process-wide caches/statics, allocator
+state and foreign changes to the true process environment/directory are not reset between items. This is
+not a security boundary between mutually untrusted items. Ordinary `spawn` retains one process per item;
+programs containing native process launches also keep that path, so their descendants retain per-item
+process-group teardown. Without a configured worker command, no process executor is installed. Both
+transports kill/reap cancelled workers before settlement; the run closes/reaps idle workers too. Tests:
+`sparrow-core/src/worker_process.rs` (`pool_tests`), `sparrow-core/src/worker.rs` (`wire_tests`), and
+`okkama-cli/tests/parallel_map.rs`.
+
+
 [#16]: https://github.com/Okkama-lang/okkama/issues/16
 [#17]: https://github.com/Okkama-lang/okkama/issues/17
 [#18]: https://github.com/Okkama-lang/okkama/issues/18

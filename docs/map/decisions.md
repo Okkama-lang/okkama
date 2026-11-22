@@ -6,6 +6,20 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. #946 worker reuse (supplied implementation task).** Keep the
+  public `parallel/map` and `spawn` APIs. A hidden map helper gives a copied
+  bound action a pool for one `results()` call; existing batches, FutureScope
+  and AllFutures retain ordering and failure/cancellation. Extend spawn's
+  Request/ProcessGroup/OKW2 transport with a Unix duplex control socket, not
+  the #938 test scheduler (which also uses fresh processes). Every request
+  creates a fresh Runtime/heap/JIT/thread/host context and reconstructs its
+  receiver from declared fields, excluding synthetic once slots. OS/native
+  process-global state can persist within the run; pools never cross calls.
+  Keep one-shot spawn outside map, without a reusable host transport, or in
+  programs containing native process launches (descendant cleanup). Embedded
+  execution never acquires a worker command. Scope settlement and shielded
+  pool close kill/reap active and idle workers before publishing results.
+
 - **2026-11-22. Security refresh #960/#963/#962 (owner task).** Keep one
   advisory failure policy for main/fuzz lockfiles. cargo-fuzz lacks a locked
   option, so its child Cargo build/check/metadata commands are wrapped with

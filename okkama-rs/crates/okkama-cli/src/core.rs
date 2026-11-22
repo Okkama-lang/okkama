@@ -3,7 +3,6 @@
 //! bytecode in `okkama --worker FILE.spb`; a program compiled in memory gets
 //! a temporary file for them when it spawns workers.
 use std::ffi::OsString;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Does the program start process workers (`worker.spawn`)?
@@ -67,12 +66,7 @@ pub(crate) fn worker(args: &[String]) -> Result<(), String> {
         return Err("--worker needs one bytecode file".into());
     };
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
-    let mut request = Vec::new();
-    std::io::stdin().read_to_end(&mut request).map_err(|e| format!("worker request: {e}"))?;
-    let response =
-        sparrow_core::run_worker(bytes, request, worker_command(Path::new(path))).map_err(|e| e.0)?;
-    let mut out = std::io::stdout().lock();
-    out.write_all(&response).and_then(|()| out.flush()).map_err(|e| format!("worker response: {e}"))
+    sparrow_core::serve_worker(bytes, worker_command(Path::new(path))).map_err(|e| e.0)
 }
 
 /// The report of an uncaught failure, ending with a newline.

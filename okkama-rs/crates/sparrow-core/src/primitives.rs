@@ -35,7 +35,8 @@ pub enum State {
     Group(Group),
     Stream(Box<Stream>),
     /// A bound action (`worker.bind`): its worker entry and receiver fields.
-    WorkerBinding { entry: Word, fields: Vec<(Word, Repr)> },
+    WorkerBinding { entry: Word, fields: Vec<(Word, Repr)>, pool: Option<Rc<crate::worker_process::Pool>> },
+    WorkerPool(Rc<crate::worker_process::Pool>),
 }
 
 /// `FutureCompletions`: settled inputs handed to `completion()` requests in
@@ -148,7 +149,7 @@ impl State {
             Self::Selection(selection) => {
                 selection.pending.iter().for_each(|&w| visit(w, Repr::Ref));
             }
-            Self::WorkerBinding { entry, fields } => {
+            Self::WorkerBinding { entry, fields, .. } => {
                 visit(*entry, Repr::Ref);
                 fields.iter().for_each(|&(w, repr)| visit(w, repr));
             }

@@ -63,3 +63,20 @@ and serializes explicit JSON schema v1 (`doc/schema-v1.json`). CLI `man --all`
 writes a sorted std catalogue. `tools/install-man.sh` stages generated man
 pages for optional installation/packages, with a filename ownership manifest;
 `make reference` builds the portable HTML catalogue for okkama-docs.
+
+
+### Parallel map worker transport (#946)
+
+`std/parallel/map.ok` keeps ordered batches and FutureScope; hidden
+`ParallelMapWorkers.bound/close` opt a copied action into one run-local pool.
+`okkama-compiler/src/lowering/intrinsics.rs` and `ir/mod.rs` register those
+private intrinsics. Worker binding/entry lowering transfers declared receiver
+fields, excluding synthetic once slots. `sparrow-core/contracts.rs` checks the
+helper's receiver/action types; `worker.rs` retains the spawn codec and driver.
+`worker_process.rs` shares Request cancellation, ProcessGroup ownership and
+output bounds between one-shot and reusable Unix sessions. `lib.rs::serve_worker`
+is the common CLI loop: a fresh Runtime for each request, a separate duplex
+control socket, ordinary output pipes. `program.rs` conservatively disables reuse
+when native process launches could leave descendants between items. The CLIs'
+executable test path preserves their configured worker command; embedding tests
+with no command remain process-free.

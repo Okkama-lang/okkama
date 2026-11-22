@@ -39,6 +39,8 @@ fn contract(intrinsic: Intrinsic) -> Contract {
     use Intrinsic::*;
     let (asynchronous, params, result) = match intrinsic {
         Worker => (true, "", '*'),
+        WorkerPoolBind => (false, "P", 'P'),
+        WorkerPoolClose => (true, "P", '-'),
         Ordering => (false, "P", 'P'),
         AtomicNew => (false, "*", 'P'),
         AtomicValue => (false, "A", 'V'),
@@ -321,6 +323,17 @@ impl Check<'_> {
             };
         if !ok {
             return Err(format!("result does not match the runtime's `{}`", contract.result));
+        }
+        if matches!(intrinsic, Intrinsic::WorkerPoolBind | Intrinsic::WorkerPoolClose) {
+            let object = self.object(params[0]).ok_or("worker pool receiver is not an object")?;
+            let fields = &self.program.objects[object].fields;
+            if fields.len() != 2 || !matches!(self.program.ty(fields[0].1), Some(Type::Fn { .. }))
+                || !matches!(self.program.ty(fields[1].1), Some(Type::Int)) {
+                return Err("worker pool needs an action and integer bound".into());
+            }
+            if intrinsic == Intrinsic::WorkerPoolBind && !result.is_some_and(|r| self.program.same_type(r, fields[0].1)) {
+                return Err("worker pool must return its action type".into());
+            }
         }
         if intrinsic == Intrinsic::GroupStart && self.future(params[1]).is_none() {
             return Err("starts a value that is not a future".into());

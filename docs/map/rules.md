@@ -7,7 +7,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (118)
+## Tags in one layer (119)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -82,6 +82,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - SPARROW_CORE_UNOPTIMIZED — sparrow: `jit.rs`
 - SPARROW_CORE_VERIFY — sparrow: `jit.rs`
 - SPARROW_INTERNAL_WORKER — other: `main.rs`
+- SPARROW_INTERNAL_WORKER_POOL — sparrow: `lib.rs`, `worker_process.rs`
 - SPARROW_TRACE_DESTROY — ownership-runtime: `failures.rs`
 - SPARROW_WORKER_OUTPUT_LIMIT_BYTES — sparrow: `worker_process.rs`
 - SQLITE_787 — sparrow: `host/native_sqlite.rs`

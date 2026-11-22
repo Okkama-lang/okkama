@@ -573,6 +573,8 @@ fn lower_worker_entry(
         let types: Vec<Type> = ctx.objects[object.0]
             .fields
             .iter()
+            // Runtime once slots are rebuilt by the receiver constructor.
+            .take(ctx.reg.objects[ctx.objects[object.0].decl.0].fields.len())
             .map(|(_, ty, _)| ty.clone())
             .collect();
         (types, Some(order))
@@ -666,6 +668,8 @@ fn lower_worker_bind(
     let field_types: Vec<Type> = ctx.objects[object.0]
         .fields
         .iter()
+        // Only declared fields reconstruct the receiver, never cached once slots.
+        .take(ctx.reg.objects[ctx.objects[object.0].decl.0].fields.len())
         .map(|(_, ty, _)| ty.clone())
         .collect();
     let action_ty = Type::Fn(Box::new(ir::FnSig {

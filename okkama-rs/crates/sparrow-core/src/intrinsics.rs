@@ -15,6 +15,8 @@ use std::rc::Rc;
 pub enum Intrinsic {
     /// The Future of a process worker (`worker`).
     Worker,
+    WorkerPoolBind,
+    WorkerPoolClose,
     Ordering,
     AtomicNew,
     AtomicValue,
@@ -97,6 +99,8 @@ impl Intrinsic {
         use Intrinsic::*;
         Some(match name {
             crate::program::WORKER => Worker,
+            "okkama.map.ParallelMapWorkers.bound" => WorkerPoolBind,
+            "okkama.map.ParallelMapWorkers.close" => WorkerPoolClose,
             "okkama.array.ordering" => Ordering,
             "okkama.atomic.Atomic.new_value" => AtomicNew,
             "okkama.atomic.Atomic.value" => AtomicValue,
@@ -323,6 +327,10 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
     use Intrinsic::*;
     let new = |runtime: &mut Runtime, fields: &[Word]| runtime.heap.object_new(related(runtime, function, 0), fields);
     match intrinsic {
+        WorkerPoolBind => match crate::worker::pool_bind(runtime, args[0]) {
+            Ok(action) => Value(action, Repr::Ref),
+            Err(message) => Fail(FailureKind::Program(message)),
+        },
         // An Atomic is a heap cell: word 1 its value, word 2 closed (0 open, 1
         // closed). Machine code reads and writes it inline (see `jit`); here
         // are the calls through roles and the closed and equality cases.

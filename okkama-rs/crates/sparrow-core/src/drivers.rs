@@ -40,6 +40,10 @@ pub fn drive(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word) -> bool {
     } else {
         match runtime.intrinsics[function] {
             Some(Intrinsic::Worker) => crate::worker::drive(runtime, frame, deliver),
+            Some(Intrinsic::WorkerPoolClose) => {
+                let receiver = param(runtime, frame, function, 0);
+                crate::worker::pool_close(runtime, frame, receiver)
+            }
             Some(intrinsic) => intrinsic_step(runtime, ctx, frame, function, intrinsic, deliver),
             None => {
                 let message = format!(

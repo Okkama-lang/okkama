@@ -68,6 +68,9 @@ pub struct Loaded {
     events: Vec<bool>,
     /// Worker Future functions by result type (see [`WORKER`]).
     workers: Vec<(Option<TypeRef>, usize)>,
+    /// Native process launches can leave descendants outside VM ownership.
+    /// Keep spawn's per-item process-group teardown for such programs.
+    pub(crate) worker_reuse_safe: bool,
 }
 
 /// Intrinsic name of the synthetic async functions whose frames are the
@@ -163,7 +166,11 @@ impl Loaded {
                         events[object.0 as usize] = true;
                     }
         }
-        Self { program, functions, events, workers }
+        let worker_reuse_safe = !program.functions.iter().any(|function| matches!(
+            function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve),
+            Some(okkama_runtime_abi::Native::ProcessProcessStateStart | okkama_runtime_abi::Native::ProcessPipelineStateCapture)
+        ));
+        Self { program, functions, events, workers, worker_reuse_safe }
     }
 
     /// The worker Future function for results of type `result`.
@@ -272,4 +279,24 @@ mod worker_tests {
         assert_eq!(again.program.functions, first.program.functions, "the existing worker is reused");
         assert_eq!(again.workers, first.workers);
     }
+    #[test]
+    fn worker_reuse_excludes_programs_that_can_launch_descendants() {
+        use okkama_runtime_abi::Native;
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
+        ).unwrap();
+        assert!(Loaded::new(program.clone()).worker_reuse_safe);
+        for (native, safe) in [
+            (Native::ProcessProcessCurrentId, true),
+            (Native::ProcessProcessArguments, true),
+            (Native::ProcessProcessStateStart, false),
+            (Native::ProcessPipelineStateCapture, false),
+        ] {
+            // Classification alone; this synthetic native is never executed.
+            let mut program = program.clone();
+            program.functions[0].native = Some(native.symbol().into());
+            assert_eq!(Loaded::new(program).worker_reuse_safe, safe);
+        }
+    }
+
 }

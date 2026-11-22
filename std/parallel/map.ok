@@ -1,13 +1,19 @@
 module parallel/map v1.0.0;
 
 import "collections/sequence" take Sequencing;
+import "collections/iteration" take Cursor;
+import "async/atomic" take Atomic;
 import "collections/list" take List, EmptyList;
 import "collections/views" take Reversed;
 import "async/scope" take FutureScope, Supervising;
 import "async/collect" take AllFutures;
-import "runtime/system" take system_cpu_count;
+import "runtime/system" take system_cpu_count, system_platform;
+import "runtime/process" take process_current_id;
+import "async/timeout" take Within, TimedOut;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
 
-// An ordered mapping performed by bounded batches of isolated process workers.
+// An ordered mapping performed by bounded batches of process workers.
 //
 //     let mapped is ParallelMapped<int,int> = ParallelMapped(
 //         origins: [1,2,3], action: Worker(seed: 10).run, workers: 2);
@@ -22,6 +28,14 @@ import "runtime/system" take system_cpu_count;
 // the spawn codec. Closures, async actions and arbitrary objects are unsupported.
 // The single-file CLI uses processes; embedded execution uses its configured
 // executor. This module does not turn Local execution into process parallelism.
+// Unix process workers are reused only within one results() run. Every item gets
+// a fresh VM and receiver reconstructed from its fields, including fresh once
+// slots, language globals, virtual environment and working directory. The OS
+// process is shared: PID, native statics/caches and foreign process-global state
+// can persist between items. This is not fresh-process isolation. Other hosts
+// retain one process per item, as do programs containing native process launches
+// (so descendants still get per-item process-group cleanup). No process is kept
+// across results() calls.
 //
 // Batches preserve input order and never exceed workers active children. A batch
 // failure prevents later batches. Input/dispatch failure and caller cancellation
@@ -65,14 +79,31 @@ object ParallelMapped<T, R> {
 
     // The results, in the order of origins.
     async results() is Sequencing<R> {
+        let workers = self.workers();
+        let pool is ParallelMapWorkers<T, R> = ParallelMapWorkers(action: action, workers: workers);
+        defer await pool.close();
         let run is ParallelMapRun<T, R> = ParallelMapRun(
             origins: origins,
-            action: action,
-            workers: self.workers()
+            action: pool.bound(),
+            workers: workers
         );
         let scope is FutureScope<R, Sequencing<R>> = FutureScope(action: run.run);
         await scope.outcome();
     }
+}
+
+// Private transport lifetime. The fallback retains the configured executor.
+hidden object ParallelMapWorkers<T, R> {
+    has action is (T) is R;
+    has workers is int;
+
+    ParallelMapWorkers(:action, :workers);
+
+    bound() is (T) is R {
+        action;
+    }
+
+    async close() is void {}
 }
 
 // Implementation body owned by one FutureScope. All started children remain
@@ -162,4 +193,170 @@ test "the worker bound is given or read from the runtime; zero is refused" {
     test.throws(InvalidWorkerCount) {
         ParallelMapped(origins: [1], action: Doubling().run, workers: 0);
     };
+}
+
+async test "results preserve input order across batches and calls" {
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: [9, 1, 7, 3, 5],
+        action: Doubling().run,
+        workers: 2
+    );
+    let first = await mapped.results();
+    let second = await mapped.results();
+    test.is(first.size(), 5);
+    for 0..5 -> index {
+        test.is(first.item(index), [18, 2, 14, 6, 10][index]);
+        test.is(second.item(index), first.item(index));
+    }
+}
+
+async test "empty input never dispatches even an unsupported closure" {
+    let origins is @int = [];
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: origins,
+        action: (value is int) is int {
+            value;
+        },
+        workers: 2
+    );
+    test.is((await mapped.results()).size(), 0);
+}
+
+hidden object StatefulWorker {
+    has seed is int;
+
+    StatefulWorker(seed is int) {
+        self.seed = seed + 1;
+    }
+
+    hidden cached() is int {
+        once let answer = seed * 2;
+        answer;
+    }
+
+    run(value is int) is int {
+        self.cached() + value;
+    }
+}
+
+async test "each item reconstructs the receiver and its once state" {
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: [1, 2, 3, 4],
+        action: StatefulWorker(seed: 10).run,
+        workers: 1
+    );
+    let values = await mapped.results();
+    for 0..4 -> index {
+        test.is(values.item(index), 25 + index);
+    }
+}
+
+hidden object ProcessWorker {
+    ProcessWorker();
+
+    run(value is int) is int {
+        process_current_id();
+    }
+}
+
+async test "a run reuses at most its worker bound and calls own separate pools" {
+    if system_platform() == "windows" {
+        test.skip("Unix reusable transport");
+    }
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: [1, 2, 3, 4, 5, 6],
+        action: ProcessWorker().run,
+        workers: 2
+    );
+    let first = await mapped.results();
+    test.isnt(first.item(0), first.item(1));
+    for 2..6 -> index {
+        test.ok(first.item(index) == first.item(0) || first.item(index) == first.item(1));
+    }
+    let second = await mapped.results();
+    for second -> pid {
+        test.isnt(pid, first.item(0));
+        test.isnt(pid, first.item(1));
+    }
+}
+
+hidden object NeverWorker {
+    NeverWorker();
+
+    run(value is int) is int {
+        loop {}
+        value;
+    }
+}
+
+async test "caller cancellation settles outstanding workers before returning" {
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: [1, 2, 3, 4],
+        action: NeverWorker().run,
+        workers: 2
+    );
+    test.is(
+        try {
+            await Within(
+                origin: mapped.results(),
+                limit: Duration(milliseconds: 100),
+                clock: SystemClock()
+            ).outcome();
+            false;
+        }
+        catch error is TimedOut {
+            true;
+        },
+        true
+    );
+}
+
+hidden enum DispatchFailed is Error = (input);
+
+hidden object FailingOrigins does Sequencing<int> {
+    has visits is Atomic<int>;
+
+    FailingOrigins(:visits);
+
+    size() is int {
+        4;
+    }
+
+    item(index is int) is int {
+        visits.replace(visits.value() + 1);
+        confirm index == 0 else throw DispatchFailed.input;
+        1;
+    }
+
+    first() is int {
+        self.item(0);
+    }
+
+    last() is int {
+        self.item(3);
+    }
+
+    cursor() is Cursor<int> {
+        [1, 2, 3, 4].cursor();
+    }
+}
+
+async test "dispatch failure cancels started work and prevents later input reads" {
+    let visits = Atomic(0);
+    let mapped is ParallelMapped<int, int> = ParallelMapped(
+        origins: FailingOrigins(visits: visits),
+        action: NeverWorker().run,
+        workers: 2
+    );
+    test.is(
+        try {
+            await mapped.results();
+            false;
+        }
+        catch error is DispatchFailed {
+            true;
+        },
+        true
+    );
+    test.is(visits.value(), 2);
 }

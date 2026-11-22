@@ -1,5 +1,31 @@
 # State (update at the end of every task)
 
+## #946 run-local ParallelMapped worker reuse (2026-11-22, feature/946-pool)
+
+- [x] Extend spawn's Tokio Request/ProcessGroup transport with reusable Unix
+  sessions; keep the OKW2 codec and separate ordinary output from control frames.
+- [x] Scope the hidden pool to one results() call; keep batching, ordering,
+  FutureScope cancellation and awaited process cleanup. No public std/spawn API
+  changes, no automatic process executor in embedding, no cross-call reuse.
+- [x] Reconstruct each receiver in a fresh Runtime/heap/JIT/thread/host context;
+  exclude synthetic once slots from worker binding/entry inputs. Retain one-shot
+  spawn for programs with native process launches, preserving descendant cleanup.
+- [x] Docker targeted runtime tests: 18 with filter `worker` plus the new intrinsic
+  contract test; 2 CLI integration tests; 7 inline map tests via build --tests /
+  sparrow --test. Targeted compiler lowering test passes. Reuse and once-slot
+  mutation checks both fail as intended, then the restored sources pass.
+- [x] Release benchmark, macOS arm64, N=100 / warmup=10, five samples each:
+  median **9.494705 → 5.693915 ms/call**, **1.6675×**, **40.03% less**.
+  Timed/warm checksums: 303/33 in all ten runs. Fresh VM/JIT per item remains.
+- [x] Document process-global isolation limits, update maps and external design /
+  report. No commits or CHANGELOG edits. Public declarations unchanged; std
+  inventory regeneration does not apply.
+
+The pool shares PID, native statics/caches and allocator/foreign process-global
+state within one run; it is not fresh-process isolation or an untrusted-item
+boundary. Non-Unix transport retains one-shot behavior. Implementation is left
+uncommitted for the lead session; no unresolved implementation blocker.
+
 ## Security release 0.6.3 (#960, #963, #962; 2026-11-22)
 
 - [x] #960: fuzz lockfile regenerated from the current manifests; both

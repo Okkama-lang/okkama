@@ -288,10 +288,92 @@ pub fn bind(runtime: &mut Runtime, action: Word, entry: Word, fields: Vec<(Word,
     let words = runtime.heap.layouts().closures[function as usize].len();
     let captures: Vec<Word> = (0..words).map(|i| runtime.heap.field(action, i)).collect();
     let bound = runtime.heap.closure_new(function, &captures);
-    runtime.state_new(bound, State::WorkerBinding { entry, fields });
+    runtime.state_new(bound, State::WorkerBinding { entry, fields, pool: None });
     bound
 }
 
+/// Attach reuse to a copy: the caller's bound action and ordinary spawn stay unchanged.
+pub(crate) fn pool_bind(runtime: &mut Runtime, receiver: Word) -> Result<Word, String> {
+    let action = runtime.heap.field(receiver, 0);
+    if runtime.worker_command.is_empty() || !runtime.loaded.worker_reuse_safe {
+        return Ok(action);
+    }
+    let bound = (match runtime.heap.integer(runtime.heap.field(receiver, 1)) {
+        Integer::Small(n) => Some(n),
+        Integer::Big(n) if n.sign() == num_bigint::Sign::Plus => Some(i64::MAX),
+        Integer::Big(_) => None,
+    })
+    .and_then(|n| usize::try_from(n).ok())
+    .filter(|&n| n > 0)
+    .ok_or_else(|| "invalid worker pool bound".to_owned())?;
+    // Leave unsupported bindings to spawn, including the empty-input case.
+    let Some(State::WorkerBinding { entry, fields, .. }) = runtime.states.get(&action) else {
+        return Ok(action);
+    };
+    let (entry, fields) = (*entry, fields.clone());
+    let pool = match runtime.states.get(&receiver) {
+        Some(State::WorkerPool(pool)) => pool.clone(),
+        _ => {
+            let pool = crate::worker_process::Pool::new(bound);
+            runtime.state_new(receiver, State::WorkerPool(pool.clone()));
+            pool
+        }
+    };
+    let bound = bind(runtime, action, entry, fields.clone());
+    runtime.state_new(
+        bound,
+        State::WorkerBinding {
+            entry,
+            fields,
+            pool: Some(pool),
+        },
+    );
+    Ok(bound)
+}
+
+pub(crate) fn pool_close(runtime: &mut Runtime, frame: Word, receiver: Word) -> Step {
+    let slot = runtime.driver_slot(frame);
+    let object = crate::tasks::get(frame, slot);
+    let request = if object == crate::word::UNBOUND {
+        let Some(State::WorkerPool(pool)) = runtime.states.get(&receiver) else {
+            return Step::Done(crate::word::UNBOUND);
+        };
+        let request = Request::closing(pool.clone());
+        let object = runtime.heap.allocate_payload(Box::new(Call {
+            request: request.clone(),
+            result: None,
+        }));
+        crate::tasks::set(frame, slot, object);
+        request
+    } else {
+        runtime
+            .heap
+            .payload::<Call>(object)
+            .expect("pool close")
+            .request
+            .clone()
+    };
+    let waker = runtime.io.waker(frame);
+    let polled = {
+        let _tokio = runtime.io.tokio().enter();
+        request.poll(&mut std::task::Context::from_waker(&waker))
+    };
+    match polled {
+        std::task::Poll::Pending => {
+            runtime.io.requests.insert(frame, u64::MAX);
+            Step::Pending
+        }
+        std::task::Poll::Ready(result) => {
+            runtime.io.requests.remove(&frame);
+            match result {
+                Ok(_) => Step::Done(crate::word::UNBOUND),
+                Err(failure) => Step::Failed(
+                    runtime.failure_new(FailureKind::Program(format!("cannot close spawn workers: {failure:?}"))),
+                ),
+            }
+        }
+    }
+}
 #[derive(Debug)]
 struct Call {
     request: Rc<Request>,
@@ -314,15 +396,15 @@ pub fn spawn(runtime: &mut Runtime, ctx: *mut Ctx, entry: Word, arguments: &[Wor
     if runtime.worker_command.is_empty() {
         return Err("process workers require an explicit worker command".into());
     }
-    let (entry, arguments) = if direct {
-        (entry, arguments.to_vec())
+    let (entry, arguments, pool) = if direct {
+        (entry, arguments.to_vec(), None)
     } else {
-        let Some(State::WorkerBinding { entry, fields }) = runtime.states.get(&entry) else {
+        let Some(State::WorkerBinding { entry, fields, pool }) = runtime.states.get(&entry) else {
             return Err("spawn requires a synchronous bound object action whose receiver fields reconstruct it".into());
         };
         let mut values: Vec<Word> = fields.iter().map(|&(w, _)| w).collect();
         values.extend_from_slice(arguments);
-        (*entry, values)
+        (*entry, values, pool.clone())
     };
     let function = crate::heap::payload(runtime.heap.header_of(entry)) as usize;
     let source = &runtime.loaded.program.functions[function];
@@ -344,7 +426,10 @@ pub fn spawn(runtime: &mut Runtime, ctx: *mut Ctx, entry: Word, arguments: &[Wor
         .worker(result)
         .ok_or_else(|| "worker.spawn without a worker Future type".to_owned())?;
     let future = runtime.future_new(driver, &[]);
-    let request = Request::new(runtime.worker_command.clone(), request, None);
+    let request = match pool {
+        Some(pool) => Request::pooled(pool, runtime.worker_command.clone(), request),
+        None => Request::new(runtime.worker_command.clone(), request, None),
+    };
     let object = runtime.heap.allocate_payload(Box::new(Call { request, result }));
     let slot = runtime.driver_slot(future);
     crate::tasks::set(future, slot, object);
@@ -558,4 +643,79 @@ mod wire_tests {
         encode(&runtime, &mut again, value, TypeRef(4)).unwrap();
         assert_eq!(again, wire);
     }
+    #[test]
+    fn pool_binding_is_run_local_and_preserves_the_original_executor_and_action() {
+        let program = okkama_sparrow::assemble(r#"sparrow 16
+module "pool-binding" "1.0.0"
+type t0 int
+type t1 fn [t0] -> t0
+type t2 object obj0
+object obj0 "PrivatePool" {
+ field "action" t1
+ field "workers" t0
+}
+function f0 "entry" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+"#).unwrap();
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        let action = runtime.heap.closure_new(0, &[]);
+        let entry = runtime.heap.closure_new(0, &[]);
+        let field = runtime.heap.int(7);
+        let action = bind(&mut runtime, action, entry, vec![(field, Repr::Int)]);
+        let bound = runtime.heap.int(2);
+        let receiver = runtime.heap.object_new(0, &[action, bound]);
+        assert_eq!(pool_bind(&mut runtime, receiver).unwrap(), action);
+        assert!(runtime.worker_command.is_empty(), "embedded execution never gains processes");
+        assert!(!runtime.states.contains_key(&receiver));
+        runtime.worker_command = vec!["unused-worker".into()];
+        runtime.loaded.worker_reuse_safe = false;
+        assert_eq!(pool_bind(&mut runtime, receiver).unwrap(), action,
+            "process-launching programs retain per-item process-group teardown");
+        runtime.loaded.worker_reuse_safe = true;
+        let pooled = pool_bind(&mut runtime, receiver).unwrap();
+        assert_ne!(pooled, action);
+        assert!(matches!(runtime.states.get(&action), Some(State::WorkerBinding { pool: None, .. })));
+        let Some(State::WorkerBinding { pool: Some(first), fields, .. }) = runtime.states.get(&pooled) else { panic!("pooled binding"); };
+        assert_eq!(fields, &[(field, Repr::Int)]);
+        let first = first.clone();
+        let other_receiver = runtime.heap.object_new(0, &[action, bound]);
+        let other = pool_bind(&mut runtime, other_receiver).unwrap();
+        let Some(State::WorkerBinding { pool: Some(second), .. }) = runtime.states.get(&other) else { panic!("second pool"); };
+        assert!(!Rc::ptr_eq(&first, second), "results calls must never share pools");
+    }
+
+    #[test]
+    fn private_pool_intrinsics_validate_the_fields_and_action_type() {
+        for (action, bound, result, valid) in [
+            ("t1", "t0", "t1", true),
+            ("t3", "t0", "t1", false),
+            ("t1", "t3", "t1", false),
+            ("t1", "t0", "t3", false),
+        ] {
+            let source = format!(r#"sparrow 16
+module "pool-contract" "1.0.0"
+type t0 int
+type t1 fn [t0] -> t0
+type t2 object obj0
+type t3 str
+object obj0 "PrivatePool" {{
+ field "action" {action}
+ field "workers" {bound}
+}}
+function f0 "bind" intrinsic "okkama.map.ParallelMapWorkers.bound" [] [] {{
+ registers [t2]
+ params [r0]
+ result {result}
+}}
+"#);
+            let program = okkama_sparrow::assemble(&source).unwrap();
+            let loaded = crate::program::Loaded::new(program);
+            assert_eq!(crate::contracts::check(&loaded).is_ok(), valid, "{source}");
+        }
+    }
+
 }

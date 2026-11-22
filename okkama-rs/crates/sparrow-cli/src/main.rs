@@ -130,9 +130,11 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
 
 fn test(path: &Path) -> Result<u8, Failure> {
     let bytes = read(path)?;
-    match sparrow_core::run_tests(bytes, Box::new(sparrow_core::stdout::Buffered)) {
-        Ok(passed) => Ok(u8::from(!passed)),
-        Err(error) => Err((1, error.0)),
+    match sparrow_core::run_executable(bytes, Vec::new(), worker_command(path), Default::default(),
+        sparrow_core::ExecutionOptions { tests: Some(Box::new(sparrow_core::stdout::Buffered)), ..Default::default() }) {
+        Ok(sparrow_core::Execution::Tests(passed)) => Ok(u8::from(!passed)),
+        Ok(_) => Err((1, "module has no tests".into())),
+        Err(sparrow_core::ExecutionError::Load(error) | sparrow_core::ExecutionError::Run(error)) => Err((1, error.0)),
     }
 }
 
@@ -140,13 +142,7 @@ fn test(path: &Path) -> Result<u8, Failure> {
 /// on stdout; it never runs main.
 fn answer(path: &Path) -> Result<u8, Failure> {
     let (bytes, _) = load(path)?;
-    let mut request = Vec::new();
-    std::io::stdin().read_to_end(&mut request).map_err(|e| (3, format!("worker request: {e}")))?;
-    let response = sparrow_core::run_worker(bytes, request, worker_command(path)).map_err(|e| (1, e.0))?;
-    // The action's own output, buffered (#132), comes before the response.
-    sparrow_core::stdout::flush().map_err(|e| (3, format!("worker response: {e}")))?;
-    let mut out = std::io::stdout().lock();
-    out.write_all(&response).and_then(|()| out.flush()).map_err(|e| (3, format!("worker response: {e}")))?;
+    sparrow_core::serve_worker(bytes, worker_command(path)).map_err(|e| (1, e.0))?;
     Ok(0)
 }
 

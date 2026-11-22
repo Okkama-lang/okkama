@@ -82,7 +82,9 @@ pub enum Type {
 
 /// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std
 /// `async/*`, чьё состояние держит рантайм.
-pub const INTRINSICS: [&str; 90] = [
+pub const INTRINSICS: [&str; 92] = [
+    "okkama.map.ParallelMapWorkers.bound",
+    "okkama.map.ParallelMapWorkers.close",
     "okkama.timeout.Within.outcome",
     "okkama.timeout.Before.outcome",
     "okkama.scope.FutureScope.outcome",

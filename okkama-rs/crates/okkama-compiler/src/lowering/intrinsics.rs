@@ -11,8 +11,9 @@ use crate::ir::{self, ObjectId, ResultType, Type};
 use crate::source::Span;
 
 /// Объекты std с intrinsic-действиями: модуль и имя.
-const OBJECTS: [(&str, &str); 22] = [
+const OBJECTS: [(&str, &str); 23] = [
     ("async/scope", "FutureScope"),
+    ("parallel/map", "ParallelMapWorkers"),
     ("async/lock", "Lock"),
     ("async/lock", "LockGuard"),
     ("async/semaphore", "Semaphore"),

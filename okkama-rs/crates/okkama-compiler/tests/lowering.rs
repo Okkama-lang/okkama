@@ -485,3 +485,35 @@ fn an_early_self_inside_a_loop_or_branch_is_built_once_before_its_statement() {
         assert_eq!(listing[start..end].matches("obj.new").count(), 1, "{body}");
     }
 }
+
+/// #946: receiver once slots are runtime state, never constructor inputs.
+#[test]
+fn worker_bound_receiver_transfers_declared_fields_not_once_slots() {
+    let module = lower(r#"module app v1.0.0;
+        object W {
+            has n is int;
+            W(:n);
+            cached() is int { once let answer = n * 2; answer; }
+            f(x is int) is int { self.cached() + x; }
+        }
+        async main() is int {
+            let g is (int) is int = W(n: 10).f;
+            await spawn g(2);
+        }
+    "#).unwrap();
+    ir::verify(&module).unwrap();
+    let entry = module.functions.iter().find(|f| f.symbol.contains(".f$worker")).unwrap();
+    assert_eq!(entry.params.len(), 2, "one declared field, one item; no once slot");
+    let binding = module.functions.iter().find(|f| f.symbol.contains(".f$bind")).unwrap();
+    let printed = module.to_string();
+    assert!(!binding.params.is_empty(), "{printed}");
+    for block in &binding.blocks {
+        for instruction in &block.insts {
+            if let ir::InstKind::WorkerBind { fields, .. } = &instruction.kind {
+                assert_eq!(fields.len(), 1, "only declared fields cross the boundary");
+                return;
+            }
+        }
+    }
+    panic!("missing worker binding: {printed}");
+}

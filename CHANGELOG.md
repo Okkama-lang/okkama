@@ -14,6 +14,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Batched `for` bindings are not part of Okkama (#967).** `for xs -> b[2]` is a syntax error that points to
   sources that do `Batching<T>`; it used to parse and then fail as "not implemented yet".
 
+### Performance
+- **`parallel/map` reuses its worker processes within one run (#946).** A `results()` call keeps up to `workers`
+  Unix processes for its items instead of starting one per item: 4 items on 2 workers take 5.7 ms instead of
+  9.5 ms. Each item still gets a fresh VM and a receiver rebuilt from its fields (once slots, globals, virtual
+  environment and working directory are fresh); the OS process itself — its PID, native statics, foreign
+  process-global state — is shared between items of one run, and nothing is kept across `results()` calls.
+  Programs that launch native processes, and non-Unix hosts, keep one process per item. A worker's receiver no
+  longer carries `once` slots it cannot rebuild (they were encoded and broke the transfer).
+
 ### Security
 - **Regex input preparation is bounded (#961).** Sparrow counted a regex input against its scalar limit only
   after copying it whole; it now stops at the limit and stores an admitted input at its exact size.
