@@ -404,8 +404,9 @@ fn float_parse(text: &str) -> Option<f64> {
     if !digits(whole) || !digits(fraction) {
         return None;
     }
-    // Language floats are finite (#986): a literal past f64::MAX is not a float, not infinity.
-    text.parse::<f64>().ok().filter(|value| value.is_finite())
+    // Language floats are finite (#986): a literal past f64::MAX is the nearest
+    // finite float, never infinity (std's Decimal.float relies on that).
+    text.parse::<f64>().ok().map(|value| value.clamp(f64::MIN, f64::MAX))
 }
 
 /// Целое в записи `strings/parse::Number.int`: необязательный `-`, при
@@ -468,11 +469,11 @@ mod number_text_tests {
         int_parse(text, &IntValue::from_i64(radix)).map(|value| value.to_string())
     }
 
-    /// #986: a float literal past f64::MAX is not a float; a large finite one still is.
+    /// #986: a float literal past f64::MAX saturates to the nearest finite float.
     #[test]
     fn float_literals_parse_only_to_finite_values() {
-        assert_eq!(float_parse(&format!("{}.0", "9".repeat(400))), None);
-        assert_eq!(float_parse(&format!("-{}.0", "9".repeat(400))), None);
+        assert_eq!(float_parse(&format!("{}.0", "9".repeat(400))), Some(f64::MAX));
+        assert_eq!(float_parse(&format!("-{}.0", "9".repeat(400))), Some(f64::MIN));
         assert_eq!(float_parse("1.5"), Some(1.5));
         assert!(float_parse(&format!("{}.0", "9".repeat(300))).is_some_and(f64::is_finite));
     }
