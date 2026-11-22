@@ -1,18 +1,11 @@
-//! Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
+//! Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
 //!
-//! Lowering выполняет то, что нужно для типизированного IR поддерживаемого
-//! подмножества: разрешение локальных имён, вывод и проверку типов, выбор
-//! инструкций и явное управление потоком. Конструкции, которых IR ещё не
-//! поддерживает, дают [`LoweringError::Unsupported`]; программы, нарушающие
-//! правила языка, — [`LoweringError::Invalid`]. Ничего не пропускается молча.
-//!
-//! Поддержано: `main() is int`; `int`, `bool`, `string`; литералы, имена,
-//! арифметика, битовые операции, сравнения, `!`, `&&`, `||`; `let` с
-//! необязательным типом, вложенные блоки, `if` как оператор и выражение,
-//! `loop`, `for` по диапазону, `next`, `last`, `return`, `confirm`, `panic`;
-//! объекты с типизированными полями и defaults, полные и shorthand
-//! конструкторы, actions с перегрузкой и `hidden`, successor-действия,
-//! rebind, обязательство использования successor, `int/bool.string()`.
+//! Lowering не разрешает имена и не выводит типы: это сделал анализ. Он строит
+//! функции OIR (специализации generic-объявлений, адаптеры ролей, замыкания,
+//! async-тела), явный поток управления и владение (регионы, ресурсы), затем
+//! прогоняет проходы (`PASSES`, `OKKAMA_IR_PASSES`) и верификатор. Нарушение
+//! правил языка, которое анализ не видит, — [`LoweringError::Invalid`];
+//! конструкция без поддержки — [`LoweringError::Unsupported`].
 
 mod body;
 mod builder;
@@ -851,6 +844,15 @@ impl Passes {
 
     fn from_spec(spec: &str, prototype: Option<&str>) -> Self {
         let mut names: Vec<String> = spec.split(',').map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).collect();
+        // A misspelt pass would be left out silently and weaken a passes-on/off comparison (#999).
+        let unknown: Vec<&str> = names.iter().map(String::as_str)
+            .filter(|name| !PASSES.contains(name) && !matches!(*name, "all" | "none" | "sabotage-int-add"))
+            .collect();
+        if !unknown.is_empty() {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| eprintln!("OKKAMA_IR_PASSES: unknown pass {} (known: all, none, {})",
+                unknown.join(", "), PASSES.join(", ")));
+        }
         let sabotage = names.iter().any(|name| name == "sabotage-int-add");
         names.retain(|name| name != "sabotage-int-add");
         // `none` names no pass, so every pass is off.

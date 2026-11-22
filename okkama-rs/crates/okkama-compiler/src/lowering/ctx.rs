@@ -243,7 +243,7 @@ pub(super) struct Ctx<'r, 'a> {
     /// `once let` whose value type is plain only if function values and
     /// role values turn out plain (#520): checked when every body is lowered,
     /// with the closures and specializations of the whole program. Each is
-    /// (value type, object, action, span, module of the task).
+    /// (value type, the object's name, span, module of the task).
     pub once_checks: Vec<(Type, String, Span, usize)>,
     plain_roles: Vec<bool>,
     /// Plain-ность объявлений ролей по всем объявлениям объектов программы
@@ -492,7 +492,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
         self.allocate(task, symbol)
     }
 
-    /// Action, которое std объявляет заглушкой: его даёт VM Perl
+    /// Action, которое std объявляет заглушкой: его даёт рантайм как intrinsic
     /// (`panic "Atomic.value is a VM intrinsic"`), а не тело Okkama.
     pub fn is_intrinsic(&self, object: ObjectId, method: usize) -> bool {
         // Intrinsics, которые даёт рантайм, вызываются как обычные действия.
@@ -751,7 +751,6 @@ impl<'r, 'a> Ctx<'r, 'a> {
         }
     }
 
-    /// Конструктор адаптера `object` (`obj.new` из полей по порядку).
     /// The global of constant `constant` (#153): its init function is lowered
     /// once, and every use reads the value built at program start.
     pub fn global(&mut self, constant: usize, span: Span) -> Result<usize> {
@@ -770,6 +769,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
         Ok(index)
     }
 
+    /// Конструктор адаптера `object` (`obj.new` из полей по порядку).
     pub fn adapter_ctor(&mut self, object: ObjectId) -> FuncId {
         let task = Task::AdapterNew { object };
         if let Some(func) = self.task_map.get(&task) {
@@ -851,7 +851,6 @@ impl<'r, 'a> Ctx<'r, 'a> {
         self.allocate(task, symbol)
     }
 
-    /// Функция текста `bool` (`true`/`false`) или case enum без payload.
     /// `(str) -> str`: экранирование строки payload для `text()` ошибки.
     pub fn escape_text(&mut self) -> FuncId {
         if let Some(func) = self.task_map.get(&Task::EscapeText) {
@@ -860,6 +859,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
         self.allocate(Task::EscapeText, "$escape.text".to_string())
     }
 
+    /// Функция текста `bool` (`true`/`false`) или case enum без payload.
     pub fn describe(&mut self, ty: &Ty) -> FuncId {
         let task = Task::Describe { ty: ty.clone() };
         if let Some(func) = self.task_map.get(&task) {
@@ -1714,7 +1714,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             })
             .collect();
         ir::Module {
-            name: module_path(program),
+            name: super::modules::module_path(program),
             version: program.module.version_text(),
             imports,
             enums,
@@ -1740,18 +1740,6 @@ fn unsupported_type(span: Span, what: &str) -> LoweringError {
     )
 }
 
-fn module_path(program: &ast::Program) -> String {
-    program
-        .module
-        .path
-        .iter()
-        .map(|part| part.text.as_str())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// Plain-ность типа анализа на уровне объявлений: параметры типа plain
-/// (их подстановку учитывают аргументы), коробки и функции — нет.
 /// Plainness of a whole lowered program (#520): see
 /// `Ctx::settled_plain_types`.
 pub struct SettledPlain {
@@ -1798,6 +1786,8 @@ fn settled_plain(
     }
 }
 
+/// Plain-ность типа анализа на уровне объявлений: параметры типа plain
+/// (их подстановку учитывают аргументы), коробки и функции — нет.
 fn decl_plain_ty(ty: &Ty, objects: &[bool], roles: &[bool]) -> bool {
     match ty {
         Ty::Object(object, args) => {

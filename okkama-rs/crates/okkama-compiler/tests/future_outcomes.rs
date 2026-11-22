@@ -903,3 +903,38 @@ fn future_outcome_modified_corpus_expectations() {
         assert_eq!(run(&compile_source(&source)).unwrap(), 0, "{name}");
     }
 }
+
+/// A bound `await` adopts its result once (#999): the binding's own adopt is not repeated by the
+/// take-extraction pass. Counted with the IR passes off, where nothing else removes a repeat.
+#[test]
+fn a_bound_await_result_is_adopted_once() {
+    let text = r#"
+        module awaits v1.0.0;
+        object Res { has n is int; Res(:n); read() is int { n; } destroy { } }
+        object Maker {
+            Maker();
+            async make(n is int) is Res { Res(n: n); }
+            async twice() is int {
+                let a = await self.make(1);
+                let f = self.make(2);
+                let b = await f;
+                a.read() + b.read();
+            }
+        }
+        async main() is int { await Maker().twice(); }
+    "#;
+    let source = SourceFile::new("awaits.ok", text).unwrap();
+    let program = syntax::parse(&source, &syntax::ParseOptions::default()).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let module = lowering::with_passes("none", || lowering::lower_linked(&program, source.name(), &mut Stdlib(root)).unwrap());
+    ir::verify(&module).unwrap();
+    let twice = module.functions.iter().find(|function| function.symbol.contains("twice")).expect("Maker.twice");
+    for block in &twice.blocks {
+        for pair in block.insts.windows(2) {
+            let same = matches!((&pair[0].kind, &pair[1].kind),
+                (ir::InstKind::RegionAdopt { region: r1, value: v1 }, ir::InstKind::RegionAdopt { region: r2, value: v2 })
+                    if r1 == r2 && v1 == v2);
+            assert!(!same, "a repeated region.adopt in {}", twice.symbol);
+        }
+    }
+}

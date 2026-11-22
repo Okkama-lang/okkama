@@ -114,7 +114,8 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
         }).collect();
         for (block_index, block) in function.blocks.iter_mut().enumerate() {
             let mut insts = Vec::with_capacity(block.insts.len());
-            for mut inst in std::mem::take(&mut block.insts) {
+            let mut pending = std::mem::take(&mut block.insts).into_iter().peekable();
+            while let Some(mut inst) = pending.next() {
                 let extraction = if let InstKind::Await(future) = inst.kind
                     && eligible[block_index].contains(&future)
                 {
@@ -133,7 +134,13 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
                         // them immediately at the binding's cleanup boundary.
                         let kind = if bound { InstKind::RegionAdopt { region, value } }
                             else { InstKind::RegionTrack { region, value } };
-                        insts.push(Inst { result: None, kind, span });
+                        // The binding's own lowering already adopts it right after (#999): one adopt, not two.
+                        let adopted_next = bound && pending.peek().is_some_and(|next| {
+                            matches!(next.kind, InstKind::RegionAdopt { region: r, value: v } if r == region && v == value)
+                        });
+                        if !adopted_next {
+                            insts.push(Inst { result: None, kind, span });
+                        }
                         if let Some(Some(types)) = ctx.settle_types.get_mut(index)
                             && !types.contains(ty) { types.push(ty.clone()); }
                     }
