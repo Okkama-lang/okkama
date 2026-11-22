@@ -1422,3 +1422,7 @@ mod selection_tests;
 #[cfg(test)]
 #[path = "held_tests.rs"]
 mod held_tests;
+
+#[cfg(test)]
+#[path = "maps_954_tests.rs"]
+mod maps_954_tests;

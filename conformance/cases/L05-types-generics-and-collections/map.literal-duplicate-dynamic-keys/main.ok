@@ -1,0 +1,19 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Probe {
+    has out is Stdout;
+    Probe(:out);
+    key(text is string) is string { out.writeln("key " + text); text; }
+    value(n is int) is int { out.writeln("value " + n.string()); n; }
+}
+
+main() is int {
+    let out = Stdout();
+    let probe = Probe(out: out);
+    out.writeln("before");
+    let m = [probe.key("a"): probe.value(1), probe.key("b"): probe.value(2), probe.key("a"): probe.value(3)];
+    out.writeln("unreachable " + m.size().string());
+    0;
+}

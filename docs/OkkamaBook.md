@@ -785,9 +785,14 @@ let empty_map = [:];
   the *variable* `name`; write `["name": "Alex"]` for a string key.
 - Missing keys are runtime errors unless an `else` fallback is given:
   `prices["fig"] else 0;`
-- A key may repeat inside one literal; the later entry wins, so
-  `["a": 1, "a": 2]` holds one entry, `"a": 2`. Whether a repeated literal
-  key should rather be an error is an open question (#954).
+- A literal names each key once (#954). Keys the compiler can compute —
+  literals, operators over them, `rat(…)`, constants — that are one map key
+  are a compile-time error: `["a": 1, "a": 2]` and `[rat(1, 2): 1, 2 / 4: 2]`
+  do not compile. Other keys are checked when the literal is built: all its
+  keys and values are evaluated once, left to right, and then equal keys
+  (by the map's own key equality, so `0.0` and `-0.0`, or two equal value
+  objects, are one key) fail with `RuntimeError: Duplicate key in map literal`.
+  An explicit `m + ["a": 2]` still replaces: that is an update, not a literal.
 - Map keys are scalar values or value objects. Keys cannot be `any` or `byte`
   (decision D-007: `Map key type byte is not a scalar key type`). A `byte`
   may still be a field of a key object. Map *values* may be any type

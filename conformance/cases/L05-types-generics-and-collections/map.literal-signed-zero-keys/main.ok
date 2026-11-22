@@ -1,0 +1,12 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let zero = 0.0;
+    out.writeln("before");
+    let m = [zero: 1, -zero: 2];
+    out.writeln("unreachable " + m.size().string());
+    0;
+}

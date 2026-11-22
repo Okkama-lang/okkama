@@ -1,0 +1,51 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L05.map.literal-equivalent-object-keys",
+  "title": "Equal value-object keys fail the literal at run time",
+  "purpose": "Two separately built objects that are one key under map equality fail the literal.",
+  "level": "L05",
+  "contracts": [
+    {
+      "contract": "COLL.MAP",
+      "aspects": [
+        "invalid",
+        "interaction"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "failure",
+    "failure": {
+      "stages": [
+        "runtime"
+      ],
+      "categories": [
+        "runtime"
+      ]
+    },
+    "stdout": {
+      "text": "before\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#8.8"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #954 (owner decision, 2026-11-22)",
+    "expected_basis": "#954: keys the compiler cannot compute are checked when the literal is built, by the map's own key equality; every key and value is evaluated once, left to right, before the map is built, and the literal then fails."
+  },
+  "status": "mandatory"
+}

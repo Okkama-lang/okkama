@@ -1656,9 +1656,24 @@ impl Checker<'_, '_> {
             return Self::poisoned(span);
         }
         let mut checked = Vec::new();
+        // A literal names each key once (#954): two keys the compiler can
+        // compute and that are one map key are an error here; keys it cannot
+        // compute are checked when the literal is built.
+        let mut seen = std::collections::BTreeMap::new();
         for ((key, value), entry) in pairs.into_iter().zip(entries) {
             let key = self.coerce(key, &key_type, entry.key.span, "Map key");
             let value = self.coerce(value, &value_type, entry.value.span, "Map value");
+            if !key_type.is_error() {
+                if let Some(constant) = super::consts::constant_key(self.reg, &key) {
+                    let text = super::consts::key_text(&constant);
+                    if let Some(&first) = seen.get(&constant) {
+                        self.error(entry.key.span, format!("Duplicate key in map literal: {text}"));
+                        self.error(first, format!("Map key {text} first appears here"));
+                    } else {
+                        seen.insert(constant, entry.key.span);
+                    }
+                }
+            }
             checked.push((key, value));
         }
         let mut out = Self::typed(ExprKind::Map(checked), Ty::map(key_type, value_type), span);

@@ -95,6 +95,30 @@ pub(super) fn evaluate(reg: &mut Registry<'_>, id: usize) -> Option<ConstResult>
     result
 }
 
+/// The key a map-literal entry has when the compiler can compute it (#954):
+/// literals, operators over them, `rat(…)` and constants, by the same rules as
+/// a module `const`, so no action, constructor or variable is evaluated.
+/// `None` when the key is not a constant: its equality is left to the run.
+pub(super) fn constant_key(reg: &Registry<'_>, key: &Expr) -> Option<okkama_runtime_core::heap::MapKey> {
+    let value = (Eval { reg }).expr(key).ok()?;
+    okkama_runtime_core::heap::MapKey::from_value(&value).ok()
+}
+
+/// A short spelling of a constant key for a diagnostic.
+pub(super) fn key_text(key: &okkama_runtime_core::heap::MapKey) -> String {
+    use okkama_runtime_core::heap::MapKey;
+    match key {
+        MapKey::Int(value) => value.to_string(),
+        MapKey::Float(value) => format!("{value:?}"),
+        MapKey::Bool(value) => value.to_string(),
+        MapKey::Byte(value) => format!("byte({value})"),
+        MapKey::Char(value) => format!("{value:?}"),
+        MapKey::Str(value) => format!("{:?}", value.as_ref()),
+        MapKey::Rat(value) => value.to_string(),
+        MapKey::Enum { .. } | MapKey::Object { .. } => "an equal key".to_string(),
+    }
+}
+
 /// Вычисление проверенного инициализатора операциями IR-движка.
 struct Eval<'r, 'a> {
     reg: &'r Registry<'a>,
