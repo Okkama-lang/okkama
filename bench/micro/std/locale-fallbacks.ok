@@ -1,0 +1,34 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/data" take LocaleFallbacks, LocaleDataKey;
+import "locale/tag" take Locale;
+import "cell" take Cell;
+import "collections/iteration" take CursorItems;
+
+object Bench {
+    has locales is @Locale;
+    Bench() {
+        locales = [Locale("de", "CH"), Locale("fr"), Locale("sr", "Latn", "RS", []), Locale("en", "US")];
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let keys = Cell(0);
+        for CursorItems(LocaleFallbacks(locales[i % 4]).cursor()) -> key {
+            keys.replace(keys.value() + 1 + key.string().length());
+        }
+        self.run(i + 1, n, acc + (keys.value() + LocaleDataKey("pt-BR").string().length()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

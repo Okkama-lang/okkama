@@ -1,0 +1,37 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "i18n/gettext" take GettextCatalog, ParsedPo;
+import "i18n/catalog" take MessageKey;
+import "i18n/plural" take PluralNumber;
+import "locale/tag" take Locale;
+
+object Bench {
+    has mo is @byte;
+    has hello is MessageKey;
+    has file is MessageKey;
+    Bench() {
+        mo = [byte(222), byte(18), byte(4), byte(149), byte(0), byte(0), byte(0), byte(0), byte(3), byte(0), byte(0), byte(0), byte(28), byte(0), byte(0), byte(0), byte(52), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(76), byte(0), byte(0), byte(0), byte(10), byte(0), byte(0), byte(0), byte(77), byte(0), byte(0), byte(0), byte(5), byte(0), byte(0), byte(0), byte(88), byte(0), byte(0), byte(0), byte(83), byte(0), byte(0), byte(0), byte(94), byte(0), byte(0), byte(0), byte(24), byte(0), byte(0), byte(0), byte(178), byte(0), byte(0), byte(0), byte(5), byte(0), byte(0), byte(0), byte(203), byte(0), byte(0), byte(0), byte(0), byte(102), byte(105), byte(108), byte(101), byte(0), byte(102), byte(105), byte(108), byte(101), byte(115), byte(0), byte(104), byte(101), byte(108), byte(108), byte(111), byte(0), byte(67), byte(111), byte(110), byte(116), byte(101), byte(110), byte(116), byte(45), byte(84), byte(121), byte(112), byte(101), byte(58), byte(32), byte(116), byte(101), byte(120), byte(116), byte(47), byte(112), byte(108), byte(97), byte(105), byte(110), byte(59), byte(32), byte(99), byte(104), byte(97), byte(114), byte(115), byte(101), byte(116), byte(61), byte(85), byte(84), byte(70), byte(45), byte(56), byte(10), byte(80), byte(108), byte(117), byte(114), byte(97), byte(108), byte(45), byte(70), byte(111), byte(114), byte(109), byte(115), byte(58), byte(32), byte(110), byte(112), byte(108), byte(117), byte(114), byte(97), byte(108), byte(115), byte(61), byte(50), byte(59), byte(32), byte(112), byte(108), byte(117), byte(114), byte(97), byte(108), byte(61), byte(40), byte(110), byte(32), byte(33), byte(61), byte(32), byte(49), byte(41), byte(59), byte(10), byte(0), byte(101), byte(105), byte(110), byte(101), byte(32), byte(68), byte(97), byte(116), byte(101), byte(105), byte(0), byte(118), byte(105), byte(101), byte(108), byte(101), byte(32), byte(68), byte(97), byte(116), byte(101), byte(105), byte(101), byte(110), byte(0), byte(72), byte(97), byte(108), byte(108), byte(111), byte(0)];
+        hello = MessageKey(context: "", identity: "hello");
+        file = MessageKey(context: "", identity: "file");
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let catalog = GettextCatalog(origin: mo, locale: Locale("de"));
+        let plural = catalog.plural(file, PluralNumber((i % 3).string()));
+        let po = ParsedPo("msgid \"a\"\nmsgstr \"b" + i.string() + "\"\n").document();
+        self.run(i + 1, n, acc + (catalog.text(hello).length() + plural.length() + po.entries().size()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

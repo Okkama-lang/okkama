@@ -1,0 +1,28 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "testing/error" take AnyErrorMatching, ErrorTextMatching;
+import "error" take InvalidArgument;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let failure = InvalidArgument.because("bad " + (i % 3).string());
+        let any = if AnyErrorMatching().match(failure) { 1; } else { 0; };
+        let text = if ErrorTextMatching("InvalidArgument.because(\"bad 1\")").match(failure) { 2; } else { 0; };
+        self.run(i + 1, n, acc + (any + text) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,27 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "os/environment" take Environment;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let environment = Environment(values: ["PATH": "/bin:/usr/bin:/opt/" + (i % 7).string(), "COUNT": (i % 50).string()]);
+        let changed = environment.addition("DEBUG", "true").difference("COUNT");
+        let debug = if changed.boolean("DEBUG") { 1; } else { 0; };
+        self.run(i + 1, n, acc + (environment.int("COUNT") + environment.list("PATH").size() + debug) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
