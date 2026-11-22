@@ -66,44 +66,54 @@ for key,value in resolved.items():
     by_kind.setdefault(kind,{})[tag] = value
 whole_tags = dict(grandfathered)
 whole_tags.update(by_kind.get('redundant',{}))
-alias_cases = ''.join('case '+json.dumps(kind)+'{'+literal(values)+';}'
+def const_name(kind):
+    return 'IANA_'+kind.upper()+'_ALIASES'
+# Tables are module constants, built once: a literal inside an action is
+# rebuilt on every call (#943).
+alias_consts = ''.join('hidden const '+const_name(kind)+' = '+literal(values)+';\n'
+                       for kind,values in sorted(by_kind.items()))
+alias_cases = ''.join('case '+json.dumps(kind)+'{'+const_name(kind)+';}'
                       for kind,values in sorted(by_kind.items()))
 text='''module locale/internal/iana v1.0.0;
-// Generated from SHA-checked IANA Language Subtag Registry, file-date DATE.
-// Materialize only the queried registry group, not every table for every tag.
+// Generated from SHA-checked IANA Language Subtag Registry, file-date @@DATE@@.
+// The tables are module constants, built once rather than on every lookup.
 // The IANA Language Subtag Registry, as needed for canonical tags.
 object IanaLanguages {
  // The registry.
  IanaLanguages();
  // The registry's file date.
- version() is string{"DATE";}
+ version() is string{"@@DATE@@";}
  // The preferred value of tag among the subtags of kind, or tag itself.
  alias(kind is string,tag is string) is string{
-  let values is %string:string=match kind{ALIASES else{[:];}};
+  let values is %string:string=match kind{@@ALIASES@@ else{IANA_NO_ALIASES;}};
   if values.has(tag){values[tag];}else{tag;}
  }
  // Whether tag is a grandfathered tag.
  grandfathered(tag is string) is bool{
-  if tag.split("-").size()==1{return false;}
-  let values is %string:string=GRANDFATHERED;values.has(tag);
+  if !tag.contains("-"){return false;}
+  IANA_GRANDFATHERED.has(tag);
  }
  // The preferred value of a whole tag, or "".
  preferred_tag(tag is string) is string{
-  if tag.split("-").size()==1{return "";}
-  let values is %string:string=WHOLE;
-  if values.has(tag){values[tag];}else{"";}
+  if !tag.contains("-"){return "";}
+  if IANA_WHOLE_TAGS.has(tag){IANA_WHOLE_TAGS[tag];}else{"";}
  }
  // The prefix an extended language subtag requires, or "".
- extlang_prefix(tag is string) is string{let values is %string:string=EXTLANGS;if values.has(tag){values[tag];}else{"";}}
+ extlang_prefix(tag is string) is string{if IANA_EXTLANG_PREFIXES.has(tag){IANA_EXTLANG_PREFIXES[tag];}else{"";}}
 }
 // The registry version.
 object IanaLanguageDataVersion {
 // The version.
 IanaLanguageDataVersion();
 // The registry's file date.
-string() is string{"DATE";}}
+string() is string{"@@DATE@@";}}
+@@ALIAS_CONSTS@@
+hidden const IANA_NO_ALIASES is %string:string = [:];
+hidden const IANA_GRANDFATHERED = @@GRANDFATHERED@@;
+hidden const IANA_WHOLE_TAGS = @@WHOLE@@;
+hidden const IANA_EXTLANG_PREFIXES = @@EXTLANGS@@;
 '''
-for key,value in [('DATE',manifest['file_date']),('ALIASES',alias_cases),('GRANDFATHERED',literal(grandfathered)),('WHOLE',literal(whole_tags)),('EXTLANGS',literal(extlangs))]:
+for key,value in [('@@DATE@@',manifest['file_date']),('@@ALIAS_CONSTS@@',alias_consts.rstrip('\n')),('@@ALIASES@@',alias_cases),('@@GRANDFATHERED@@',literal(grandfathered)),('@@WHOLE@@',literal(whole_tags)),('@@EXTLANGS@@',literal(extlangs))]:
     text=text.replace(key,value)
 args.output.parent.mkdir(parents=True,exist_ok=True)
 args.output.write_text(text)

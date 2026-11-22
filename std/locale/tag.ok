@@ -198,7 +198,7 @@ object LocaleSubtag {
     variant() is bool {
         ((origin.length() >= 5 && origin.length() <= 8)
             || (origin.length() == 4 && "0123456789".contains(origin.slice(0, 1))))
-            && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            && self.alphanumeric();
     }
 
     // Whether it can be an extended language.
@@ -210,20 +210,20 @@ object LocaleSubtag {
     extension() is bool {
         origin.length() >= 2
             && origin.length() <= 8
-            && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            && self.alphanumeric();
     }
 
     // Whether it can be a private-use subtag.
     private_use() is bool {
         origin.length() >= 1
             && origin.length() <= 8
-            && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            && self.alphanumeric();
     }
 
     // Whether it is a singleton such as `u` or `x`.
     singleton() is bool {
         origin.length() == 1
-            && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            && self.alphanumeric();
     }
 
     // Whether it can be a `u` extension key.
@@ -240,14 +240,14 @@ object LocaleSubtag {
             && "0123456789".contains(origin.slice(1, 2));
     }
 
-    // It in lowercase.
+    // It in lowercase; only ASCII letters change.
     lower() is string {
-        self.translated("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz");
+        self.shifted(65, 90, 32);
     }
 
-    // It in uppercase.
+    // It in uppercase; only ASCII letters change.
     upper() is string {
-        self.translated("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        self.shifted(97, 122, -32);
     }
 
     // It in title case.
@@ -262,29 +262,38 @@ object LocaleSubtag {
     }
 
     hidden alphabetic() is bool {
-        self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        self.every(letters: true, digits: false);
     }
 
     hidden numeric() is bool {
-        self.characters("0123456789");
+        self.every(letters: false, digits: true);
     }
 
-    hidden characters(alphabet is string) is bool {
-        let valid = (0..origin.length()).reduce(true) -> previous, index {
-            previous && alphabet.contains(origin.slice(index, index + 1));
-        };
-        origin != "" && valid;
+    hidden alphanumeric() is bool {
+        self.every(letters: true, digits: true);
     }
 
-    hidden translated(from is string, to is string) is string {
-        let parts is @string = (0..origin.length()).map() -> index {
-            let char = origin.slice(index, index + 1);
-            let split = from.split(char);
-            if split.size() == 2 {
-                to.slice(split[0].length(), split[0].length() + 1);
+    // Whether it is not empty and every character is an ASCII letter or digit
+    // of the kinds asked for.
+    hidden every(letters is bool, digits is bool) is bool {
+        origin != ""
+            && origin.characters().reduce(true) -> valid, character {
+                let code = character.code();
+                valid
+                    && ((letters && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)))
+                    || (digits && code >= 48 && code <= 57));
+            };
+    }
+
+    // It with the codes lowest..highest moved by offset; other characters stay.
+    hidden shifted(lowest is int, highest is int, offset is int) is string {
+        let parts is @string = origin.characters().map() -> character {
+            let code = character.code();
+            if code >= lowest && code <= highest {
+                (code + offset).char().string();
             }
             else {
-                char;
+                character.string();
             }
         };
         parts.join("");
@@ -1056,4 +1065,35 @@ test "POSIX forms stay separate from BCP 47" {
             true;
         });
     }
+}
+
+test "subtags change the case of ASCII letters only and classify by ASCII" {
+    test.is(LocaleSubtag("Ab-Zz@[`{").lower(), "ab-zz@[`{");
+    test.is(LocaleSubtag("ab-Zz@[`{").upper(), "AB-ZZ@[`{");
+    test.is(LocaleSubtag("cYRL").title(), "Cyrl");
+    test.is(LocaleSubtag("\u{212A}\u{130}\u{e9}").lower(), "\u{212A}\u{130}\u{e9}");
+    test.is(LocaleSubtag("\u{e9}\u{df}").upper(), "\u{e9}\u{df}");
+    test.ok(!LocaleSubtag("\u{212A}a").language());
+    test.ok(!LocaleSubtag("\u{e9}n").language());
+    test.ok(
+        LocaleSubtag("Az").language() && LocaleSubtag("aZ").region() && LocaleSubtag("419").region()
+    );
+    test.ok(
+        !LocaleSubtag("a9").language()
+            && !LocaleSubtag("4a9").region()
+            && !LocaleSubtag("").language()
+    );
+    test.ok(
+        LocaleSubtag("a9Z0").extension()
+            && LocaleSubtag("1996").variant()
+            && !LocaleSubtag("a-b").extension()
+    );
+    test.ok(
+        !LocaleSubtag("@@").extension()
+            && !LocaleSubtag("[`").extension()
+            && !LocaleSubtag("{{").extension()
+    );
+    test.ok(!LocaleSubtag("//").extension() && !LocaleSubtag("::").extension());
+    test.is(Locale("EN-latn-us").string(), "en-Latn-US");
+    test.is(Locale("iw").string(), "he");
 }

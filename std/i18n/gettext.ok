@@ -26,8 +26,9 @@ import "collections/list" take List, EmptyList;
 import "collections/iteration" take Cursor, CursorItems;
 import "collections/ordering" take SortedBy;
 import "async/atomic" take Atomic;
+import "cell" take Cell;
 import "compare" take Order;
-import "regex/pattern" take Regex;
+import "regex/pattern" take Regex, NoRegexMatch;
 import "regex/search" take RegexMatches, EntireRegexMatch;
 
 // A catalog that cannot be read; offset and reason say where and why.
@@ -125,6 +126,38 @@ hidden object GettextControl {
     }
 }
 
+
+// A metadata field name: an ASCII letter, then ASCII letters, digits and hyphens.
+hidden object GettextFieldName {
+    has origin is string;
+
+    GettextFieldName(origin is string) {
+        self.origin = origin;
+    }
+
+    valid() is bool {
+        let codes is @int = origin.characters().map() -> character {
+            character.code();
+        };
+        codes.size() > 0
+            && GettextLetter(codes[0]).letter()
+            && codes.reduce(true) -> valid, code {
+                valid && (GettextLetter(code).letter() || (code >= 48 && code <= 57) || code == 45);
+            };
+    }
+}
+
+hidden object GettextLetter {
+    has code is int;
+
+    GettextLetter(code is int) {
+        self.code = code;
+    }
+
+    letter() is bool {
+        (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    }
+}
 
 // The charset a catalog declares.
 object GettextCharset {
@@ -509,28 +542,28 @@ hidden object GettextTokens {
     GettextTokens(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 2048
             else throw InvalidCatalog.located(0, "plural expression size must be 1..2048");
+        // A hand scanner: the tokens of `[0-9]+|n|==|!=|<=|>=|&&|\|\||[!?:()+*/%<>-]`
+        // between spaces, without a regex walk per token (#943).
+        let characters = origin.split("");
+        let size = characters.size();
         let empty is List<GettextToken> = EmptyList();
-        let items is Atomic<List<GettextToken>> = Atomic(empty);
-        let position = Atomic(0);
-        defer items.close();
-        defer position.close();
-        for RegexMatches(
-            origin: origin,
-            regex: Regex("[0-9]+|n|==|!=|<=|>=|&&|\\|\\||[!?:()+*/%<>-]")
-        ) -> token {
-            let at = token.range()::Bounds::start;
-            for (position.value()..at) -> index {
-                confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                    else throw InvalidCatalog.located(index, "invalid plural token");
+        let items = Cell(empty);
+        let position = Cell(0);
+        loop {
+            last if position.value() >= size;
+            let at = position.value();
+            if GettextSpace(characters[at]).matches() {
+                position.replace(at + 1);
             }
-            confirm items.value().size() < 512
-                else throw InvalidCatalog.located(at, "plural token budget 512");
-            items.replace(items.value().prefix(GettextToken(text: token.text(), offset: at)));
-            position.replace(token.range()::Bounds::end);
-        }
-        for (position.value()..origin.length()) -> index {
-            confirm GettextSpace(origin.slice(index, index + 1)).matches()
-                else throw InvalidCatalog.located(index, "invalid plural token");
+            else {
+                let width = GettextTokenWidth(characters: characters, at: at).width();
+                confirm width > 0 else throw InvalidCatalog.located(at, "invalid plural token");
+                confirm items.value().size() < 512
+                    else throw InvalidCatalog.located(at, "plural token budget 512");
+                let token = GettextToken(text: origin.slice(at, at + width), offset: at);
+                items.replace(items.value().prefix(token));
+                position.replace(at + width);
+            }
         }
         values = GettextListArray(
             items.value().prefix(GettextToken(text: "", offset: origin.length()))
@@ -539,6 +572,57 @@ hidden object GettextTokens {
 
     values() is @GettextToken {
         values;
+    }
+}
+
+// How many characters the plural token at `at` takes; 0 for none.
+hidden object GettextTokenWidth {
+    has characters is @string;
+    has at is int;
+
+    GettextTokenWidth(characters is @string, at is int) {
+        self.characters = characters;
+        self.at = at;
+    }
+
+    width() is int {
+        let run = self.digits();
+        if run > 0 {
+            return run;
+        }
+        let symbol = characters[at];
+        if symbol == "n" {
+            return 1;
+        }
+        if at + 1 < characters.size() {
+            let pair = symbol + characters[at + 1];
+            if ["==", "!=", "<=", ">=", "&&", "||"].contains(pair) {
+                return 2;
+            }
+        }
+        if "!?:()+*/%<>-".contains(symbol) {
+            1;
+        }
+        else {
+            0;
+        }
+    }
+
+    // How many ASCII digits start at `at`.
+    digits() is int {
+        let count = Cell(0);
+        let going = Cell(true);
+        for (at..characters.size()) -> index {
+            if going.value() {
+                if "0123456789".contains(characters[index]) {
+                    count.replace(count.value() + 1);
+                }
+                else {
+                    going.replace(false);
+                }
+            }
+        }
+        count.value();
     }
 }
 
@@ -567,7 +651,8 @@ hidden object GettextExpressionParsing {
             let token = tokens[index];
             let text = token.text();
             let at = token.offset();
-            if text == "n" || RegexMatches(origin: text, regex: Regex("^[0-9]+$")).found() {
+            let digits = GettextTokenWidth(characters: text.split(""), at: 0).digits();
+            if text == "n" || digits == text.length() {
                 confirm expected.value()
                     else throw InvalidCatalog.located(at, "trailing plural token");
                 values.replace(values.value().prefix(GettextLiteral(token: text, offset: at)));
@@ -1061,7 +1146,7 @@ object GettextMetadata {
                 confirm parts.size() >= 2
                     else throw InvalidCatalog.located(0, "metadata field lacks colon");
                 let name = parts[0];
-                confirm RegexMatches(origin: name, regex: Regex("^[A-Za-z][A-Za-z0-9-]*$")).found()
+                confirm GettextFieldName(name).valid()
                     else throw InvalidCatalog.located(0, "invalid metadata name");
                 let key = GettextAscii(name).lower();
                 let list = cell.value();
@@ -1902,9 +1987,15 @@ hidden object PoParsing {
         let expression = Regex(
             "^(msgctxt|msgid_plural|msgid|msgstr)(?:\\[([0-9]{1,2})\\])?[ \\t]+(.*)$"
         );
-        confirm RegexMatches(origin: text, regex: expression).found()
-            else throw InvalidCatalog.located(at, "unknown PO directive");
-        let directive = EntireRegexMatch(origin: text, regex: expression);
+        // One query: the entire match is the directive or there is none.
+        let directive = try {
+            let found = EntireRegexMatch(origin: text, regex: expression);
+            found.text();
+            found;
+        }
+        catch missing is NoRegexMatch {
+            throw InvalidCatalog.located(at, "unknown PO directive");
+        };
         let name = directive.capture(1).text();
         let indexed = directive.capture(2).matched();
         confirm !indexed || name == "msgstr"
@@ -2362,4 +2453,62 @@ test "plural formulas keep their GNU unsigned 64-bit results (#205)" {
     );
     test.is(refused("nplurals=2; plural=n/2>=1 && n/2<2;", "3"), "1");
     test.is(refused("nplurals=2; plural=n/2>=1 && n/2<2;", "4"), "0");
+}
+
+test "plural expressions tokenize numbers, n and one- and two-character operators" {
+    let russian = GettextPluralRule(
+        "nplurals=3; plural=n%10==1&&n%100!=11?0:n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?1:2;"
+    );
+    let forms is @int = [1, 2, 5, 11, 21, 22, 25, 111, 104].map() -> count {
+        russian.index(Decimal(count.string()));
+    };
+    test.is(forms, [0, 1, 2, 2, 0, 1, 2, 2, 1]);
+    let ten = GettextPluralRule("nplurals=2; plural=n==10 || !(n>3)&&n<=1;");
+    test.is([0, 1, 2, 3, 9, 10].map() -> count { ten.index(Decimal(count.string())); }, [1, 1, 0, 0, 0, 1]);
+    let refused = [
+        ["nplurals=2; plural=n = 1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=n & 1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=n |1;", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=1 \u{e9};", "InvalidCatalog.located(2, \"invalid plural token\")"],
+        ["nplurals=2; plural=nn;", "InvalidCatalog.located(1, \"trailing plural token\")"],
+        ["nplurals=2; plural=n==;", "InvalidCatalog.located(3, \"expected literal or n\")"],
+    ];
+    for refused -> pair {
+        test.is(
+            try {
+                GettextPluralRule(pair[0]);
+                "";
+            }
+            catch failure is InvalidCatalog {
+                failure.text();
+            },
+            pair[1]
+        );
+    }
+}
+
+test "metadata names and PO directives are checked by their grammar" {
+    test.is(GettextMetadata("X-a9-: v\nLanguage: de").text("x-a9-"), "v");
+    for ["1bad: x", "Bad_Name: x", "\u{c4}: x", "-x: y"] -> header {
+        test.is(
+            try {
+                GettextMetadata(header);
+                "";
+            }
+            catch failure is InvalidCatalog {
+                failure.text();
+            },
+            "InvalidCatalog.located(0, \"invalid metadata name\")"
+        );
+    }
+    test.is(
+        try {
+            ParsedPo("msgid \"a\"\nmsgfoo \"b\"\n");
+            "";
+        }
+        catch failure is InvalidCatalog {
+            failure.text();
+        },
+        "InvalidCatalog.located(10, \"unknown PO directive\")"
+    );
 }

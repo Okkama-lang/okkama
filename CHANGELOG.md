@@ -158,7 +158,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 - **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
   secret scalar alone, still with RFC 6979 deterministic nonces: a P-256 signature plus two verifications takes
-  178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs.
+  178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. Locale tags no longer
+  rebuild the IANA alias tables or change case through string splitting per call (`Locale("ru")` 7.1 → 1.3 µs,
+  `LikelyLocale` 47 → 5.6 µs, `LocaleFallbacks` 29 → 6.7 µs, `LocalizedDate` 73 → 33 µs); gettext tokenizes
+  plural formulas without regex (`GettextCatalog` 131 → 83 µs in the benchmark); regex match cursors ask the
+  runtime once per match; one-shot DEFLATE, zlib and gzip reuse pooled miniz engines and small buffers (round
+  trip of 8 bytes 26 → 8 µs); tar pads and checks zero blocks in bulk (round trip 78 → 62 µs).
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
   most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives

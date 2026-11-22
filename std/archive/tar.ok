@@ -577,15 +577,7 @@ hidden object TarAsciiField {
     bytes() is @byte {
         confirm self.fits() else throw InvalidTar.because("string exceeds USTAR field");
         let text = Utf8Encoded(origin).bytes();
-        let result is @byte = (0..width).map() -> index {
-            if index < text.size() {
-                text[index];
-            }
-            else {
-                byte(0);
-            }
-        };
-        result;
+        text + TarZeroes(width - text.size()).bytes();
     }
 }
 
@@ -623,11 +615,14 @@ hidden object TarZeroes {
         self.size = size;
     }
 
+    // Made by the runtime in one go rather than a byte at a time (#943).
     bytes() is @byte {
-        let result is @byte = (0..size).map() -> ignored {
-            byte(0);
-        };
-        result;
+        Utf8Encoded("\u{0}".repeat(size)).bytes();
+    }
+
+    // Whether origin is all zero bytes.
+    zero(origin is @byte) is bool {
+        origin.size() == size && origin == self.bytes();
     }
 }
 
@@ -871,9 +866,7 @@ hidden object TarParseProgress {
         confirm origin.size() - at >= 512
             else throw InvalidTar.because("truncated header or missing EOF");
         let raw = origin.slice(at, at + 512);
-        let zero = raw.reduce(true) -> valid, b {
-            valid && b == byte(0);
-        };
+        let zero = TarZeroes(512).zero(raw);
         if zero {
             confirm !pending else throw InvalidTar.because("orphan local extension");
             confirm origin.size() - at >= 1024 && (origin.size() - at) % 512 == 0
@@ -885,9 +878,7 @@ hidden object TarParseProgress {
                     last;
                 }
                 let block = origin.slice(tail.at(), tail.at() + 512);
-                confirm block.reduce(true) -> valid, b {
-                    valid && b == byte(0);
-                }
+                confirm TarZeroes(512).zero(block)
                     else throw InvalidTar.because("nonzero data after EOF");
                 tail = tail.following(tail.at() + 512);
             }
@@ -976,9 +967,7 @@ hidden object TarBodySpan {
         confirm pad <= origin.size() - start - size
             else throw InvalidTar.because("missing entry padding");
         let padding = origin.slice(start + size, start + size + pad);
-        confirm padding.reduce(true) -> valid, b {
-            valid && b == byte(0);
-        }
+        confirm TarZeroes(pad).zero(padding)
             else throw InvalidTar.because("nonzero entry padding");
         start + size + pad;
     }
@@ -1780,24 +1769,18 @@ hidden object TarStreamInput {
         let local = TarStreamLocal();
         loop {
             let raw = source.bytes(512, false);
-            let zero = raw.reduce(true) -> valid, b {
-                valid && b == byte(0);
-            };
+            let zero = TarZeroes(512).zero(raw);
             if zero {
                 confirm !local.present() else throw InvalidTar.because("orphan local extension");
                 let second = source.bytes(512, false);
-                confirm second.reduce(true) -> valid, b {
-                    valid && b == byte(0);
-                }
+                confirm TarZeroes(512).zero(second)
                     else throw InvalidTar.because("nonzero data after EOF");
                 loop {
                     let trailer = source.bytes(512, true);
                     if trailer.size() == 0 {
                         return [];
                     }
-                    confirm trailer.reduce(true) -> valid, b {
-                        valid && b == byte(0);
-                    }
+                    confirm TarZeroes(trailer.size()).zero(trailer)
                         else throw InvalidTar.because("nonzero data after EOF");
                 }
             }
@@ -1854,9 +1837,7 @@ hidden object TarStreamInput {
 
     hidden padding(size is int) is void {
         let bytes = source.bytes((512 - size % 512) % 512, false);
-        confirm bytes.reduce(true) -> valid, b {
-            valid && b == byte(0);
-        }
+        confirm TarZeroes(bytes.size()).zero(bytes)
             else throw InvalidTar.because("nonzero entry padding");
     }
 }
@@ -2079,4 +2060,62 @@ test "TAR stream local extension presence is not the attribute count" {
     catch e is InvalidTar {
         true;
     });
+}
+
+test "TAR pads fields and blocks with zeros and refuses nonzero padding and trailers" {
+    let metadata = ArchiveMetadata(
+        mode: PermissionMode(420),
+        modified: ArchiveModificationFromEpoch(1700000000.rat()).local_date_time(),
+        comment: ""
+    );
+    let entries is @ArchiveEntry = [
+        ArchiveFile(path: ArchivePath("a"), metadata: metadata, data: [byte(7)])
+    ];
+    let bytes = TarArchive(entries, TarFormat.ustar).bytes();
+    let zeros = (size is int) is @byte {
+        (0..size).map() -> index {
+            byte(0);
+        };
+    };
+    test.is(bytes.size(), 2048);
+    test.is(bytes.slice(0, 2), [byte(97), byte(0)]);
+    test.is(bytes.slice(1, 100), zeros(99));
+    test.is(bytes[512], byte(7));
+    test.is(bytes.slice(513, 2048), zeros(1535));
+    let limits = ArchiveLimits(entries: 8, entry_size: 4096, total_size: 65536, path_length: 256);
+    let reason = (origin is @byte) is string {
+        try {
+            ParsedTar(origin: origin, limits: limits).entries();
+            "";
+        }
+        catch failure is InvalidTar {
+            failure.text();
+        }
+    };
+    let streamed = (origin is @byte) is string {
+        try {
+            let reading = TarReading(origin: ByteBuffer(origin).reading(), limits: limits);
+            reading.entry();
+            reading.entry();
+            "";
+        }
+        catch failure is InvalidTar {
+            failure.text();
+        }
+        catch ended is EndOfArchive {
+            "end";
+        }
+    };
+    let padded = bytes.slice(0, 1023) + [byte(1)] + bytes.slice(1024, 2048);
+    let trailed = bytes.slice(0, 2047) + [byte(1)];
+    let extended = bytes + zeros(511) + [byte(1)];
+    test.is(reason(bytes), "");
+    test.is(reason(padded), "InvalidTar.because(\"nonzero entry padding\")");
+    test.is(reason(trailed), "InvalidTar.because(\"nonzero data after EOF\")");
+    test.is(reason(extended), "InvalidTar.because(\"nonzero data after EOF\")");
+    test.is(reason(bytes + zeros(512)), "");
+    test.is(streamed(bytes), "end");
+    test.is(streamed(padded), "InvalidTar.because(\"nonzero entry padding\")");
+    test.is(streamed(trailed), "InvalidTar.because(\"nonzero data after EOF\")");
+    test.is(streamed(extended), "InvalidTar.because(\"nonzero data after EOF\")");
 }
