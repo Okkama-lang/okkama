@@ -26442,7 +26442,7 @@ documented.
 
 | Module | What it is for |
 |---|---|
-| `parallel/map` | An ordered mapping performed by bounded batches of isolated process workers. |
+| `parallel/map` | An ordered mapping performed by bounded batches of process workers. |
 
 ### `plist`
 

@@ -5168,6 +5168,17 @@ memory layout of a run: the same program prints the same output every
 time. Python made its dictionaries keep insertion order in version 3.7
 for the same reason — predictability — and many test suites in languages
 with unordered maps contain workarounds for nondeterministic output.</p>
+<p>A literal names each key once. Two keys the compiler can compute and
+that are one key — <code>["a": 1, "a": 2]</code>,
+<code>[rat(1, 2): 1, 2 / 4: 2]</code>, <code>[1 + 1: 1, 2: 2]</code> —
+are a compile-time error that points at the repeat and at the first.
+Keys known only at run time are checked when the literal is built: every
+key and value is evaluated once, left to right, and if two keys are
+equal by the map's own key equality the literal fails with "Duplicate
+key in map literal" instead of keeping one of them. Many languages let
+the later entry win; Okkama treats a repeated key in a literal as the
+mistake it nearly always is (issue #954). Replacing an entry is written
+as what it is, <code>prices + ["fig": 95]</code>.</p>
 <p>A lookup of a missing key is a runtime failure unless it has a
 fallback: <code>stock["kiwi"] else 0</code>. <code>has(key)</code> asks
 without looking up, and a <code>Maybe</code> is one <code>if</code> away
@@ -9366,8 +9377,21 @@ Composition couples it only to a contract.</p>
 <p><code>has</code> is the only way to declare state.</p>
 <pre class="okkama"><code><span class="k">has</span> digit <span class="k">is</span> int;                 <span class="c">// required: a constructor must bind it</span>
 <span class="k">has</span> cents <span class="k">is</span> int = <span class="n">0</span>;             <span class="c">// optional: a default</span>
-<span class="k">has</span> given, family <span class="k">is</span> string;      <span class="c">// several names, one type</span></code></pre>
+<span class="k">has</span> given, family <span class="k">is</span> string;      <span class="c">// several names, one type</span>
+<span class="k">has</span> currency = <span class="s">&quot;USD&quot;</span>;             <span class="c">// the type comes from the initializer: string</span></code></pre>
 
+<p><strong>A field's type may come from its initializer.</strong>
+<code>has currency = "USD";</code> declares a <code>string</code> field
+exactly as <code>has currency is string = "USD";</code> does. This is
+inference at compile time, not dynamic typing: the compiler takes the
+initializer's static type once, every object keeps that one type, and
+constructors and successors are checked against it as against a written
+type. Only the initializer gives the type, never a constructor's
+assignment, so <code>has digit;</code> is an error that asks for the
+type. An initializer that settles no type, such as an empty
+<code>[]</code> or <code>[:]</code>, needs the type written
+(<code>has items is @string = [];</code>), and nothing widens to
+<code>any</code>.</p>
 <p>Two rules make fields different from fields in most languages.</p>
 <p><strong>A field is private to its object.</strong> Code outside the
 object cannot read it, not even with the same type in the same
@@ -11179,10 +11203,9 @@ lengths.value();    <span class="c">// 6</span></code></pre>
 <ul>
 <li><p>It has three operations: <code>Cell(value: initial)</code>,
 <code>value()</code> and <code>replace(value)</code>. The values it
-holds are ordinary immutable values. Two cells are meant to compare by
-identity, but today <code>==</code> on any two cells is
-<code>true</code> (issue #956), so a program should not compare
-them.</p></li>
+holds are ordinary immutable values. Cells compare by identity, not by
+content: two cells are equal only when they are the same cell (issue
+#956).</p></li>
 <li><p>It stays in synchronous code. An async action cannot create,
 receive or use one. A synchronous action that uses a cell may still be
 called from async code. Synchronous code has no suspension point, so no
@@ -15833,12 +15856,70 @@ sort call stays one line.</li>
 <li><strong>A <code>Cell</code> gathers the names.</strong>
 <code>Listing.names</code> walks any <code>Iterating&lt;Job&gt;</code>
 and appends to a <code>Cell</code>, the mutable value of synchronous
-code. A <code>for</code> block is not a closure, so it may update the
-cell. An anonymous action may capture a <code>Cell</code> too, and today
-nothing stops such an action from reaching async code, where a cell must
-not go (issue #957); keep cells in the synchronous code that made
-them.</li>
+code. <code>for</code> and the six functional operations
+(<code>map</code>, <code>filter</code>, <code>reduce</code>,
+<code>any</code>, <code>all</code>, <code>find</code>) execute blocks in
+the current frame; those blocks may use a Cell.</li>
 </ul>
+<p>An action that captures a Cell, a collection containing one, or
+another such local action is <strong>frame-bound</strong>. A bound
+action on a Cell, such as <code>count.value</code>, has the same
+restriction. It may be called synchronously, bound to a local name, or
+captured by another frame-bound action. Repeated local calls are
+allowed:</p>
+<pre class="okkama"><code><span class="k">module</span> bible/cell_local v1.<span class="n">0.0</span>;
+<span class="k">import</span> <span class="s">&quot;cell&quot;</span> <span class="k">take</span> <span class="t">Cell</span>;
+<span class="k">import</span> <span class="s">&quot;io/stdout&quot;</span> <span class="k">take</span> <span class="t">Stdout</span>;
+
+main() <span class="k">is</span> int {
+    <span class="k">let</span> count = <span class="t">Cell</span>(<span class="n">0</span>);
+    <span class="k">let</span> step = () <span class="k">is</span> int {
+        count.replace(count.value() + <span class="n">1</span>);
+        count.value();
+    };
+    <span class="k">let</span> nested = () <span class="k">is</span> int { step(); };
+    <span class="k">let</span> read <span class="k">is</span> () <span class="k">is</span> int = count.value;
+    <span class="t">Stdout</span>().writeln(step().string());
+    <span class="t">Stdout</span>().writeln(nested().string());
+    <span class="t">Stdout</span>().writeln(read().string());
+    <span class="n">0</span>;
+}</code></pre>
+
+<p>Output:</p>
+<pre class="text"><code>1
+2
+2</code></pre>
+<p>Every other use is rejected: returning it, passing it to any action
+(even a synchronous callback), storing it in a field, enum payload or
+collection, boxing it into <code>any</code> or a role, awaiting it, or
+spawning it. A synchronous forwarder could return or retain its
+callback, so it cannot receive one:</p>
+<pre class="okkama"><code><span class="k">module</span> bible/cell_escape v1.<span class="n">0.0</span>;
+<span class="k">import</span> <span class="s">&quot;cell&quot;</span> <span class="k">take</span> <span class="t">Cell</span>;
+
+<span class="k">object</span> <span class="t">Forwarder</span> {
+    <span class="t">Forwarder</span>();
+    forwarded(f <span class="k">is</span> () <span class="k">is</span> int) <span class="k">is</span> () <span class="k">is</span> int { f; }
+}
+
+main() <span class="k">is</span> int {
+    <span class="k">let</span> count = <span class="t">Cell</span>(<span class="n">0</span>);
+    <span class="k">let</span> read = () <span class="k">is</span> int { count.value(); };
+    <span class="k">let</span> escaped = <span class="t">Forwarder</span>().forwarded(read);
+    <span class="n">0</span>;
+}</code></pre>
+
+<p>The compiler answers:</p>
+<pre class="text"><code>18-cell-escape-rejected.ok:12:41: semantic error: An action that retains a Cell cannot be passed to an action: a cell stays in its synchronous frame; share state between tasks with Atomic</code></pre>
+<p>The Cell itself cannot be hidden in <code>any</code>, a role or a
+generic parameter. This includes inferred parameters, even those
+inferred from an action's signature. <code>Cell&lt;T&gt;</code> itself
+and builtin collections keep Cell types visible; ordinary synchronous
+Cell use remains valid. Object fields, enum payloads and cached
+<code>once let</code> values cannot hold a Cell. For state retained by
+an object or shared between tasks, use <code>Atomic</code>. Closures
+with ordinary immutable captures and Atomic captures keep their usual
+behavior.</p>
 <p>The same shape recurs across the library: keys in
 <code>SortedBy</code>, mappings and conditions in the lazy views of
 <code>collections/views</code>, and the condition a test check such as
@@ -16105,10 +16186,9 @@ that cannot end.</li>
 <li><strong>Equality by identity only</strong>, and an action value is
 never a map key.</li>
 <li><strong>Positional calls only</strong>, exactly the declared number
-of arguments; no variadic anonymous parameters, no defaults. A default
-is not rejected yet, only ignored:
-<code>(n is int = 1) is int { n; }</code> compiles and <code>f()</code>
-still fails for want of an argument (issue #958).</li>
+of arguments; no variadic anonymous parameters, no defaults:
+<code>(n is int = 1) is int { n; }</code> is the syntax error "Anonymous
+action parameters cannot declare default values" (issue #958).</li>
 <li><strong>No currying or partial application.</strong>
 <code>make_adder</code> has to be written out.</li>
 <li><strong>No async anonymous actions.</strong> An action that awaits
@@ -16900,20 +16980,20 @@ book's examples run in a cage without processes.</p>
 root</em>. A file belongs to the package of the nearest such directory
 above it, and a <em>project</em> is a package that is not installed
 inside another project. <code>blade new demo</code> creates one:</p>
-<div class="sourceCode" id="cb191"><pre
-class="sourceCode toml"><code class="sourceCode toml"><span id="cb191-1"><a href="#cb191-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">module</span><span class="kw">]</span></span>
-<span id="cb191-2"><a href="#cb191-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;demo&quot;</span></span>
-<span id="cb191-3"><a href="#cb191-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;1.0.0&quot;</span></span>
-<span id="cb191-4"><a href="#cb191-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb191-5"><a href="#cb191-5" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">build</span><span class="kw">]</span></span>
-<span id="cb191-6"><a href="#cb191-6" aria-hidden="true" tabindex="-1"></a><span class="dt">entry</span> <span class="op">=</span> <span class="st">&quot;src/main.ok&quot;</span></span>
-<span id="cb191-7"><a href="#cb191-7" aria-hidden="true" tabindex="-1"></a><span class="dt">output</span> <span class="op">=</span> <span class="st">&quot;target/demo.spb&quot;</span></span>
-<span id="cb191-8"><a href="#cb191-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb191-9"><a href="#cb191-9" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">run</span><span class="kw">]</span></span>
-<span id="cb191-10"><a href="#cb191-10" aria-hidden="true" tabindex="-1"></a><span class="dt">args</span> <span class="op">=</span> <span class="op">[]</span></span>
-<span id="cb191-11"><a href="#cb191-11" aria-hidden="true" tabindex="-1"></a><span class="dt">env</span> <span class="op">=</span> <span class="op">{}</span></span>
-<span id="cb191-12"><a href="#cb191-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb191-13"><a href="#cb191-13" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">dependencies</span><span class="kw">]</span></span></code></pre></div>
+<div class="sourceCode" id="cb193"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb193-1"><a href="#cb193-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">module</span><span class="kw">]</span></span>
+<span id="cb193-2"><a href="#cb193-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;demo&quot;</span></span>
+<span id="cb193-3"><a href="#cb193-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;1.0.0&quot;</span></span>
+<span id="cb193-4"><a href="#cb193-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb193-5"><a href="#cb193-5" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">build</span><span class="kw">]</span></span>
+<span id="cb193-6"><a href="#cb193-6" aria-hidden="true" tabindex="-1"></a><span class="dt">entry</span> <span class="op">=</span> <span class="st">&quot;src/main.ok&quot;</span></span>
+<span id="cb193-7"><a href="#cb193-7" aria-hidden="true" tabindex="-1"></a><span class="dt">output</span> <span class="op">=</span> <span class="st">&quot;target/demo.spb&quot;</span></span>
+<span id="cb193-8"><a href="#cb193-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb193-9"><a href="#cb193-9" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">run</span><span class="kw">]</span></span>
+<span id="cb193-10"><a href="#cb193-10" aria-hidden="true" tabindex="-1"></a><span class="dt">args</span> <span class="op">=</span> <span class="op">[]</span></span>
+<span id="cb193-11"><a href="#cb193-11" aria-hidden="true" tabindex="-1"></a><span class="dt">env</span> <span class="op">=</span> <span class="op">{}</span></span>
+<span id="cb193-12"><a href="#cb193-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb193-13"><a href="#cb193-13" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">dependencies</span><span class="kw">]</span></span></code></pre></div>
 <pre class="okkama"><code><span class="k">module</span> demo;
 <span class="k">import</span> <span class="s">&quot;io/stdout&quot;</span> <span class="k">take</span> <span class="t">Stdout</span>;
 
@@ -16963,9 +17043,9 @@ that executes is one the project calls.</p>
 installs it:</p>
 <pre><code>blade add json https://example.org/okkama/json 1.4.0</code></pre>
 <p>writes</p>
-<div class="sourceCode" id="cb194"><pre
-class="sourceCode toml"><code class="sourceCode toml"><span id="cb194-1"><a href="#cb194-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">dependencies</span><span class="kw">]</span></span>
-<span id="cb194-2"><a href="#cb194-2" aria-hidden="true" tabindex="-1"></a><span class="dt">json</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">git</span><span class="op"> =</span> <span class="st">&quot;https://example.org/okkama/json&quot;</span><span class="op">, </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1.4.0&quot;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb196"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb196-1"><a href="#cb196-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[</span><span class="dt">dependencies</span><span class="kw">]</span></span>
+<span id="cb196-2"><a href="#cb196-2" aria-hidden="true" tabindex="-1"></a><span class="dt">json</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">git</span><span class="op"> =</span> <span class="st">&quot;https://example.org/okkama/json&quot;</span><span class="op">, </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1.4.0&quot;</span> <span class="op">}</span></span></code></pre></div>
 <p>Without <code>MIN</code> the minimum is the repository's newest tag,
 so a new dependency starts current and the manifest says which version
 that was. A local directory is declared by hand,
@@ -25540,43 +25620,43 @@ to the object behind it (Section 14.3).</p>
 <h2 id="2614-a-port-step-by-step"><span class="num">26.14</span> A port, step by step</h2>
 <p>The rules are easiest to compare on one small class. Here is a bank
 account in Java, written the way a Java course would write it:</p>
-<div class="sourceCode" id="cb281"><pre
-class="sourceCode java"><code class="sourceCode java"><span id="cb281-1"><a href="#cb281-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">util</span><span class="op">.</span><span class="im">HashMap</span><span class="op">;</span></span>
-<span id="cb281-2"><a href="#cb281-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">util</span><span class="op">.</span><span class="im">Map</span><span class="op">;</span></span>
-<span id="cb281-3"><a href="#cb281-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb281-4"><a href="#cb281-4" aria-hidden="true" tabindex="-1"></a><span class="kw">public</span> <span class="kw">class</span> Account <span class="op">{</span></span>
-<span id="cb281-5"><a href="#cb281-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">private</span> <span class="dt">final</span> <span class="bu">String</span> owner<span class="op">;</span></span>
-<span id="cb281-6"><a href="#cb281-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">private</span> <span class="dt">long</span> cents<span class="op">;</span></span>
-<span id="cb281-7"><a href="#cb281-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb281-8"><a href="#cb281-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="fu">Account</span><span class="op">(</span><span class="bu">String</span> owner<span class="op">,</span> <span class="dt">long</span> cents<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb281-9"><a href="#cb281-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>cents <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">IllegalArgumentException</span><span class="op">(</span><span class="st">&quot;negative balance&quot;</span><span class="op">);</span></span>
-<span id="cb281-10"><a href="#cb281-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">this</span><span class="op">.</span><span class="fu">owner</span> <span class="op">=</span> owner<span class="op">;</span></span>
-<span id="cb281-11"><a href="#cb281-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">this</span><span class="op">.</span><span class="fu">cents</span> <span class="op">=</span> cents<span class="op">;</span></span>
-<span id="cb281-12"><a href="#cb281-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb281-13"><a href="#cb281-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb281-14"><a href="#cb281-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="dt">void</span> <span class="fu">withdraw</span><span class="op">(</span><span class="dt">long</span> amount<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb281-15"><a href="#cb281-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>amount <span class="op">&gt;</span> cents<span class="op">)</span> <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">IllegalStateException</span><span class="op">(</span><span class="st">&quot;overdrawn: &quot;</span> <span class="op">+</span> cents <span class="op">+</span> <span class="st">&quot; &lt; &quot;</span> <span class="op">+</span> amount<span class="op">);</span></span>
-<span id="cb281-16"><a href="#cb281-16" aria-hidden="true" tabindex="-1"></a>        cents <span class="op">-=</span> amount<span class="op">;</span></span>
-<span id="cb281-17"><a href="#cb281-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb281-18"><a href="#cb281-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb281-19"><a href="#cb281-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="bu">String</span> <span class="fu">shown</span><span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> owner <span class="op">+</span> <span class="st">&quot; &quot;</span> <span class="op">+</span> cents<span class="op">;</span> <span class="op">}</span></span>
-<span id="cb281-20"><a href="#cb281-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb281-21"><a href="#cb281-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="dt">static</span> <span class="dt">void</span> <span class="fu">main</span><span class="op">(</span><span class="bu">String</span><span class="op">[]</span> args<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb281-22"><a href="#cb281-22" aria-hidden="true" tabindex="-1"></a>        <span class="bu">Map</span><span class="op">&lt;</span><span class="bu">String</span><span class="op">,</span> Account<span class="op">&gt;</span> accounts <span class="op">=</span> <span class="kw">new</span> <span class="bu">HashMap</span><span class="op">&lt;&gt;();</span></span>
-<span id="cb281-23"><a href="#cb281-23" aria-hidden="true" tabindex="-1"></a>        accounts<span class="op">.</span><span class="fu">put</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">,</span> <span class="kw">new</span> <span class="fu">Account</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">,</span> <span class="dv">1000</span><span class="op">));</span></span>
-<span id="cb281-24"><a href="#cb281-24" aria-hidden="true" tabindex="-1"></a>        Account ada <span class="op">=</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">);</span></span>
-<span id="cb281-25"><a href="#cb281-25" aria-hidden="true" tabindex="-1"></a>        ada<span class="op">.</span><span class="fu">withdraw</span><span class="op">(</span><span class="dv">300</span><span class="op">);</span></span>
-<span id="cb281-26"><a href="#cb281-26" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span>ada<span class="op">.</span><span class="fu">shown</span><span class="op">());</span></span>
-<span id="cb281-27"><a href="#cb281-27" aria-hidden="true" tabindex="-1"></a>        Account bob <span class="op">=</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;bob&quot;</span><span class="op">);</span></span>
-<span id="cb281-28"><a href="#cb281-28" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span>bob <span class="op">==</span> <span class="kw">null</span> <span class="op">?</span> <span class="st">&quot;no bob&quot;</span> <span class="op">:</span> bob<span class="op">.</span><span class="fu">shown</span><span class="op">());</span></span>
-<span id="cb281-29"><a href="#cb281-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">try</span> <span class="op">{</span></span>
-<span id="cb281-30"><a href="#cb281-30" aria-hidden="true" tabindex="-1"></a>            ada<span class="op">.</span><span class="fu">withdraw</span><span class="op">(</span><span class="dv">5000</span><span class="op">);</span></span>
-<span id="cb281-31"><a href="#cb281-31" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">catch</span> <span class="op">(</span><span class="bu">IllegalStateException</span> e<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb281-32"><a href="#cb281-32" aria-hidden="true" tabindex="-1"></a>            <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span><span class="st">&quot;refused: &quot;</span> <span class="op">+</span> e<span class="op">.</span><span class="fu">getMessage</span><span class="op">());</span></span>
-<span id="cb281-33"><a href="#cb281-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb281-34"><a href="#cb281-34" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span><span class="st">&quot;in the map: &quot;</span> <span class="op">+</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">).</span><span class="fu">shown</span><span class="op">());</span></span>
-<span id="cb281-35"><a href="#cb281-35" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb281-36"><a href="#cb281-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb283"><pre
+class="sourceCode java"><code class="sourceCode java"><span id="cb283-1"><a href="#cb283-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">util</span><span class="op">.</span><span class="im">HashMap</span><span class="op">;</span></span>
+<span id="cb283-2"><a href="#cb283-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">util</span><span class="op">.</span><span class="im">Map</span><span class="op">;</span></span>
+<span id="cb283-3"><a href="#cb283-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb283-4"><a href="#cb283-4" aria-hidden="true" tabindex="-1"></a><span class="kw">public</span> <span class="kw">class</span> Account <span class="op">{</span></span>
+<span id="cb283-5"><a href="#cb283-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">private</span> <span class="dt">final</span> <span class="bu">String</span> owner<span class="op">;</span></span>
+<span id="cb283-6"><a href="#cb283-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">private</span> <span class="dt">long</span> cents<span class="op">;</span></span>
+<span id="cb283-7"><a href="#cb283-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb283-8"><a href="#cb283-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="fu">Account</span><span class="op">(</span><span class="bu">String</span> owner<span class="op">,</span> <span class="dt">long</span> cents<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb283-9"><a href="#cb283-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>cents <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">IllegalArgumentException</span><span class="op">(</span><span class="st">&quot;negative balance&quot;</span><span class="op">);</span></span>
+<span id="cb283-10"><a href="#cb283-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">this</span><span class="op">.</span><span class="fu">owner</span> <span class="op">=</span> owner<span class="op">;</span></span>
+<span id="cb283-11"><a href="#cb283-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">this</span><span class="op">.</span><span class="fu">cents</span> <span class="op">=</span> cents<span class="op">;</span></span>
+<span id="cb283-12"><a href="#cb283-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb283-13"><a href="#cb283-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb283-14"><a href="#cb283-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="dt">void</span> <span class="fu">withdraw</span><span class="op">(</span><span class="dt">long</span> amount<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb283-15"><a href="#cb283-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>amount <span class="op">&gt;</span> cents<span class="op">)</span> <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">IllegalStateException</span><span class="op">(</span><span class="st">&quot;overdrawn: &quot;</span> <span class="op">+</span> cents <span class="op">+</span> <span class="st">&quot; &lt; &quot;</span> <span class="op">+</span> amount<span class="op">);</span></span>
+<span id="cb283-16"><a href="#cb283-16" aria-hidden="true" tabindex="-1"></a>        cents <span class="op">-=</span> amount<span class="op">;</span></span>
+<span id="cb283-17"><a href="#cb283-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb283-18"><a href="#cb283-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb283-19"><a href="#cb283-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="bu">String</span> <span class="fu">shown</span><span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> owner <span class="op">+</span> <span class="st">&quot; &quot;</span> <span class="op">+</span> cents<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb283-20"><a href="#cb283-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb283-21"><a href="#cb283-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="dt">static</span> <span class="dt">void</span> <span class="fu">main</span><span class="op">(</span><span class="bu">String</span><span class="op">[]</span> args<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb283-22"><a href="#cb283-22" aria-hidden="true" tabindex="-1"></a>        <span class="bu">Map</span><span class="op">&lt;</span><span class="bu">String</span><span class="op">,</span> Account<span class="op">&gt;</span> accounts <span class="op">=</span> <span class="kw">new</span> <span class="bu">HashMap</span><span class="op">&lt;&gt;();</span></span>
+<span id="cb283-23"><a href="#cb283-23" aria-hidden="true" tabindex="-1"></a>        accounts<span class="op">.</span><span class="fu">put</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">,</span> <span class="kw">new</span> <span class="fu">Account</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">,</span> <span class="dv">1000</span><span class="op">));</span></span>
+<span id="cb283-24"><a href="#cb283-24" aria-hidden="true" tabindex="-1"></a>        Account ada <span class="op">=</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">);</span></span>
+<span id="cb283-25"><a href="#cb283-25" aria-hidden="true" tabindex="-1"></a>        ada<span class="op">.</span><span class="fu">withdraw</span><span class="op">(</span><span class="dv">300</span><span class="op">);</span></span>
+<span id="cb283-26"><a href="#cb283-26" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span>ada<span class="op">.</span><span class="fu">shown</span><span class="op">());</span></span>
+<span id="cb283-27"><a href="#cb283-27" aria-hidden="true" tabindex="-1"></a>        Account bob <span class="op">=</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;bob&quot;</span><span class="op">);</span></span>
+<span id="cb283-28"><a href="#cb283-28" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span>bob <span class="op">==</span> <span class="kw">null</span> <span class="op">?</span> <span class="st">&quot;no bob&quot;</span> <span class="op">:</span> bob<span class="op">.</span><span class="fu">shown</span><span class="op">());</span></span>
+<span id="cb283-29"><a href="#cb283-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">try</span> <span class="op">{</span></span>
+<span id="cb283-30"><a href="#cb283-30" aria-hidden="true" tabindex="-1"></a>            ada<span class="op">.</span><span class="fu">withdraw</span><span class="op">(</span><span class="dv">5000</span><span class="op">);</span></span>
+<span id="cb283-31"><a href="#cb283-31" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">catch</span> <span class="op">(</span><span class="bu">IllegalStateException</span> e<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb283-32"><a href="#cb283-32" aria-hidden="true" tabindex="-1"></a>            <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span><span class="st">&quot;refused: &quot;</span> <span class="op">+</span> e<span class="op">.</span><span class="fu">getMessage</span><span class="op">());</span></span>
+<span id="cb283-33"><a href="#cb283-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb283-34"><a href="#cb283-34" aria-hidden="true" tabindex="-1"></a>        <span class="bu">System</span><span class="op">.</span><span class="fu">out</span><span class="op">.</span><span class="fu">println</span><span class="op">(</span><span class="st">&quot;in the map: &quot;</span> <span class="op">+</span> accounts<span class="op">.</span><span class="fu">get</span><span class="op">(</span><span class="st">&quot;ada&quot;</span><span class="op">).</span><span class="fu">shown</span><span class="op">());</span></span>
+<span id="cb283-35"><a href="#cb283-35" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb283-36"><a href="#cb283-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Run with Java 26, it prints:</p>
 <pre class="text"><code>ada 700
 no bob
@@ -26133,10 +26213,10 @@ CHAR      = &quot;&#39;&quot; ( char | ESCAPE ) &quot;&#39;&quot; ;             
 ESCAPE    = &quot;\n&quot; | &quot;\r&quot; | &quot;\t&quot; | &quot;\\&quot; | &#39;\&quot;&#39; (string) | &quot;\&#39;&quot; (char)
           | &quot;\u{&quot; HEX [HEX] [HEX] [HEX] [HEX] [HEX] &quot;}&quot; ;  (* a Unicode scalar value *)
 BOOL      = &quot;true&quot; | &quot;false&quot; ;</code></pre>
-<p>There are no octal literals (<code>0o17</code> is read as
-<code>0</code> followed by the name <code>o17</code>, #968) and no
-<code>\0</code> escape. Writing <code>1.</code> leaves the dot for
-member access, which is why <code>1..3</code> is a range.</p>
+<p>There are no octal literals (<code>0o17</code> is the lexical error
+"octal literals are not supported", #968) and no <code>\0</code> escape.
+Writing <code>1.</code> leaves the dot for member access, which is why
+<code>1..3</code> is a range.</p>
 <p><strong>Operators and punctuation.</strong> Operators are matched by
 longest match.</p>
 <pre class="text"><code>+  -  *  /  %  &amp;  &amp;&amp;  |  ||  ^  ~  !  &lt;&lt;  &gt;&gt;  &gt;&gt;&gt;
@@ -26173,7 +26253,7 @@ other than <code>int</code>).</p>
 object_body   = &quot;{&quot; { object_member } &quot;}&quot; ;
 object_member = has_decl | constructor | action_decl | &quot;hidden&quot; action_decl
               | cap_decl | destroy_decl | test_decl ;
-has_decl      = &quot;has&quot; LOWER_NAME { &quot;,&quot; LOWER_NAME } [ &quot;is&quot; type ] [ &quot;=&quot; expression ] &quot;;&quot; ;
+has_decl      = &quot;has&quot; LOWER_NAME { &quot;,&quot; LOWER_NAME } ( &quot;is&quot; type [ &quot;=&quot; expression ] | &quot;=&quot; expression ) &quot;;&quot; ;
 destroy_decl  = [ &quot;async&quot; ] &quot;destroy&quot; block ;</code></pre>
 <ul>
 <li>An object header takes no parameters: "Object headers do not accept
@@ -26183,9 +26263,11 @@ constructor, a field, a cap, <code>destroy</code> or a test it is a
 syntax error. <code>hidden(</code> is an action named
 <code>hidden</code>, and <code>has(</code> is an action named
 <code>has</code>.</li>
-<li><code>has x;</code> and <code>has x = 1;</code> parse (rejected
-later: "Fields without an explicit type are not supported by the
-analysis yet", #967).</li>
+<li>A field without a type takes it from its initializer, at compile
+time: <code>has x = 1;</code> is <code>has x is int = 1;</code>. With
+neither a type nor an initializer (<code>has x;</code>) the checker asks
+for the type, and an initializer that settles no type (<code>[]</code>,
+<code>[:]</code>) needs it written.</li>
 </ul>
 <pre class="text"><code>constructor = TYPE_NAME parameter_list block                      (* full *)
             | TYPE_NAME &quot;(&quot; &quot;)&quot; &quot;;&quot;                               (* zero-field shorthand *)
@@ -26237,7 +26319,8 @@ enum_case = LOWER_NAME [ parameter_list ] ;                        (* payload fi
 <li>An upper-case case name is a syntax error: "Expect enum case
 name."</li>
 <li>An enum with no cases, <code>enum E = ();</code>, parses, and the
-compiler then fails with an internal error (#966).</li>
+checker rejects it: "Enum "E" has no cases; an enum needs at least one"
+(#966).</li>
 <li><code>is Error</code> makes an error enum (rejected by the checker:
 type parameters on an error enum, and any role other than
 <code>Error</code>).</li>
@@ -26299,7 +26382,7 @@ variant patterns whose bindings are names or <code>_</code>. Nested
 patterns and ranges are rejected.</li>
 </ul>
 <pre class="text"><code>for_stmt    = &quot;for&quot; [ &quot;await&quot; ] source &quot;-&gt;&quot; for_binding { &quot;,&quot; for_binding } block ;
-for_binding = BINDING [ &quot;[&quot; INT &quot;]&quot; ] ;            (* batch size *)
+for_binding = BINDING ;                            (* one name *)
 loop_stmt   = &quot;loop&quot; block ;
 next_stmt   = &quot;next&quot; [ &quot;if&quot; expression ] &quot;;&quot; ;     (* never a value *)
 last_stmt   = &quot;last&quot; [ expression ] [ &quot;if&quot; expression ] &quot;;&quot; ;</code></pre>
@@ -26309,9 +26392,9 @@ the <code>for</code>, so a functional call used as the source needs
 parentheses.</li>
 <li>A <code>for</code> without a source is an error: use
 <code>loop</code>.</li>
-<li><code>x[64]</code> batched bindings parse (rejected later: "Analysis
-of batched <code>for</code> bindings is not implemented yet",
-#967).</li>
+<li>A binding is one name. <code>x[64]</code> is a syntax error:
+batching belongs to the source (a source that does
+<code>Batching&lt;T&gt;</code> binds one <code>@T</code> per step).</li>
 </ul>
 <pre class="text"><code>return_stmt  = &quot;return&quot; [ expression ] [ &quot;if&quot; expression ] &quot;;&quot; ;
 throw_stmt   = &quot;throw&quot; [ expression ] [ &quot;if&quot; expression ] &quot;;&quot; ;   (* bare: rethrow *)
@@ -26452,8 +26535,8 @@ array_cast    = &quot;@&quot; ( &quot;int&quot; | &quot;float&quot; | &quot;byte
 <code>)</code> or by <code>name is</code> / <code>a, b is</code>;
 otherwise it is a grouping.</li>
 <li>Anonymous actions cannot be <code>async</code>, variadic or
-successors. A default on one of their parameters parses and is ignored
-(#958).</li>
+successors, and their parameters take no defaults (a syntax error,
+#958).</li>
 <li>A range inside an array literal is spread:
 <code>[0, 1..=3, 9]</code> holds five numbers.</li>
 <li>Casts such as <code>int(x)</code>, <code>float(n)</code> and
@@ -26557,7 +26640,7 @@ returns the <code>Order</code> of the module <code>compare</code>
 (import <code>Order</code>), and an array's <code>cursor()</code>
 returns the <code>Cursor&lt;T&gt;</code> of
 <code>collections/iteration</code> (import <code>Cursor</code>). Without
-the import the compiler reports the action as missing (issue #952).</p>
+the import the compiler names the import to add (issue #952).</p>
 <h2 id="b1-numbers"><span class="num">B.1</span> Numbers</h2>
 <div class="table-wrap"><table>
 <thead>
@@ -28731,7 +28814,7 @@ not a physical disk.</td>
 <tbody>
 <tr class="odd">
 <td><code>parallel/map</code></td>
-<td>An ordered mapping performed by bounded batches of isolated process
+<td>An ordered mapping performed by bounded batches of process
 workers.</td>
 </tr>
 </tbody>

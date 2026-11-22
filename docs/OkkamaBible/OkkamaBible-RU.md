@@ -26679,7 +26679,7 @@ result      = "void" | "^" type | type ;                        (* after "is" in
 
 | Модуль | Для чего |
 |---|---|
-| `parallel/map` | An ordered mapping performed by bounded batches of isolated process workers. |
+| `parallel/map` | An ordered mapping performed by bounded batches of process workers. |
 
 ### `plist`
 
