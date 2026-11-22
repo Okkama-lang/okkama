@@ -147,6 +147,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `ZstdCompressed` tells zstd the size of its whole input, so the codec no longer prepares tables for an
   unbounded stream: compressing and decompressing 8 bytes at level 3 takes 10 µs instead of 95 µs. The frame
   now records its content size, as the zstd tool writes it.
+- **`LookedUpLocale` follows RFC 4647 Lookup (#941).** A truncated range now has to equal an available tag;
+  before, any tag extending it matched and won even over an exact one (`en` chose `en-US` where only the
+  fallback is right, `de` chose `de-DE` although `de` was available). `FilteredLocales` still matches by prefix.
 
 ### Changed
 
