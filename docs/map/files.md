@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 21857 lines
+## front — 36 files, 21893 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -11,16 +11,16 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 240 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 622 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
-- `okkama-compiler/src/analysis/check/call.rs` 1993 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
+- `okkama-compiler/src/analysis/check/call.rs` 2021 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
 - `okkama-compiler/src/analysis/check/collections.rs` 659 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 334 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
-- `okkama-compiler/src/analysis/check/expr.rs` 1975 — Выражения: литералы, имена, операторы, условные и составные формы.
+- `okkama-compiler/src/analysis/check/expr.rs` 1967 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/frame.rs` 262 — Local non-escaping Cell actions (#957). One lexical walk per body, with
 - `okkama-compiler/src/analysis/check/generics.rs` 397 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
 - `okkama-compiler/src/analysis/check/mod.rs` 912 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 670 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
 - `okkama-compiler/src/analysis/check/variants.rs` 580 — Nominal variant construction, pattern bindings, and optional fallback.
-- `okkama-compiler/src/syntax/format.rs` 1380 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
+- `okkama-compiler/src/syntax/format.rs` 1396 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
 - `okkama-compiler/src/syntax/limits.rs` 297 — Бюджет синтаксического дерева (H-03): глубина и число узлов.
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.
 - `okkama-compiler/src/syntax/prune.rs` 238 — Production pruning: removing test-only declarations from a parsed tree.
@@ -99,7 +99,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
 - `okkama-compiler/src/source/mod.rs` 175 — Source text, byte spans and human-facing positions.
 
-## spb — 9 files, 4933 lines
+## spb — 9 files, 4953 lines
 
 - `okkama-sparrow/src/asm.rs` 779 — Текстовая форма Sparrow (ассемблер): [`disassemble`] печатает программу,
 - `okkama-sparrow/src/codec.rs` 634 — SPB (версия формата — [`VERSION`]): магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
@@ -108,8 +108,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/liveness.rs` 523 — Registers live before each instruction of a function.
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
 - `okkama-sparrow/src/session.rs` 290 — #588 phase B: the program of a REPL session, append-only.
-- `okkama-sparrow/src/typing.rs` 1144 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
-- `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
+- `okkama-sparrow/src/typing.rs` 1161 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
+- `okkama-sparrow/src/verify.rs` 513 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
 ## ownership-runtime — 2 files, 3122 lines
 
