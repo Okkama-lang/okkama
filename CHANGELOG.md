@@ -6,6 +6,24 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-11-22
+
+0.6.2 moves the format parsers into Okkama, gives every std action that does real work a benchmark, makes an
+`async destroy` guard as cheap as a deferred close, and speeds up the std where those benchmarks pointed.
+- **Formats in Okkama (#13).** CSV, TOML, XML (with plist), HTML (with entities) and time patterns read and write
+  in Okkama at 0.7–1.3× the native time; 52 natives retired. Natives stay where the numbers say so.
+- **Benchmarks for the std (#244).** 2 773 of the 3 158 work actions measured by 709 programs with independent
+  oracles; the rest need a server, a socket, a terminal or host resources and are listed with their reasons.
+- **Cheap `async destroy` (#329).** A guard alone in its scope settles without a region; nine HTTP and TCP guards
+  use it.
+- **Faster std (#939, #943, #944, #948, #950).** Cookie dates ×17, PEM ×3, zstd ×9, ECDSA ×3, SQLite ×1.8,
+  HPACK ×8, locales ×5–8, JUnit reports ×7; no more `df` or `hostname` processes.
+- **Runtime and tools.** Ctrl-C and SIGTERM stop a program cleanly (#638); tests run in process workers with
+  captured output and deadlines (#938), named sub-cases (#809) and JSON/JUnit reports (#339); the std reference
+  as man pages, HTML and JSON (#515).
+- Release report: micro A/B 0.6.1 → 0.6.2 (Linux containers, both built as the packages, one session), Sparrow
+  −4.1% over 39 reliable pairs; nothing slower beyond the noise band.
+
 ### Added
 
 - **Std micro-benchmarks (#244).** Every std action that does real work has a benchmark: `bench/micro/std` grows
@@ -8360,7 +8378,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/shootnix/okkama/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/shootnix/okkama/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/shootnix/okkama/compare/v0.5.8...v0.6.0
 [0.5.8]: https://github.com/shootnix/okkama/compare/v0.5.7...v0.5.8

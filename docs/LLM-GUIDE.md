@@ -336,6 +336,12 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.2 against 0.6.1 (report
+  `okkama-docs/benchmarks/reports/2026-11-22-v0.6.2/micro.html`): Sparrow
+  −4.1% by geometric mean over 39 reliable pairs, nothing slower beyond the
+  noise band; sha256, json-round-trip and rat-big about −9%. array-plus −25% is
+  the same layout lottery as its +25% in 0.6.1. The A/B keeps the 75 programs of
+  0.6.1: one N does not fit the millisecond-scale std programs of #244.
 - Micro, 0.6.1 against 0.6.0 (report
   `okkama-docs/benchmarks/reports/2026-11-22-v0.6.1/micro.html`): Sparrow
   −10.8% by geometric mean over 35 reliable pairs; closure-call −50%, method-call
