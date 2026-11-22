@@ -309,6 +309,19 @@ fn functional_suffix_errors() {
             "values.map(1) -> value { value; };",
             "Functional operation \"map\" accepts no arguments.",
         ),
+        // #996: one layer, one wording for every operation.
+        (
+            "values.any(1) -> value { value > 0; };",
+            "Functional operation \"any\" accepts no arguments.",
+        ),
+        (
+            "values.all(1) -> value { value > 0; };",
+            "Functional operation \"all\" accepts no arguments.",
+        ),
+        (
+            "values.find(2) -> value { value > 0; };",
+            "Functional operation \"find\" accepts no arguments.",
+        ),
         (
             "values.filter(limit: 1) -> value { true; };",
             "Functional operation \"filter\" does not accept named arguments.",

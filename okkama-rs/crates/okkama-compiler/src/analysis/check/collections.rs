@@ -11,7 +11,7 @@ use crate::syntax::ast;
 struct Checked {
     source: Source,
     items: Vec<Ty>,
-    /// Имя категории для сообщений: `Array`, `Range`, `Map`, `Iterable`.
+    /// Имя категории для сообщений: `Array`, `Range`, `Map`, `Batching`, `Iterating`.
     name: &'static str,
     /// Пустой нетегированный источник.
     untagged: bool,
@@ -417,15 +417,8 @@ impl Checker<'_, '_> {
         expected: Option<&Ty>,
         span: Span,
     ) -> Expr {
+        // The parser refuses named arguments and wrong counts for every operation (#996).
         let expected_args = usize::from(operation == ast::FunctionalOp::Reduce);
-        if args.len() != expected_args || args.iter().any(|arg| arg.name.is_some()) {
-            let message = format!(
-                "`{}` takes {expected_args} positional argument(s)",
-                operation.as_str()
-            );
-            self.error(span, message);
-            return Self::poisoned(span);
-        }
         let Some(checked) = self.source(receiver, true) else {
             for arg in args {
                 let _ = self.expr(&arg.value, true, None);

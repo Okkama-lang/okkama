@@ -149,7 +149,14 @@ impl Parser<'_> {
             return Err(self.error_at_name(named, &message));
         }
         match operation {
-            FunctionalOp::Map | FunctionalOp::Filter if !args.is_empty() => {
+            // One layer refuses wrong arguments for all six operations (#996).
+            FunctionalOp::Map
+            | FunctionalOp::Filter
+            | FunctionalOp::Any
+            | FunctionalOp::All
+            | FunctionalOp::Find
+                if !args.is_empty() =>
+            {
                 let message = format!(
                     "Functional operation \"{}\" accepts no arguments.",
                     operation_name.text
