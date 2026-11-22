@@ -8830,7 +8830,18 @@ to a contract.
 has digit is int;                 // required: a constructor must bind it
 has cents is int = 0;             // optional: a default
 has given, family is string;      // several names, one type
+has currency = "USD";             // the type comes from the initializer: string
 ```
+
+**A field's type may come from its initializer.** `has currency = "USD";`
+declares a `string` field exactly as `has currency is string = "USD";` does.
+This is inference at compile time, not dynamic typing: the compiler takes
+the initializer's static type once, every object keeps that one type, and
+constructors and successors are checked against it as against a written
+type. Only the initializer gives the type, never a constructor's
+assignment, so `has digit;` is an error that asks for the type. An
+initializer that settles no type, such as an empty `[]` or `[:]`, needs the
+type written (`has items is @string = [];`), and nothing widens to `any`.
 
 Two rules make fields different from fields in most languages.
 
@@ -25427,7 +25438,7 @@ object_decl   = "object" TYPE_NAME [ generic_params ] [ "does" type { "," type }
 object_body   = "{" { object_member } "}" ;
 object_member = has_decl | constructor | action_decl | "hidden" action_decl
               | cap_decl | destroy_decl | test_decl ;
-has_decl      = "has" LOWER_NAME { "," LOWER_NAME } [ "is" type ] [ "=" expression ] ";" ;
+has_decl      = "has" LOWER_NAME { "," LOWER_NAME } ( "is" type [ "=" expression ] | "=" expression ) ";" ;
 destroy_decl  = [ "async" ] "destroy" block ;
 ```
 
@@ -25436,8 +25447,10 @@ destroy_decl  = [ "async" ] "destroy" block ;
 - `hidden` may stand only before an action. Before a constructor, a field, a
   cap, `destroy` or a test it is a syntax error. `hidden(` is an action named
   `hidden`, and `has(` is an action named `has`.
-- `has x;` and `has x = 1;` parse (rejected later: "Fields without an explicit
-  type are not supported by the analysis yet", #967).
+- A field without a type takes it from its initializer, at compile time:
+  `has x = 1;` is `has x is int = 1;`. With neither a type nor an initializer
+  (`has x;`) the checker asks for the type, and an initializer that settles
+  no type (`[]`, `[:]`) needs it written.
 
 ```text
 constructor = TYPE_NAME parameter_list block                      (* full *)
@@ -25583,7 +25596,7 @@ pattern    = expression ;     (* a value, Enum.case, or Enum.case(binding | "_",
 
 ```text
 for_stmt    = "for" [ "await" ] source "->" for_binding { "," for_binding } block ;
-for_binding = BINDING [ "[" INT "]" ] ;            (* batch size *)
+for_binding = BINDING ;                            (* one name *)
 loop_stmt   = "loop" block ;
 next_stmt   = "next" [ "if" expression ] ";" ;     (* never a value *)
 last_stmt   = "last" [ expression ] [ "if" expression ] ";" ;
@@ -25592,8 +25605,8 @@ last_stmt   = "last" [ expression ] [ "if" expression ] ";" ;
 - An arrow at the top level of the `for` source belongs to the `for`, so a
   functional call used as the source needs parentheses.
 - A `for` without a source is an error: use `loop`.
-- `x[64]` batched bindings parse (rejected later: "Analysis of batched `for`
-  bindings is not implemented yet", #967).
+- A binding is one name. `x[64]` is a syntax error: batching belongs to the
+  source (a source that does `Batching<T>` binds one `@T` per step).
 
 ```text
 return_stmt  = "return" [ expression ] [ "if" expression ] ";" ;
