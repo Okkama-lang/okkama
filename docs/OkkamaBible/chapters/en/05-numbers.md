@@ -341,7 +341,7 @@ both can be written around in a few lines [@goldberg1991; @higham2002].
   object and each step a successor, `added(x)`. Its result here is `10000`
   to the last bit, at the price of four operations per element instead of
   one.
-- **Subtraction cancels significant digits.** `1 + 1e-15 - 1` is
+- **Subtraction cancels significant digits.** `1.0 + 1e-15 - 1.0` is
   `1.1102230246251565e-15`, 11% away from the true `1e-15`: the operands
   agreed in their leading digits, and what remained after the subtraction
   was rounding noise. The textbook formula for the small root of

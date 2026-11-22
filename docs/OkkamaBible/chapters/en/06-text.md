@@ -132,7 +132,7 @@ the most common ones are now builtins (issue #210).
 | `repeat(count)` | `string` | a negative count, or a result over 1 GiB, fails |
 | `characters()` | `@char` | the code points, in one walk |
 | `string()` | `string` | the string itself |
-| `order(other)` | `Order` | code point order |
+| `order(other)` | `Order` | code point order; `Order` comes from the std module `compare` |
 | `less(other)`, `less_or_equal(other)` | `bool` | the same order: `order(other) == Order.less`, `!= Order.greater` (until 0.4.2 they compared lengths) |
 
 Two design decisions recur in this table. Operations are *literal*: `split`,
@@ -146,8 +146,11 @@ away; a search that finds nothing says so with `Maybe.none`, not with `-1`.
 Case conversion is the one place where "no guessing" needs a qualification.
 `lower()` and `upper()` apply the Unicode default case mapping, which is the
 same everywhere and needs no locale — but Turkish, Azeri and Lithuanian have
-their own rules (in Turkish, `"I".lower()` should be the dotless `"ı"`), and
-Okkama has no locale-aware case mapping yet (issue #261).
+their own rules (in Turkish, `"I".lower()` should be the dotless `"ı"`). Those
+rules live in the library, where the locale is an argument the reader can see:
+`LocalizedCase(text: "istanbul", locale: Locale("tr")).upper()` from
+`locale/case` is `"İSTANBUL"`, and its `title()` capitalises words (issue #261).
+The builtins stay locale-free, so `"I".lower()` is `"i"` on every machine.
 
 ## 6.5 Equality and normalisation
 
@@ -202,7 +205,8 @@ whether it takes text (`string`) or data (`@byte`).
 `char` is a single code point, written in single quotes: `'x'`, `'Ж'`,
 `'\u{1F44D}'`. A `char` literal must contain exactly one code point after
 escapes, so `'é'` written with a combining accent is rejected. Characters
-compare and order like strings.
+compare with `==` and have `order(other)`, by code point; unlike strings they
+have no `less`, and no character has `<`.
 
 A `char` converts in both directions: `letter.code()` is its code point as an
 `int`, `letter.string()` (or `string(letter)`) its text, and `char(1046)`
@@ -229,7 +233,10 @@ character-by-character slicing — in about forty modules, from MIME header
 parsing to template compilation, and filed an issue for each hot one. It is
 the best example in this book of a cost that a design choice moved from the
 language to its users, and of why the choice has to be paid for with the
-right operation.
+right operation. Version 0.6.2 paid it: about two hundred such sites now call
+`contains`, `starts_with`, `ends_with` and `find` (issue #260). The slicing
+that remains is a parser's cursor moving through its input, which is what
+slicing is for.
 
 ## 6.9 Laying out text
 
@@ -357,9 +364,6 @@ is a few lines. The cost of a catastrophic pattern is an outage.
 ## 6.12 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
-- **Case conversion has no locale.** `lower()` and `upper()` follow the
-  Unicode default; Turkish, Azeri and Lithuanian rules are missing
-  (issue #261).
-- **The standard library still has its workarounds.** About forty modules
-  search, compare prefixes and walk characters by slicing; moving them to
-  the builtins waits for the rewrite of the library (issue #260, postponed).
+- **Case conversion in the builtins has no locale.** `lower()` and `upper()`
+  follow the Unicode default; Turkish, Azeri and Lithuanian rules are a
+  library call, `LocalizedCase` (issue #261).
