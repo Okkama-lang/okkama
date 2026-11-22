@@ -115,15 +115,15 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2293 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 732 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 32357 lines
+## sparrow — 64 files, 32750 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 481 — Load-time contracts of intrinsics: what the core assumes about the SPB
-- `sparrow-core/src/drivers.rs` 1263 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/drivers.rs` 1270 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/heap.rs` 2281 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 1075 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
-- `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
+- `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2928 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 495 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
@@ -141,7 +141,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/arena.rs` 92 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 105 — POSIX record locks through nix's safe boundary. A process-wide reservation
 - `sparrow-core/src/host/handle.rs` 141 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 871 — Native provider host. The providers of the previous engine (`sparrow-engine`
+- `sparrow-core/src/host/mod.rs` 876 — Native provider host. The providers of the previous engine (`sparrow-engine`
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 105 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
@@ -158,7 +158,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_glob.rs` 186 — Iterative glob matching and traversal. Symlinks are never followed as directories.
 - `sparrow-core/src/host/native_idna.rs` 568 — IDNA/PSL policy retains the language's pinned Unicode tables and error
 - `sparrow-core/src/host/native_input.rs` 185 — Input decorators own only undecoded bytes; standard input retains unread
-- `sparrow-core/src/host/native_io.rs` 189 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
+- `sparrow-core/src/host/native_io.rs` 241 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
 - `sparrow-core/src/host/native_multicast.rs` 175 — Memberships use socket2's safe platform wrappers. The UDP owner retains
 - `sparrow-core/src/host/native_net.rs` 126 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
 - `sparrow-core/src/host/native_network.rs` 732 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
@@ -169,7 +169,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_regex.rs` 1714 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
 - `sparrow-core/src/host/native_root.rs` 440 — Descriptor-relative rooted access. No child operation reconstructs an ambient
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
-- `sparrow-core/src/host/native_sqlite.rs` 2333 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
+- `sparrow-core/src/host/native_sqlite.rs` 2634 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
 - `sparrow-core/src/host/native_temporary.rs` 287 — Temporary resources use exclusive OS creation and cryptographic random names.
 - `sparrow-core/src/host/native_text.rs` 370 — Pure codecs and exact numeric parsing at the independent native boundary.
 - `sparrow-core/src/host/native_tls.rs` 753 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from

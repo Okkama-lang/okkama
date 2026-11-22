@@ -967,6 +967,14 @@ pub fn poll(runtime: &mut Runtime, native: Native, id: u64, waker: &std::task::W
     })
 }
 
+/// True when only a provider thread can wake request `id` (see
+/// `Heap::native_io_threaded`): the scheduler's spin need not turn the reactor.
+pub fn off_reactor(runtime: &mut Runtime, id: u64) -> bool {
+    with_host(runtime, true, |host| {
+        host.futures.get(id).ok().and_then(|cell| cell.io.as_ref().map(|request| request.off_reactor())).unwrap_or(false)
+    })
+}
+
 /// Cancel a pending request; true while its cleanup still runs (keep polling).
 pub fn cancel(runtime: &mut Runtime, id: u64) -> bool {
     with_host(runtime, true, |host| {

@@ -30,6 +30,9 @@ pub(crate) struct Request {
     cleanup: RefCell<Option<Cleanup>>,
     cancelling: Cell<bool>,
     finished: Cell<bool>,
+    /// The body is woken only from a provider thread (a SQLite worker), so
+    /// the scheduler need not turn the reactor for it while it spins (#943).
+    threaded: Cell<bool>,
     waiters: RefCell<Vec<Waker>>,
 }
 impl std::fmt::Debug for Request {
@@ -54,6 +57,7 @@ impl Request {
             cleanup: RefCell::new(None),
             cancelling: Cell::new(false),
             finished: Cell::new(false),
+            threaded: Cell::new(false),
             waiters: RefCell::new(Vec::new()),
         })
     }
@@ -97,6 +101,11 @@ impl Request {
                 Poll::Ready(())
             }
         }
+    }
+    /// True while only a provider thread can wake the request: its body is
+    /// threaded and no cancellation cleanup (which may need the reactor) runs.
+    pub fn off_reactor(&self) -> bool {
+        self.threaded.get() && !self.cancelling.get() && !self.finished.get()
     }
     /// Returns true when the language Future must remain pending until cleanup.
     pub fn request_cancel(&self) -> bool {
@@ -153,6 +162,24 @@ impl Heap {
         self.futures.get_mut(slot.bits)?.io = Some(request);
         Ok(slot)
     }
+    /// A request whose body is woken only from a provider thread (it waits on
+    /// a channel a worker thread answers, never on the reactor or a timer);
+    /// a cancellation cleanup is not bound by that.
+    pub(crate) fn native_io_threaded<F, T>(
+        &mut self,
+        body: F,
+        cleanup: Option<CancelHook>,
+    ) -> Result<Slot, Error>
+    where
+        F: Future<Output = Result<T, NativeFailure>> + 'static,
+        T: Output + 'static,
+    {
+        let slot = self.native_io_with_cleanup(body, cleanup)?;
+        if let Some(request) = &self.futures.get(slot.bits)?.io {
+            request.threaded.set(true);
+        }
+        Ok(slot)
+    }
     /// Publish a completed request into its Future's state.
     pub(crate) fn native_io_settle(&mut self, future: Slot) -> Result<(), Error> {
         if !matches!(self.future(future)?.state, State::Io) {
@@ -192,5 +219,44 @@ impl Heap {
         cell.state = State::Ready(value);
         cell.io = None;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Nothing;
+    impl Output for Nothing {
+        fn publish(self: Box<Self>, _heap: &mut Heap) -> Result<Slot, Error> {
+            Ok(Slot::default())
+        }
+    }
+
+    fn pending() -> Rc<Request> {
+        Request::new(std::future::pending::<Result<Nothing, NativeFailure>>())
+    }
+
+    fn poll(request: &Request) -> Poll<()> {
+        request.poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    /// A threaded request stays off the reactor only while its body runs: a
+    /// cancellation cleanup may wait on anything (#943).
+    #[test]
+    fn threaded_request_is_off_reactor_until_cancelled() {
+        let plain = pending();
+        assert!(!plain.off_reactor());
+        let threaded = pending();
+        threaded.threaded.set(true);
+        assert!(poll(&threaded).is_pending());
+        assert!(threaded.off_reactor());
+        *threaded.cancel_hook.borrow_mut() = Some(Box::new(|| Box::pin(std::future::pending())));
+        assert!(threaded.request_cancel());
+        assert!(!threaded.off_reactor(), "the cleanup may need the reactor");
+        let done = Request::new(async { Ok(Nothing) });
+        done.threaded.set(true);
+        assert!(poll(&done).is_ready());
+        assert!(!done.off_reactor());
     }
 }

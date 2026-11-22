@@ -5,13 +5,17 @@
 //! earliest timer is due, then wakes those frames.
 use crate::runtime::Runtime;
 use crate::word::Word;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Wake, Waker};
 
 /// How long the scheduler spins for a pending native reply before sleeping.
 const SPIN_MICROS: u64 = 50;
+/// The longest a spinning scheduler goes without turning the reactor when
+/// every waiting request is answered by a provider thread (#943): local
+/// tasks (process reapers, capture pipes) still progress.
+const REACTOR_AT_LEAST: std::time::Duration = std::time::Duration::from_millis(1);
 /// How often a waiting scheduler looks at the interrupt flag.
 const INTERRUPT_LOOK: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -46,6 +50,11 @@ pub struct Io {
     shared: Arc<Shared>,
     /// Native request of each waiting driver frame (frames are roots).
     pub requests: HashMap<Word, u64>,
+    /// The waiting frames of `requests` that only a provider thread wakes
+    /// (`Request::off_reactor`); a subset of `requests`.
+    pub off_reactor: HashSet<Word>,
+    /// When the scheduler last turned the reactor while waiting.
+    last_turn: Option<std::time::Instant>,
     /// The buffer the last poll emptied, kept for the next one (#442), so a
     /// busy server does not allocate a vector of woken frames per poll.
     spare: Vec<Word>,
@@ -91,6 +100,13 @@ impl Io {
         woken
     }
 
+    /// Whether a spin starting at `now` turns the reactor: some waiting
+    /// request needs it, or it has not turned for REACTOR_AT_LEAST.
+    fn spin_turns_reactor(&self, now: std::time::Instant) -> bool {
+        self.requests.len() > self.off_reactor.len()
+            || self.last_turn.is_none_or(|last| now.duration_since(last) >= REACTOR_AT_LEAST)
+    }
+
     /// Keep an emptied buffer for the next poll.
     fn recycle(&mut self, mut buffer: Vec<Word>) {
         buffer.clear();
@@ -118,16 +134,23 @@ impl Runtime {
         // Native replies (SQLite workers) usually arrive within microseconds:
         // spin briefly before paying for a sleep and a wake-up. Sockets make
         // progress only when this thread turns the reactor, so every 64 turns
-        // the spin also polls it without blocking.
+        // the spin also polls it without blocking. A turn costs a kevent
+        // (about 12 microseconds on macOS, #943), so a spin for requests that
+        // only provider threads wake turns it only when it has not turned
+        // for REACTOR_AT_LEAST.
         if !self.io.requests.is_empty() {
             let spin = std::time::Instant::now();
+            let turn = self.io.spin_turns_reactor(spin);
             let mut turns = 0u32;
             while !self.io.shared.pending.load(Ordering::Acquire) {
                 std::hint::spin_loop();
                 turns += 1;
                 // Reading the clock costs more than a turn; look every 64.
                 if turns.is_multiple_of(64) {
-                    self.io.block_on(tokio::task::yield_now());
+                    if turn {
+                        self.io.block_on(tokio::task::yield_now());
+                        self.io.last_turn = Some(std::time::Instant::now());
+                    }
                     if spin.elapsed() >= std::time::Duration::from_micros(SPIN_MICROS) {
                         break;
                     }
@@ -157,6 +180,7 @@ impl Runtime {
                     None => shared.notify.notified().await,
                 }
             });
+            self.io.last_turn = Some(std::time::Instant::now());
             if let Some(stats) = &mut self.stats {
                 *stats.entry("scheduler idle wait, microseconds".into()).or_default() += started.elapsed().as_micros() as u64;
             }
@@ -203,7 +227,24 @@ fn dedupe_in_order(frames: &mut Vec<Word>) {
 
 #[cfg(test)]
 mod woken_tests {
-    use super::dedupe_in_order;
+    use super::{Io, REACTOR_AT_LEAST, dedupe_in_order};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn spin_turns_the_reactor_only_when_needed() {
+        let now = Instant::now();
+        let mut io = Io::default();
+        io.requests.insert(1, 10);
+        io.off_reactor.insert(1);
+        assert!(io.spin_turns_reactor(now), "never turned yet");
+        io.last_turn = Some(now);
+        assert!(!io.spin_turns_reactor(now + Duration::from_micros(10)), "only a worker can wake frame 1");
+        assert!(io.spin_turns_reactor(now + REACTOR_AT_LEAST), "local tasks still progress");
+        io.requests.insert(2, 11);
+        assert!(io.spin_turns_reactor(now + Duration::from_micros(10)), "frame 2 waits on the reactor");
+        io.off_reactor.insert(2);
+        assert!(!io.spin_turns_reactor(now + Duration::from_micros(10)));
+    }
 
     #[test]
     fn repeated_wakes_collapse_in_first_order() {

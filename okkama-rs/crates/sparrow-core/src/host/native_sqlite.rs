@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 /// A statement and its streaming rows are confined to the connection worker.
@@ -405,12 +405,17 @@ impl Engine {
         }
         self.authorizer.configuration.set(true);
         let configured = (|| -> Done<()> {
-            let foreign = if self.options.foreign_keys { 1 } else { 0 };
-            self.execution(&format!("PRAGMA foreign_keys={foreign}"), &[], false)?;
-            let reply = self.rows_sql("PRAGMA foreign_keys", &[])?;
-            let seen = self.fetch(reply.id.unwrap_or(0), 1)?;
-            self.release(reply.id.unwrap_or(0))?;
-            if first_cell(&seen) != if self.options.foreign_keys { "1" } else { "0" } {
+            // What `PRAGMA foreign_keys=…` and reading it back did, as one C
+            // call instead of two statements to compile (#943).
+            let foreign: c_int = if self.options.foreign_keys { 1 } else { 0 };
+            let mut seen: c_int = -1;
+            // SAFETY: the open connection of this thread; ENABLE_FKEY takes an
+            // int and an int pointer.
+            let rc = unsafe {
+                ffi::sqlite3_db_config(self.db, ffi::SQLITE_DBCONFIG_ENABLE_FKEY, foreign, &mut seen as *mut c_int)
+            };
+            self.check(rc)?;
+            if seen != foreign {
                 return Err(self.raise("unsupported", "SQLITE_FOREIGN_KEYS"));
             }
             let mode = self.options.journal.clone();
@@ -1302,30 +1307,137 @@ impl Connection {
     }
 }
 
-/// The Engine is created on, and never leaves, its worker thread.
+/// What a worker thread serves: one connection's queue, from its first job to
+/// its close.
+struct Assignment {
+    queue: mpsc::Receiver<Job>,
+    exit: tokio::sync::watch::Sender<bool>,
+    options: Options,
+    shared: Arc<Shared>,
+}
+
+/// Worker threads waiting for their next connection (#943). Starting a thread
+/// for every connection cost more than opening an in-memory database, so a
+/// worker whose connection closed waits here a while for another. An entry is
+/// taken and handed its assignment under the lock, so a worker that gives up
+/// waiting can tell whether someone already chose it.
+struct Pool {
+    idle: Mutex<Vec<(u64, mpsc::Sender<Assignment>)>>,
+    /// How many workers wait at most, and for how long.
+    limit: usize,
+    wait: std::time::Duration,
+    serial: AtomicU64,
+}
+
+static WORKERS: Pool = Pool::new(4, std::time::Duration::from_secs(2));
+
+/// The Engine is created on, and never leaves, its worker thread; each
+/// connection gets a fresh one there.
 fn spawn_worker(connection: &mut Connection) -> std::io::Result<()> {
-    let (jobs, queue) = mpsc::channel::<Job>();
-    let (exit, exited) = tokio::sync::watch::channel(false);
-    let options = connection.options.clone();
-    let shared = connection.shared.clone();
-    std::thread::Builder::new()
-        .name("okkama-sqlite".into())
-        .spawn(move || {
-            let mut engine = Engine::new(options, shared);
-            // Requests of a session come in bursts (a query is two of them):
-            // spin briefly for the next one before the channel puts this
-            // thread to sleep, whose wake-up costs more than the work.
-            while let Some(job) = next_job(&queue) {
-                job(&mut engine);
-            }
-            drop(engine);
-            let _ = exit.send(true);
-        })?;
+    let (jobs, exited) = WORKERS.assign(connection.options.clone(), connection.shared.clone())?;
     connection.worker = Some(Worker {
         jobs: Some(jobs),
         exited,
     });
     Ok(())
+}
+
+impl Pool {
+    const fn new(limit: usize, wait: std::time::Duration) -> Self {
+        Self { idle: Mutex::new(Vec::new()), limit, wait, serial: AtomicU64::new(0) }
+    }
+
+    /// A worker for a new connection: a waiting one, else a new thread.
+    fn assign(
+        &'static self,
+        options: Options,
+        shared: Arc<Shared>,
+    ) -> std::io::Result<(mpsc::Sender<Job>, tokio::sync::watch::Receiver<bool>)> {
+        let (jobs, queue) = mpsc::channel::<Job>();
+        let (exit, exited) = tokio::sync::watch::channel(false);
+        let assignment = Assignment { queue, exit, options, shared };
+        if let Some(assignment) = self.hand_to_idle(assignment) {
+            std::thread::Builder::new()
+                .name("okkama-sqlite".into())
+                .spawn(move || self.serve(assignment))?;
+        }
+        Ok((jobs, exited))
+    }
+
+    /// Gives the assignment to a waiting worker; back when none waits.
+    fn hand_to_idle(&self, mut assignment: Assignment) -> Option<Assignment> {
+        let mut idle = self.idle.lock().expect("SQLite worker list");
+        while let Some((_, worker)) = idle.pop() {
+            match worker.send(assignment) {
+                Ok(()) => return None,
+                Err(mpsc::SendError(back)) => assignment = back,
+            }
+        }
+        Some(assignment)
+    }
+
+    fn serve(&self, first: Assignment) {
+        let serial = self.serial.fetch_add(1, Ordering::Relaxed);
+        let (offer, offered) = mpsc::channel::<Assignment>();
+        let mut current = Some(first);
+        while let Some(assignment) = current.take() {
+            let mut engine = Engine::new(assignment.options, assignment.shared);
+            // Requests of a session come in bursts (a query is two of them):
+            // spin briefly for the next one before the channel puts this
+            // thread to sleep, whose wake-up costs more than the work.
+            while let Some(job) = next_job(&assignment.queue) {
+                job(&mut engine);
+            }
+            drop(engine);
+            let _ = assignment.exit.send(true);
+            {
+                let mut idle = self.idle.lock().expect("SQLite worker list");
+                if idle.len() >= self.limit {
+                    return;
+                }
+                idle.push((serial, offer.clone()));
+            }
+            // A program that closes a connection often opens the next one at
+            // once: spin briefly before sleeping, as next_job does.
+            current = match spin_for(&offered).map_or_else(|| offered.recv_timeout(self.wait), Ok) {
+                Ok(next) => Some(next),
+                Err(_) => self.give_up(serial, &offered),
+            };
+        }
+    }
+
+    /// A worker that waited in vain leaves the list, unless someone chose it
+    /// meanwhile: then its assignment is already in the channel (it was sent
+    /// under the lock) and it serves that.
+    fn give_up(&self, serial: u64, offered: &mpsc::Receiver<Assignment>) -> Option<Assignment> {
+        let mut idle = self.idle.lock().expect("SQLite worker list");
+        match idle.iter().position(|(id, _)| *id == serial) {
+            Some(at) => {
+                idle.remove(at);
+                None
+            }
+            None => offered.try_recv().ok(),
+        }
+    }
+}
+
+/// What arrives on queue within about 50 µs of spinning, if anything.
+fn spin_for<T>(queue: &mpsc::Receiver<T>) -> Option<T> {
+    let spin = std::time::Instant::now();
+    let mut turns = 0u32;
+    loop {
+        match queue.try_recv() {
+            Ok(item) => return Some(item),
+            Err(mpsc::TryRecvError::Disconnected) => return None,
+            Err(mpsc::TryRecvError::Empty) => {
+                std::hint::spin_loop();
+                turns += 1;
+                if turns.is_multiple_of(64) && spin.elapsed() >= std::time::Duration::from_micros(50) {
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 fn next_job<T>(queue: &mpsc::Receiver<T>) -> Option<T> {
@@ -1599,7 +1711,7 @@ impl Heap {
                 Ok(())
             })
         });
-        self.native_io_with_cleanup(body, Some(cancel))
+        self.native_io_threaded(body, Some(cancel))
     }
 
     fn sqlite_settled(&mut self, state: ConnectionRef) -> Result<Slot, Error> {
@@ -1629,14 +1741,14 @@ impl Heap {
                 let _ = jobs.send(Box::new(move |_engine| {
                     let _ = done.send(());
                 }));
-                return self.native_io(async move {
+                return self.native_io_threaded(async move {
                     let _ = barrier.await;
                     let mut connection = state.borrow_mut();
                     if connection.stopped {
                         connection.handle_closed = true;
                     }
                     Ok(Flag(true))
-                });
+                }, None);
             }
         self.native_io(async move {
             let _ = tokio::time::timeout(
@@ -2512,3 +2624,257 @@ impl Heap {
     }
 }
 
+
+#[cfg(test)]
+mod pool_tests {
+    //! Workers serve one connection after another (#943); each connection
+    //! still sees a fresh engine, its own interrupt handle, its own
+    //! transaction state and the same errors and locks as before.
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn pool(limit: usize, wait: Duration) -> &'static Pool {
+        Box::leak(Box::new(Pool::new(limit, wait)))
+    }
+
+    fn options(path: &str, foreign_keys: bool) -> Options {
+        let journal = if path == ":memory:" { "memory" } else { "delete" };
+        Options { path: path.into(), read_only: false, create: true, foreign_keys, busy_ms: 0, journal: journal.into() }
+    }
+
+    fn temporary(name: &str) -> String {
+        let path = std::env::temp_dir().join(format!("okkama-943-{}-{name}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path.to_string_lossy().into_owned()
+    }
+
+    struct Session {
+        jobs: Option<mpsc::Sender<Job>>,
+        exited: tokio::sync::watch::Receiver<bool>,
+        shared: Arc<Shared>,
+    }
+
+    impl Session {
+        fn open(pool: &'static Pool, options: Options) -> Self {
+            let shared = Arc::new(Shared::default());
+            let (jobs, exited) = pool.assign(options, shared.clone()).expect("worker");
+            let session = Self { jobs: Some(jobs), exited, shared };
+            session.run(|engine| engine.open().map_err(|_| ()).expect("open"));
+            session
+        }
+
+        fn run<R: Send + 'static>(&self, work: impl FnOnce(&mut Engine) -> R + Send + 'static) -> R {
+            let (reply, replied) = mpsc::channel();
+            let job: Job = Box::new(move |engine| {
+                let _ = reply.send(work(engine));
+            });
+            self.jobs.as_ref().expect("open session").send(job).expect("worker queue");
+            replied.recv_timeout(Duration::from_secs(10)).expect("worker reply")
+        }
+
+        /// One operation as `sqlite_request` performs it (kind on failure).
+        fn perform(&self, operation: impl FnOnce(&mut Engine) -> Done<Data> + Send + 'static) -> (bool, Data) {
+            self.run(move |engine| perform(engine, Box::new(operation)))
+        }
+
+        fn count(&self, sql: &'static str) -> i64 {
+            self.run(move |engine| {
+                engine.library.as_ref().expect("library").query_row(sql, [], |row| row.get::<_, i64>(0)).expect("count")
+            })
+        }
+
+        fn thread(&self) -> std::thread::ThreadId {
+            self.run(|_| std::thread::current().id())
+        }
+
+        /// Close as `DatabaseSqliteClose` does: the queue ends, the worker
+        /// drops the engine and reports its exit.
+        fn close(mut self) {
+            self.jobs = None;
+            until(|| *self.exited.borrow(), "worker exit");
+        }
+    }
+
+    fn until(mut done: impl FnMut() -> bool, what: &str) {
+        let started = Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn idle(pool: &Pool) -> usize {
+        pool.idle.lock().expect("idle list").len()
+    }
+
+    fn kind(data: &Data) -> &str {
+        data.kind.as_deref().unwrap_or("")
+    }
+
+    #[test]
+    fn sqlite_pool_reuses_a_worker_with_a_fresh_engine() {
+        let pool = pool(4, Duration::from_secs(5));
+        let first = Session::open(pool, options(":memory:", true));
+        first.run(|engine| engine.execution("CREATE TABLE t(x INTEGER)", &[], false).map(|_| ()).map_err(|_| ()).expect("create"));
+        assert_eq!(first.count("SELECT count(*) FROM sqlite_master"), 1);
+        let thread = first.thread();
+        first.close();
+        until(|| idle(pool) == 1, "worker parked");
+        let second = Session::open(pool, options(":memory:", true));
+        assert_eq!(second.thread(), thread, "a parked worker serves the next connection");
+        assert_eq!(idle(pool), 0);
+        assert_eq!(second.count("SELECT count(*) FROM sqlite_master"), 0, "fresh database per connection");
+        assert!(second.shared.interrupt.lock().expect("interrupt").is_some());
+        second.close();
+    }
+
+    #[test]
+    fn sqlite_pool_parks_at_most_its_limit() {
+        let pool = pool(2, Duration::from_secs(5));
+        let sessions: Vec<Session> = (0..5).map(|_| Session::open(pool, options(":memory:", true))).collect();
+        let threads: std::collections::HashSet<_> = sessions.iter().map(Session::thread).collect();
+        assert_eq!(threads.len(), 5, "open connections never share a worker");
+        for session in sessions {
+            session.close();
+        }
+        until(|| idle(pool) == 2, "two workers parked");
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(idle(pool), 2);
+    }
+
+    #[test]
+    fn sqlite_pool_gives_up_unless_chosen_meanwhile() {
+        let pool = pool(4, Duration::from_secs(5));
+        // Chosen while giving up: the assignment is in the channel already.
+        let (offer, offered) = mpsc::channel::<Assignment>();
+        pool.idle.lock().expect("idle").push((7, offer));
+        let (_jobs, queue) = mpsc::channel::<Job>();
+        let (exit, _exited) = tokio::sync::watch::channel(false);
+        let assignment = Assignment { queue, exit, options: options(":memory:", true), shared: Arc::new(Shared::default()) };
+        assert!(pool.hand_to_idle(assignment).is_none());
+        assert!(pool.give_up(7, &offered).is_some(), "the handed assignment is served");
+        assert_eq!(idle(pool), 0);
+        // Not chosen: the worker leaves the list.
+        let (offer, offered) = mpsc::channel::<Assignment>();
+        pool.idle.lock().expect("idle").push((8, offer));
+        assert!(pool.give_up(8, &offered).is_none());
+        assert_eq!(idle(pool), 0, "a leaving worker takes its entry along");
+    }
+
+    #[test]
+    fn sqlite_pool_workers_leave_and_the_pool_keeps_serving() {
+        // Waits of a millisecond put hand-overs right into the give-up window.
+        let pool = pool(2, Duration::from_millis(1));
+        for round in 0..300u64 {
+            let session = Session::open(pool, options(":memory:", true));
+            assert_eq!(session.count("SELECT 1"), 1);
+            session.close();
+            if round % 3 != 0 {
+                std::thread::sleep(Duration::from_micros(500 * (round % 4)));
+            }
+        }
+        until(|| idle(pool) == 0, "idle workers leave");
+    }
+
+    #[test]
+    fn sqlite_foreign_keys_follow_the_option() {
+        for enforced in [true, false] {
+            let mut engine = Engine::new(options(":memory:", enforced), Arc::new(Shared::default()));
+            engine.open().map_err(|_| ()).expect("open");
+            engine.execution("CREATE TABLE parent(id INTEGER PRIMARY KEY)", &[], false).map_err(|_| ()).expect("parent");
+            engine.execution("CREATE TABLE child(p INTEGER REFERENCES parent(id))", &[], false).map_err(|_| ()).expect("child");
+            let orphan = engine.execution("INSERT INTO child(p) VALUES (1)", &[], false);
+            match (enforced, orphan) {
+                (true, Err(Stop::Sqlite { kind, code, .. })) => {
+                    assert_eq!((kind, code.as_str()), ("constraint", "SQLITE_787"));
+                }
+                (false, Ok(_)) => {}
+                (enforced, other) => panic!("foreign_keys={enforced}: {:?}", other.map(|_| ())),
+            }
+            // What `PRAGMA foreign_keys` reads (programs may not run PRAGMAs).
+            engine.authorizer.configuration.set(true);
+            let pragma = engine.library.as_ref().expect("library").query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0));
+            engine.authorizer.configuration.set(false);
+            assert_eq!(pragma.expect("pragma"), i64::from(enforced));
+        }
+    }
+
+    #[test]
+    fn sqlite_errors_and_transactions_on_a_reused_worker() {
+        let pool = pool(4, Duration::from_secs(5));
+        let path = temporary("transactions");
+        let first = Session::open(pool, options(&path, true));
+        first.run(|engine| engine.execution("CREATE TABLE t(x INTEGER)", &[], false).map(|_| ()).map_err(|_| ()).expect("create"));
+        let (ok, data) = first.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
+        assert!(ok && data.autocommit == Some(false));
+        assert!(!first.shared.autocommit.load(Ordering::SeqCst));
+        first.run(|engine| engine.execution("INSERT INTO t(x) VALUES (1)", &[], false).map(|_| ()).map_err(|_| ()).expect("insert"));
+        let thread = first.thread();
+        // Closing with the transaction open rolls it back.
+        first.close();
+        until(|| idle(pool) == 1, "worker parked");
+        let second = Session::open(pool, options(&path, true));
+        assert_eq!(second.thread(), thread);
+        assert_eq!(second.count("SELECT count(*) FROM t"), 0, "the open transaction of the closed connection rolled back");
+        let (ok, data) = second.perform(|engine| engine.execution("SELEC 1", &[], false));
+        assert!(!ok);
+        assert_eq!((kind(&data), data.code.as_deref(), data.autocommit), ("syntax", Some("SQLITE_1"), Some(true)));
+        let (ok, _) = second.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
+        assert!(ok && !second.shared.autocommit.load(Ordering::SeqCst));
+        let (ok, data) = second.perform(|engine| engine.execution("ROLLBACK", &[], true));
+        assert!(ok && data.autocommit == Some(true) && second.shared.autocommit.load(Ordering::SeqCst));
+        second.close();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn sqlite_parallel_connections_lock_each_other() {
+        let pool = pool(4, Duration::from_secs(5));
+        let path = temporary("locks");
+        let writer = Session::open(pool, options(&path, true));
+        let other = Session::open(pool, options(&path, true));
+        assert_ne!(writer.thread(), other.thread());
+        let (ok, _) = writer.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
+        assert!(ok);
+        let (ok, data) = other.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
+        assert!(!ok);
+        assert_eq!((kind(&data), data.code.as_deref()), ("busy", Some("SQLITE_5")));
+        let (ok, _) = writer.perform(|engine| engine.execution("COMMIT", &[], true));
+        assert!(ok);
+        let (ok, _) = other.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
+        assert!(ok, "the lock is free after the commit");
+        writer.close();
+        other.close();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn sqlite_interrupt_reaches_only_its_own_connection() {
+        let pool = pool(4, Duration::from_secs(5));
+        let first = Session::open(pool, options(":memory:", true));
+        let stale = first.shared.interrupt.lock().expect("interrupt").clone().expect("handle");
+        let thread = first.thread();
+        first.close();
+        until(|| idle(pool) == 1, "worker parked");
+        let second = Session::open(pool, options(":memory:", true));
+        assert_eq!(second.thread(), thread);
+        // The closed connection's handle does not reach the new one.
+        stale.interrupt();
+        assert_eq!(second.count("SELECT 1"), 1);
+        // Its own handle interrupts a running statement.
+        let handle = second.shared.interrupt.lock().expect("interrupt").clone().expect("handle");
+        let interrupter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            handle.interrupt();
+        });
+        let (ok, data) = second.perform(|engine| {
+            let reply = engine.rows_sql("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c", &[])?;
+            engine.fetch(reply.id.unwrap_or(0), 1)
+        });
+        interrupter.join().expect("interrupter");
+        assert!(!ok);
+        assert_eq!((kind(&data), data.code.as_deref()), ("cancelled", Some("SQLITE_9")));
+        assert_eq!(second.count("SELECT 2"), 2, "the connection stays usable");
+        second.close();
+    }
+}

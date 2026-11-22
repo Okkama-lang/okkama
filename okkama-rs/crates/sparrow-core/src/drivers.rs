@@ -151,9 +151,13 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
     use crate::host::Start;
     let started = match runtime.io.requests.get(&frame) {
         Some(&id) => {
-            if deliver && !crate::host::cancel(runtime, id) {
-                runtime.io.requests.remove(&frame);
-                return cancelled(runtime);
+            if deliver {
+                // A cleanup may need the reactor whatever woke the body.
+                runtime.io.off_reactor.remove(&frame);
+                if !crate::host::cancel(runtime, id) {
+                    runtime.io.requests.remove(&frame);
+                    return cancelled(runtime);
+                }
             }
             let waker = runtime.io.waker(frame);
             match crate::host::poll(runtime, native, id, &waker) {
@@ -172,6 +176,9 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
                     // is observed, as on the other engines. The frame is woken
                     // at once and polls the request then.
                     runtime.io.requests.insert(frame, id);
+                    if crate::host::off_reactor(runtime, id) {
+                        runtime.io.off_reactor.insert(frame);
+                    }
                     runtime.io.waker(frame).wake();
                     return Pending;
                 }
@@ -180,6 +187,7 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
         }
     };
     runtime.io.requests.remove(&frame);
+    runtime.io.off_reactor.remove(&frame);
     match started {
         Start::Done(value) => Done(value),
         Start::Raise(failure) => Failed(failure),

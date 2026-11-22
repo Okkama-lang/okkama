@@ -172,7 +172,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   jar store 110 → 46 µs, HTTP/2 request fields 31 → 17 µs); the HPACK static table builds only the row asked for
   (28 → 3.7 µs per decoded block); XML-RPC, IMAP responses and X.509 names lose repeated scans and per-call
   regexes. `JUnitTestReport` writes its fixed XML directly instead of building and re-checking an XML tree
-  (250 → 33 µs for two cases).
+  (250 → 33 µs for two cases). SQLite reuses idle worker threads for new connections, sets foreign keys in
+  one call, and its replies no longer make the waiting scheduler turn the event loop: an INSERT takes 7.5 µs
+  instead of 19.6 µs, opening and closing an in-memory database 27 µs instead of 41 µs.
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
   most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
