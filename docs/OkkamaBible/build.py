@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the Okkama Bible from its chapters.
 
-    python3 docs/OkkamaBible/build.py [--check] [--stats] [--figures]
+    python3 docs/OkkamaBible/build.py [--check] [--stats] [--figures] [--std-index]
 
 chapters/en/*.md and chapters/ru/*.md (same file names, ordered by name) are
 joined into OkkamaBible.md and OkkamaBible-RU.md with a generated table of
@@ -21,6 +21,7 @@ suite with -t);
 --stats prints characters and pages (2,500 characters) per chapter;
 --issues lists every issue the chapters cite with its current title (gh).
 """
+import json
 import os
 import re
 import subprocess
@@ -33,8 +34,8 @@ OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "rel
 STDLIB = os.environ.get("OKKAMA_STDLIB_DIR", os.path.join(ROOT, "std"))
 PAGE = 2500
 LANGUAGES = {
-    "en": ("OkkamaBible.md", "The Okkama Bible", "Contents", "Output", "References", "The compiler answers"),
-    "ru": ("OkkamaBible-RU.md", "Библия Okkama", "Содержание", "Вывод", "Литература", "Ответ компилятора"),
+    "en": ("OkkamaBible.md", "The Okkama Bible", "Contents", "Output", "Appendix E. References", "The compiler answers"),
+    "ru": ("OkkamaBible-RU.md", "Библия Okkama", "Содержание", "Вывод", "Приложение E. Литература", "Ответ компилятора"),
 }
 
 
@@ -85,6 +86,37 @@ def builtins_table(language):
     return "\n".join(lines)
 
 
+def std_index_refresh():
+    """data/std-index.json from `okkama man`: the public std modules by area."""
+    text = subprocess.run([OKKAMA, "man", "--format", "markdown", "--no-pager"], capture_output=True, text=True,
+                          timeout=120, env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB}, check=True).stdout
+    version = subprocess.run([OKKAMA, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    areas, area = {}, "top level"
+    for line in text.splitlines():
+        if line.startswith("## "):
+            area = line[3:].strip()
+        m = re.match(r"^- `([^`]+)`(?:: (.*))?$", line)
+        if m and "internal" not in m.group(1).split("/"):
+            areas.setdefault(area, []).append([m.group(1), (m.group(2) or "").strip()])
+    data = {"version": version, "areas": areas}
+    json.dump(data, open(os.path.join(HERE, "data", "std-index.json"), "w"), indent=1, ensure_ascii=False)
+    print(f"std index: {sum(len(v) for v in areas.values())} public modules from {version}")
+
+
+def std_index_table(language):
+    """Appendix C: one table per area, from data/std-index.json."""
+    data = json.load(open(os.path.join(HERE, "data", "std-index.json")))
+    head = "| Module | What it is for |" if language == "en" else "| Модуль | Для чего |"
+    out = []
+    for area in sorted(data["areas"], key=lambda a: (a == "top level", a)):
+        title = area if area != "top level" else ("top level" if language == "en" else "верхний уровень")
+        out += [f"### `{area}`" if area != "top level" else f"### {title}", "", head, "|---|---|"]
+        for path, summary in data["areas"][area]:
+            out.append(f"| `{path}` | {summary.replace('|', chr(92) + '|')} |")
+        out.append("")
+    return "\n".join(out).rstrip()
+
+
 def slug(title):
     return re.sub(r"[^\w\- ]", "", title.lower()).strip().replace(" ", "-")
 
@@ -106,6 +138,8 @@ def build(language, cited):
 
     text = re.sub(r"\{\{figure:([\w-]+)\|([^}]*)\}\}", figure, text)
     text = text.replace("{{table:builtins}}", builtins_table(language))
+    if "{{table:stdlib}}" in text:
+        text = text.replace("{{table:stdlib}}", std_index_table(language))
     known = references()
 
     def cite(match):
@@ -214,6 +248,8 @@ if __name__ == "__main__":
         for script in sorted(os.listdir(os.path.join(HERE, "figures", "src"))):
             if script.endswith(".py"):
                 subprocess.run([sys.executable, os.path.join(HERE, "figures", "src", script)], check=True)
+    if "--std-index" in sys.argv:
+        std_index_refresh()
     cited = set()
     for language in LANGUAGES:
         build(language, cited)

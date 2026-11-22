@@ -383,6 +383,7 @@
   - [27.4 Открытые вопросы](#274-открытые-вопросы)
   - [27.5 Издержки, принятые сознательно](#275-издержки-принятые-сознательно)
   - [27.6 Путь вперёд](#276-путь-вперёд)
+- [Приложение C. Указатель стандартной библиотеки](#приложение-c-указатель-стандартной-библиотеки)
 
 # Часть I. Бритва
 
@@ -25410,7 +25411,702 @@ async-действие (раздел 14.9). Swift допускает обрат�
 утверждение — когда пример запускается, а пробел — закрытым, когда закрыт
 тикет, который его называет.
 
-# Литература
+# Приложение C. Указатель стандартной библиотеки
+
+Публичные модули стандартной библиотеки версии 0.6.2 по областям, с
+однострочным описанием из документации самого модуля. Список порождается из
+`okkama man` (раздел 22.12), который читает те же комментарии, поэтому
+`okkama man MODULE` печатает полную страницу любого названного здесь модуля.
+38 модулей с `internal` в пути — подробности реализации, и их здесь нет.
+Описания — собственные описания библиотеки, по-английски, как библиотека и
+документирована.
+
+### `archive`
+
+| Модуль | Для чего |
+|---|---|
+| `archive/entry` | Immutable archive member values, with already-bound paths and metadata. |
+| `archive/limits` | Immutable archive admission policy. |
+| `archive/metadata` | What an archive records about a member besides its bytes: permissions, the time it was changed, its owner and a comment. |
+| `archive/path` | Immutable relative archive member name, independent of fs/Path and the host. |
+| `archive/stream` | Archives read or written one member at a time. |
+| `archive/tar` | Complete uncompressed TAR writing: default PAX, or explicitly strict USTAR. |
+| `archive/zip` | ZIP archives (#185): ZipArchive reads one from bytes, ZipWriting writes one to a Writing; members are stored or deflated, and ZIP64 is read and written. |
+
+### `async`
+
+| Модуль | Для чего |
+|---|---|
+| `async/atomic` | One value that tasks share and replace whole. |
+| `async/barrier` | Cyclic cooperative rendezvous for a fixed number of parties. |
+| `async/cancellation` | Explicit cooperative cancellation capabilities. |
+| `async/channel` | Bounded typed channels for cooperative async work. |
+| `async/collect` | Structured collection of futures. |
+| `async/event` | One-way cooperative readiness signalling. |
+| `async/lock` | Cancellation-safe cooperative mutual exclusion. |
+| `async/scope` | Structured lifetime for language futures. |
+| `async/semaphore` | Bounded cooperative access to a shared resource. |
+| `async/timeout` | Structured monotonic deadlines for futures. |
+
+### `checksum`
+
+| Модуль | Для чего |
+|---|---|
+| `checksum/adler32` | Adler-32 of an immutable byte chunk continued from an unsigned 32-bit seed. |
+| `checksum/crc` | Immutable CRC values over byte chunks. |
+| `checksum/state` | A non-cryptographic checksum over an ordered history of bytes. |
+
+### `cli`
+
+| Модуль | Для чего |
+|---|---|
+| `cli/arguments` | The process's arguments, as bytes or text. |
+| `cli/command` | Command lines: options, flags, operands and subcommands declared as data, read into an Invocation. |
+
+### `collections`
+
+| Модуль | Для чего |
+|---|---|
+| `collections/combinatorics` | Lazy combinatorial iterators over finite indexed sources. |
+| `collections/combining` | Combines Iterating values without materializing them. |
+| `collections/deque` | An immutable persistent double-ended queue. |
+| `collections/enumeration` | Adds a stable integer index to every item of an Iterating object. |
+| `collections/frequencies` | Immutable frequency counts in first-occurrence order. |
+| `collections/heap` | An immutable persistent min-heap. |
+| `collections/iteration` | How `for` walks a collection: an Iterating gives a Cursor, and a Batching gives batches. |
+| `collections/list` | An immutable persistent linked list. |
+| `collections/ordering` | Stable ordered sequences and binary-search projections. |
+| `collections/repetition` | Repeats values lazily or as a finite sequence. |
+| `collections/sequence` | A role for collections with a size and items by index. |
+| `collections/set` | Immutable sets with deterministic traversal order. |
+| `collections/views` | Lazy views transform cursor traversal without changing their origins. |
+
+### `compression`
+
+| Модуль | Для чего |
+|---|---|
+| `compression/brotli` | Brotli (RFC 7932): what browsers ask for as Content-Encoding: br (#184). |
+| `compression/deflate` | raw DEFLATE (RFC 1951) without a header or checksum, as inside ZIP entries (#183). |
+| `compression/gzip` | gzip (RFC 1952): DEFLATE with a header, a CRC-32 and the length; what .gz files and Content-Encoding: gzip hold (#183). |
+| `compression/read` | Consuming byte streams over caller-owned input and codecs. |
+| `compression/state` | Stateful streaming codecs: writes may produce no output until a later write or finish(). |
+| `compression/zlib` | zlib (RFC 1950): DEFLATE with a two-byte header and an Adler-32; what Content-Encoding: deflate holds (#183). |
+| `compression/zstd` | zstd (RFC 8878): fast compression with ratios near gzip's best, or better, as in .zst files and Content-Encoding: zstd (#184). |
+
+### `config`
+
+| Модуль | Для чего |
+|---|---|
+| `config/document` | Settings read from a parsed JSON, TOML or INI document. |
+| `config/environment` | Settings read from environment variables, each bound to a key. |
+| `config/ini` | Immutable INI bindings, sections and documents with a bounded text codec. |
+| `config/key` | Setting keys: names made of parts, written `server.port`. |
+| `config/source` | Settings from several sources, later ones winning. |
+| `config/value` | One setting read from a SettingReading, with its source. |
+
+### `crypto`
+
+| Модуль | Для чего |
+|---|---|
+| `crypto/aead` | The role of authenticated encryption with associated data, played by AES-GCM, ChaCha20-Poly1305 and XChaCha20-Poly1305. |
+| `crypto/aes_gcm` | AES-GCM (NIST SP 800-38D): a 16- or 32-byte key, a 12-byte nonce and a 16-byte tag. |
+| `crypto/chacha20_poly1305` | ChaCha20-Poly1305 (RFC 8439) with a 12-byte nonce, and XChaCha20-Poly1305 with a 24-byte nonce, long enough to pick at random for every message. |
+| `crypto/constant_time` | Equality of two byte strings whose running time does not depend on where they differ (host `subtle`). |
+| `crypto/ecdsa` | ECDSA signatures on P-256 with SHA-256 and P-384 with SHA-384 (FIPS 186-5), with deterministic nonces. |
+| `crypto/ed25519` | Ed25519 signatures (RFC 8032, pure, deterministic). |
+| `crypto/error` | The failures of digest and crypto modules. |
+| `crypto/hmac` | HMAC (RFC 2104) with an explicit hash. |
+| `crypto/jwt` | JSON Web Tokens (RFC 7519) signed as JWS compact serialization (RFC 7515): HS256/384/512, RS256/384/512, ES256/384 and EdDSA (Ed25519, RFC 8037). |
+| `crypto/kdf` | Key derivation. |
+| `crypto/key` | The roles keys play across crypto: PublicKey, VerifyingKey and SigningKey. |
+| `crypto/key_format` | Keys in PEM files: PKCS#8 `PRIVATE KEY` and SubjectPublicKeyInfo `PUBLIC KEY`. |
+| `crypto/nonce` | Entropy is the explicit randomness capability of crypto/*: keys, salts, nonces and randomized signatures draw from the Entropy they are given and never from ambient state. |
+| `crypto/password` | Password storage with Argon2id (RFC 9106) in PHC string format. |
+| `crypto/rsa` | RSA (RFC 8017) over the host provider (aws-lc: constant-time, blinded private operations). |
+| `crypto/secret` | Secret bytes kept out of sight: keys, passwords and shared secrets. |
+| `crypto/x25519` | X25519 key agreement (RFC 7748): two parties reach the same shared secret. |
+| `crypto/x509/certificate` | X.509 certificates read from DER: subject, issuer, validity, key, names and extensions. |
+| `crypto/x509/name` | Distinguished names: the subject and issuer of a certificate, kept as their RDN groups in DER order. |
+| `crypto/x509/trust` | Verifying certificate chains against trusted roots. |
+| `crypto/x509/value` | Values of certificates: validity periods and basic constraints. |
+
+### `csv`
+
+| Модуль | Для чего |
+|---|---|
+| `csv/input` | A borrowed, bounded UTF-8 CSV document reader. |
+| `csv/stream` | Explicit synchronous record consumption, default comma/quote/CRLF grammar. |
+
+### `db`
+
+| Модуль | Для чего |
+|---|---|
+| `db/acquisition` | What a pool gets from a connector: the connection and, when the driver has them, its preparing and transaction capabilities. |
+| `db/connection` | Database connections, whatever the database. |
+| `db/error` | Database errors. |
+| `db/pool` | A pool of database connections. |
+| `db/postgres` | PostgreSQL driver over the frontend/backend protocol 3.0, written in Okkama: framing (db/postgres/wire), SCRAM-SHA-256 and MD5 (db/postgres/auth) and the conversation below. |
+| `db/postgres/auth` | PostgreSQL password authentication, written in Okkama over crypto/*. |
+| `db/postgres/wire` | PostgreSQL frontend/backend protocol 3.0 framing, written in Okkama. |
+| `db/prepared` | Prepared statements: SQL parsed once, run many times with new values. |
+| `db/query` | Queries: run a statement and take its rows. |
+| `db/read` | Reading values out of rows: one reader per column, with the conversions db/row offers, and Maybe and Presence for NULL and missing columns. |
+| `db/row` | Rows and columns, read by column name. |
+| `db/sqlite` | SQLite databases, in a file or in memory. |
+| `db/sqlite/backup` | Online backups of a SQLite database to a file. |
+| `db/sqlite/blob` | SQLite BLOBs read and written in pieces, without loading them whole. |
+| `db/sqlite/script` | Running a SQL script: several statements separated by semicolons, without bound values. |
+| `db/statement` | Statements: SQL text with bound values, and what running one did. |
+| `db/transaction` | Transactions. |
+| `db/value` | Database values: what is bound to a statement and what a row holds. |
+
+### `debug`
+
+| Модуль | Для чего |
+|---|---|
+| `debug/dumper` | Detailed dump of any value for debugging, after Perl's Data::Printer: its type, size and everything inside — object fields (private ones too), array elements, map pairs — indented by nesting. |
+
+### `digest`
+
+| Модуль | Для чего |
+|---|---|
+| `digest/blake2` | BLAKE2 digests (RFC 7693), plain and keyed. |
+| `digest/blocks` | Infrastructure for digests of 64-byte blocks with a 64-bit length trailer, as MD5 and SHA-1 are built. |
+| `digest/host` | Infrastructure: the runtime digest state behind digest/sha2, sha3, shake, blake2 and legacy. |
+| `digest/legacy` | MD5 (RFC 1321) and SHA-1 (RFC 3174), for legacy interoperability only. |
+| `digest/read` | Digests of byte streams. |
+| `digest/sha2` | SHA-2 (FIPS 180-4) over the host provider. |
+| `digest/sha3` | SHA-3 digests (FIPS 202) of 28, 32, 48 or 64 bytes. |
+| `digest/shake` | SHAKE128 and SHAKE256 extendable-output functions (FIPS 202) over the host provider. |
+| `digest/state` | An immutable digest of an ordered byte history. |
+
+### `encoding`
+
+| Модуль | Для чего |
+|---|---|
+| `encoding/base32` | Strict RFC 4648 Base32. |
+| `encoding/base64` | Strict RFC 4648 Base64 with explicit standard and URL-safe alphabets. |
+| `encoding/base85` | Strict Base85 codecs with two genuinely implemented variants. |
+| `encoding/binary` | Explicit fixed-width numeric binary representations. |
+| `encoding/bytes` | Parsing primitives over byte values: search and range views that read the bytes in place, without slicing them into new arrays first. |
+| `encoding/hex` | Strict hexadecimal encoding. |
+| `encoding/pem` | Strict textual PEM containers. |
+| `encoding/quoted_printable` | Strict RFC 2045 quoted-printable over bytes. |
+| `encoding/single_byte` | Immutable ASCII and ISO-8859-1 codecs. |
+| `encoding/utf` | Explicit, immutable UTF codecs. |
+
+### `fs`
+
+| Модуль | Для чего |
+|---|---|
+| `fs/directory` | Directory is a narrow path command object. |
+| `fs/entry` | A path on disk, opened or not: whether something is there, what it is, and removing, moving or copying it. |
+| `fs/error` | Everything that goes wrong with a file, a directory or a path is a FileError; the cases about one path carry it. |
+| `fs/file` | A file is a resource: File opens it lazily, owns the handle and closes it once (close() is idempotent; destroy closes too). |
+| `fs/glob` | MatchingPaths snapshots every path below root that matches a relative glob pattern. |
+| `fs/link` | SymbolicLink is a path command object. |
+| `fs/lock` | Whole-file advisory locks. |
+| `fs/path` | Purely lexical paths for native and foreign path grammars. |
+| `fs/root` | Reads below one directory that cannot be led out of it: entries are reached by names, one at a time, and links are never followed. |
+| `fs/stat` | What the disk knows about an entry: its kind, size, permissions, times and identity. |
+| `fs/temp` | Temporary resources are created eagerly with unpredictable names inside an explicitly supplied directory. |
+| `fs/watch` | FileWatch observes an existing file or directory without exposing blocking operating-system events through Cursor. |
+
+### `html`
+
+| Модуль | Для чего |
+|---|---|
+| `html/entities` | HTML escaping and unescaping of text. |
+| `html/events` | A deterministic event tokenizer for one already available string. |
+
+### `http`
+
+| Модуль | Для чего |
+|---|---|
+| `http/auth` | Client authentication: Basic (RFC 7617) and Bearer (RFC 6750) credentials, sent only inside a scope. |
+| `http/auth_challenge` | WWW-Authenticate challenges (RFC 9110 §11): the schemes a server offers. |
+| `http/body` | Message bodies: what a request or response carries, read once or many times. |
+| `http/body_coding` | Bodies with a content coding applied as they are read (#186, #184): what a server sends as Content-Encoding: gzip or br, and what a client gets back from it. |
+| `http/cache` | A private HTTP cache around a client (RFC 9111). |
+| `http/cache_admission` | One request at a time per cache key: concurrent misses for one URL wait for the first to fill the cache. |
+| `http/cache_control` | Cache-Control directives (RFC 9111 §5.2). |
+| `http/cache_freshness` | How old a cached response is and how long it stays fresh (RFC 9111 §4.2). |
+| `http/cache_memory` | Cached responses and a cache in memory. |
+| `http/cache_validation` | Revalidating a stale cached response (RFC 9111 §4.3): the conditional request, and the entry a 304 refreshes. |
+| `http/client` | An HTTP client. |
+| `http/client_policy` | What a client allows itself: limits, timeouts, protocols, connections and endpoints. |
+| `http/client_protocols` | Which HTTP version a client speaks on a connection: what ALPN selected on TLS, or the configured one on cleartext. |
+| `http/client_request` | A request checked before it leaves: an absolute http or https URL and at most one Host, matching it. |
+| `http/conditional` | Conditional and range requests (RFC 9110 §13, §14): entity tags and byte ranges. |
+| `http/connection` | HTTP/1 connections for a client: TCP to an address already checked, racing the candidates a little apart, then TLS when the URL is https. |
+| `http/content_coding` | Content codings (RFC 9110 §8.4): the names in Content-Encoding and Accept-Encoding. |
+| `http/conversation` | Conversations: one connection speaking HTTP/1.1 or HTTP/2, as a client pool holds them. |
+| `http/cookie` | Cookies (RFC 6265bis): Set-Cookie on the way out, Cookie on the way in. |
+| `http/cookie_client` | Sending and keeping cookies around a client. |
+| `http/cookie_date` | Cookie dates: the forgiving Expires grammar of RFC 6265bis. |
+| `http/cookie_jar` | Cookie jars: where a client keeps cookies between requests. |
+| `http/cookie_policy` | Which cookies go where: domain and path matching (RFC 6265bis) and the context of a request. |
+| `http/date` | HTTP dates (RFC 9110 §5.6.7): `Thu, 01 Jan 1970 00:00:00 GMT`. |
+| `http/digest` | Digest authentication (RFC 7616) with SHA-256 and SHA-512-256, qop=auth. |
+| `http/endpoint` | Which addresses a client may connect to, checked after DNS and before the socket. |
+| `http/environment_proxy` | The proxy the environment names: http_proxy, https_proxy (or HTTPS_PROXY), all_proxy (or ALL_PROXY) and no_proxy (or NO_PROXY). |
+| `http/exchange` | What a client sends and gets back. |
+| `http/form` | Form bodies: `application/x-www-form-urlencoded` and `multipart/form-data` (RFC 7578). |
+| `http/handler` | Handlers: what answers a request. |
+| `http/header` | Header fields: names, values and the set of fields of a message. |
+| `http/http1_body` | Reading an HTTP/1.1 body by its plan: fixed length, chunked with trailers, or until close. |
+| `http/http1_body_check` | Checks a body against its framing plan before the head is written: a fixed length must match, a body must be within the limits. |
+| `http/http1_body_writing` | Writing an HTTP/1.1 body by its plan: as is for a fixed length, in chunks with trailers for chunked. |
+| `http/http1_chunk` | The pieces of chunked transfer coding (RFC 9112 §7.1): chunk size lines and trailer fields. |
+| `http/http1_continue` | `Expect: 100-continue` on the client side: the head goes first, the body after a 100 or after a short wait. |
+| `http/http1_framing` | How long an HTTP/1.1 body is (RFC 9112 §6): none, Content-Length, chunked, until the connection closes, or a tunnel or upgrade after the head. |
+| `http/http1_head` | HTTP/1.1 message heads (RFC 9112): the start line and the fields, read from text and checked. |
+| `http/http1_message_writing` | Writing whole HTTP/1.1 messages: head and body, in one write when the body is in memory. |
+| `http/http1_reading` | Reading HTTP/1.1 heads from a stream, keeping whatever was read past them. |
+| `http/http1_session` | One HTTP/1.1 client connection: one request at a time, no pipelining. |
+| `http/http1_writing` | Writing HTTP/1.1 heads: checked and bounded before a single write. |
+| `http/http2_connection` | Opening HTTP/2 client connections (RFC 9113): prior knowledge over cleartext, or h2 selected by ALPN over TLS. |
+| `http/http2_server` | The server side of one HTTP/2 connection. |
+| `http/http2_session` | The client side of one HTTP/2 connection: many requests at once on one socket, after the preface and settings. |
+| `http/http2_settings` | The SETTINGS this side advertises on an HTTP/2 connection. |
+| `http/http2_tls` | HTTP/2 over TLS needs `h2` selected by ALPN; the list offered is not enough. |
+| `http/media_type` | Media types as HTTP uses them (RFC 9110 §8.3.1): Content-Type and the like. |
+| `http/message` | Requests and responses: a head (method, target, status, fields, version) and a body. |
+| `http/method` | HTTP methods: those of RFC 9110 and PATCH (RFC 5789), and `other(name)` for an extension token. |
+| `http/negotiation` | Content negotiation (RFC 9110 §12): Accept, Accept-Encoding, Accept-Charset and Accept-Language. |
+| `http/proxy` | A client that goes through an HTTP proxy: http requests are forwarded, https ones tunnelled with CONNECT and verified end to end. |
+| `http/proxy_connection` | Connections through a proxy for one client pool. |
+| `http/proxy_policy` | An HTTP proxy and its credentials. |
+| `http/proxy_request` | The requests a client sends to a proxy: a forwarded request in absolute form, or CONNECT for a tunnel. |
+| `http/proxy_tunnel` | A CONNECT tunnel on a proxy connection: the request, and the proxy's answer read byte by byte so that TLS can follow on the same stream. |
+| `http/redirect` | Following redirects (RFC 9110 §15.4). |
+| `http/request_context` | What a handler knows about a request besides the request itself. |
+| `http/retry` | Sending a request once more when a reused connection closed before it answered. |
+| `http/robots` | robots.txt (RFC 9309): what a crawler may fetch. |
+| `http/routing` | Routing: patterns, routes and a table that picks the handler. |
+| `http/selected_connection` | Select an enabled conversation from actual ALPN, or explicit cleartext policy. |
+| `http/server` | An HTTP server: a listener, a handler and a policy. |
+| `http/server_policy` | What a server allows itself: protocols, limits, timeouts, connections and ranges per request. |
+| `http/sse` | Server-sent events (HTML Living Standard §9.2): `text/event-stream`. |
+| `http/static` | Files from a directory, with validators, ranges and precompressed variants. |
+| `http/status` | HTTP status codes: a case for each code of the IANA registry, and `other(code)` for the rest of 100-599. |
+| `http/target` | Request targets (RFC 9112 §3.2): the four forms of the second word of a request line. |
+| `http/tls_session` | HTTP/1.1 over a verified TLS connection, once ALPN agrees: `http/1.1`, or no ALPN at all. |
+| `http/token` | Tokens (RFC 9110 §5.6.2): the words of HTTP. |
+| `http/transport_observation` | Whether a response started to arrive on an HTTP/1 connection. |
+| `http/version` | HTTP versions, and the `HTTP/1.x` text of HTTP/1 message lines. |
+| `http/websocket` | WebSocket connections (RFC 6455): messages, limits and close codes. |
+| `http/websocket_client` | Opening a WebSocket connection as a client. |
+| `http/websocket_handshake` | The WebSocket opening handshake (RFC 6455 §4): the client's Upgrade request, the server's 101, and subprotocols. |
+| `http/websocket_origin` | Whether a WebSocket upgrade may come from its Origin. |
+| `http/websocket_server` | Accepting WebSocket upgrades on a server. |
+| `http/websocket_session` | Dedicated upgraded transport owner. |
+| `http/xmlrpc` | XML-RPC over HTTP: values, calls, a client and a handler. |
+
+### `i18n`
+
+| Модуль | Для чего |
+|---|---|
+| `i18n/catalog` | Message catalogs: translated text looked up by key, with plural forms. |
+| `i18n/gettext` | GNU gettext catalogs: PO text and compiled MO files. |
+| `i18n/operands` | The operands CLDR plural rules ask about a number (n, i, v, w, f, t, e). |
+| `i18n/plural` | Plural categories CLDR: which form of a word a number takes in a language. |
+
+### `io`
+
+| Модуль | Для чего |
+|---|---|
+| `io/buffer` | Bytes in memory, read, written and observed through separate views. |
+| `io/decorators` | Readers and writers that wrap others: read ahead, stop at a limit, read one source after another, write to several outputs, or write nowhere. |
+| `io/input` | Buffered reading of an asynchronous byte stream, for protocol parsers. |
+| `io/stdin` | The process input, as lines of text or as bytes (#221). |
+| `io/stdout` | The process's standard output and standard error. |
+| `io/stream` | The roles every byte and text stream of std plays: Reading and Writing for bytes, AsyncReading and AsyncWriting for streams that wait, ReadingText and WritingText for text, ByteSource for something that has bytes, and Closing. |
+| `io/text` | Text written to any byte output as UTF-8. |
+| `io/transfer` | A source read to its end, and bytes carried from a source to a destination (#130), so that modules stop repeating the read loop: |
+
+### `locale`
+
+| Модуль | Для чего |
+|---|---|
+| `locale/case` | Text in the case a language writes it. |
+| `locale/collation` | Sorting text as a language does (Unicode Collation Algorithm, CLDR tailorings). |
+| `locale/currency` | Money in a locale's way: symbol, digits, accounting brackets. |
+| `locale/data` | The locale data shipped with std: its versions, and the fallback chain of a locale. |
+| `locale/date_time` | Dates and times as a locale writes them (CLDR Gregorian styles). |
+| `locale/likely` | Likely subtags (CLDR): the script and region a language most likely means. |
+| `locale/list` | Lists in words: "tea, milk and bread", "tea, milk ou bread". |
+| `locale/match` | Choosing a locale from what a user asks for (RFC 4647). |
+| `locale/number` | Numbers as a locale writes them, and read back (CLDR 46.1). |
+| `locale/system` | The locales a user prefers, from the operating system and the environment. |
+| `locale/tag` | Locales: BCP 47 language tags (RFC 5646), checked and canonical. |
+
+### `logging`
+
+| Модуль | Для чего |
+|---|---|
+| `logging/enrichment` | Loggers that add fields to every record, or log under a child name. |
+| `logging/field` | Structured fields of log records: JSON members. |
+| `logging/file` | Log files: appended to, flushed or synced as told, reopened after outside rotation. |
+| `logging/filter` | Which records pass: a level per logger name, the longest name winning. |
+| `logging/level` | Log levels, from debug to critical. |
+| `logging/line` | Log records as lines: text for people, JSON for machines. |
+| `logging/logger` | A logger for an application (#181): text lines to standard error, info and above, unless told otherwise. |
+| `logging/name` | Logger names: dotted segments, `shop.db.pool`. |
+| `logging/named` | Named loggers with their clock, fixed fields and process id; Logger is the short form. |
+| `logging/queue` | Writing records in the background through a bounded queue. |
+| `logging/record` | Log records: when, how important, the message, the logger's context and an optional cause. |
+| `logging/redact` | Hiding secrets in log records before they are written. |
+| `logging/rotation` | Log files that rotate by size or by time, keeping some backups. |
+| `logging/stream` | Writing records as lines to a stream or a terminal. |
+| `logging/syslog` | Syslog over UDP (RFC 5424). |
+| `logging/write` | Destinations of log records, and ways to combine them. |
+
+### `mail`
+
+| Модуль | Для чего |
+|---|---|
+| `mail/imap` | IMAP capabilities (RFC 3501, RFC 9051): what a CAPABILITY response advertises. |
+| `mail/imap_command` | IMAP commands as values: a closed set, built from typed arguments and never from raw text. |
+| `mail/imap_command_reading` | Reading every response of one command up to its tagged completion. |
+| `mail/imap_data` | The structure of an untagged response: atoms, quoted strings, literals and parenthesized lists. |
+| `mail/imap_exchange` | The command channel of an IMAP connection: tags, literals, responses in order. |
+| `mail/imap_message` | What a FETCH brought back about a message. |
+| `mail/imap_metadata` | Values read out of IMAP responses: response codes, LIST entries, flags, UID ranges and SEARCH results. |
+| `mail/imap_name` | IMAP mailbox names and their modified UTF-7 (RFC 3501 §5.1.3). |
+| `mail/imap_reading` | Reading one IMAP response from a stream, literals included, keeping the bytes read past it. |
+| `mail/imap_response` | IMAP server responses: tagged, untagged or continuation, with their literals framed (RFC 9051 §7). |
+| `mail/imap_search` | What to search for, as values: never as raw SEARCH text. |
+| `mail/imap_session` | An IMAP session after login: mailboxes, searching, fetching, flags, copies and moves, IDLE. |
+| `mail/imap_state` | What SELECT or EXAMINE reports about a mailbox, kept up to date by later responses. |
+| `mail/imap_uid` | IMAP message numbers and UIDs: different types, so they cannot be mixed. |
+| `mail/mailbox` | Message flags, stored messages and Maildir folders. |
+| `mail/mbox` | mbox archives in the mboxrd flavour: messages one after another, each behind a `From ` line. |
+| `mail/mbox_store` | An mbox file changed in place, under a lock. |
+| `mail/message` | E-mail messages (RFC 5322 with MIME): built, rendered, parsed. |
+| `mail/pop3` | POP3 values (RFC 1939, RFC 2449): message numbers, unique ids, listings and capabilities. |
+| `mail/pop3_reading` | Reading one POP3 reply from a stream, keeping the bytes read past it. |
+| `mail/pop3_reply` | POP3 replies: `+OK` or `-ERR`, and for some commands a multiline body ended by a lone dot. |
+| `mail/pop3_session` | A POP3 session in the TRANSACTION state: listing, fetching and deleting messages. |
+| `mail/smtp` | SMTP server capabilities: what an EHLO reply advertises (RFC 5321 §4.1.1.1). |
+| `mail/smtp_data` | The DATA content of an SMTP transaction: a message made ready to send. |
+| `mail/smtp_reading` | Reading one SMTP reply from a stream, keeping the bytes read past it. |
+| `mail/smtp_reply` | SMTP replies (RFC 5321 §4.2): a code and lines of text. |
+| `mail/smtp_session` | Sending e-mail: an SMTP submission client (RFC 5321, RFC 6409). |
+
+### `math`
+
+| Модуль | Для чего |
+|---|---|
+| `math/aggregate` | One-pass aggregates over Iterating values. |
+| `math/constants` | Finite mathematical constants, as module constants (#153): |
+| `math/decimal` | Exact immutable decimal value. |
+| `math/rounding` | How a number is rounded to fewer digits. |
+
+### `message`
+
+| Модуль | Для чего |
+|---|---|
+| `message/header` | Header fields of Internet messages (RFC 5322): mail and MIME parts use them. |
+
+### `mime`
+
+| Модуль | Для чего |
+|---|---|
+| `mime/disposition` | Content-Disposition (RFC 6266, RFC 2183): inline or attachment, and a file name. |
+| `mime/media_type` | Media types (RFC 2045, RFC 6838) and their parameters. |
+| `mime/part` | MIME messages and parts (RFC 2045, RFC 2046): bodies, multipart bodies, parsing and writing. |
+| `mime/transfer` | Content-Transfer-Encoding (RFC 2045): base64 and quoted-printable for 7-bit transports. |
+| `mime/types` | Media types guessed from file name extensions. |
+| `mime/word` | RFC 2047 encoded words, for non-ASCII text in mail header fields. |
+
+### `net`
+
+| Модуль | Для чего |
+|---|---|
+| `net/dns` | Names to addresses and back. |
+| `net/endpoint` | Where to connect: a host name or an address, and a port. |
+| `net/failure` | What went wrong with a connection, as one kind code takes it apart by. |
+| `net/interface` | Immutable observation of one interface, supplied by a provider or a fixture. |
+| `net/ip` | IP addresses and networks, IPv4 and IPv6. |
+| `net/ip_registry` | The IANA special-purpose address registries, built in; IpAddress.properties() reads them. |
+| `net/multicast` | Immutable multicast send-option request. |
+| `net/public_suffix` | The Public Suffix List, built in: which part of a host name is a public suffix and which is the registrable domain. |
+| `net/stream` | Immutable observations of the two ends of a connection. |
+| `net/tcp` | TCP connections and listeners. |
+| `net/tcp_racing` | Happy Eyeballs over numeric candidates (RFC 8305): attempts start a stagger apart, families interleave, and the first connection wins while the others are cancelled and closed. |
+| `net/tls` | TLS 1.2 and 1.3 over a TCP connection, client and server. |
+| `net/udp` | Immutable observation of one received packet: sender, retained payload and explicit truncation flag. |
+| `net/unix` | Exact filesystem address for the current host. |
+
+### `numbers`
+
+| Модуль | Для чего |
+|---|---|
+| `numbers/bigint` | An explicit integer wrapper with validated decimal parsing and numeric algorithms. |
+| `numbers/bigrational` | Canonical exact ratio: positive denominator, gcd=1, unique zero 0/1. |
+| `numbers/float` | The shortest decimal that reads back as exactly a float. |
+
+### `os`
+
+| Модуль | Для чего |
+|---|---|
+| `os/account` | User() denotes the effective security identity of the current process. |
+| `os/command` | Commanding is the immutable description accepted by process consumers. |
+| `os/command_capture` | CommandCapture is the safe bounded alternative to manually coordinating ProcessInput, ProcessOutput and ProcessErrors. |
+| `os/directory` | WorkingDirectory denotes the process working directory without changing it. |
+| `os/environment` | Environment is an immutable snapshot. |
+| `os/pipeline_capture` | PipelineCapture connects commands directly without a shell. |
+| `os/platform` | Platform answers the portable runtime identity when asked. |
+| `os/process` | Process owns one shared lazy runtime state. |
+| `os/run` | Run a tool and read what it printed (#197): |
+| `os/signal` | Stopping cleanly on Ctrl-C (SIGINT), SIGTERM or SIGHUP. |
+| `os/storage` | Storage denotes the mounted filesystem or volume containing a path, not a physical disk. |
+
+### `parallel`
+
+| Модуль | Для чего |
+|---|---|
+| `parallel/map` | An ordered mapping performed by bounded batches of isolated process workers. |
+
+### `plist`
+
+| Модуль | Для чего |
+|---|---|
+| `plist/parse` | Property lists read from XML or binary bytes. |
+| `plist/value` | Immutable property-list values, independent from JSON and any wire format. |
+| `plist/write` | Property lists written as XML or binary. |
+
+### `random`
+
+| Модуль | Для чего |
+|---|---|
+| `random/distribution` | Stateful distribution views over an injected Randomizing capability. |
+| `random/source` | Stateful random sources with one compact capability. |
+
+### `regex`
+
+| Модуль | Для чего |
+|---|---|
+| `regex/escape` | EscapedRegex converts arbitrary text into one literal Dialect 1 expression. |
+| `regex/match` | RegexMatching is the observable surface shared by mandatory search results and matches yielded by RegexMatches. |
+| `regex/pattern` | Okkama Regex Dialect 1 is a locale-independent regular-language dialect implemented by a bounded Thompson NFA. |
+| `regex/range` | RegexRange describes a half-open interval [start, end) inside regex input. |
+| `regex/replace` | Matches of a pattern replaced in a text. |
+| `regex/search` | Mandatory searches are matches themselves: read them directly. |
+| `regex/split` | RegexParts is the collection itself. |
+
+### `runtime`
+
+| Модуль | Для чего |
+|---|---|
+| `runtime/account` | The native layer under os/account: the calls those modules make into the host runtime. |
+| `runtime/application` | The native layer under terminal/mode, terminal/screen, terminal/session: the calls those modules make into the host runtime. |
+| `runtime/base32` | The native layer under encoding/base32: the calls those modules make into the host runtime. |
+| `runtime/base64` | The native layer under encoding/base64: the calls those modules make into the host runtime. |
+| `runtime/base85` | The native layer under encoding/base85: the calls those modules make into the host runtime. |
+| `runtime/bigint` | The native layer under numbers/bigint: the calls those modules make into the host runtime. |
+| `runtime/binary` | The native layer under encoding/binary, http/internal/websocket_frame: the calls those modules make into the host runtime. |
+| `runtime/buffer` | The native layer under http/internal/http2_body, http/internal/wire_bytes, io/buffer, io/decorators: the calls those modules make into the host runtime. |
+| `runtime/bytes` | The native layer under encoding/bytes, io/input: the calls those modules make into the host runtime. |
+| `runtime/checksum` | The native layer under checksum/adler32, checksum/crc: the calls those modules make into the host runtime. |
+| `runtime/cldr` | The native layer under locale/internal/currencies, locale/internal/day_periods, locale/internal/gregorian, locale/internal/likely: the calls those modules make into the host runtime. |
+| `runtime/collation` | The native layer under locale/collation: the calls those modules make into the host runtime. |
+| `runtime/collections` | The native layer under http/robots, http/routing: the calls those modules make into the host runtime. |
+| `runtime/compression` | The native layer under compression/internal/codec: the calls those modules make into the host runtime. |
+| `runtime/crypto` | The native layer under http/cache_admission, http/digest: the calls those modules make into the host runtime. |
+| `runtime/database` | The native layer under db/sqlite: the calls those modules make into the host runtime. |
+| `runtime/db` | The native layer under db/postgres, db/read, db/row, db/sqlite: the calls those modules make into the host runtime. |
+| `runtime/debug` | The native layer under debug/dumper, testing/check: the calls those modules make into the host runtime. |
+| `runtime/decimal` | The native layer under i18n/gettext, math/decimal: the calls those modules make into the host runtime. |
+| `runtime/diff` | The native layer under diff: the calls those modules make into the host runtime. |
+| `runtime/environment` | The native layer under os/environment: the calls those modules make into the host runtime. |
+| `runtime/format` | The native layer under numbers/float: the calls those modules make into the host runtime. |
+| `runtime/fs` | The native layer under db/sqlite, fs/directory, fs/entry, fs/file: the calls those modules make into the host runtime. |
+| `runtime/fs_root` | The native layer under fs/root: the calls those modules make into the host runtime. |
+| `runtime/hex` | The native layer under encoding/hex: the calls those modules make into the host runtime. |
+| `runtime/host_crypto` | The native layer under crypto/error, digest/host: the calls those modules make into the host runtime. |
+| `runtime/hpack` | The native layer under http/internal/hpack_primitives: the calls those modules make into the host runtime. |
+| `runtime/idna` | The native layer under net/endpoint: the calls those modules make into the host runtime. |
+| `runtime/input_state` | The native layer under io/stdin: the calls those modules make into the host runtime. |
+| `runtime/io_decorators` | The native layer under io/decorators: the calls those modules make into the host runtime. |
+| `runtime/json` | The native layer under json: the calls those modules make into the host runtime. |
+| `runtime/layout` | The native layer under text/layout: the calls those modules make into the host runtime. |
+| `runtime/locale` | The native layer under locale/system: the calls those modules make into the host runtime. |
+| `runtime/math_aggregate` | The native layer under math/aggregate, statistics: the calls those modules make into the host runtime. |
+| `runtime/net` | The native layer under net/ip, net/multicast, net/tcp, net/udp: the calls those modules make into the host runtime. |
+| `runtime/network` | The native layer under net/dns, net/multicast, net/stream, net/tcp: the calls those modules make into the host runtime. |
+| `runtime/number_text` | The native layer under json, math/decimal, numbers/bigint, strings/parse: the calls those modules make into the host runtime. |
+| `runtime/ordering` | The low-level bulk ordering boundary used by collections/ordering. |
+| `runtime/pem` | The native layer under crypto/x509/trust, encoding/pem: the calls those modules make into the host runtime. |
+| `runtime/postgres` | The native layer under db/postgres: the calls those modules make into the host runtime. |
+| `runtime/process` | The native layer under cli/arguments, logging/named, os/command_capture, os/pipeline_capture: the calls those modules make into the host runtime. |
+| `runtime/public_suffix` | The native layer under net/public_suffix: the calls those modules make into the host runtime. |
+| `runtime/quoted_printable` | The native layer under encoding/quoted_printable: the calls those modules make into the host runtime. |
+| `runtime/random` | The native layer under random/source: the calls those modules make into the host runtime. |
+| `runtime/random_distribution` | The native layer under random/distribution: the calls those modules make into the host runtime. |
+| `runtime/regex` | The native layer under regex/escape, regex/match, regex/pattern, regex/replace: the calls those modules make into the host runtime. |
+| `runtime/secret` | The native layer under crypto/secret: the calls those modules make into the host runtime. |
+| `runtime/signal` | The native layer under os/signal and web/app: the calls those modules make into the host runtime. |
+| `runtime/single_byte` | The native layer under encoding/single_byte, http/http1_chunk, http/http1_head: the calls those modules make into the host runtime. |
+| `runtime/snapshot` | The native layer under testing/snapshot: the calls those modules make into the host runtime. |
+| `runtime/statistics` | The native layer under statistics: the calls those modules make into the host runtime. |
+| `runtime/stdio` | The native layer under io/stdin, io/stdout: the calls those modules make into the host runtime. |
+| `runtime/system` | The native layer under fs/path, locale/system, os/platform, os/storage: the calls those modules make into the host runtime. |
+| `runtime/template` | The native layer under the template modules: the calls they make into the host runtime. |
+| `runtime/testing` | The native layer under testing/context, testing/double: the calls those modules make into the host runtime. |
+| `runtime/time` | The native layer under testing/time, time/clock: the calls those modules make into the host runtime. |
+| `runtime/time_zone` | The native layer under time/zone: the calls those modules make into the host runtime. |
+| `runtime/tls_transport` | The native layer under net/stream, net/tls: the calls those modules make into the host runtime. |
+| `runtime/unicode_character` | The native layer under logging/line, terminal/width, unicode/character: the calls those modules make into the host runtime. |
+| `runtime/unicode_normalization` | The native layer under unicode/normalization: the calls those modules make into the host runtime. |
+| `runtime/utf` | The native layer under encoding/utf, http/sse, io/stdin, json: the calls those modules make into the host runtime. |
+| `runtime/uuid` | The native layer under uuid/generation: the calls that module makes into the host runtime. |
+| `runtime/x509` | The native layer under crypto/x509/certificate, crypto/x509/trust: the calls those modules make into the host runtime. |
+
+### `strings`
+
+| Модуль | Для чего |
+|---|---|
+| `strings/buffer` | Text built up piece by piece and kept by the runtime: a write does not copy what is already there, and string() gives the text so far. |
+| `strings/format` | Exact, typed interpolation: only {} denotes a slot; other braces are literal. |
+| `strings/join` | Strings joined with a separator, within limits. |
+| `strings/parse` | Strict readings of numbers and truth values written as text. |
+
+### `template`
+
+| Модуль | Для чего |
+|---|---|
+| `template/compile` | Text templates: `{{name}}` filled from strings. |
+| `template/engine` | Templates over JSON: one small language, compiled once, rendered as text. |
+| `template/html` | HTML templates that escape each value for where it lands. |
+| `template/html_library` | Named HTML templates, for partials. |
+| `template/json` | A Json as the strings of a text template: `{{user.name}}` reads member name of member user. |
+| `template/library` | Named text templates, for partials of section templates. |
+| `template/model` | The strings a text template is filled with. |
+| `template/path` | Template paths: `user.name` as its parts. |
+| `template/render` | Writing a filled text template piece by piece to a destination, without building the whole text. |
+| `template/sections` | Section templates over JSON, in the Mustache style. |
+| `template/tree` | The syntax tree of a section template: literals, variables, sections, inverted sections and partials. |
+
+### `terminal`
+
+| Модуль | Для чего |
+|---|---|
+| `terminal/capability` | What a terminal can do: whether input and output are interactive, how many colors it shows and its size. |
+| `terminal/error` | Terminal errors. |
+| `terminal/mode` | Terminal input modes, applied for a while and then restored. |
+| `terminal/prompt` | Asking for a line or a secret. |
+| `terminal/screen` | Moving the cursor, clearing and the alternate screen; following resizes. |
+| `terminal/session` | A terminal session: input, output, modes, screen and capabilities. |
+| `terminal/style` | Colors and text attributes, rendered for the terminal's color depth. |
+| `terminal/width` | How many columns text takes on a terminal, by grapheme cluster: wide East Asian characters and emoji take two, combining marks none. |
+
+### `testing`
+
+| Модуль | Для чего |
+|---|---|
+| `testing/check` | Checks for tests beyond test.is and test.ok: floats, text and sequence diffs, regexes, and conditions that become true later. |
+| `testing/context` | Whether code runs inside a test. |
+| `testing/double` | Test doubles: record the calls a fake receives, and stub answers. |
+| `testing/error` | Checking that code throws, and what. |
+| `testing/generation` | Generators of test values for property tests, with shrinking. |
+| `testing/property` | Property tests: a condition checked on many generated values, the failing one shrunk to a small example. |
+| `testing/report` | Test reports as text: for people, TAP, JSON or JUnit XML. |
+| `testing/result` | Test results: what each test did and the report of a run. |
+| `testing/runner` | Test reports read back from the test runner's recorded form. |
+| `testing/signal` | Signals for tests: nothing comes until the test raises one. |
+| `testing/snapshot` | Snapshot tests: output compared with a file kept next to the tests. |
+| `testing/time` | A clock for tests that moves only when told. |
+
+### `text`
+
+| Модуль | Для чего |
+|---|---|
+| `text/layout` | Immutable text-layout values. |
+
+### `time`
+
+| Модуль | Для чего |
+|---|---|
+| `time/clock` | Wall-clock and monotonic time are deliberately different nominal values. |
+| `time/date` | Immutable dates in the proleptic Gregorian calendar. |
+| `time/day` | Immutable civil time within one nominal day. |
+| `time/duration` | Exact immutable durations with nanosecond resolution. |
+| `time/format` | Explicit, locale-free formatting and parsing. |
+| `time/iso` | Strict ISO 8601 calendar and local-date-time representations. |
+| `time/local_datetime` | A local calendar date and wall-clock time without an offset or time zone. |
+| `time/rfc3339` | Strict nanosecond-resolution RFC 3339 timestamps. |
+| `time/zone` | Deterministic time-zone values backed only by bundled IANA tzdata 2026c. |
+
+### `toml`
+
+| Модуль | Для чего |
+|---|---|
+| `toml/parse` | Immutable TOML 1.0 document representation; parsing occurs on value(). |
+| `toml/value` | Immutable TOML values; not a TOML document parser or printer. |
+
+### `unicode`
+
+| Модуль | Для чего |
+|---|---|
+| `unicode/character` | Unicode Character Database properties for one Unicode scalar value. |
+| `unicode/normalization` | Immutable Unicode 16.0.0 normalization. |
+
+### `url`
+
+| Модуль | Для чего |
+|---|---|
+| `url/form` | HTML forms as `application/x-www-form-urlencoded`. |
+| `url/percent` | Percent-encoding of URL parts (RFC 3986). |
+| `url/query` | The query of a URL as parameters, read like json. |
+| `url/value` | URLs constructed, transformed and taken apart (RFC 3986). |
+
+### `uuid`
+
+| Модуль | Для чего |
+|---|---|
+| `uuid/generation` | RFC-compatible UUID generation that does not depend on host UUID libraries. |
+| `uuid/value` | A UUID is a role: whatever makes one, it answers the same questions. |
+
+### `web`
+
+| Модуль | Для чего |
+|---|---|
+| `web/app` | Binds a route table to a listener: HTTP/1.1 in cleartext, or HTTPS with HTTP/2 and HTTP/1.1 offered by ALPN (#80). |
+| `web/around` | Code that goes around endpoints with web/routing's Around (#77): |
+| `web/exception` | An HTTP failure. |
+| `web/reply` | Endpoint replies. |
+| `web/request` | The request as an endpoint sees it: route parameters, query, header fields, cookies and a body read under a byte limit. |
+| `web/routing` | Route tables built from controller actions. |
+| `web/session` | Sessions kept on the server, found by a signed cookie (#208): |
+| `web/testing` | Calls a route table the way HttpClient calls a server, without a network (#85). |
+
+### `xml`
+
+| Модуль | Для чего |
+|---|---|
+| `xml/name` | XML names with namespaces. |
+| `xml/node` | XML trees: elements, text, comments and processing instructions. |
+| `xml/parse` | XML text read into a tree (#144): |
+| `xml/write` | Text escaped for XML. |
+
+### верхний уровень
+
+| Модуль | Для чего |
+|---|---|
+| `calendar` | Immutable Gregorian calendar views. |
+| `cell` | A mutable value for synchronous code. |
+| `compare` | A three-way intrinsic ordering contract. |
+| `csv` | In-memory Unicode CSV representations; defaults are comma / double quote / CRLF. |
+| `diff` | The differences between two lists of lines, as unified or context diffs. |
+| `error` | Common argument and state failures. |
+| `json` | JSON values: one immutable Json, parsed or built in code, read without casts and written by the runtime in one call. |
+| `operators` | Operator roles (#215). |
+| `size` | A role for things that know how many elements they hold. |
+| `statistics` | Descriptive statistics over finite builtin floats. |
+
+# Приложение E. Литература
 
 - <a id="ref-alexander1977"></a>Christopher Alexander, Sara Ishikawa, Murray Silverstein (1977). *A Pattern Language: Towns, Buildings, Construction*. Oxford University Press.
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
