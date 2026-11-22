@@ -19,7 +19,43 @@ const UNOPENED: u8 = 1;
 const OPEN: u8 = 2;
 const CLOSED: u8 = 4;
 
-type State = HashMap<ValueId, u8>;
+/// The states of the values a function's check can meet, one byte per value
+/// (0: not met yet), indexed through [`Keys`] (#972: a map per state made the
+/// check of a function with many resources take most of a debug check).
+#[derive(Clone)]
+struct State(Vec<u8>);
+
+/// The values a state can hold, and their positions.
+struct Keys {
+    index: HashMap<ValueId, usize>,
+    values: Vec<ValueId>,
+}
+
+impl Keys {
+    fn new(values: impl IntoIterator<Item = ValueId>) -> Self {
+        let mut keys = Keys { index: HashMap::new(), values: Vec::new() };
+        for value in values {
+            if let std::collections::hash_map::Entry::Vacant(slot) = keys.index.entry(value) {
+                slot.insert(keys.values.len());
+                keys.values.push(value);
+            }
+        }
+        keys
+    }
+}
+
+impl State {
+    fn get(&self, keys: &Keys, value: &ValueId) -> Option<u8> {
+        keys.index.get(value).map(|&at| self.0[at]).filter(|&bits| bits != 0)
+    }
+    fn insert(&mut self, keys: &Keys, value: ValueId, bits: u8) {
+        let at = keys.index[&value];
+        self.0[at] = bits;
+    }
+    fn contains(&self, keys: &Keys, value: &ValueId) -> bool {
+        self.get(keys, value).is_some()
+    }
+}
 
 /// Check every function; the first violation, named by function.
 pub fn check(module: &Module) -> Result<(), String> {
@@ -74,14 +110,23 @@ fn closes(kind: &InstKind) -> Option<ValueId> {
 
 fn join(into: &mut State, from: &State) -> bool {
     let mut changed = false;
-    for (value, bits) in from {
-        let entry = into.entry(*value).or_insert(0);
+    for (entry, bits) in into.0.iter_mut().zip(&from.0) {
         if *entry | bits != *entry {
             *entry |= bits;
             changed = true;
         }
     }
     changed
+}
+
+/// The most block visits the data flow can need (#972). A block is visited
+/// once per change of its entry state, and a join only adds bits: each of
+/// `values` tracked values gains at most its three states, so one entry
+/// changes at most `3 * values` times after it is first reached. More visits
+/// than that is a defect of the check, not a slow function; a fixed bound
+/// (64 per block) refused real std functions with many resources.
+fn visit_limit(blocks: usize, values: usize) -> usize {
+    blocks.saturating_mul(3usize.saturating_mul(values).saturating_add(1)).saturating_add(1)
 }
 
 fn check_function(function: &Function) -> Result<(), String> {
@@ -98,14 +143,33 @@ fn check_function(function: &Function) -> Result<(), String> {
     if regions_in_params {
         return Ok(());
     }
+    // Every value an instruction below can put in a state: the tracked ones,
+    // and the operands of closes (outside them only in invalid IR).
+    let keys = Keys::new(values.iter().copied().chain(function.blocks.iter().flat_map(|block| &block.insts).filter_map(|inst| {
+        match &inst.kind {
+            InstKind::RegionUnwind { region: value, .. }
+            | InstKind::RegionSettleUnwind { region: value, .. }
+            | InstKind::ResourceUnwind { value, .. }
+            | InstKind::ResourceSettleUnwind { value, .. }
+            | InstKind::ResourcePin { value }
+            | InstKind::ResourceLeave { value }
+            | InstKind::ResourceSettle { value } => Some(*value),
+            kind => closes(kind),
+        }
+    })));
+    let mut start = State(vec![0; keys.values.len()]);
+    for &value in &values {
+        start.insert(&keys, value, UNOPENED);
+    }
     let mut entry: Vec<Option<State>> = vec![None; function.blocks.len()];
-    entry[0] = Some(values.iter().map(|&value| (value, UNOPENED)).collect());
+    entry[0] = Some(start);
     let mut pending = vec![0usize];
     let mut errors = Vec::new();
     let mut visits = 0usize;
+    let limit = visit_limit(function.blocks.len(), keys.values.len());
     while let Some(block_index) = pending.pop() {
         visits += 1;
-        if visits > 64 * function.blocks.len() + 64 {
+        if visits > limit {
             return Err("the data flow does not settle".into());
         }
         let block = &function.blocks[block_index];
@@ -129,7 +193,7 @@ fn check_function(function: &Function) -> Result<(), String> {
                 match closes(&inst.kind) {
                     Some(value) => {
                         let mut after = state.clone();
-                        after.insert(value, CLOSED);
+                        after.insert(&keys, value, CLOSED);
                         flow(unwind.block.0, &after, &mut entry, &mut pending);
                     }
                     None => flow(unwind.block.0, &state, &mut entry, &mut pending),
@@ -137,22 +201,22 @@ fn check_function(function: &Function) -> Result<(), String> {
             }
             let at = || format!("block {block_index}, instruction {index}");
             let open = |state: &State, value: &ValueId, what: &str| -> Result<(), String> {
-                match state.get(value) {
-                    Some(&OPEN) | None => Ok(()),
-                    Some(bits) => Err(format!("{what} of {value} at {} while it is {}", at(), describe(*bits))),
+                match state.get(&keys, value) {
+                    Some(OPEN) | None => Ok(()),
+                    Some(bits) => Err(format!("{what} of {value} at {} while it is {}", at(), describe(bits))),
                 }
             };
             // A definition starts a tracked value afresh (a loop makes a new one each round).
             if let Some(defined) = inst.result
                 && !matches!(inst.kind, InstKind::RegionEnter)
-                && state.contains_key(&defined)
+                && state.contains(&keys, &defined)
             {
-                state.insert(defined, UNOPENED);
+                state.insert(&keys, defined, UNOPENED);
             }
             let result = match &inst.kind {
                 InstKind::RegionEnter => {
                     if let Some(region) = inst.result {
-                        state.insert(region, OPEN);
+                        state.insert(&keys, region, OPEN);
                     }
                     Ok(())
                 }
@@ -162,7 +226,7 @@ fn check_function(function: &Function) -> Result<(), String> {
                 }
                 InstKind::RegionLeave { region, .. } | InstKind::RegionSettle { region, .. } => {
                     let checked = open(&state, region, "a close");
-                    state.insert(*region, CLOSED);
+                    state.insert(&keys, *region, CLOSED);
                     checked
                 }
                 // A close on the failure path may meet a value its failing leave already closed: it does nothing
@@ -171,26 +235,26 @@ fn check_function(function: &Function) -> Result<(), String> {
                 | InstKind::RegionSettleUnwind { region: value, .. }
                 | InstKind::ResourceUnwind { value, .. }
                 | InstKind::ResourceSettleUnwind { value, .. } => {
-                    let checked = match state.get(value) {
+                    let checked = match state.get(&keys, value) {
                         Some(bits) if bits & UNOPENED != 0 => {
-                            Err(format!("an unwind of {value} at {} while it is {}", at(), describe(*bits)))
+                            Err(format!("an unwind of {value} at {} while it is {}", at(), describe(bits)))
                         }
                         _ => Ok(()),
                     };
-                    state.insert(*value, CLOSED);
+                    state.insert(&keys, *value, CLOSED);
                     checked
                 }
                 InstKind::ResourcePin { value } => {
-                    let checked = match state.get(value) {
-                        Some(&UNOPENED) | None => Ok(()),
-                        Some(bits) => Err(format!("a pin of {value} at {} while it is {}", at(), describe(*bits))),
+                    let checked = match state.get(&keys, value) {
+                        Some(UNOPENED) | None => Ok(()),
+                        Some(bits) => Err(format!("a pin of {value} at {} while it is {}", at(), describe(bits))),
                     };
-                    state.insert(*value, OPEN);
+                    state.insert(&keys, *value, OPEN);
                     checked
                 }
                 InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
                     let checked = open(&state, value, "a close");
-                    state.insert(*value, CLOSED);
+                    state.insert(&keys, *value, CLOSED);
                     checked
                 }
                 _ => Ok(()),
@@ -207,7 +271,7 @@ fn check_function(function: &Function) -> Result<(), String> {
                 flow(unwind.block.0, &state, &mut entry, &mut pending);
             }
             TermKind::Ret(_) | TermKind::Raise(_) | TermKind::Throw(_) => {
-                for (value, bits) in &state {
+                for (value, &bits) in keys.values.iter().zip(&state.0) {
                     if bits & OPEN != 0 {
                         errors.push(format!("{value} may still be open when block {block_index} leaves the function"));
                     }
