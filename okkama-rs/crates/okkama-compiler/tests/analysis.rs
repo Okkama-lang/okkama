@@ -1459,3 +1459,20 @@ fn call_messages_list_the_spread_argument() {
     assert!(first("K().join(\"a\", K());").starts_with("No action \"join\" on object \"K\" accepts (string, K)"));
     assert_eq!(first("let words is @string = [\"a\"]; K().join(\"b\", words...);"), "");
 }
+
+/// #952: `order(other)` and an array's `cursor()` return std types, so without
+/// those types loaded the message names the import instead of saying the
+/// action does not exist.
+#[test]
+fn order_and_cursor_name_the_import_they_need() {
+    for (body, expected) in [
+        ("let x = \"a\".order(\"b\");", "Builtin action \"order\" returns Order from the module compare, which this program does not load: add `import \"compare\" take Order;`"),
+        ("let x = 1.order(2);", "Builtin action \"order\" returns Order from the module compare, which this program does not load: add `import \"compare\" take Order;`"),
+        ("let x = 'a'.order('b');", "Builtin action \"order\" returns Order from the module compare, which this program does not load: add `import \"compare\" take Order;`"),
+        ("let c = [1, 2].cursor();", "Builtin action \"cursor\" returns Cursor from the module collections/iteration, which this program does not load: add `import \"collections/iteration\" take Cursor;`"),
+    ] {
+        assert_eq!(messages(&format!("main() is int {{ {body} 0; }}")), [expected], "{body}");
+    }
+    // A missing action stays a missing action.
+    assert_eq!(messages("main() is int { let x = true.order(false); 0; }"), ["Type \"bool\" has no builtin action \"order\""]);
+}

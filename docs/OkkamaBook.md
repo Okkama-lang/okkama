@@ -1017,7 +1017,7 @@ Rules:
 Complete list (a test checks it against the compiler's table, `analysis/check/builtin.rs`).
 `order(other)` answers the `Order` enum of the module `compare`, so a program
 that calls it imports that enum first, `import "compare" take Order;`; without
-the import the compiler reports the action as missing (#952).
+the import the compiler says which import to add (#952).
 
 | Receiver | Builtin actions |
 |---|---|

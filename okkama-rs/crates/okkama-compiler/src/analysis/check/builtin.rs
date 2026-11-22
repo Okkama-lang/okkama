@@ -347,12 +347,29 @@ impl Checker<'_, '_> {
             return Self::poisoned(span);
         };
         let Some((op, params, result)) = self.builtin_signature(&receiver, &name.text) else {
+            // An action whose result is a std type exists only once that type
+            // is loaded (#952): say what to import, not that it is missing.
+            let needs = match (&receiver, name.text.as_str()) {
+                (Ty::Str | Ty::Char | Ty::Int | Ty::Float | Ty::Rat | Ty::Byte, "order")
+                    if self.reg.standard.order.is_none() =>
+                {
+                    Some(("Order", "compare"))
+                }
+                (Ty::Array(_), "cursor") if self.reg.standard.cursor.is_none() => Some(("Cursor", "collections/iteration")),
+                _ => None,
+            };
             // The full type (`@Reading`), not only its category (#300).
-            let message = format!(
-                "Type \"{}\" has no builtin action \"{}\"",
-                self.type_name(&receiver),
-                name.text
-            );
+            let message = match needs {
+                Some((ty, module)) => format!(
+                    "Builtin action \"{}\" returns {ty} from the module {module}, which this program does not load: add `import \"{module}\" take {ty};`",
+                    name.text
+                ),
+                None => format!(
+                    "Type \"{}\" has no builtin action \"{}\"",
+                    self.type_name(&receiver),
+                    name.text
+                ),
+            };
             self.error(name.span, message);
             for arg in args {
                 let _ = self.expr(&arg.value, true, None);
