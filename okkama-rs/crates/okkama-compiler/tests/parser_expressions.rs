@@ -67,6 +67,42 @@ fn constants_compare_with_less_than() {
     assert_eq!(expr_sexpr("math.PI < x"), "(< (. math PI) x)");
 }
 
+/// #1004: a binding of any case compares with `<`. `Name<` opens type
+/// arguments only when they parse as types closed by `>`; otherwise the
+/// `<` is a comparison.
+#[test]
+fn a_capitalised_binding_compares_with_less_than() {
+    for (source, expected) in [
+        ("Count < 3", "(< Count 3)"),
+        ("Count < other", "(< Count other)"),
+        ("Count < x.size()", "(< Count (call (. x size)))"),
+        ("Count < Limit", "(< Count Limit)"),
+        ("Count < (other + 1)", "(< Count (group (+ other 1)))"),
+        ("Count < 3 && Limit > Count", "(&& (< Count 3) (> Limit Count))"),
+        ("Count <= Limit", "(<= Count Limit)"),
+        ("box.Count < 3", "(< (. box Count) 3)"),
+    ] {
+        assert_eq!(expr_sexpr(source), expected, "{source}");
+    }
+    // Arguments that parse as types stay a type application.
+    for source in [
+        "Maybe<int>.none",
+        "Maybe<Maybe<@int>>.none",
+        "Maybe<%string:@int>.none",
+        "Maybe<(int) is int>.none",
+        "Maybe<async (int) is int>.none",
+        "Slot<string>.full(\"s\")",
+        "Pair<string, int>.of(\"a\", 1)",
+        "Maybe<sqlite.Statement>.none",
+        "shop.Box<int>.empty()",
+    ] {
+        let tree = expr_sexpr(source);
+        let applied = &source[..source.find('<').unwrap() + 1];
+        let applied = applied.rsplit('.').next().unwrap();
+        assert!(tree.contains(applied) && !tree.starts_with("(<"), "{source}: {tree}");
+    }
+}
+
 #[test]
 fn ranges_sit_between_equality_and_comparison() {
     assert_eq!(expr_sexpr("1..10"), "(.. 1 10)");

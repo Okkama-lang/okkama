@@ -742,8 +742,12 @@ impl Parser<'_> {
             TokenKind::Async if self.starts_anonymous_action(self.pos + 1) => Err(self.error_here(
                 "Anonymous actions cannot be async; declare a named async action instead.",
             )),
-            // `Name<…>` is a type with arguments; a constant (`LIMIT < x`) is
-            // a comparison.
+            // `Name<…>` is a type with arguments when what follows `<` parses
+            // as type arguments closed by `>`; otherwise `<` compares, as it
+            // does for a constant (`LIMIT < x`) and for a binding of any case
+            // (`let Count = 2; Count < 3`, #1004). Arguments that parse and
+            // close with `>` stay a type, as before: the comparison chain they
+            // would also spell, `(A < B) > c`, orders a bool and is never valid.
             _ if (self.check_type_name()
                 && is_generic_type_name(self.lexeme(self.peek()))
                 && self.check_next(TokenKind::Less))
@@ -752,11 +756,28 @@ impl Parser<'_> {
                     && is_generic_type_name(self.lexeme(self.nth(2)))
                     && self.nth(3).kind == TokenKind::Less) =>
             {
-                let ty = self.type_expr()?;
-                Ok(Expr {
-                    span: ty.span,
-                    kind: ExprKind::TypeValue(ty),
-                })
+                let from = self.pos;
+                // Only a token that can start a type is worth a try.
+                let first = if self.check_next(TokenKind::Less) { self.nth(2) } else { self.nth(4) };
+                let may_start = matches!(
+                    first.kind,
+                    TokenKind::At | TokenKind::Percent | TokenKind::LeftParen | TokenKind::Async
+                ) || self.is_name_token(first);
+                let parsed = if may_start { self.type_expr().ok() } else { None };
+                match parsed {
+                    Some(ty) => Ok(Expr {
+                        span: ty.span,
+                        kind: ExprKind::TypeValue(ty),
+                    }),
+                    None => {
+                        self.pos = from;
+                        let token = self.advance();
+                        Ok(Expr {
+                            span: token.span,
+                            kind: ExprKind::Name(self.name_of(&token)),
+                        })
+                    }
+                }
             }
             _ if self.check_name() => {
                 let token = self.advance();

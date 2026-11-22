@@ -353,6 +353,21 @@ const CHAINS: [&str; 15] = [
     "||", "&&", "<-", "==", "!=", "<", "|", "^", "&", "<<", "+", "*", "field", "call", "index",
 ];
 
+/// #1004: `Name <` tries type arguments before it compares; on a long chain
+/// of capitalised comparisons every try is bounded by the nesting limit, so
+/// the chain still ends in the tree-depth diagnostic on a small stack.
+#[test]
+fn capitalised_comparison_chains_are_bounded() {
+    on_small_stack(|| {
+        for link in ["Ab < ", "Ab<"] {
+            let body = format!("{}1", link.repeat(10_000));
+            let text = format!("module app v1.0.0; main() is int {{ let Ab = 1; let x = {body}; 0; }}");
+            let message = parse_in(&text, ParseMode::Full).expect_err(link).0;
+            assert!(message.starts_with("Expression nesting is too deep"), "{link}: {message}");
+        }
+    });
+}
+
 #[test]
 fn long_chains_are_reported_not_overflowed() {
     on_small_stack(|| {

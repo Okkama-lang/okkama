@@ -25392,7 +25392,9 @@ BINDING    = WORD that is not a keyword ;                  (* let, for, catch, c
 - An action may not be named `with` or start with `with_`. The parser refuses
   such a name both in a declaration and after `.`.
 - `<` after a type name opens type arguments only when the name contains a
-  lower-case letter (`List<int>`). `LIMIT < x` is a comparison.
+  lower-case letter (`List<int>`) and what follows parses as type arguments
+  closed by `>`. Otherwise `<` compares: `LIMIT < x`, and also
+  `let Count = 2; Count < 3`.
 
 **Keywords.** These words cannot be used as names (except in the member and
 action positions above):
