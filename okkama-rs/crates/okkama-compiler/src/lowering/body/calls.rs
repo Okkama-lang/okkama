@@ -655,8 +655,15 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 )));
             }
             Builtin::ArrayOrdering => {
-                // Устойчивая сортировка по `order()` элементов — в рантайме.
                 let ty = target.ty.clone();
+                // An untyped `[]` has no element to compare: its ordering is an
+                // empty `[]`, as a filter of it is (#971; `join` of it is "",
+                // #969). The runtime sort needs an element type with an order.
+                if matches!(&ty, Type::Array(element) if **element == Type::Never) {
+                    let empty = self.emit(InstKind::ArrayNew(Vec::new()), ty, span);
+                    return Ok(Out::Value(empty));
+                }
+                // Устойчивая сортировка по `order()` элементов — в рантайме.
                 let func = self.ctx.runtime_intrinsic(
                     "okkama.array.ordering",
                     vec![ty.clone()],
