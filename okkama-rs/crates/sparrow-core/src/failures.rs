@@ -1251,6 +1251,12 @@ impl Runtime {
             else { "destroyed: moved (returned, stored, captured, handed on)" }, 1);
     }
 
+    /// #909 measurement: a static resource (#909 2b) is destroyed by its own scope's exit, never moved
+    /// (#976: it has no birth region, so `dev_destroyed` counted it as moved).
+    fn dev_destroyed_static() {
+        okkama_devtrace::count!("runtime", "destroyed: static resource at its scope's exit");
+    }
+
     /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
     /// reports its release, so a reused address never inherits an old index.
     fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
@@ -1763,7 +1769,7 @@ impl Runtime {
         }
         self.set_owner(object, Owner::Dead);
         let serial = self.serial_of(object);
-        self.dev_destroyed(object, 0);
+        Self::dev_destroyed_static();
         self.roots.push((object, Repr::Ref));
         let primary = match self.destroy_one(ctx, object, serial, primary, false) {
             DestroyStep::Next(primary) | DestroyStep::Stop(primary) | DestroyStep::Async(primary) => primary,
@@ -1781,7 +1787,7 @@ impl Runtime {
             return Err(primary);
         }
         self.set_owner(object, Owner::Dead);
-        self.dev_destroyed(object, 0);
+        Self::dev_destroyed_static();
         let descriptor = heap::payload(self.heap.header_of(object)) as usize;
         match self.loaded.program.objects[descriptor].destroy {
             // The async destroy to await, as `destroy_one` would hand it to a settling close (no allocation).

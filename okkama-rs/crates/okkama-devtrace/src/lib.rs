@@ -14,7 +14,8 @@
 //!
 //! Output, written by [`finish`] (the CLI calls it before it exits) and as it goes:
 //! - `events.jsonl`: one JSON object per event: `{"t_us":…,"cat":…,"name":…, fields…}`;
-//! - `dumps/NNNN-<stage>/<function>.txt`: the text a [`dump!`] produced, numbered in emission order;
+//! - `dumps/NNNN-<stage>/<function>.txt`: the text a [`dump!`] produced, one directory per dump, numbered in
+//!   emission order;
 //! - `summary.txt` (also printed on stderr) and `counters.json`: counters and timers (count, total, max).
 //!
 //! Categories are free strings; the ones in use are listed by `OKKAMA_DEV=help` (see [`CATEGORIES`]).
@@ -22,14 +23,14 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The categories the code base uses, for `OKKAMA_DEV=help`. A new category is added here.
 pub const CATEGORIES: &[(&str, &str)] = &[
     ("lower", "lowering and IR passes: sizes, region operations by kind, per-function IR dumps"),
-    ("runtime", "runtime events: identities, region helpers, resource walks, structure indexes, allocation"),
+    ("runtime", "runtime events: identities, region helpers, resource walks, structure indexes, allocation; adds counting calls to machine code, so its timings are not comparable"),
     ("cleanup-count", "cleanup helper calls (separate from timing)"),
     ("cleanup-time", "cleanup helper inclusive timings (diagnostic runs only)"),
     ("jit", "JIT compilation"),
@@ -59,11 +60,15 @@ impl Config {
                 "help" => {
                     eprintln!("OKKAMA_DEV categories (comma separated, `cat:filter` limits to functions):");
                     for (name, what) in CATEGORIES {
-                        eprintln!("  {name:10} {what}");
+                        eprintln!("  {name:13} {what}");
                     }
-                    eprintln!("  all        every category\n  dump       also write dumps");
+                    eprintln!("  {:13} every category\n  {:13} also write dumps", "all", "dump");
                 }
                 _ => {
+                    // A misspelt category (`lowr`) would otherwise switch on nothing, silently (#976).
+                    if !CATEGORIES.iter().any(|(known, _)| *known == name) {
+                        eprintln!("okkama-dev: unknown category `{name}` (OKKAMA_DEV=help lists them)");
+                    }
                     let filters = config.categories.entry(name.to_string()).or_default();
                     if let Some(filter) = filter {
                         filters.push(filter.to_string());
@@ -99,6 +104,8 @@ struct State {
     timers: BTreeMap<(&'static str, String), Timer>,
     events: Option<std::io::BufWriter<std::fs::File>>,
     events_written: u64,
+    /// `events.jsonl` could not be created: no further attempts (#976).
+    events_failed: bool,
     dumps: u64,
     finished: bool,
 }
@@ -108,7 +115,6 @@ struct State {
 static CONFIG: OnceLock<Option<Config>> = OnceLock::new();
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 static START: OnceLock<Instant> = OnceLock::new();
-static EVENTS: AtomicU64 = AtomicU64::new(0);
 
 fn config() -> Option<&'static Config> {
     #[cfg(okkama_release)]
@@ -248,21 +254,22 @@ pub fn json_string(text: &str) -> String {
 pub fn event(category: &'static str, name: &str, fields: &[(&str, String)]) {
     let t = START.get().map_or(0, |start| start.elapsed().as_micros());
     with_state(|state, config| {
-        if state.events.is_none() && !state.finished {
+        if state.events.is_none() && !state.finished && !state.events_failed {
             let _ = std::fs::create_dir_all(&config.out);
             state.events = std::fs::File::create(config.out.join("events.jsonl")).ok().map(std::io::BufWriter::new);
+            state.events_failed = state.events.is_none();
         }
         let mut line = format!("{{\"t_us\":{t},\"cat\":{},\"name\":{}", json_string(category), json_string(name));
         for (key, value) in fields {
             let _ = write!(line, ",{}:{}", json_string(key), json_string(value));
         }
         line.push_str("}\n");
-        if let Some(events) = state.events.as_mut() {
-            let _ = events.write_all(line.as_bytes());
+        if let Some(events) = state.events.as_mut()
+            && events.write_all(line.as_bytes()).is_ok()
+        {
+            state.events_written += 1;
         }
-        state.events_written += 1;
     });
-    EVENTS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Writes a dump file `dumps/NNNN-<stage>/<function>.txt`.
@@ -279,10 +286,11 @@ fn file_name(text: &str) -> String {
     let name: String = text.chars()
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '#') { c } else { '_' })
         .collect();
-    if name.len() > 120 { format!("{}…{:x}", &name[..100], fxhash(text)) } else { name }
+    if name.len() > 120 { format!("{}…{:x}", &name[..100], fnv1a(text)) } else { name }
 }
 
-fn fxhash(text: &str) -> u64 {
+/// FNV-1a 64 of `text`: a short stable suffix for a long dump file name.
+fn fnv1a(text: &str) -> u64 {
     text.bytes().fold(0xcbf29ce484222325, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3))
 }
 

@@ -279,6 +279,8 @@ fn main() -> ExitCode {
     let result = run();
     // The program's buffered output goes before a failure report (#132).
     let _ = sparrow_core::stdout::flush();
+    // Development instrumentation (OKKAMA_DEV): flush events, write the counters, print the summary (#976).
+    okkama_devtrace::finish();
     match result {
         Ok(code) => ExitCode::from(code),
         Err((code, message)) => {

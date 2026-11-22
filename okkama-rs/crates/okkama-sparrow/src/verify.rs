@@ -120,6 +120,18 @@ fn check_function_ref(program: &Program, function: u32) -> Result<(), VerifyErro
 
 fn check_tables(program: &Program) -> Result<(), VerifyError> {
     check_types(program)?;
+    // A native's ABI names a handle by its short name (`BufferState`), and typing matches the
+    // program's `module::Name` by that name (#976): two modules' handles of one name would be
+    // ambiguous, so a program may not hold both.
+    let mut handles: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for handle in &program.handles {
+        let short = handle.rsplit("::").next().unwrap_or(handle);
+        if let Some(other) = handles.insert(short, handle)
+            && other != handle
+        {
+            return Err(program_error(format!("handles {other} and {handle} share the name {short}")));
+        }
+    }
     for role in &program.roles {
         for method in &role.methods {
             for param in &method.params {

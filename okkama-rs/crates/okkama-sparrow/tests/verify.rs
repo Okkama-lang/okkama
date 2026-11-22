@@ -314,3 +314,14 @@ fn rejects_nonfinite_floats_ordered_value_comparisons_sync_resource_settles_and_
     program.functions[2].code[1] = I::Return { value: None };
     assert_eq!(program.verify(), Ok(()));
 }
+
+/// #976: native ABI types name a handle by its short name, so a program may not hold two
+/// modules' handles of one name; distinct names, or the same handle once, are fine.
+#[test]
+fn handles_of_one_short_name_from_two_modules_are_rejected() {
+    let mut program = sample();
+    program.handles = vec!["runtime.buffer::State".into(), "runtime.other::State".into()];
+    assert!(message(&program).contains("share the name State"), "{}", message(&program));
+    program.handles = vec!["runtime.buffer::State".into(), "runtime.other::Cursor".into()];
+    assert_eq!(program.verify(), Ok(()));
+}

@@ -8,10 +8,15 @@ stable: an existing symbol keeps its ID and name (read from the current
 table); a new symbol gets the next free ID. Removing a declaration retires
 its ID — it is never reused.
 
-    tools/engines/gen-abi.py
+    tools/engines/gen-abi.py            # write the table
+    tools/engines/gen-abi.py --check    # exit 1 if the table differs from std/runtime (#976)
+
+A type name that is neither a scalar, a collection of known types nor a `native object` declared in
+std/runtime is an error: it used to become a handle silently (#976).
 """
 
 import re
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -24,6 +29,22 @@ DECLARATION = re.compile(
     re.S,
 )
 ENTRY = re.compile(r'^\s*(\w+)\s*=\s*(\d+),\s*"([^"]+)"')
+HANDLE = re.compile(r"\bnative\s+object\s+([A-Z][A-Za-z0-9_]*)\s*;")
+SCALARS = {"int", "float", "rat", "bool", "byte", "char", "string", "any", "void"}
+
+
+def check_type(text, handles, where):
+    """Fail on a type the ABI cannot name: `@T`, `%K:V`, a scalar or a declared native object."""
+    text = text.strip()
+    if text.startswith("@"):
+        return check_type(text[1:], handles, where)
+    if text.startswith("%"):
+        key, _, value = text[1:].partition(":")
+        check_type(key, handles, where)
+        return check_type(value, handles, where)
+    if text in SCALARS or text in handles:
+        return
+    sys.exit(f"gen-abi: {where}: unknown type `{text}` (not a scalar, a collection or a native object)")
 
 
 def camel(text):
@@ -42,7 +63,9 @@ def main():
     used_ids = {entry[1] for entry in known.values()} | retired
     used_names = {entry[0] for entry in known.values()}
     entries = []
-    for path in sorted((REPO_ROOT / "std" / "runtime").glob("*.ok")):
+    sources = sorted((REPO_ROOT / "std" / "runtime").glob("*.ok"))
+    handles = {name for path in sources for name in HANDLE.findall(re.sub(r"//[^\n]*", "", path.read_text()))}
+    for path in sources:
         text = path.read_text()
         header = re.search(r"^module\s+(\S+)\s+v(\d+)\.", text, re.M)
         module, major = header.group(1), header.group(2)
@@ -53,6 +76,8 @@ def main():
             for param in filter(None, (p.strip() for p in params.split(","))):
                 types.append(param.split(" is ", 1)[1].strip())
             symbol = f"{module}@{major}::{name}/{len(types)}"
+            for ty in types + ([result] if result else []):
+                check_type(ty, handles, symbol)
             signature = f"({', '.join(types)}) -> {(result or 'void').strip()}"
             if is_async:
                 signature = "async " + signature
@@ -83,7 +108,13 @@ def main():
     lines.append("}")
     if retired:
         lines.append(f"// retired: {', '.join(str(n) for n in sorted(retired))}")
-    TABLE.write_text("\n".join(lines) + "\n")
+    text = "\n".join(lines) + "\n"
+    if "--check" in sys.argv[1:]:
+        if TABLE.read_text() != text:
+            sys.exit("gen-abi: crates/okkama-runtime-abi/src/table.rs is stale; run tools/engines/gen-abi.py")
+        print(f"table.rs current: {len(rows)} natives")
+        return
+    TABLE.write_text(text)
     print(f"{len(rows)} natives, {len(gone)} retired now, next id {next_id}")
 
 

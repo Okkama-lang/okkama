@@ -11,6 +11,7 @@ publish.workspace = true
 allocation-stats = ["dep:okkama-allocation-counter"]
 
 [dependencies]
+okkama-devtrace = { path = "../okkama-devtrace" }
 okkama-allocation-counter = { path = "../../tools/allocation-counter", optional = true }
 okkama-sparrow = { path = "../okkama-sparrow" }
 sparrow-core = { path = "../sparrow-core", features = ["mimalloc"] }

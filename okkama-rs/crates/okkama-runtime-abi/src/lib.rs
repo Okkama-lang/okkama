@@ -149,12 +149,12 @@ impl Native {
             .expect("every native has a signature")
     }
 
-    /// Модуль символа без версии: `runtime/json@1::json_quote/1` → `runtime/json`.
+    /// Модуль символа без версии: `runtime/utf@1::utf8_encode/1` → `runtime/utf`.
     pub fn module(self) -> &'static str {
         Self::parts()[self as usize].0
     }
 
-    /// Имя функции без модуля и арности: `runtime/json@1::json_quote/1` → `json_quote`.
+    /// Имя функции без модуля и арности: `runtime/utf@1::utf8_encode/1` → `utf8_encode`.
     pub fn name(self) -> &'static str {
         Self::parts()[self as usize].1
     }
@@ -189,13 +189,6 @@ impl Native {
 
     pub fn result(self) -> &'static Type {
         &self.signature().result
-    }
-
-    pub fn from_id(id: u32) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|native| *native as u32 == id)
     }
 
     pub fn resolve(symbol: &str) -> Option<Self> {

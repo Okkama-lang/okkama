@@ -1188,7 +1188,6 @@ dependencies = [
 name = "okkama-sparrow"
 version = "0.6.3"
 dependencies = [
- "okkama-devtrace",
  "okkama-runtime-abi",
 ]
 

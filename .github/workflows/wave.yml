@@ -159,3 +159,5 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       # docs/map/files.md and rules.md are generated from the code (owner, 2026-11-20): regenerate and commit.
       - run: python3 tools/map/gen.py --check
+      # The native ABI table is generated from std/runtime (#976): it must match the declarations.
+      - run: python3 okkama-rs/tools/engines/gen-abi.py --check

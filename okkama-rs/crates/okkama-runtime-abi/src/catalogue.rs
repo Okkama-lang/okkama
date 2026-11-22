@@ -2,7 +2,8 @@
 //!
 //! The generated table gives each provider operation its canonical symbol,
 //! stable wire ID and Okkama signature. This catalogue adds what the table does
-//! not carry and what both the compiler (own, verifier) and the loader need:
+//! not carry. Since the Champ engine that admitted natives by it was removed, only tests read it: its own,
+//! and sparrow-core's check that the host permission groups agree with its effects (#976):
 //! - the ABI kind: a synchronous call, or an asynchronous one (`Future` result);
 //! - the transport: data only, data with native handles, or opaque `any`;
 //! - the handle role: a handle belongs to the native registry. The provider
@@ -273,7 +274,7 @@ mod tests {
                 *effects.entry(contract.effect).or_insert(0) += 1;
             }
         }
-        // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
+        // #601 N1: the 52 async natives are admitted too (all host; #638 added the 52nd).
         let roles_expected = [(HandleRole::None, 219), (HandleRole::Uses, 229), (HandleRole::Publishes, 93),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
@@ -282,7 +283,7 @@ mod tests {
     }
 
     /// #601 N1, audit item 1 of the slice: every asynchronous native of the table takes and publishes plain data
-    /// or native handles only, so its driver's creation packet is statically empty (ruling PR-N). The 51 natives,
+    /// or native handles only, so its driver's creation packet is statically empty (ruling PR-N). The 52 natives,
     /// by module, are the `native async` declarations of std `runtime/`.
     #[test]
     fn async_natives_carry_data_and_handles_only() {

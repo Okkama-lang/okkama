@@ -1325,7 +1325,6 @@ dependencies = [
 name = "okkama-sparrow"
 version = "0.6.3"
 dependencies = [
- "okkama-devtrace",
  "okkama-runtime-abi",
 ]
 
@@ -1896,6 +1895,7 @@ version = "0.6.3"
 dependencies = [
  "mimalloc",
  "okkama-allocation-counter",
+ "okkama-devtrace",
  "okkama-sparrow",
  "sparrow-core",
 ]
