@@ -1,0 +1,68 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "logging/record" take LogRecord, LogContext;
+import "logging/level" take LogLevel;
+import "logging/name" take LogName;
+import "logging/field" take LogFields;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+import "json" take JsonField, Json;
+import "logging/named" take NamedLogging;
+import "logging/write" take CollectedLogs, BroadcastLogs, BestEffortLogs;
+import "logging/filter" take AllowedLogs;
+import "logging/redact" take RedactedLogs;
+import "logging/enrichment" take FieldLogging;
+import "time/clock" take Timing, MonotonicInstant;
+import "cell" take Cell;
+
+object Bench {
+    has levels is @LogLevel;
+    Bench() {
+        levels = [LogLevel.debug, LogLevel.info, LogLevel.warning, LogLevel.error, LogLevel.critical];
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let collected = CollectedLogs();
+        let allowed = AllowedLogs(origin: BroadcastLogs(collected), level: LogLevel.info, overrides: ["app.db": LogLevel.error]);
+        let destination = BestEffortLogs(RedactedLogs(origin: allowed, names: ["password"], replacement: Json("***")));
+        let clock = FixedClock();
+        let logging = NamedLogging(name: LogName("app"), destination: destination, clock: clock, fields: LogFields(JsonField("host", "a")));
+        let level = levels[i % 5];
+        logging.log(level, "start " + i.string());
+        logging.child("db").log(level, "query");
+        FieldLogging(origin: logging, fields: LogFields(JsonField("password", "secret"))).log(levels[(i + 2) % 5], "login");
+        let lengths = Cell(0);
+        for collected.records() -> record {
+            lengths.replace(lengths.value() + record::Entry::message.length());
+        }
+        self.run(i + 1, n, acc + (collected.size() + lengths.value() + destination.failures()) % 7);
+    }
+}
+
+// A clock that always reads the same instant (testing/time needs a test context).
+object FixedClock does Timing {
+    FixedClock();
+
+    instant() is Instant {
+        Instant(origin: Duration(seconds: 1700000000));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(origin: Duration(seconds: 1));
+    }
+
+    async wait(duration is Duration) is void {}
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

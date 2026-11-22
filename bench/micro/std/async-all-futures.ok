@@ -1,0 +1,42 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/collect" take AllFutures;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let pending is @Future<int> = [Job(value: i).result(), Job(value: i + 1).result(), Job(value: 2 * i).result()];
+            let values = await AllFutures(origins: pending).results();
+            sum = sum.add((values.first() + values.item(1) + values.last()) % 7);
+        }
+        sum.total();
+    }
+}
+
+object Job {
+    has value is int;
+    Job(:value);
+    async result() is int { value % 7; }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

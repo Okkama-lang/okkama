@@ -1,0 +1,37 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "compression/read" take CompressedReading, DecompressedReading;
+import "compression/state" take CompressionOutput, DecompressionBudget;
+import "compression/deflate" take DeflateCompressor, DeflateDecompressor;
+import "cell" take Cell;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let data is @byte = (0..64).map() -> k { byte((i + k % 5) % 256); };
+        let reading = CompressedReading(origin: CompressionOutput(data), compressor: DeflateCompressor(level: 6));
+        let packed = Cell([byte(0)].slice(0, 0));
+        loop {
+            let chunk = reading.bytes(4096);
+            last if chunk.size() == 0;
+            packed.replace(packed.value() + chunk);
+        }
+        let unpacked = DecompressedReading(origin: CompressionOutput(packed.value()), decompressor: DeflateDecompressor(limit: 4096)).bytes(4096);
+        let budget = DecompressionBudget(maximum: 100).spent(unpacked.size()).remaining();
+        self.run(i + 1, n, acc + (unpacked[0].int() + unpacked.size() + budget) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

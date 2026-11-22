@@ -1,0 +1,36 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/ecdsa" take EcdsaPrivateKey, EcdsaPublicKey, EcdsaCurve;
+import "crypto/secret" take SecretBytes;
+import "encoding/pem" take PemBlock;
+import "encoding/utf" take Utf8Encoded;
+
+object Bench {
+    has key is EcdsaPrivateKey;
+    has public is EcdsaPublicKey;
+    Bench() {
+        key = EcdsaPrivateKey(curve: EcdsaCurve.p256, pkcs8: SecretBytes(PemBlock(origin: "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n").bytes()));
+        public = EcdsaPublicKey(curve: EcdsaCurve.p256, spki: PemBlock(origin: "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGjA1WnY9zY89EAxpCAupsDL7CK3C\nhIDaQaWeKfZWZf1OyGTo2hsJf6EEuu1/2B3+a3H3cb3G+9NNNzbJqHsUyw==\n-----END PUBLIC KEY-----\n").bytes());
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let message = Utf8Encoded("message " + i.string()).bytes();
+        let signature = key.signature(message);
+        let good = if public.verified(message, signature) { 1; } else { 0; };
+        let bad = if public.verified(Utf8Encoded("other").bytes(), signature) { 2; } else { 0; };
+        self.run(i + 1, n, acc + (good + bad) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

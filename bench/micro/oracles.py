@@ -12,6 +12,9 @@ import datetime
 import zlib
 import hashlib
 import json
+import gettext
+import csv
+import io
 from functools import lru_cache
 import posixpath
 from html.parser import HTMLParser
@@ -105,6 +108,19 @@ HTTP244_PROGRAMS = frozenset({
     'websocket-output-message', 'websocket-reading-frame', 'websocket-server-protocols', 'websocket-text',
     'websocket-upgrade-bytes',
 })
+# The RSA-2048 key of the rsa-pkcs1-sign benchmark (its PKCS#8 PEM is in that program).
+RSA_TEST_KEY = {
+    'prime1': 162361397268632976590698668520293315391989932528885618395605771025135312302908481441354204980634880370398703294807749768882263304214744859677047835321986749050428346485021662099292511460068622787509832232659479884887779834887536866510631440437662281668525006576207179643345932903776859487385761647858631878639,
+    'prime2': 159136473945357531731946905247436674558942081048427570697105912577667669023773088813119039868893471616548306359995554935067290123655497262028936776432146366763531965869181190834953252909077651861116460382487503440474685251220161403417655821943079772563970619744888799393895618483287060436974443514350757956147,
+    'exponent1': 80106745512935399820868233922878440471794474393419236016630492791823707574569262361813757389700914853851138609298695222192166012203545707579799834523039527756009591278105122968409041580501379645606762977295944002286439125396165594681191809612155116617357463534212111536499851083260215626663085018897857115763,
+    'exponent2': 98968283642291869910595418833254863385161990011318963737623674944543980561681852294812179791207411327147655074548710316973200037535296968213000368247271337054610920013062651266475802707908310336991084307634247298882573530513013083914381433247723352765038291645363347203814602715135175691444594179744391607437,
+    'coefficient': 119148132139312305680700028627364090970081565327820650652007413624058338594928045993755915670426038010035077902738030248012060749859108852937574068794435768675202906239244488805738395092936155496125494557839534027519185279781096040631424602575522021210897242731272798863025729323634889487599613203599515138222,
+}
+
+
+# The GNU .mo catalog of the gettext-catalog benchmark (the same bytes are in that program).
+GETTEXT_TEST_MO = b'\xde\x12\x04\x95\x00\x00\x00\x00\x03\x00\x00\x00\x1c\x00\x00\x004\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00L\x00\x00\x00\n\x00\x00\x00M\x00\x00\x00\x05\x00\x00\x00X\x00\x00\x00S\x00\x00\x00^\x00\x00\x00\x18\x00\x00\x00\xb2\x00\x00\x00\x05\x00\x00\x00\xcb\x00\x00\x00\x00file\x00files\x00hello\x00Content-Type: text/plain; charset=UTF-8\nPlural-Forms: nplurals=2; plural=(n != 1);\n\x00eine Datei\x00viele Dateien\x00Hallo\x00'
+
 
 def contribution(name, i):
     if name in HTTP244_PROGRAMS:
@@ -390,6 +406,164 @@ def contribution(name, i):
         kept=[v for v in [i%5,1,2,3,4,5,6] if v%2==0]
         chunks=[kept[k:k+2] for k in range(0,len(kept),2)]
         return (3*len(chunks)+sum(chunk[0] for chunk in chunks))%7
+    # #244, the rest of std outside http/web/mail/db: oracles from the module contracts and Python.
+    if name=='cell-replace':return (i%5+i%3)%7
+    if name=='zipped-chained':
+        left=[i%4,1,2,3]
+        right=['a','bb',str(i%10)]
+        total=sum(a+len(b) for a,b in zip(left,right))
+        total+=sum([i%3]+[4,5]+left)
+        return total%7
+    if name=='enumerated':
+        return sum((i%5+k)*len(item) for k,item in enumerate(['x','yy',str(i%100)]))%7
+    if name=='repeated':
+        count,value=1+i%6,i%9
+        return (value*count+count+value)%7
+    if name=='archive-path':
+        return (len('guide-'+str(i)+'.md')+len('docs/'+str(i%50))+3)%7
+    if name=='tar-round-trip':return (2+len('hello '+str(i))+2+1)%7
+    if name=='setting-key':return (4+len('server.http.'+str(i%20)+'.port')+2)%7
+    if name=='process-arguments':return (3+len('--n'+str(i%10))+len('é')+len('é'.encode()))%7
+    if name=='counter-nonce':
+        counter=(i*65537).to_bytes(8,'big')
+        return (counter[7]+counter[5]+12)%7
+    if name=='process-exit':
+        exited=i%5==0
+        return ((2 if exited and i%3==0 else 0)+(i%3 if exited else 0))%7
+    if name=='environment-values':return (i%50+len(('/bin:/usr/bin:/opt/'+str(i%7)).split(':'))+1)%7
+    if name=='layered-settings':
+        port=8000+i%100
+        return (port+len('b'+str(i%3))+len(str(port)))%7
+    if name=='cli-invocation':
+        return ((i%50+1+2) if i%2==0 else (i%50+0+1))%7
+    if name=='dumper-shape':return (3+len('x')+len('y')+len('label')+len('object')+3+len('t'+str(i)))%7
+    if name=='message-catalog':
+        # German plurals (CLDR): one for 1, other otherwise.
+        return (len('Hallo')+len('eine Datei' if i%3==1 else 'viele Dateien')+len('Beenden'))%7
+    if name=='likely-locale':
+        # CLDR likely subtags.
+        likely={'en':'en-Latn-US','ru':'ru-Cyrl-RU','zh':'zh-Hans-CN','ja':'ja-Jpan-JP','de':'de-Latn-DE',
+                'ar':'ar-Arab-EG','sr':'sr-Cyrl-RS','pt':'pt-Latn-BR','hi':'hi-Deva-IN'}
+        text=likely[['en','ru','zh','ja','de','ar','sr','pt','hi'][i%9]]
+        return (len(text)+ord(text[3]))%7
+    if name=='basic-language-range':
+        # RFC 4647 section 3.3.1 basic filtering and section 3.4 lookup.
+        available=['en-US','en-GB','de-DE','de','fr-CA']
+        given=['en','en-GB','de','*','fr-FR','es'][i%6]
+        matches=lambda tag:given=='*' or tag.lower()==given.lower() or tag.lower().startswith(given.lower()+'-')
+        matched=sum(len(tag) for tag in available if matches(tag))
+        return (matched+len(given)+(1 if matches('en-GB') else 0))%7
+    if name=='localized-date':
+        # CLDR en-US long date: MMMM d, y.
+        year,month,day=2000+i%30,1+i%12,1+i%28
+        text=calendar.month_name[month]+' '+str(day)+', '+str(year)
+        return (len(text)+ord(text[0]))%7
+    if name=='json-log-line':
+        level=['debug','info','warning','error','critical'][i%5]
+        moment=datetime.datetime.fromtimestamp(1700000000+i,datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        line=json.dumps({'time':moment,'level':level,'name':'app.http','process':42,'message':'request '+str(i),
+                         'fields':{'id':i}},separators=(',',':'))
+        return (len(line)+ord(line[-3]))%7
+    if name=='log-pipeline':
+        level,login=i%5,(i+2)%5
+        messages=(['start '+str(i)] if level>=1 else [])+(['query'] if level>=3 else [])+(['login'] if login>=1 else [])
+        return (len(messages)+sum(len(m) for m in messages))%7
+    if name=='logger-levels':
+        parsed=i%5
+        return (1+(1 if i%2==0 else 0)+(1 if parsed>=2 else 0)+len(['debug','info','warning','error','critical'][parsed]))%7
+    if name=='x509-certificate':
+        # The leaf and CA test certificates of net/tls: CN=localhost (DNS:localhost) and CN=Okkama Test CA,
+        # both issued by the CA and valid until 2048-10-07 11:42:04 UTC.
+        ends=int(datetime.datetime(2048,10,7,11,42,4,tzinfo=datetime.timezone.utc).timestamp())
+        subject,names=(('localhost',1) if i%2==0 else ('Okkama Test CA',0))
+        return (len(subject)+len('Okkama Test CA')+names+ends%7)%7
+    if name=='ecdsa-sign-verify':return 1
+    if name=='parsed-key-algorithm':
+        return ((1 if i%2==0 else 2)+2*(1 if (i//2)%2==0 else 2))%7
+    if name=='rsa-pkcs1-sign':
+        # RFC 8017 RSASSA-PKCS1-v1_5 with SHA-256, by CRT with the key's own numbers.
+        message=('message '+str(i)).encode()
+        digest=bytes.fromhex('3031300d060960864801650304020105000420')+hashlib.sha256(message).digest()
+        encoded=int.from_bytes(b'\x00\x01'+b'\xff'*(256-3-len(digest))+b'\x00'+digest,'big')
+        m1=pow(encoded,RSA_TEST_KEY['exponent1'],RSA_TEST_KEY['prime1'])
+        m2=pow(encoded,RSA_TEST_KEY['exponent2'],RSA_TEST_KEY['prime2'])
+        h=(RSA_TEST_KEY['coefficient']*(m1-m2))%RSA_TEST_KEY['prime1']
+        signature=(m2+h*RSA_TEST_KEY['prime2']).to_bytes(256,'big')
+        return (signature[0]+signature[255]+256)%7
+    if name=='argon2-password':
+        # PHC string: $argon2id$v=19$m=8,t=1,p=1$ + 16-byte salt and 32-byte hash in unpadded Base64.
+        return (len('$argon2id$v=19$m=8,t=1,p=1$')+22+1+43+(0 if i%3==0 else 1))%7
+    if name=='decimal-argument':
+        text=str(i*31-500)
+        return (len(text)+ord(text[0]))%7
+    if name=='async-channel-items':return (i%5+i%3)%7
+    if name=='async-event':return (2+i%3)%7
+    if name=='async-lock-guard':return (1+2+i%2)%7
+    if name=='async-semaphore':
+        permits=1+i%3
+        return (permits-1+permits)%7
+    if name=='async-barrier':
+        # One party: its arrival index is parties-1 = 0 and the release starts generation 1.
+        return (0+1+1+i%4)%7
+    if name=='async-cancellation':return (2 if i%2==0 else 0)%7
+    if name=='async-all-futures':return (i%7+(i+1)%7+(2*i)%7)%7
+    if name=='async-future-group':return (i%7+(i+3)%7)%7
+    if name=='async-within':return (i%7)%7
+    if name=='parallel-map':return (i*i+1+(i+3)*(i+3)+1)%7
+    if name=='read-until-end':return len('line '+str(i)+'\nend')%7
+    if name=='byte-input-lines':return (len('first '+str(i))+len('second'))%7
+    if name=='csv-input':
+        rows=list(csv.reader(io.StringIO('name,note\r\nAda,'+str(i)+'\r\nBob,"x, y"\r\n')))
+        return (len(rows)+len(rows[1][1])+len(rows[2][1]))%7
+    if name=='csv-stream':
+        rows=list(csv.reader(io.StringIO('a,b\r\n'+str(i)+',"q""t"\r\n')))
+        return sum(1+len(row[1]) for row in rows)%7
+    if name=='read-digest':
+        digest=hashlib.sha256(bytes((i+k)%256 for k in range(40))).digest()
+        return (digest[0]+digest[31])%7
+    if name=='compressed-reading':return (i%256+64+(100-64))%7
+    if name=='native-codec':return (i%256+8)%7
+    if name=='zip-round-trip':return (2+len('a.txt')+len('hello '+str(i))+i%256+8)%7
+    if name=='fs-temporary-tree':
+        # One file, one symbolic link beside it; *.txt matches the file only.
+        return (len('hello '+str(i))+1+1+2+len('data-'+str(i)+'.txt')+5+1)%7
+    if name=='error-matching':return (1+(2 if i%3==1 else 0))%7
+    if name=='test-report-counts':
+        statuses=['passed','failed','skipped','passed','timed_out']
+        results=[statuses[(i+k)%5] for k in range(1+i%4)]
+        return (len(results)+2*results.count('passed')+i%3+1)%7
+    if name=='text-snapshot':return (len(('snapshot '+str(i)+'\n').encode())+i%256+2)%7
+    if name=='integer-generation':
+        value=10+i%10
+        return (value+len(str(value)))%7
+    if name=='size-rotation':
+        value=(i*37)%2000
+        size=value+1-value%2
+        return ((1 if size>1000 else 0)+size%5)%7
+    if name=='json-stream-logs':
+        level=['debug','info','warning','error','critical'][i%5]
+        moment=datetime.datetime.fromtimestamp(1700000000+i,datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        line=json.dumps({'time':moment,'level':level,'name':'app.http','process':42,'message':'request '+str(i),
+                         'fields':{'id':i}},separators=(',',':'))+'\n'
+        return (len(line.encode())+10)%7
+    if name=='language-preferences':
+        return (len('de-CH')+len('en')+len('fr' if i%2==0 else 'it-IT')+(1 if i%3==0 else 0))%7
+    if name=='locale-fallbacks':
+        # CLDR lookup chains: truncation, except sr-Latn, whose parent locale is root.
+        chains=[['de-CH','de','root'],['fr','root'],['sr-Latn-RS','sr-Latn','root'],['en-US','en','root']]
+        return (sum(1+len(key) for key in chains[i%4])+len('pt-BR'))%7
+    if name=='verified-chain':return (len('localhost')+i%3)%7
+    if name=='gettext-catalog':
+        translations=gettext.GNUTranslations(io.BytesIO(GETTEXT_TEST_MO))
+        return (len(translations.gettext('hello'))+len(translations.ngettext('file','files',i%3))+1)%7
+    if name=='command-string':
+        quoted=lambda text:'"'+text.replace('\\','\\\\').replace('"','\\"').replace('\n','\\n').replace('\r','\\r').replace('\t','\\t')+'"'
+        arguments=['--name','a "quoted" '+str(i),'tab\there']
+        text='Command(program: '+quoted('/usr/bin/tool')+', arguments: ['+', '.join(quoted(a) for a in arguments)+'], directory: '+quoted('/srv/work')+')'
+        return (len(text)+ord(text[20]))%7
+    if name=='host-digest':
+        digest=hashlib.sha256(bytes((i*3+k)%256 for k in range(24))).digest()
+        return (digest[0]+digest[31])%7
     raise ValueError('No independent oracle: '+name)
 
 

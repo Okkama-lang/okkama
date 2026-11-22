@@ -1,0 +1,33 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/key_format" take ParsedPrivateKey, ParsedPublicKey, KeyAlgorithm;
+
+object Bench {
+    has privates is @string;
+    has publics is @string;
+    Bench() {
+        privates = ["-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n", "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDMrGJ6RyrG8131\ninCEJcrj0Z9FsI39S7Voe/05v0u44dwX4RngiHMyoPHfqSoDZ8l9KlOBV1oMNJd3\n1WeLCtgSZyzFWnBAFuK89tOpkHejlYbLXyzYpsZKrNkxdHfa3HtkPY5eb1TsHzzm\nbcDxiiuW+bRHXpvYp6Txz1+47SmVHh+Oa6hwYZ8EWIEqUvx6ffhFgxbgm+x5iYaZ\nTm8odDJZGWIGpGLpRH++6cR5oRRK5KvlZWyXzqGfGTMmjSQI3Jy8ty5j2tEFwzUB\nJhfimcPAExbFLLeEjgWCCw5iOEwAJI2a1Z3BcwcfYIao1yPU+jb9YXXu4tuwDnRW\nBbEsKYqdAgMBAAECggEAE+X4hwHPP1teuaX1bWuNL5vsG6bgDw2iu98+DbSy5G0U\n7D9muCUb6gKqsT9thbo75Q7N4oe/Ceu9BBn7wJFT02ozeJZjzl9LOOrYRiZ08zLw\n0WnV3tRL9+uZDA1SL7V6y5KOelDhlTkuPwrRlMoFld597+hbR3N4/kdWe5CXF9eS\n4BYgGSIXWFXNRjpO51wnwxFuiJDmbbjO6s1UJqg4l+28YNqqfiJ/Ta4MBRoYbxwj\nm8T2RPuiH9YWKkDKUFP7u6EiFV2OaF14o6Ydj14ZEcs8dDMBTptM+ajVHyA/UwNE\n99St2Xa+2VacJIiESUHcCiI6HV//2TSlYkY+H5GiMwKBgQDnNdaDE4Ak+1EP3w0E\n3jXDpKQM/AbUgsTXZ1WveAHpOQ4ZFvin3KWlHKlntiNZxsIcEXSrsNeakYhVduO/\nR2nrnIu1QA6JMNc2MaF7rmTBx3q5sr4ZLlCumdwSvdgjjnaj/7oP5tZWISYrH1jg\nhDocQETIEFxmNLZbOq4EpHSn7wKBgQDiniwmqIKODB3wN9LKACobToRKXC147k0W\nEaNKRFSAxFexYLE9x4iEXM7jmR4pXI5K9wOJHbFK776hNAhvIxxs4JJsUqQXN+hR\nnVMFX3kxoKvhbIj0ndqtRe29v4WRChgld+zRnCZup4DfUXURuT/7ZkEr93jE3fvN\nsbT+XK9KMwKBgHITZx5O7cfRU6KAC71eIarAvcxGQNxzFMmui2FC1baLVwBcDB1O\nSVAYvyCThgeSgE0285iObSIvMdPxD9ddVc5Q88FetI1N0rFDdYg/eCj/0fZzUUW9\nS0OKWEHK9yw76x9pWhTkcNYYDuvx0Hkd5EnyD72iDOTEl0CVyCw0M/ZzAoGBAIzv\nfdnU9szMsFnS/d7u10EARbnRNd59padR9NGdSUiD013XGqOnUjmvVmOpuF5U15G7\nqZE+zCIkk9PBfnVPyr/Tsnx3sOFXvb30L8upor/AguTBETPAcF1Onhph3/lh4755\npOh/Sk+LENTR3hLVuPrqjyF+2Lbmr1Evcba3gbSNAoGBAKmsLbGeaYD9CvvhrXVC\ncq5kbLDwJf/DRxuS1ypr9u+dnQEb8N1jldsCUcra3QxG+FLbXiq5yA609SElAQFa\nWksPKFh1Yc/PV1Ng6Y5JiWAQWBDSKf/K1+7V9Tzwl/KL5P/s9v4mdYE0u+JGqkp3\nmVFsewgdVbka4ezKH1dacziu\n-----END PRIVATE KEY-----\n"];
+        publics = ["-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGjA1WnY9zY89EAxpCAupsDL7CK3C\nhIDaQaWeKfZWZf1OyGTo2hsJf6EEuu1/2B3+a3H3cb3G+9NNNzbJqHsUyw==\n-----END PUBLIC KEY-----\n", "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzKxiekcqxvNd9YpwhCXK\n49GfRbCN/Uu1aHv9Ob9LuOHcF+EZ4IhzMqDx36kqA2fJfSpTgVdaDDSXd9VniwrY\nEmcsxVpwQBbivPbTqZB3o5WGy18s2KbGSqzZMXR32tx7ZD2OXm9U7B885m3A8Yor\nlvm0R16b2Kek8c9fuO0plR4fjmuocGGfBFiBKlL8en34RYMW4JvseYmGmU5vKHQy\nWRliBqRi6UR/vunEeaEUSuSr5WVsl86hnxkzJo0kCNycvLcuY9rRBcM1ASYX4pnD\nwBMWxSy3hI4FggsOYjhMACSNmtWdwXMHH2CGqNcj1Po2/WF17uLbsA50VgWxLCmK\nnQIDAQAB\n-----END PUBLIC KEY-----\n"];
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let private = ParsedPrivateKey(pem: privates[i % 2]).algorithm();
+        let public = ParsedPublicKey(pem: publics[(i / 2).int() % 2]).algorithm();
+        let first = if private == KeyAlgorithm.ecdsa_p256 { 1; } else if private == KeyAlgorithm.rsa { 2; } else { 5; };
+        let second = if public == KeyAlgorithm.ecdsa_p256 { 1; } else if public == KeyAlgorithm.rsa { 2; } else { 5; };
+        self.run(i + 1, n, acc + (first + 2 * second) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

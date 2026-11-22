@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/scope" take FutureGroup;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let group is FutureGroup<int> = FutureGroup();
+            let first = Job(value: i).result();
+            let second = Job(value: i + 3).result();
+            group.start(first);
+            group.start(second);
+            await group.wait();
+            sum = sum.add((await first + await second) % 7);
+        }
+        sum.total();
+    }
+}
+
+object Job {
+    has value is int;
+    Job(:value);
+    async result() is int { value % 7; }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,45 +1,45 @@
 # std micro-benchmark targets
 
-276 of 435 non-runtime module files have an explicitly declared measured action.
+356 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
 | module | measured by |
 |---|---|
-| `archive/entry` | — |
-| `archive/limits` | — |
-| `archive/metadata` | — |
-| `archive/path` | — |
+| `archive/entry` | tar-round-trip |
+| `archive/limits` | tar-round-trip |
+| `archive/metadata` | tar-round-trip |
+| `archive/path` | archive-path, tar-round-trip |
 | `archive/stream` | — |
-| `archive/tar` | — |
-| `archive/zip` | — |
+| `archive/tar` | tar-round-trip |
+| `archive/zip` | zip-round-trip |
 | `async/atomic` | defer-observed, destroy-observed, http1-body-writing-output, http1-message-writing-output, http2-output-submit, websocket-output-message, http2-preface-settings, http-proxy-tunnel-ready, imap-exchange-perform, http2-input-run |
-| `async/barrier` | — |
-| `async/cancellation` | http-request-context-parameters |
-| `async/channel` | — |
-| `async/collect` | — |
-| `async/event` | — |
-| `async/lock` | — |
-| `async/scope` | — |
-| `async/semaphore` | — |
-| `async/timeout` | — |
+| `async/barrier` | async-barrier |
+| `async/cancellation` | http-request-context-parameters, async-cancellation |
+| `async/channel` | async-channel-items |
+| `async/collect` | async-all-futures |
+| `async/event` | async-event |
+| `async/lock` | async-lock-guard |
+| `async/scope` | async-future-group |
+| `async/semaphore` | async-semaphore |
+| `async/timeout` | async-within |
 | `calendar` | calendar-month |
-| `cell` | — |
+| `cell` | cell-replace |
 | `checksum/adler32` | adler32 |
 | `checksum/crc` | crc32 |
 | `checksum/state` | — |
-| `cli/arguments` | — |
-| `cli/command` | — |
+| `cli/arguments` | process-arguments |
+| `cli/command` | cli-invocation |
 | `collections/combinatorics` | combinations-count |
-| `collections/combining` | — |
+| `collections/combining` | zipped-chained |
 | `collections/deque` | deque-ends |
-| `collections/enumeration` | — |
+| `collections/enumeration` | enumerated |
 | `collections/frequencies` | frequencies-count |
 | `collections/heap` | heap-top |
 | `collections/iteration` | regex-parts |
 | `collections/list` | heap-top |
 | `collections/ordering` | sorted |
-| `collections/repetition` | — |
+| `collections/repetition` | repeated |
 | `collections/sequence` | http-static-indexes, imap-metadata-uids, http-cookie-jar-store |
 | `collections/set` | keyed-set, ordered-set-union |
 | `collections/views` | views-filtered-chunked |
@@ -47,41 +47,41 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `compression/brotli` | brotli-round-trip |
 | `compression/deflate` | deflate-round-trip |
 | `compression/gzip` | gzip-round-trip, http-body-coding-contained |
-| `compression/internal/codec` | — |
-| `compression/read` | — |
-| `compression/state` | — |
+| `compression/internal/codec` | native-codec |
+| `compression/read` | compressed-reading |
+| `compression/state` | compressed-reading |
 | `compression/zlib` | zlib-round-trip |
 | `compression/zstd` | zstd-round-trip |
-| `config/document` | — |
-| `config/environment` | — |
+| `config/document` | layered-settings |
+| `config/environment` | layered-settings |
 | `config/ini` | ini-parse |
-| `config/key` | — |
-| `config/source` | — |
-| `config/value` | — |
+| `config/key` | setting-key |
+| `config/source` | layered-settings |
+| `config/value` | layered-settings |
 | `crypto/aead` | — |
 | `crypto/aes_gcm` | aes-gcm-round-trip |
 | `crypto/chacha20_poly1305` | chacha20-round-trip |
 | `crypto/constant_time` | constant-time-equal |
-| `crypto/ecdsa` | — |
+| `crypto/ecdsa` | ecdsa-sign-verify |
 | `crypto/ed25519` | ed25519-sign-verify |
-| `crypto/error` | — |
+| `crypto/error` | decimal-argument |
 | `crypto/hmac` | hmac-sha256 |
 | `crypto/jwt` | jwt-hs256-sign |
 | `crypto/kdf` | hkdf-sha256, pbkdf2-sha256 |
 | `crypto/key` | ed25519-sign-verify |
-| `crypto/key_format` | — |
-| `crypto/nonce` | — |
-| `crypto/password` | — |
-| `crypto/rsa` | — |
+| `crypto/key_format` | parsed-key-algorithm |
+| `crypto/nonce` | counter-nonce |
+| `crypto/password` | argon2-password |
+| `crypto/rsa` | rsa-pkcs1-sign |
 | `crypto/secret` | hkdf-sha256, pbkdf2-sha256, x25519-public-key, http-auth-authorization, smtp-session-response, http-digest-response-digest |
 | `crypto/x25519` | x25519-public-key |
-| `crypto/x509/certificate` | — |
-| `crypto/x509/name` | — |
-| `crypto/x509/trust` | http-client-protocols-selected |
-| `crypto/x509/value` | — |
+| `crypto/x509/certificate` | x509-certificate |
+| `crypto/x509/name` | x509-certificate |
+| `crypto/x509/trust` | http-client-protocols-selected, verified-chain |
+| `crypto/x509/value` | x509-certificate |
 | `csv` | csv-round-trip |
-| `csv/input` | — |
-| `csv/stream` | — |
+| `csv/input` | csv-input |
+| `csv/stream` | csv-stream |
 | `db/acquisition` | — |
 | `db/connection` | — |
 | `db/error` | — |
@@ -100,13 +100,13 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `db/statement` | — |
 | `db/transaction` | — |
 | `db/value` | — |
-| `debug/dumper` | — |
+| `debug/dumper` | dumper-shape |
 | `diff` | diff-edits |
 | `digest/blake2` | blake2b |
 | `digest/blocks` | — |
-| `digest/host` | — |
+| `digest/host` | host-digest |
 | `digest/legacy` | md5, sha1 |
-| `digest/read` | — |
+| `digest/read` | read-digest |
 | `digest/sha2` | sha256, sha512 |
 | `digest/sha3` | sha3-256 |
 | `digest/shake` | shake128 |
@@ -122,17 +122,17 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `encoding/single_byte` | latin1-decode, ascii-encode |
 | `encoding/utf` | utf8-encode, utf16-encode, form-parse, plist-parse, imap-response, pop3-size, pop3-reply, smtp-reply-fed, http1-reading-head, imap-reading-read, smtp-reading-read, pop3-reading-read, imap-message-uid, imap-state-messages, smtp-data-bytes, http1-body-bytes, http-proxy-tunnel-ready, imap-exchange-perform |
 | `error` | — |
-| `fs/directory` | — |
-| `fs/entry` | — |
+| `fs/directory` | fs-temporary-tree |
+| `fs/entry` | fs-temporary-tree |
 | `fs/error` | — |
-| `fs/file` | — |
-| `fs/glob` | — |
-| `fs/link` | — |
-| `fs/lock` | — |
+| `fs/file` | fs-temporary-tree |
+| `fs/glob` | fs-temporary-tree |
+| `fs/link` | fs-temporary-tree |
+| `fs/lock` | fs-temporary-tree |
 | `fs/path` | mime-extension, unix-address, fs-path |
-| `fs/root` | — |
-| `fs/stat` | — |
-| `fs/temp` | — |
+| `fs/root` | fs-temporary-tree |
+| `fs/stat` | fs-temporary-tree |
+| `fs/temp` | fs-temporary-tree |
 | `fs/watch` | — |
 | `html/entities` | html-escape, html-unescape |
 | `html/events` | html-events |
@@ -240,24 +240,24 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `http/websocket_server` | websocket-server-protocols |
 | `http/websocket_session` | — |
 | `http/xmlrpc` | http-xmlrpc-bytes |
-| `i18n/catalog` | — |
-| `i18n/gettext` | — |
+| `i18n/catalog` | message-catalog |
+| `i18n/gettext` | gettext-catalog |
 | `i18n/operands` | — |
 | `i18n/plural` | plural-ru |
-| `io/buffer` | template-stream |
+| `io/buffer` | template-stream, read-until-end, csv-input, read-digest, zip-round-trip, json-stream-logs |
 | `io/decorators` | mime-transfer |
-| `io/input` | — |
+| `io/input` | byte-input-lines |
 | `io/stdin` | — |
 | `io/stdout` | — |
 | `io/stream` | http1-body-writing-output, http1-message-writing-output, http2-output-submit, websocket-output-message, http2-preface-settings, http-proxy-tunnel-ready, imap-exchange-perform |
 | `io/text` | template-stream |
-| `io/transfer` | — |
-| `json` | json-parse, json-round-trip, json-render, template-render, html-template, template-json-value, template-sections, jwt-hs256-sign |
+| `io/transfer` | read-until-end |
+| `json` | json-parse, json-round-trip, json-render, template-render, html-template, template-json-value, template-sections, jwt-hs256-sign, json-log-line |
 | `locale/case` | locale-case |
 | `locale/collation` | — |
 | `locale/currency` | currency-digits |
-| `locale/data` | — |
-| `locale/date_time` | — |
+| `locale/data` | locale-fallbacks |
+| `locale/date_time` | localized-date |
 | `locale/internal/currencies` | — |
 | `locale/internal/day_periods` | — |
 | `locale/internal/gregorian` | — |
@@ -269,28 +269,28 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/internal/plurals` | — |
 | `locale/internal/zone_meta` | — |
 | `locale/internal/zone_names` | — |
-| `locale/likely` | — |
+| `locale/likely` | likely-locale |
 | `locale/list` | locale-list |
-| `locale/match` | — |
+| `locale/match` | basic-language-range |
 | `locale/number` | locale-decimal |
-| `locale/system` | — |
+| `locale/system` | language-preferences |
 | `locale/tag` | locale-case, plural-ru, locale-decimal, locale-list |
-| `logging/enrichment` | — |
-| `logging/field` | — |
+| `logging/enrichment` | log-pipeline |
+| `logging/field` | json-log-line |
 | `logging/file` | — |
-| `logging/filter` | — |
-| `logging/level` | — |
-| `logging/line` | — |
-| `logging/logger` | — |
-| `logging/name` | — |
-| `logging/named` | — |
+| `logging/filter` | log-pipeline |
+| `logging/level` | logger-levels |
+| `logging/line` | json-log-line |
+| `logging/logger` | logger-levels |
+| `logging/name` | json-log-line |
+| `logging/named` | log-pipeline |
 | `logging/queue` | — |
-| `logging/record` | — |
-| `logging/redact` | — |
-| `logging/rotation` | — |
-| `logging/stream` | — |
+| `logging/record` | json-log-line |
+| `logging/redact` | log-pipeline |
+| `logging/rotation` | size-rotation |
+| `logging/stream` | json-stream-logs |
 | `logging/syslog` | — |
-| `logging/write` | — |
+| `logging/write` | log-pipeline, logger-levels |
 | `mail/imap` | imap-name |
 | `mail/imap_command` | imap-command-bytes, imap-exchange-perform |
 | `mail/imap_command_reading` | imap-command-bytes, imap-command-reading-string, imap-state-messages, imap-exchange-perform |
@@ -348,17 +348,17 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `numbers/float` | shortest-float |
 | `operators` | operator-adding |
 | `os/account` | — |
-| `os/command` | — |
+| `os/command` | command-string |
 | `os/command_capture` | — |
 | `os/directory` | — |
-| `os/environment` | http-environment-proxy |
+| `os/environment` | http-environment-proxy, environment-values, fs-temporary-tree |
 | `os/pipeline_capture` | — |
 | `os/platform` | — |
-| `os/process` | — |
+| `os/process` | process-exit |
 | `os/run` | — |
 | `os/signal` | — |
 | `os/storage` | — |
-| `parallel/map` | — |
+| `parallel/map` | parallel-map |
 | `plist/parse` | plist-parse |
 | `plist/value` | plist-parse, plist-integer, plist-write |
 | `plist/write` | plist-write |
@@ -399,14 +399,14 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/check` | — |
 | `testing/context` | — |
 | `testing/double` | — |
-| `testing/error` | — |
-| `testing/generation` | — |
+| `testing/error` | error-matching |
+| `testing/generation` | integer-generation |
 | `testing/property` | — |
 | `testing/report` | — |
-| `testing/result` | — |
+| `testing/result` | test-report-counts |
 | `testing/runner` | — |
 | `testing/signal` | — |
-| `testing/snapshot` | — |
+| `testing/snapshot` | text-snapshot |
 | `testing/time` | — |
 | `text/layout` | text-indent |
 | `time/clock` | instant-shift, rfc3339-parse, http-cache-freshness-age, http-cache-validation-request |
