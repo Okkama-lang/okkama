@@ -11,8 +11,9 @@ Companion documents: `docs/okkama-spec-11072026.md` (normative specification),
 This book is a textbook. It teaches the language from first principles,
 explains *why* Okkama is shaped the way it is, and walks through every part of
 the language: its philosophy, types, objects, roles, and constructs. Where the
-book and the specification disagree, the specification and the test suite
-(`okkama-pl/t/`) are the source of truth.
+book and the implementation disagree, the implementation is right: the
+compiler and runtime in `okkama-rs/crates/`, the standard library in `std/`,
+and the executable conformance cases in `conformance/cases/`.
 
 ## Rust toolchain commands
 
@@ -52,7 +53,7 @@ okkama> total + 2
   read line by line, so scripts can be piped in.
 `build` emits Sparrow
 bytecode, the only target; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
-version is called Tomato). `sparrow check out.spb` verifies without execution.
+version, since 0.6.0, is called Tweed). `sparrow check out.spb` verifies without execution.
 See the [Rust implementation guide](../okkama-rs/README.md) for building the
 tools and current runtime coverage.
 
@@ -161,7 +162,7 @@ The mapping between EO principles and Okkama language features is direct:
 | Elegant Objects principle | Okkama language rule |
 |---|---|
 | Never use `null` | There is no `null`, `none`, or `nil`. The words are reserved errors. |
-| No getters and setters | Fields are private, always. External field access is a runtime error. There is no setter syntax at all. |
+| No getters and setters | Fields are private, always. External field access is a compile-time error. There is no setter syntax at all. |
 | Objects are immutable | Fields can only be bound during construction. After that, no mutation. |
 | State change returns a new object | Successor actions (`is ^Type`) return a new object with staged updates. |
 | No inheritance | There is no `extends`, `isa`, `super`, `abstract`, or `protected`. Composition and decoration are the tools. |
@@ -183,7 +184,7 @@ Okkama is defined as much by what it removes as by what it provides:
   question does not arise (for example, map indexing takes an explicit
   `else` fallback).
 - **No truthiness.** Conditions require real `bool` values. `if 1 { ... }` is
-  a runtime error, not a convenience.
+  a compile-time error, not a convenience.
 - **No inheritance.** Behavior is shared through roles (contracts) and
   composition (holding other objects in fields), never through parent classes.
 - **No implicit conversions.** `1 == 1.0` is an error: `int` and `float` are
@@ -197,28 +198,23 @@ Okkama is defined as much by what it removes as by what it provides:
 
 ### 1.3 The current implementation
 
-The reference implementation, `okkama-pl`, is an experimental tree-walking
-interpreter written in modern Perl (5.42, using the native `class` feature).
-It is a complete lexer → parser → static analyzer → interpreter pipeline with
-an extensive test suite (`okkama-pl/t/lexer`, `t/parser`, `t/interpreter`,
-`t/suite`). The analyzer expands imports, registers declarations, and rejects
-everything decidable from source alone — undeclared types, duplicate names,
-role conformance, misplaced context-sensitive statements — before any code
-runs (Chapter 28.2); the interpreter keeps only value-dependent checks. A
-native provider layer connects the language to the host operating system
-through a strictly portable ABI (Chapter 27).
-
-When an embedder reuses Analyzer, each independent analysis starts a fresh body
-traversal. A previous semantic error does not disable successor must-use in the
-next source. A published semantic model may outlive its analyzer; discarded
-intermediate models must not stay alive through its walkers.
-
+The implementation is written in Rust. The compiler parses every source
+file, expands its imports and checks the whole program before any code runs:
+undeclared names and types, type mismatches, duplicate names, role
+conformance, unused successors and misplaced statements are rejected at this
+stage (Chapter 28.2). Only checks that depend on values — an index out of
+range, a failed `confirm`, a conversion that does not fit — are left for run
+time. The checked program is compiled to bytecode and runs on Sparrow, the
+Okkama runtime, with a JIT compiler. A native provider layer connects the
+language to the host operating system through a strictly portable ABI
+(Chapter 27). Conformance cases under `conformance/cases/` pin the language's
+behaviour as executable programs with their expected output.
 
 Run a program with:
 
 ```sh
-okkama-pl/bin/okkama program.ok [program arguments...]
-okkama-pl/bin/okkama toaster/pets/*.ok [program arguments...]
+okkama run program.ok [program arguments...]
+okkama run toaster/pets/*.ok [program arguments...]
 ```
 
 When several existing `.ok` paths are supplied before the program arguments,
@@ -254,8 +250,10 @@ Rules to remember:
   version is set in `blade.toml`.
 - Executable modules must declare `main()`. Library modules may omit it.
 - Only *declarations* are allowed at module scope: objects, roles, enums,
-  native declarations, actions, and test blocks. There are no top-level
-  executable statements.
+  constants, native declarations, test blocks, module-level caps and the
+  entry point `main`. Every other action belongs to an object (`Only main()
+  may be declared at module scope.`), and there are no top-level executable
+  statements.
 
 The entry point must be exactly `main() is int` or `async main() is int`,
 with no parameters. Its result is the process exit status: `0` means success,
@@ -348,7 +346,10 @@ contextual namespaces, so unambiguous forms such as `module test/more`, action
 body, `has(` starts that action while `has field is T;` declares state.
 Built-in forms such as
 `value.last()`, `test.ok()`, and `Role.fake()` follow the same contextual rule.
-Removed and deferred reserved words remain forbidden everywhere.
+Removed and deferred reserved words are rejected everywhere, with one
+exception: `none` is accepted as an enum case name, so `Maybe.none`,
+`Presence.none` and a case of your own such as `Choice.none` all work. It is
+never a standalone absence literal.
 
 Action names have one additional guard: `with` and every `with_*` spelling
 are forbidden in declarations and member calls. `withdrawal` is unrelated and
@@ -398,8 +399,10 @@ modifier. The first following three-backtick sequence closes the literal, so
 that exact sequence cannot occur inside this initial form. One or two
 backticks outside a fence and a missing closing fence are lexer errors.
 
-A decimal token type exists in the grammar, but decimal runtime semantics are
-deliberately deferred; do not rely on them.
+There is no decimal literal and no built-in decimal type. A literal with a
+decimal point or an exponent is a `float` (binary64); exact arithmetic uses
+`rat` (Chapter 5), and the standard library has a `Decimal` object for money
+and similar values.
 
 There is **no byte literal** — bytes are constructed with the checked call
 `byte(value)` (Chapter 5) — and **no regex literal**: portable regular
@@ -408,12 +411,15 @@ patterns (`Regex("[a-z]+")`, Chapter 31.3), never as lexer syntax.
 
 ### 3.3 Reserved and removed words
 
-The following words are not valid Okkama 1.0 syntax and exist only so the
-parser can produce clear errors:
+The following words and symbols are not valid Okkama 1.0 syntax and exist
+only so the parser can produce clear errors:
 
 ```text
-null none nil optional ?. isa super abstract protected with setters mutable var
+null none nil isa super abstract protected with finally ? ?? ?. **
 ```
+
+`none` remains usable as an enum case name (§3.1). Words such as `var`,
+`mutable` or `optional` are not reserved; they are ordinary identifiers.
 
 Additionally, every action/member spelling matching `with_*` is a parse error;
 this is an action-name rule rather than a general identifier reservation.
@@ -428,7 +434,8 @@ keyword. Appendix A has the full picture.
 ## Chapter 4. The Type System at a Glance
 
 Okkama is statically typed with **nominal** typing for objects and roles, and
-strict runtime category checking for built-in values. The public type
+strict category checking for built-in values: `int`, `float`, `rat` and
+`byte` never mix, and the compiler rejects every place where they would. The public type
 spellings you can write in source are:
 
 ```okkama
@@ -450,12 +457,13 @@ Box<int>     // an applied generic type
 
 Types appear at *typed boundaries*: `let x is T = ...`, `has field is T`,
 constructor and action parameters, action return types, and `catch` clauses.
-The static analyzer validates every annotation *reference* before execution
+The compiler validates every annotation *reference* before execution
 (undeclared type names and wrong generic arity are semantic errors, even in
-code that never runs). At each boundary the runtime then validates the actual
-value — recursively, for collections; value–type mismatches are precise
-runtime errors because values, overload selection, and generic inference are
-dynamic.
+code that never runs), and it checks every typed boundary the same way:
+element types of collections, overload selection and generic inference are
+all decided before the program starts, so a value of the wrong type is a
+compile-time error. Run time keeps only the checks that depend on a value,
+such as an index out of range or a number that does not fit a `byte`.
 
 Key properties of the type system:
 
@@ -467,7 +475,7 @@ Key properties of the type system:
 - **`any` is a boundary, not an escape hatch.** Values crossing into `any`
   become opaque (Chapter 9).
 - **Inference is local and exact.** Untyped `let x = expr;` gives `x` the
-  exact runtime type of `expr`. Generic inference (Chapter 25) solves exact
+  exact static type of `expr`. Generic inference (Chapter 25) solves exact
   equations and fails rather than widening.
 
 ## Chapter 5. Numbers: `int`, `float`, `rat`, and `byte`
@@ -603,8 +611,9 @@ let payload is @byte = @byte(0, 127, maximum);
   `@byte(...)` constructs an immutable array with the same conversions.
 - There is no implicit narrowing, modulo wrapping, saturation, or byte literal
   syntax. `byte(256)` fails.
-- `byte` satisfies the numeric umbrella `number`, but it does not satisfy
-  `int`, and `int` does not satisfy `byte`.
+- `byte` is a numeric category of its own: it does not satisfy `int`, and
+  `int` does not satisfy `byte`. There is no `number` umbrella type that
+  covers them all.
 - Arithmetic takes two `byte` operands, and the *result* is never `byte`:
   `+ - * %` give `int` and `/` gives the exact `rat`; unary `-` gives `int`.
   So byte arithmetic can never silently overflow within `0..255`; the result
@@ -664,13 +673,13 @@ See Section 11.1 for precedence and evaluation, and the
 ## Chapter 6. Strings and Characters
 
 `string` is immutable Unicode text; `char` is a distinct single-character
-value. They are separate categories: `'a' == "a"` is a runtime error.
+value. They are separate categories: `'a' == "a"` is a compile-time error.
 
 Strings concatenate with `+`, and only with other strings:
 
 ```okkama
 "foo" + "bar";   // "foobar"
-"n = " + 1;      // runtime error: no implicit stringification
+"n = " + 1;      // compile-time error: no implicit stringification
 ```
 
 There is no string repetition operator (`"ab".repeat(3)` is an action) and
@@ -774,6 +783,9 @@ let empty_map = [:];
   the *variable* `name`; write `["name": "Alex"]` for a string key.
 - Missing keys are runtime errors unless an `else` fallback is given:
   `prices["fig"] else 0;`
+- A key may repeat inside one literal; the later entry wins, so
+  `["a": 1, "a": 2]` holds one entry, `"a": 2`. Whether a repeated literal
+  key should rather be an error is an open question (#954).
 - Map keys are scalar values or value objects. Keys cannot be `any` or `byte`
   (decision D-007: `Map key type byte is not a scalar key type`). A `byte`
   may still be a field of a key object. Map *values* may be any type
@@ -783,8 +795,10 @@ let empty_map = [:];
   categories never mix, so `%rat:int` takes no `int` key — write `1.rat()`
   (#296).
 - A **value object** is a key when every field is a scalar (`byte`
-  included), an enum or another such object, and it has no `destroy` block and
-  no capabilities. Objects are immutable, so a key compares by its fields
+  included), a plain enum or another such object, and it has no `destroy`
+  block and no capabilities. A plain enum is one without payloads, type
+  parameters or `is Error`; an enum with payloads cannot be a key, directly or
+  as a field, even when the case in hand has no payload. Objects are immutable, so a key compares by its fields
   exactly like `==`, and `keys()` orders object keys field by field in
   declaration order:
 
@@ -849,13 +863,13 @@ let kept = merged - ["a": 0];             // ["b": 3]: keys of the right map go
 
 ### 8.3 Typed collection identity
 
-Arrays and maps are backed by an immutable typed runtime representation
-(`ArrayValue<T>` / `MapValue<K,V>`). Once a collection crosses a declared
-`@T`/`%K:V` boundary, it is *tagged* with that type — and even an **empty**
-result of `slice`/`keys`/`values` remembers its true element type. An
-untagged empty literal (`[]`, `[:]`) has no contradictory evidence and may
-cross any compatible explicit boundary; that first boundary establishes its
-tag.
+Every array and map has an exact element type, and the compiler knows it.
+Once a collection crosses a declared `@T`/`%K:V` boundary, it carries that
+type — and even an **empty** result of `slice`/`keys`/`values` keeps its true
+element type: an empty slice of an `@int` is still an `@int` and cannot
+become an `@string`. An untagged empty literal (`[]`, `[:]`) has no
+contradictory evidence and may cross any compatible explicit boundary; that
+first boundary establishes its type.
 
 ### 8.4 Ranges
 
@@ -877,8 +891,9 @@ tag.
 - arrays compare deeply by length and element order;
 - maps compare deeply by key set and value equality;
 - ranges compare by `start`, `end`, `inclusive`;
-- objects compare by concrete runtime type and *all* fields, including
-  private ones;
+- objects compare by concrete type and all declared fields, including
+  private ones; the value a `once let` keeps is not a field and does not take
+  part;
 - runtime-owned effect capabilities compare by intrinsic state identity;
   detached BarrierState snapshots compare their four observed coordinates;
 - Futures and action values compare by handle identity without running them.
@@ -887,7 +902,8 @@ tag.
 - elements and fields compare exactly as they would on their own: a `float`
   numerically at any depth, so `[-0.0] == [0.0]` is `true`, as `-0.0 == 0.0`
   is. `contains`, `index_of` and array `-` use the same equality;
-- mixed runtime categories are runtime errors, never `false`.
+- operands of different types are a compile-time error (`Cannot compare
+  @int and @float`), never `false`.
 
 ## Chapter 9. The Top Type `any`
 
@@ -907,10 +923,12 @@ The rules:
 - `any` is *never* implicitly assignable back to a concrete type, even when
   the hidden value has exactly that type. (Explicit narrowing syntax is a
   future feature.)
-- Okkama code may **pass, store, return, catch, unpack, and iterate** boxed
+- Okkama code may **pass, store, return, unpack, and iterate** boxed
   values — but may not *inspect* them: arithmetic, comparison, boolean logic,
   ranges, member access, calls, indexing, use as a map key, and `match` on an
   `any` value are all rejected.
+- An `any` value cannot be thrown, and `any` is not a `catch` type: catch an
+  error enum or `Error` (Chapter 14) before boxing a value for transport.
 - Repeated `any` boundaries do not nest boxes.
 - `@any` and `%K:any` preserve the same opacity per element. Map *keys*
   cannot be `any`.
@@ -933,8 +951,8 @@ types, roles, or generics.
 
 Built-in values — arrays, maps, strings, and exact numbers — are receivers
 with a small portable set of immutable behaviors. This is language semantics
-(a fixed dispatch table in the runtime), not host method lookup and not a
-native provider.
+(a fixed table in the compiler), not host method lookup and not a native
+provider.
 
 Runtime-supported today:
 
@@ -970,8 +988,11 @@ Rules:
 - An empty separator splits into Unicode code points. An empty replacement
   target means code-point boundaries: `"ab".replace("", "-")` returns
   `"-a-b-"`; `replace_first("", "-")` prefixes once.
-- `join` exists on exact `@string` values only, including typed empty arrays;
-  joining an empty array returns `""`. Removal is
+- `join` exists on exact `@string` values only, including typed empty arrays:
+  `let empty is @string = []; empty.join(",")` returns `""`. An untyped `[]`
+  has no element type yet, and `[].join(",")` currently stops the compiler
+  with an internal error instead of a diagnostic (#969); give the empty array
+  its type first. Removal is
   `text.replace(target, "")`, not a separate builtin.
 - Every transformation is immutable: it returns a new string or array.
 - The numeric comparisons `.less`, `.less_or_equal`, `.greater`,
@@ -981,8 +1002,9 @@ Rules:
 - `string.less(other)` and `string.less_or_equal(other)` follow
   `order(other)`: lexicographic by Unicode code point, a prefix before the
   longer string, no case folding — `"ab".less("b")` and `"Z".less("a")` are
-  `true`. A string has one order, shared by `less`, `order` and `ordering()`;
-  compare lengths with `length()`. (Until 0.4.2 `less` and `less_or_equal`
+  `true`. A string has one order, shared by `less`, `less_or_equal` and
+  `order`, and an array of strings sorts by it with `ordering()`; compare
+  lengths with `length()`. (Until 0.4.2 `less` and `less_or_equal`
   compared lengths, #281.)
 - Builtin calls are positional-only and exact-arity.
 - Builtin dispatch activates only for non-object receivers, so an object's
@@ -991,7 +1013,10 @@ Rules:
   builtin support at all (`range`, `enum`, `any`) still report
   `Can only call actions on objects` when called.
 
-Complete list (a test checks it against the compiler's table, `analysis/check/builtin.rs`):
+Complete list (a test checks it against the compiler's table, `analysis/check/builtin.rs`).
+`order(other)` answers the `Order` enum of the module `compare`, so a program
+that calls it imports that enum first, `import "compare" take Order;`; without
+the import the compiler reports the action as missing (#952).
 
 | Receiver | Builtin actions |
 |---|---|
@@ -1002,7 +1027,7 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 | `int`, `float` | `min(other)`, `max(other)` (the receiver when they are equal), `clamp(low, high)` (`low` above `high` is an error) — of the receiver's type |
 | `float` | `floor()`, `ceil()`, `round()` (half away from zero), `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `atan2(y)` (`x.atan2(y)` is the angle of the point (x, y)) — each a `float`, and a result that is not finite (`0.0.ln()`, `1000.0.exp()`) is an error, as for every float; `finite()`, `nan()` (a `bool`) |
 | `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (`int`; the denominator is positive), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
-| numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` with the same category |
+| numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` (needs `Order` imported) with the same category |
 | `char` | `order(other)`, `code()` (the code point, an `int`), `string()`; `char(code)` and `code.char()` make one from an `int` (a Unicode scalar value, else an error) |
 | `int`, `byte` | `bit_count()`, `leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`, `rotate_right(n)`, `reverse_bits()`, `swap_bytes()` |
 | scalars | conversions `int()`, `float()`, `rat()`, `byte()`, `string()` (Chapter 5); `char()` on `int` |
@@ -1058,8 +1083,9 @@ Neither binary `~` nor `<<<` is a stream-write operator.
 
 ### 11.2 Arithmetic and concatenation
 
-- `number + number` adds; `string + string` concatenates; mixed
-  string/number `+` is a runtime error.
+- `number + number` of one category adds; `string + string` concatenates;
+  mixed string/number `+` is a compile-time error — convert explicitly with
+  `.string()` or `string(...)`.
 - `- * / %` require numeric operands.
 - There is no string or scalar repetition via `*`, and no `**` power
   operator.
@@ -1288,28 +1314,30 @@ for 1..=3 -> n {
 ```
 
 The source may be an array, a range, a variadic unpack (`values...`, Chapter
-18), or an object implementing the standard `Iterable<T>` role from
+18), or an object implementing the standard `Iterating<T>` role from
 `collections/iteration`. The current runtime supports one binding. Iteration
 order is source order. Both the source and `->` binding are mandatory; use
 `loop`, not a source-less `for`, for an unbounded loop.
 
-User-defined collections expose an immutable cursor:
+User-defined collections expose an immutable cursor. The two roles live in
+`collections/iteration` (`import "collections/iteration" take Cursor,
+Iterating;`):
 
 ```okkama
 role Cursor<T> {
     available() is bool;
-    current() is T;
-    advanced() is Cursor<T>;
+    item() is T;
+    successor() is Cursor<T>;
 }
 
-role Iterable<T> {
+role Iterating<T> {
     cursor() is Cursor<T>;
 }
 ```
 
 This is nominal, not duck typing: the collection must explicitly `does
-Iterable<T>`. `for` asks for one cursor, checks `available()`, binds
-`current()`, and replaces its private cursor reference with `advanced()`.
+Iterating<T>`. `for` asks for one cursor, checks `available()`, binds
+`item()`, and replaces its private cursor reference with `successor()`.
 Neither the collection nor an existing cursor changes. Normal completion and
 `next` advance; `last` exits immediately without requesting another cursor.
 A false `available()` is ordinary exhaustion, with no sentinel, null or
@@ -1327,10 +1355,10 @@ role Batching<T> {
 `for source -> item { ... }` asks for a batch, walks it with the array loop,
 and asks again until a batch is empty. `next`, `last`, `return` and `defer`
 behave as in any `for`; `last` does not ask for another batch, and an empty
-source runs no body. The protocol is nominal, like `Iterable<T>`, and a source
-that does both is walked in batches. It exists for speed: a cursor costs an
-object and three role calls per item, while a batch costs one call per batch
-and the array loop per item, about ten times less on Tomato. `file.text()`
+source runs no body. The protocol is nominal, like `Iterating<T>`, and a
+source that does both is walked in batches. It exists for speed: a cursor costs
+an object and three role calls per item, while a batch costs one call per batch
+and the array loop per item, about ten times less. `file.text()`
 hands out lines and `file.binary()` bytes this way, with the batch made by the
 runtime.
 
@@ -1342,6 +1370,14 @@ A traversal owns what it walks (#483, #484):
 - A batch lives until the next one is requested.
 - Nothing about past cursors is kept, so a loop over a resource-backed cursor
   runs in constant memory.
+
+A `for` in the value position of a body — its last statement, where the
+action's result is due — has a value: the body value of the last pass, or the
+value of a `last value`. `value() is int { for [2, 3] -> n { n * 10; } }`
+returns `30`. When the source may be empty the loop may have no value, and the
+compiler warns: `For loop value is undefined when its source is empty: the body
+may not run`. This does not make `for` an expression: `let x = for …` is not
+accepted, and `for await` never has a value.
 
 ### Async streams: `for await`
 
@@ -1418,8 +1454,9 @@ functional block, is a semantic error even in code that never runs.
 ## Chapter 13. Functional Collection Operations
 
 Arrays, ranges, typed maps, and objects nominally implementing the standard
-`Iterable<T>` or `Batching<T>` role support exactly three **eager, immutable** operations,
-written with a dedicated block syntax:
+`Iterating<T>` or `Batching<T>` role support six **immutable** operations,
+written with a dedicated block syntax. `map`, `filter` and `reduce` walk the
+whole source eagerly; `any`, `all` and `find` stop early (below):
 
 ```okkama
 let doubled = values.map() -> value {
@@ -1457,23 +1494,24 @@ there, group the functional source in parentheses.
 
 Semantics:
 
-- **Bindings.** Arrays, ranges, and `Iterable<T>` objects bind one element.
+- **Bindings.** Arrays, ranges, and `Iterating<T>` objects bind one element.
   Typed maps bind `key, value` — and map `reduce` binds
   `accumulator, key, value`.
-- **Result shapes.** Array/range/Iterable `map` and map `map` return a typed
-  array. Array/range/Iterable `filter` returns a typed array; map `filter`
-  preserves the typed map. Range and Iterable results are eagerly
-  materialized arrays. An empty Iterable filter retains exact `T`.
-- **`map` result type.** `map` produces one exact output element type. A
-  direct typed `@U` target can supply it (essential for empty sources);
-  otherwise the first result establishes `U` and every later result is deeply
-  checked against it. `@any` output happens only with an explicit `@any`
-  target.
+- **Result shapes.** Array/range/Iterating `map` and map `map` return a typed
+  array. Array/range/Iterating `filter` returns a typed array; map `filter`
+  preserves the typed map. Range and Iterating results are eagerly
+  materialized arrays. An empty Iterating filter retains exact `T`.
+- **`map` result type.** `map` has one output element type, checked before
+  the program runs. A direct typed `@U` target can supply it; otherwise the
+  compiler infers it from the block, so a typed empty source needs no target:
+  `let xs is @int = []; xs.map() -> x { x.string(); }` is an empty `@string`.
+  Only an untyped empty `[]` needs a typed target. `@any` output happens only
+  with an explicit `@any` target.
 - **`filter`** predicates must return exact `bool`.
 - **`any`, `all`, `find` stop early.** With the same block syntax and
   bindings, `any` is `true` at the first item whose block is `true`, `all` is
   `false` at the first whose block is `false`, and `find` gives
-  `Maybe.some(item)` for the first match (arrays, ranges and `Iterable`
+  `Maybe.some(item)` for the first match (arrays, ranges and `Iterating`
   objects; not maps). Later items are not visited, so a block with effects
   stops with them; an empty source gives `false`, `true` and `Maybe.none`:
 
@@ -1506,9 +1544,9 @@ Semantics:
   scope, receives fresh iteration bindings, and cannot use `next` or `last`.
 
 Custom iteration is nominal, exactly as for `for`: matching `cursor()` methods
-or a local role also named `Iterable` are insufficient. The runtime obtains
-one standard cursor and processes each item in `available`, `current`, body,
-`advanced` order. A failing body does not advance that item. All cursor calls
+or a local role also named `Iterating` are insufficient. The operation obtains
+one standard cursor and processes each item in `available()`, `item()`, body,
+`successor()` order. A failing body does not advance that item. All cursor calls
 cross their ordinary public action and generic return boundaries.
 
 An identity map with a direct target is the general linear materialization
@@ -1533,18 +1571,22 @@ map-entry transformation, and mutable accumulators.
 Okkama splits failure into two channels:
 
 1. **Expected typed failures** — raised by `throw DbError.closed`,
-   `throw ErrorObject(...)`, `confirm ... else throw ...`, and by normalized
-   native failures. They satisfy the nominal `Error` role and can be caught by
-   typed `catch`.
+   `confirm ... else throw ...`, and by normalized native failures. Every one
+   is a value of an error enum (14.2); it satisfies the nominal `Error` role
+   and can be caught by typed `catch`. An ordinary object cannot be thrown.
 2. **Uncatchable failures** — `panic "message"`, a plain failed `confirm`,
-   undefined variables, type mismatches, out-of-bounds indexing and invalid
-   operations. They unwind cleanup and then terminate. A bug is not a value.
+   out-of-bounds indexing and other operations that fail on the value at
+   hand. They unwind cleanup and then terminate. A bug is not a value.
+
+Undefined names and type mismatches belong to neither channel: they are
+compile-time errors, so the program never starts and there is nothing to
+clean up.
 
 ### 14.1 `confirm`
 
 ```okkama
 confirm condition;                             // uncatchable on failure
-confirm condition else throw ErrorObject();    // expected typed failure
+confirm condition else throw Invariant.broken; // expected typed failure (an error enum case)
 confirm condition else panic "Invariant lost"; // uncatchable emergency
 ```
 
@@ -1696,11 +1738,13 @@ value itself (`throw e;`) is a rethrow: it keeps the failure's origin, stack and
 causes and is reported once, not as its own cause.
 Default CLI diagnostics show the concrete Error type, public message, optional
 application context, causes, source stacks and secondary cleanup failures.
-`-d` additionally shows the evaluator trace; it is not needed to see errors.
+`OKKAMA_TRACE=off` prints the failure without the source line and the stack;
+there is no separate trace flag.
 The message is the error's generated `text()`. Control characters are escaped; long strings are marked as
 truncated. Array bounds diagnostics also show `index` and `length`.
-Embedding APIs preserve the original failure objects; host tools can obtain a
-separate structured model through `Interpreter.diagnostic(failure)`.
+Programs that embed the runtime receive the same report as a structured
+value (Rust: `sparrow_core::run_reported` and its `Uncaught` result); the
+original failure and the `catch` rules do not change.
 
 ### 14.5 `try?` and `try!`
 
@@ -1762,13 +1806,18 @@ stack before execution continues in the enclosing scope.
 In an async action, cleanup may suspend: `defer await audit.finished();`.
 Cancellation also unwinds registered defers; the Future does not finish until
 cleanup completes. Requesting cancellation is not itself completion.
+A deferred `await` is not shielded from that cancellation: if the task is
+cancelled while the deferred action waits, the wait ends with `Cancelled` and
+the rest of that action does not run. Cleanup that must finish whatever
+happens belongs in an `async destroy`, which is shielded (§20.1.1).
 
 For resource ownership use `destroy`; for additional scope-local work use
 `defer`. Neither promises cleanup after forced process termination or when
 execution never leaves the scope.
 
-This behavior is covered by `t/interpreter/54-defer.t`, the async suites, and
-`t/audit/09-async-lexical-blocks.t`. See also [async cleanup](async-guide.md).
+The conformance cases `conformance/cases/L07-errors-cleanup-and-lifetimes/defer.*`
+and the cancellation cases under `L08-async-and-concurrency` pin this behaviour.
+See also [async cleanup](async-guide.md).
 
 ---
 
