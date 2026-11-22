@@ -530,7 +530,15 @@ impl Checker<'_, '_> {
                             }
                         };
                         let ty = Ty::Variant(maybe, vec![element.clone()]);
-                        let item = Self::typed(ExprKind::Local(locals[0]), element, span);
+                        // The expected element is a boundary for the found item, as
+                        // the expected element is for map's result (#995): the item
+                        // keeps its own type and is coerced, or the mismatch is an error.
+                        let item = if checked.untagged {
+                            Self::typed(ExprKind::Local(locals[0]), element, span)
+                        } else {
+                            let item = Self::typed(ExprKind::Local(locals[0]), item_types[0].clone(), span);
+                            self.coerce(item, &element, span, "Find result")
+                        };
                         // Maybe's cases: some(value), none.
                         found = Some(Box::new(Self::typed(
                             ExprKind::VariantNew { case: 0, values: vec![item] },

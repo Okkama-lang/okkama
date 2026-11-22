@@ -179,6 +179,29 @@ fn loops_carry_last_values_and_ranges_check_their_bounds() {
     assert!(!forever.contains("ret"), "{forever}");
 }
 
+/// #995: under an expected `Maybe<U>`, the item `find` returns is coerced to
+/// `U` (a role wrap, a retag of an untagged `[]`) and the IR verifies.
+#[test]
+fn find_coerces_the_found_item_to_the_expected_element() {
+    let decls = "role Shape { area() is int; } object Sq does Shape { has s is int; Sq(:s); area() is int { s * s; } }";
+    for (body, coercion) in [
+        (
+            "let d is Maybe<Shape> = [Sq(s: 1), Sq(s: 3)].find() -> x { x.area() > 1; }; match d { case Maybe.some(v) { v.area(); } case Maybe.none { 0; } }",
+            "Shape = role.wrap %",
+        ),
+        (
+            "let h is Maybe<@int> = [[]].find() -> x { x.size() == 0; }; (h else [5]).size();",
+            "array<int> = array.retag %",
+        ),
+    ] {
+        let module = lower(&format!("module app v1.0.0; {decls} main() is int {{ {body} }}"))
+            .unwrap_or_else(|error| panic!("{body}: {error}"));
+        ir::verify(&module).unwrap_or_else(|error| panic!("{body}: {error:?}"));
+        let text = module.to_string();
+        assert!(text.contains(coercion), "{body}\n{text}");
+    }
+}
+
 #[test]
 fn confirm_and_panic_become_terminators() {
     let text = main_listing("confirm 1 == 1; confirm true else panic \"boom\"; 0;");

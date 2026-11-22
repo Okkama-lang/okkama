@@ -1790,3 +1790,29 @@ fn an_overload_without_defaults_beats_one_that_needs_them() {
     );
     assert!(found.len() == 1 && found[0].starts_with("Ambiguous call"), "{found:?}");
 }
+
+
+#[test]
+fn find_takes_the_expected_element_as_a_boundary() {
+    // #995: the found item keeps the source's element type and is coerced to
+    // an expected `Maybe<U>`'s element, as map's result is; a mismatch is an
+    // error at the call, never an untyped value.
+    assert_eq!(
+        messages("main() is int { let xs = [1, 2, 3]; let d is Maybe<string> = xs.find() -> x { x > 1; }; 0; }"),
+        ["Find result must be string, got int"]
+    );
+    assert_eq!(
+        messages("main() is int { let d is Maybe<@string> = [[1]].find() -> x { x.size() > 0; }; 0; }"),
+        ["Find result must be @string, got @int"]
+    );
+    let decls = "role Shape { area() is int; } object Sq does Shape { has s is int; Sq(:s); area() is int { s * s; } }";
+    for body in [
+        "let d = [1, 2].find() -> x { x > 1; }; let n is Maybe<int> = d;",
+        "let d is Maybe<int> = [1, 2].find() -> x { x > 1; };",
+        "let d is Maybe<Shape> = [Sq(s: 1)].find() -> x { x.area() > 0; };",
+        "let d is Maybe<@int> = [[]].find() -> x { x.size() == 0; };",
+    ] {
+        let found = messages(&format!("{decls} main() is int {{ {body} 0; }}"));
+        assert!(found.is_empty(), "{body}: {found:?}");
+    }
+}
