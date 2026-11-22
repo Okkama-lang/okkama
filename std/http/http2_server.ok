@@ -6,14 +6,14 @@ module http/http2_server v1.0.0;
 import "http/method" take Method;
 import "http/handler" take Handling, HandlingResult, HandlingKind, ResponseHandling;
 import "http/request_context" take HttpRequestContext;
-import "http/server_policy" take ServerPolicy;
+import "http/server_policy" take ServerPolicy, ServerTimeouts;
 import "http/exchange" take ExchangeDetails;
 import "http/message" take Request, Response, InvalidHttpMessage;
 import "http/status" take Status, StatusCode, StatusClass;
 import "http/version" take HttpVersion;
 import "http/header" take Headers, HeaderName, HttpAsciiLowercase;
-import "http/body" take BodyOpening, BodyReading, EmptyBody, UnknownBodyLength;
-import "http/http2_settings" take Http2Settings;
+import "http/body" take BodyOpening, BodyReading, EmptyBody, UnknownBodyLength, ByteBodyInput;
+import "http/http2_settings" take Http2Settings, Http2SettingsWire;
 import "http/internal/http2_preface" take Http2ServerPreface;
 import "http/internal/http2_settings" take Http2PeerSettings;
 import "http/internal/http2_input" take Http2ConnectionInput, Http2ReceivingEvents,
@@ -30,10 +30,11 @@ import "http/internal/http2_fields" take ParsedHttp2Request, Http2ResponseFields
 import "http/internal/http2_flow" take Http2DataPayload, Http2WindowIncrement;
 import "http/internal/http2_controls" take Http2Reset, Http2ResetFrame, Http2GoAway,
     Http2GoAwayFrame;
-import "http/internal/http2_frame" take Http2Fault, Http2FaultScope, Http2FaultView;
+import "http/internal/http2_frame" take Http2Fault, Http2FaultScope, Http2FaultView, Http2Frame,
+    Http2FrameHeader;
 import "http/internal/hpack_tables" take HpackField;
 import "http/internal/hpack" take HpackBudget;
-import "io/stream" take AsyncReading, AsyncWriting, Closing;
+import "io/stream" take AsyncReading, AsyncWriting, Closing, ByteSource;
 import "io/decorators" take InvalidReading;
 import "strings/parse" take Number;
 import "compare" take Order;
@@ -42,11 +43,18 @@ import "async/event" take Event;
 import "async/scope" take FutureGroup;
 import "async/cancellation" take Cancellation;
 import "async/timeout" take Within, Before, TimedOut;
-import "time/clock" take Timing, MonotonicInstant;
+import "time/clock" take Timing, Instant, MonotonicInstant;
 import "time/duration" take Duration, DurationUnit;
 import "error" take InvalidState;
 import "encoding/binary" take Binary, Signedness;
-import "encoding/utf" take ByteOrder;
+import "encoding/utf" take ByteOrder, Utf8Encoded;
+
+import "http/client_policy" take HttpLimits;
+import "collections/set" take OrderedSet;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "io/buffer" take ByteBuffer;
 
 // Serves one HTTP/2 connection with a handler.
 object Http2ServerSession does Closing {
@@ -289,9 +297,14 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
         if self.closed() {
             return true;
         }
-        loops.start(self.reading());
+        // start() is eager: hold the reader and idle timer until every loop
+        // is registered. Start the writer last so it owns output cleanup
+        // before EOF can close the session with a GOAWAY still queued.
+        let ready = Event();
+        loops.start(self.reading(ready));
+        loops.start(self.idling(ready));
         loops.start(self.writing());
-        loops.start(self.idling());
+        ready.set();
         await stopped.wait();
         for failures.value() -> failure {
             throw failure;
@@ -299,8 +312,9 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
         true;
     }
 
-    async reading() is bool {
+    async reading(ready is Event) is bool {
         defer self.close();
+        await ready.wait();
         let wire = Http2ServerWireInput(origin: input, owner: self);
         let reader = Http2ConnectionInput(
             origin: wire,
@@ -350,7 +364,8 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
         self.wake();
     }
 
-    async idling() is bool {
+    async idling(ready is Event) is bool {
+        await ready.wait();
         let interval = policy.timeouts().keep_alive_timeout();
         loop {
             if self.closed() {
@@ -1318,3 +1333,311 @@ hidden object Http2ServerCleanup {
 
 // The session was used after it closed.
 enum Http2ServerClosed is Error = (closed);
+
+// In-memory session fixtures: no sockets and no wall-clock deadlines.
+
+hidden object Http2ServerTestOutput does AsyncWriting {
+    has buffer is ByteBuffer;
+    has writes is Atomic<int>;
+    has fail_after is int;
+
+    Http2ServerTestOutput(fail_after is int = -1) {
+        buffer = ByteBuffer();
+        writes = Atomic(0);
+        self.fail_after = fail_after;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        await self.write(source.bytes());
+    }
+
+    async write(bytes is @byte) is AsyncWriting {
+        confirm writes.value() != fail_after
+            else throw InvalidReading.because("test output failure");
+        writes.replace(writes.value() + 1);
+        buffer.writing().write(bytes);
+        self;
+    }
+
+    bytes() is @byte {
+        buffer.content().bytes();
+    }
+}
+
+hidden object Http2ServerTestClock does Timing {
+    has elapsed is Event;
+    has waiting is Atomic<int>;
+
+    Http2ServerTestClock(elapsed is Event = Event()) {
+        self.elapsed = elapsed;
+        waiting = Atomic(0);
+    }
+
+    instant() is Instant {
+        Instant(Duration(seconds: 100));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(Duration(seconds: 100));
+    }
+
+    async wait(duration is Duration) is void {
+        waiting.replace(waiting.value() + 1);
+        defer waiting.replace(waiting.value() - 1);
+        await elapsed.wait();
+    }
+
+    active() is int {
+        waiting.value();
+    }
+}
+
+hidden object Http2ServerTestHandler does Handling {
+    Http2ServerTestHandler();
+
+    async handling(request is Request, context is HttpRequestContext) is HandlingResult {
+        panic "no request was sent";
+    }
+}
+
+hidden object Http2ServerTestConnection {
+    Http2ServerTestConnection();
+
+    preface() is @byte {
+        let payload = Http2SettingsWire(origin: Http2Settings(), client: true).bytes();
+        Utf8Encoded("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").bytes() + Http2Frame(
+            header: Http2FrameHeader(4.byte(), 0.byte(), 0, payload.size()),
+            payload: payload
+        ).bytes();
+    }
+
+    session(input is ByteBodyInput, output is AsyncWriting) is Http2ServerSession {
+        self.session(input, output, input, Http2ServerTestClock(), Duration(seconds: 0));
+    }
+
+    session(
+        input is AsyncReading,
+        output is AsyncWriting,
+        owner is Closing,
+        clock is Timing,
+        idle is Duration
+    ) is Http2ServerSession {
+        let endpoints is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(
+            local: IpEndpoint(IpAddress("127.0.0.1"), 80),
+            remote: IpEndpoint(IpAddress("127.0.0.1"), 50000)
+        );
+        Http2ServerSession(
+            input: input,
+            output: output,
+            owner: owner,
+            handling: Http2ServerTestHandler(),
+            details: ExchangeDetails(endpoints: endpoints, version: HttpVersion.http_2),
+            policy: ServerPolicy(
+                protocols: OrderedSet([HttpVersion.http_2]),
+                limits: HttpLimits(),
+                timeouts: ServerTimeouts(
+                    headers: Duration(seconds: 0),
+                    body_idle: Duration(seconds: 0),
+                    keep_alive: idle,
+                    handling: Duration(seconds: 0)
+                ),
+                connections: 1,
+                ranges: 16
+            ),
+            clock: clock
+        );
+    }
+}
+
+async test "an HTTP/2 server settles EOF immediately after preface and SETTINGS" {
+    let connection = Http2ServerTestConnection();
+    let input = ByteBodyInput(connection.preface());
+    let server = connection.session(input, Http2ServerTestOutput());
+    test.is(await server.serve(), true);
+    test.is(server.closed(), true);
+    test.is(input.closed(), true);
+    test.is(await server.drained(), true);
+    test.is(await server.settled(), true);
+}
+
+async test "an HTTP/2 server settles early EOF after control frames and GOAWAY" {
+    let connection = Http2ServerTestConnection();
+    let ack = Http2Frame(header: Http2FrameHeader(4.byte(), 1.byte(), 0, 0), payload: []).bytes();
+    let ping = Http2Frame(
+        header: Http2FrameHeader(6.byte(), 0.byte(), 0, 8),
+        payload: [0.byte(), 1.byte(), 2.byte(), 3.byte(), 4.byte(), 5.byte(), 6.byte(), 7.byte()]
+    ).bytes();
+    for [ack, ping, Http2GoAwayFrame(last_stream: 0, code: 0, debug: []).frame().bytes()] -> tail {
+        let input = ByteBodyInput(connection.preface() + tail);
+        let server = connection.session(input, Http2ServerTestOutput());
+        test.is(await server.serve(), true);
+        test.is(input.closed(), true);
+        test.is(await server.drained(), true);
+        test.is(await server.settled(), true);
+    }
+}
+
+async test "an HTTP/2 server preserves faults and settles every truncated preface" {
+    let connection = Http2ServerTestConnection();
+    let preface = connection.preface();
+    for 0..preface.size() -> length {
+        let input = ByteBodyInput(preface.slice(0, length));
+        let server = connection.session(input, Http2ServerTestOutput());
+        let code = try {
+            await server.serve();
+            -1;
+        }
+        catch failure is Http2Fault {
+            Http2FaultView(failure).code();
+        };
+        test.is(code, 1);
+        test.is(input.closed(), true);
+        test.is(await server.drained(), true);
+        test.is(await server.settled(), true);
+    }
+}
+
+async test "an HTTP/2 server preserves partial frame faults and sends GOAWAY" {
+    let connection = Http2ServerTestConnection();
+    let ping = Http2Frame(
+        header: Http2FrameHeader(6.byte(), 0.byte(), 0, 8),
+        payload: [0.byte(), 1.byte(), 2.byte(), 3.byte(), 4.byte(), 5.byte(), 6.byte(), 7.byte()]
+    ).bytes();
+    for 1..ping.size() -> length {
+        let input = ByteBodyInput(connection.preface() + ping.slice(0, length));
+        let output = Http2ServerTestOutput();
+        let server = connection.session(input, output);
+        let reason = try {
+            await server.serve();
+            "served";
+        }
+        catch failure is Http2Fault {
+            test.is(Http2FaultView(failure).code(), 1);
+            Http2FaultView(failure).reason();
+        };
+        test.is(reason, if length < 9 {
+            "partial frame header";
+        }
+        else {
+            "partial frame payload";
+        });
+        let goodbye = Http2GoAwayFrame(last_stream: 0, code: 1, debug: []).frame().bytes();
+        let written = output.bytes();
+        test.is(written.slice(written.size() - goodbye.size(), written.size()), goodbye);
+        test.is(input.closed(), true);
+        test.is(await server.drained(), true);
+        test.is(await server.settled(), true);
+    }
+}
+
+// Keeps the transport open after its prefix so cancellation must settle a read.
+hidden object Http2ServerTestWaitingInput does AsyncReading, Closing {
+    has prefix is ByteBodyInput;
+    has waiting is Atomic<int>;
+    has fail is bool;
+
+    Http2ServerTestWaitingInput(bytes is @byte, fail is bool = false) {
+        prefix = ByteBodyInput(bytes);
+        waiting = Atomic(0);
+        self.fail = fail;
+    }
+
+    async bytes(limit is int) is @byte {
+        let bytes = await prefix.bytes(limit);
+        if bytes.size() > 0 {
+            return bytes;
+        }
+        confirm !fail else throw InvalidReading.because("test input failure");
+        waiting.replace(waiting.value() + 1);
+        defer waiting.replace(waiting.value() - 1);
+        await Event().wait();
+        bytes;
+    }
+
+    active() is int {
+        waiting.value();
+    }
+
+    closed() is bool {
+        prefix.closed();
+    }
+
+    close() is void {
+        prefix.close();
+    }
+}
+
+async test "an HTTP/2 server settles an immediate idle timeout and its pending read" {
+    let connection = Http2ServerTestConnection();
+    let input = Http2ServerTestWaitingInput(bytes: connection.preface());
+    let clock = Http2ServerTestClock(elapsed: Event(ready: true));
+    let server = connection.session(
+        input,
+        Http2ServerTestOutput(),
+        input,
+        clock,
+        Duration(seconds: 1)
+    );
+    test.is(await server.serve(), true);
+    test.is(input.closed(), true);
+    test.is(input.active(), 0);
+    test.is(clock.active(), 0);
+    test.is(await server.drained(), true);
+    test.is(await server.settled(), true);
+}
+
+async test "an HTTP/2 server preserves an immediate input failure and settles" {
+    let connection = Http2ServerTestConnection();
+    let input = Http2ServerTestWaitingInput(bytes: connection.preface(), fail: true);
+    let clock = Http2ServerTestClock();
+    let server = connection.session(
+        input,
+        Http2ServerTestOutput(),
+        input,
+        clock,
+        Duration(seconds: 1)
+    );
+    let reason = try {
+        await server.serve();
+        "served";
+    }
+    catch InvalidReading.because(reason) {
+        reason;
+    };
+    test.is(reason, "test input failure");
+    test.is(input.closed(), true);
+    test.is(input.active(), 0);
+    test.is(clock.active(), 0);
+    test.is(await server.drained(), true);
+    test.is(await server.settled(), true);
+}
+
+async test "an HTTP/2 server preserves writer failure and settles its read and timer" {
+    let connection = Http2ServerTestConnection();
+    let ping = Http2Frame(
+        header: Http2FrameHeader(6.byte(), 0.byte(), 0, 8),
+        payload: [0.byte(), 1.byte(), 2.byte(), 3.byte(), 4.byte(), 5.byte(), 6.byte(), 7.byte()]
+    ).bytes();
+    let input = Http2ServerTestWaitingInput(bytes: connection.preface() + ping);
+    let clock = Http2ServerTestClock();
+    let server = connection.session(
+        input,
+        Http2ServerTestOutput(fail_after: 2),
+        input,
+        clock,
+        Duration(seconds: 1)
+    );
+    let reason = try {
+        await server.serve();
+        "served";
+    }
+    catch InvalidReading.because(reason) {
+        reason;
+    };
+    test.is(reason, "test output failure");
+    test.is(input.closed(), true);
+    test.is(input.active(), 0);
+    test.is(clock.active(), 0);
+    test.is(await server.drained(), true);
+    test.is(await server.settled(), true);
+}

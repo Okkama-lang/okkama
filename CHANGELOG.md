@@ -164,6 +164,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `PlistXmlSource.until` compared codes at every position after building the text's character array; one
   substring search replaces it (20 000 searches in 600 characters: 0.24 s → 0.03 s).
 
+- **An HTTP/2 server session ends cleanly when its input ends early (#949).** Input that stopped right after the
+  preface failed with `FinishedFutureGroup`: the reader reached the end and sealed the session's loops before the
+  writer joined them. The reader and the idle timer now wait until every loop is registered, the writer last, so
+  a queued GOAWAY is also delivered.
+
 ### Changed
 
 - **An `async destroy` guard costs what a deferred close costs (#329).** A guard with its own async destroy,

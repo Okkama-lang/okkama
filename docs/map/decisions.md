@@ -6,6 +6,13 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. #949 HTTP/2 session startup (supplied ticket).**
+  `FutureGroup.start` is eager and `close` seals the loops group. Hold the
+  reader and idle loop on a local Event, register/start the writer last, then
+  release the Event. The writer must own output cleanup before a reader can
+  queue GOAWAY and immediately see EOF. Preserve protocol faults, timeouts,
+  cancellation and the public API; do not catch `FinishedFutureGroup`.
+
 - **2026-11-22. Format native #13, CSV (owner performance rule).**
   Accept the pure default-grammar scalar/span parser and the indexed streaming
   byte scanner: all measured sizes pass 1.5x (worst median 1.326x, worst final
