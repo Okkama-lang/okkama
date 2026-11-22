@@ -1,5 +1,15 @@
 # State (update at the end of every task)
 
+## Release 0.6.3 (2026-11-22, release/063)
+
+- [x] Bible findings #952–#971, #954, #956, #967; #957 (Cell stays synchronous, local rule); security
+  #960–#963; #946 (parallel/map worker reuse); #951; #972 (linearity bound); version 0.6.3.
+- [x] Micro A/B 0.6.2 → 0.6.3: within noise (−4.1% over 47 pairs; campaign order shifts a few percent);
+  the map-literal regression of the first candidate fixed (790fd2c51, #[cold] error text).
+- [ ] After the owner pushes v0.6.3: Packages run and GitHub Release, install-pgo, man site rebuild,
+  Bible PDF/HTML regeneration, cleanup of worktrees and micro toolchains; then the implementer book
+  (Codex Gigas).
+
 ## #946 run-local ParallelMapped worker reuse (2026-11-22, feature/946-pool)
 
 - [x] Extend spawn's Tokio Request/ProcessGroup transport with reusable Unix

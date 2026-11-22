@@ -350,6 +350,14 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.3 against 0.6.2 (report
+  `okkama-docs/benchmarks/reports/2026-11-22-v0.6.3/micro.html`): Sparrow
+  −4.1% over 47 reliable pairs, all within the noise band — whichever version
+  runs first in a session gains a few percent, so a campaign order flips the
+  sign; judge by interleaved runs. The first candidate lost 6–18% on map
+  programs: a `format!` for a new error inside `execute` (#954). Build every
+  new error text in `execute` in a `#[cold]` function. The final candidate,
+  interleaved A/B/A/B with 0.6.2 on 14 programs: −0.5%, all within ±2.7%.
 - Micro, 0.6.2 against 0.6.1 (report
   `okkama-docs/benchmarks/reports/2026-11-22-v0.6.2/micro.html`): Sparrow
   −4.1% by geometric mean over 39 reliable pairs, nothing slower beyond the

@@ -6,6 +6,24 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-11-22
+
+0.6.3 is the release of the Bible: every finding of checking the Okkama Bible and the Book against the source
+became a fix, and a security pass closed the audit's findings.
+- **The Bible's findings (#952–#971).** Three compiler crashes are diagnostics; runtime-held objects compare by
+  identity (#956); a map literal names each key once (#954); a field's type comes from its initializer and batched
+  `for` bindings are gone (#967); clearer diagnostics across the board.
+- **A `Cell` stays synchronous (#957).** A local, per-body rule closes every path by which a `Cell` reached async
+  code — closures, bound actions, `any`, roles, generics, enum payloads, `once let` — at no cost to `okkama check`.
+- **Security (#960–#963).** Both Cargo lockfiles audited, the nightly fuzz job building for the first time,
+  bounded regex input preparation, the trust model rewritten for Sparrow 0.6.3.
+- **`parallel/map` reuses its workers (#946)**: small parallel maps 1.7× faster.
+- **The Okkama Bible** in the repository, Markdown, HTML and PDF, 246 checked examples.
+- Release report: micro A/B 0.6.2 → 0.6.3 (Linux containers, both built as the packages, one session), Sparrow
+  −4.1% over 47 reliable pairs, all within the noise band; the first candidate was 6–18% slower on map
+  programs (#954's error text inside `execute`); the report found it, and it was fixed before the release. The
+  final candidate interleaved with 0.6.2 (A, B, A, B) on 14 programs: −0.5%, every program within ±2.7%.
+
 ### Changed
 - **A field's type can come from its initializer (#967, owner decision).** `has value = 1;` is an `int` field:
   the type is inferred at compile time from the initializer, checked like a written one, and must be a type an
@@ -13,7 +31,6 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   type nor initializer is an error at its name.
 - **Batched `for` bindings are not part of Okkama (#967).** `for xs -> b[2]` is a syntax error that points to
   sources that do `Batching<T>`; it used to parse and then fail as "not implemented yet".
-
 - **A `Cell` stays in its synchronous frame, also through a closure (#957, owner decision).** A closure that
   captures a `Cell` (or a bound action on one, `c.value`) may be called, kept in a local or captured by another
   closure, and nothing else: returning it, passing it to any action (synchronous ones too — a parameter promises
@@ -22,6 +39,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   coercion to `any` or a role, no generic type argument, no enum payload, no `once let` value. The six functional
   operations take a block, not an action, so a `Cell` inside `xs.map() -> x { … }` stays legal. A local check per
   body: `okkama check` time unchanged (+0.5–1.4%, against +33–40% for the whole-program analysis it replaces).
+- **A map literal names each key once (#954, owner decision).** Keys the compiler can compute (literals,
+  operators over them, `rat(…)`, constants) that are one map key are a compile-time error at the repeat, with a
+  note at the first: `["a": 1, "a": 2]`, `[rat(1, 2): 1, 2 / 4: 2]`. Other keys are checked when the literal is
+  built, after every key and value was evaluated once, left to right: equal keys (by the map's key equality,
+  so `0.0` and `-0.0` or two equal value objects) fail with "Duplicate key in map literal". The later entry no
+  longer silently wins. `m + [k: v]` still replaces. The runtime's key text for an object key no longer reads
+  the object as an integer (it crashed "Map key not found" for object keys).
 
 ### Performance
 - **`parallel/map` reuses its worker processes within one run (#946).** A `results()` call keeps up to `workers`
@@ -32,10 +56,6 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   Programs that launch native processes, and non-Unix hosts, keep one process per item. A worker's receiver no
   longer carries `once` slots it cannot rebuild (they were encoded and broke the transfer).
 
-### Security
-- **Regex input preparation is bounded (#961).** Sparrow counted a regex input against its scalar limit only
-  after copying it whole; it now stops at the limit and stores an admitted input at its exact size.
-
 ### Fixed
 - **The ownership linearity check settles on large functions (#972).** With `OKKAMA_VERIFY_OWNERSHIP=1` (and in
   debug builds) `http/redirect`, `http/cache` and `http/http2_server` — and every program importing them — stopped
@@ -45,8 +65,6 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   4.8 s instead of failing after 22 s (the check alone 46.8 s → 1.4 s once it runs to the end).
 - **`order()` and `cursor()` name the import they need (#952).** Without `Order` (or an array's `Cursor`)
   loaded, the compiler said the action did not exist; it now says which module to import.
-
-### Fixed
 - **Three compiler crashes are diagnostics now.** An enum with no cases is rejected at its name (#966);
   `[].join(",")` joins an untyped empty array as an empty `@string` instead of producing invalid IR (#969); a
   `...any` (or other) spread into a `...string` constructor is rejected at the spread (#970). All three used
@@ -66,16 +84,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   parameter is a syntax error instead of being ignored (#958); no-match and ambiguity messages list a spread
   argument as `@T...` (#959); the variadic-native message no longer names an internal phase (#964); `0o17` is
   one lexical error, "octal literals are not supported", instead of `0` followed by a name (#968).
-### Changed
-- **A map literal names each key once (#954, owner decision).** Keys the compiler can compute (literals,
-  operators over them, `rat(…)`, constants) that are one map key are a compile-time error at the repeat, with a
-  note at the first: `["a": 1, "a": 2]`, `[rat(1, 2): 1, 2 / 4: 2]`. Other keys are checked when the literal is
-  built, after every key and value was evaluated once, left to right: equal keys (by the map's key equality,
-  so `0.0` and `-0.0` or two equal value objects) fail with "Duplicate key in map literal". The later entry no
-  longer silently wins. `m + [k: v]` still replaces. The runtime's key text for an object key no longer reads
-  the object as an integer (it crashed "Map key not found" for object keys).
 
 ### Security
+- **Regex input preparation is bounded (#961).** Sparrow counted a regex input against its scalar limit only
+  after copying it whole; it now stops at the limit and stores an admitted input at its exact size.
 - **Both Cargo lockfiles are audited (#960).** The fuzz workspace's lockfile is regenerated from the current
   manifests (it no longer resolved under `--locked`, and its old SQLite and RSA versions matched RustSec
   advisories). The Audit workflow checks `okkama-rs/Cargo.lock` and `okkama-rs/fuzz/Cargo.lock` with the same
@@ -8470,7 +8482,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/Okkama-lang/okkama/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/Okkama-lang/okkama/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Okkama-lang/okkama/compare/v0.5.8...v0.6.0
