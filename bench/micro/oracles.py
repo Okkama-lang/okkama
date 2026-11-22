@@ -811,7 +811,8 @@ def http244_contribution(name, i):
     # Запись chunked body в checksum sink
     if name == 'http1-body-writing-output': return sum((format(len(x),"x")+"\r\n"+x+"\r\n0\r\n\r\n").encode())
     # Запись полного HTTP/1 response в checksum sink
-    if name == 'http1-message-writing-output': return sum(("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+x).encode())
+    # The response carries its known length (#942).
+    if name == 'http1-message-writing-output': return sum(("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "+str(len(x.encode()))+"\r\n\r\n"+x).encode())
     # Чтение fixed body из памяти
     if name == 'http1-body-bytes': return sum(x.encode())
     # Обновление route parameters в request context
