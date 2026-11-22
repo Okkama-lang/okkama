@@ -701,3 +701,27 @@ fn block_if_is_unchanged() {
     assert_eq!(body_sexpr("let x = if a { 1; } else if b { 2; } else { 3; };"),
         "(LetStatement name=x type=_ value=(if a {1} {(if b {2} {3})}))");
 }
+
+/// #958: an action value is called with every argument, so a default on an
+/// anonymous action's parameter is rejected where it is written, at the value.
+#[test]
+fn anonymous_action_parameters_cannot_declare_defaults() {
+    let wrap = |body: &str| format!("module app v1.0.0;\nmain() is int {{\n{body}\n0; }}");
+    for (body, found) in [
+        ("let f = (n is int = 1) is int { n; };", "1"),
+        ("let f = (a is int, b is string = \"x\") is int { a; };", "\"x\""),
+        ("let f = (a, b is int = 2 + 3) is int { a + b; };", "2 + 3"),
+    ] {
+        let (message, lexeme, line) = parse_in(&wrap(body), ParseMode::Full).expect_err(body);
+        assert_eq!(message, "Anonymous action parameters cannot declare default values.", "{body}");
+        assert_eq!((lexeme.as_str(), line), (found, 3), "{body}");
+    }
+}
+
+/// #958: without defaults anonymous actions parse as before, and object
+/// actions and constructors keep their defaults.
+#[test]
+fn anonymous_actions_without_defaults_and_object_defaults_still_parse() {
+    common::parse_ok("module app v1.0.0; main() is int { let f = (n is int, s is string) is int { n; }; f(1, \"a\"); }");
+    common::parse_ok("module app v1.0.0; object P { has n is int; P(n is int = 1) { self.n = n; } add(by is int = 1) is int { n + by; } } main() is int { 0; }");
+}

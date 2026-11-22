@@ -911,6 +911,14 @@ impl Parser<'_> {
                         "Variadic anonymous action parameters are not supported.",
                     ));
                 }
+                // Defaults exist only on object actions and constructors (#149);
+                // an action value is called with every argument (#958).
+                if let Some(default) = &param.default {
+                    return Err(self.error_at_span(
+                        default.span,
+                        "Anonymous action parameters cannot declare default values.",
+                    ));
+                }
                 params.push(param);
                 }
                 if !self.eat(TokenKind::Comma) {
