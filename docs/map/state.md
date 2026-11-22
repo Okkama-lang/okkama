@@ -6,9 +6,9 @@
   #960–#963; #946 (parallel/map worker reuse); #951; #972 (linearity bound); version 0.6.3.
 - [x] Micro A/B 0.6.2 → 0.6.3: within noise (−4.1% over 47 pairs; campaign order shifts a few percent);
   the map-literal regression of the first candidate fixed (790fd2c51, #[cold] error text).
-- [ ] After the owner pushes v0.6.3: Packages run and GitHub Release, install-pgo, man site rebuild,
-  Bible PDF/HTML regeneration, cleanup of worktrees and micro toolchains; then the implementer book
-  (Codex Gigas).
+- [x] v0.6.3 published (Packages on the tag, GitHub Release with 14 assets), install-pgo, man site on
+  0.6.3, Bible PDF/HTML rebuilt (fb8c20446), worktrees and micro toolchains cleaned (baseline
+  micro-tc/v0.6.3 kept).
 
 ## #946 run-local ParallelMapped worker reuse (2026-11-22, feature/946-pool)
 
