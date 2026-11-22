@@ -50,12 +50,46 @@ impl Checker<'_, '_> {
     /// The cases of its enum a `match` without `else` leaves out, in
     /// declaration order, as the IDE lint `non-exhaustive-match` names them;
     /// `fallback` is the branch that would cover the rest. `None` when the
-    /// match is exhaustive or not over a payload-free enum.
+    /// match is exhaustive.
+    ///
+    /// Over any other subject (int, string, …) the cases cannot cover every
+    /// value, so a match whose cases all give a value lacks only the
+    /// remainder branch, and the message names it (#955).
     fn uncovered_message(&self, matched: &Match, fallback: &str) -> Option<String> {
-        let Some(Ty::Enum(id)) = &matched.subject.ty else { return None };
         if matched.exhaustive || matched.else_block.is_some() {
             return None;
         }
+        let subject = matched.subject.ty.as_ref()?.taken();
+        let Ty::Enum(id) = &subject else {
+            let gives_value = |block: &crate::analysis::thir::Block| match block.stmts.last().map(|stmt| &stmt.kind) {
+                Some(StmtKind::Expr(value)) => value.ty.is_some() || value.diverges,
+                Some(StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Rethrow) => true,
+                _ => false,
+            };
+            if subject.is_error() || matches!(subject, Ty::Variant(..)) || !matched.cases.iter().all(|(_, block)| gives_value(block)) {
+                return None;
+            }
+            // A bool has two values, so a match over it can name the missing one.
+            if subject == Ty::Bool {
+                let missing: Vec<&str> = [(false, "false"), (true, "true")]
+                    .into_iter()
+                    .filter(|(value, _)| {
+                        !matched.cases.iter().flat_map(|(patterns, _)| patterns).any(|pattern| {
+                            matches!(&pattern.kind, ExprKind::Constant(Constant::Bool(seen)) if seen == value)
+                        })
+                    })
+                    .map(|(_, name)| name)
+                    .collect();
+                return Some(format!(
+                    "match over bool does not cover {}, so it has no value here; add the case or {fallback}",
+                    missing.join(", ")
+                ));
+            }
+            return Some(format!(
+                "match over {} cannot cover every value, so it has no value here; add {fallback} (or `case _`)",
+                self.type_name(&subject)
+            ));
+        };
         let declaration = &self.reg.enums[id.0];
         let mut seen = vec![false; declaration.cases.len()];
         for pattern in matched.cases.iter().flat_map(|(patterns, _)| patterns) {

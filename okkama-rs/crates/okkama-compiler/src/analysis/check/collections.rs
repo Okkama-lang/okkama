@@ -151,8 +151,13 @@ impl Checker<'_, '_> {
                 name: "Map",
                 diverges,
             }),
+            // The same message as for any other source, naming a map's way in (#955).
             Ty::Map(..) => {
-                self.error(expr.span, "For source must be an array or range");
+                let message = format!(
+                    "For source must be an array, range, Iterating or Batching, got {}; iterate a map through keys() or values()",
+                    self.type_name(&ty)
+                );
+                self.error(expr.span, message);
                 None
             }
             Ty::Error => None,

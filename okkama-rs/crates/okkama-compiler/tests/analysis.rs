@@ -1395,3 +1395,40 @@ fn repeated_enum_cases_are_reported_in_order_at_the_repetition() {
     let wide: Vec<String> = (0..3000).map(|i| format!("c{i}")).collect();
     assert!(messages(&format!("enum W = ({}); main() is int {{ let w = W.c2999; 0; }}", wide.join(", "))).is_empty());
 }
+
+/// #955: a `match` over a subject that is not an enum cannot cover every
+/// value with cases, so used as a value without `else` it says so at the
+/// match and names the remainder branch; over bool it names the missing value.
+#[test]
+fn a_match_over_other_values_without_else_names_the_missing_else() {
+    let wrap = |subject: &str, ty: &str, body: &str| {
+        format!("object Q {{\n Q();\n f(x is {ty}) is int {{\n{body}\n }}\n}}\nmain() is int {{ let v = {subject}; 0; }}")
+    };
+    let other = |ty: &str| {
+        format!("match over {ty} cannot cover every value, so it has no value here; add an `else` branch (or `case _`)")
+    };
+    // A `let` initializer, the issue's form.
+    let inner = "match x { case 1: 10; }";
+    assert_eq!(located(&wrap("0", "int", &format!("let s = {inner};\ns;"))), [(inner.to_string(), other("int"))]);
+    // The action's last value, and a string subject with block cases.
+    let tail = "match x { case 1 { 10; } case 2 { 20; } }";
+    assert_eq!(located(&wrap("0", "int", tail)), [(tail.to_string(), other("int"))]);
+    let tail = "match x { case \"a\" { 1; } }";
+    assert_eq!(located(&wrap("\"\"", "string", tail)), [(tail.to_string(), other("string"))]);
+    // Over bool the missing value is named.
+    let tail = "match x { case true: 1; }";
+    assert_eq!(
+        located(&wrap("true", "bool", tail)),
+        [(tail.to_string(), "match over bool does not cover false, so it has no value here; add the case or an `else` branch".to_string())]
+    );
+    // An `else`, a `case _`, a covering bool match and a statement are fine.
+    for (subject, ty, body) in [
+        ("0", "int", "match x { case 1 { 10; } else { 0; } }"),
+        ("0", "int", "match x { case 1 { 10; } case _ { 0; } }"),
+        ("\"\"", "string", "let s = match x { case \"a\": 1; case _: 2; };\ns;"),
+        ("true", "bool", "match x { case true: 1; case false: 0; }"),
+        ("0", "int", "match x { case 1 { 10; } }\n0;"),
+    ] {
+        assert_eq!(located(&wrap(subject, ty, body)), [], "{body}");
+    }
+}
