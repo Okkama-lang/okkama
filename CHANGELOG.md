@@ -165,6 +165,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `GettextCatalog` 131 → 48 µs in the benchmark); regex match cursors ask the
   runtime once per match; one-shot DEFLATE, zlib and gzip reuse pooled miniz engines and small buffers (round
   trip of 8 bytes 26 → 8 µs); tar pads and checks zero blocks in bulk (round trip 78 → 62 µs).
+  178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. `UrlParts` keeps the
+  host it validated and its canonical text, so cookies, proxies, WebSocket origins, HTTP/2 fields and redirects
+  stop re-parsing it (cookie jar store 110 → 46 µs, HTTP/2 request fields 31 → 17 µs); the HPACK static table
+  builds only the row asked for (28 → 3.7 µs per decoded block); XML-RPC, IMAP responses and X.509 names lose
+  repeated scans and per-call regexes.
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
   most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives

@@ -8,8 +8,6 @@ module crypto/x509/name v1.0.0;
 //     }
 
 import "collections/sequence" take Sequencing;
-import "regex/pattern" take Regex;
-import "regex/search" take RegexMatches;
 import "strings/parse" take Number;
 
 // One attribute: an OID and its text, such as 2.5.4.3 (CN).
@@ -20,12 +18,21 @@ object NameAttribute {
     NameAttribute(identifier is string, value is string) {
         confirm identifier.length() <= 1024 && value.length() <= 4096
             else throw InvalidDistinguishedName.because("attribute limit exceeded");
-        confirm RegexMatches(
-            origin: identifier,
-            regex: Regex("^[012]\\.(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*))*$")
-        ).found()
-            else throw InvalidDistinguishedName.because("canonical dotted OID required");
+        // Validate bounded dotted decimal directly; compiling a regex for every
+        // subject/issuer attribute dominates this metadata wrapper (#943).
         let parts = identifier.split(".");
+        let canonical = parts.size() >= 2
+            && (parts[0] == "0" || parts[0] == "1" || parts[0] == "2")
+            && parts.reduce(true) -> valid, part {
+                valid
+                    && part != ""
+                    && (part == "0" || !part.starts_with("0"))
+                    && part.characters().reduce(true) -> digits, character {
+                        digits && character.code() >= 48 && character.code() <= 57;
+                    };
+            };
+        confirm canonical
+            else throw InvalidDistinguishedName.because("canonical dotted OID required");
         confirm parts.size() <= 128
             else throw InvalidDistinguishedName.because("OID arc limit exceeded");
         if parts[0] != "2" {
@@ -153,4 +160,37 @@ test "two attributes in one RDN retain their membership" {
     );
     test.is(name.relative_names().size(), 1);
     test.is(name.relative_names().item(0).attributes().size(), 2);
+}
+
+test "certificate OIDs require canonical ASCII arcs and bounded roots" {
+    for ["0.0", "0.39", "1.39", "2.0", "2.40", "2.999999999999999999999999999999.3"] -> oid {
+        test.is(NameAttribute(oid, "CN").identifier(), oid);
+    }
+    for [
+        "",
+        "0",
+        "3.1",
+        "00.1",
+        "1.40",
+        "0.40",
+        "2.01",
+        "2..1",
+        "2.1.",
+        ".2.1",
+        "2.١",
+        "2.1\n",
+        "2.-1",
+        "2.+1"
+    ] -> oid {
+        test.throws(InvalidDistinguishedName) {
+            NameAttribute(oid, "CN");
+        };
+    }
+    let tail = (0..127).map() -> i {
+        "1";
+    }.join(".");
+    test.is(NameAttribute("2." + tail, "").identifier(), "2." + tail);
+    test.throws(InvalidDistinguishedName) {
+        NameAttribute("2.1." + tail, "");
+    };
 }

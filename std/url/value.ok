@@ -1081,6 +1081,8 @@ hidden object UrlResolution {
 // dropped, as RFC 3986 normalization allows.
 object UrlParts {
     has scheme_text is string;
+    // Keep the canonical host already validated by the constructor (#943).
+    has hosts is @UrlHost;
     has userinfo_text is Maybe<string>;
     has host_text is Maybe<string>;
     has port_number is Maybe<int>;
@@ -1110,6 +1112,7 @@ object UrlParts {
             query: query,
             fragment: fragment,
         ).pieces());
+        hosts = canonical.hosts();
         scheme_text = canonical.scheme();
         userinfo_text = canonical.userinfo();
         host_text = canonical.host();
@@ -1183,7 +1186,7 @@ object UrlParts {
 
     // The URL, canonical.
     string() is string {
-        (if scheme_text == "" {
+        once let text = (if scheme_text == "" {
             "";
         }
         else {
@@ -1208,6 +1211,7 @@ object UrlParts {
                 "";
             }
         };
+        text;
     }
 
     // Replaces an encoded URI/IRI path, preserving all other components.
@@ -1363,12 +1367,16 @@ object UrlParts {
 
     // The same URL with "." and ".." segments removed from its path.
     normalized() is UrlParts {
+        let path = UrlDotSegments(path_text).path();
+        if path == path_text {
+            return self;
+        }
         UrlParts(
             scheme: scheme_text,
             userinfo: userinfo_text,
             host: host_text,
             port: port_number,
-            path: UrlDotSegments(path_text).path(),
+            path: path,
             query: query_text,
             fragment: fragment_text,
         );
@@ -1390,14 +1398,8 @@ object UrlParts {
     }
 
     hidden host_value() is UrlHost {
-        match host_text {
-            case Maybe.some(host) {
-                ParsedUrlAuthority(host).authority().host();
-            }
-            else {
-                throw MissingUrlAuthority.missing;
-            }
-        }
+        confirm hosts.size() == 1 else throw MissingUrlAuthority.missing;
+        hosts[0];
     }
 }
 
@@ -1509,6 +1511,32 @@ hidden object UrlCanonical {
     has pieces is UrlPieces;
 
     UrlCanonical(:pieces);
+
+    hosts() is @UrlHost {
+        let authority = pieces.authority();
+        if authority.present() {
+            let host = authority.host();
+            // IDNA can turn a Unicode registered name into an IPv4 spelling.
+            // Preserve the classification of the canonical host text (#943).
+            if host.kind() == UrlHostKind.name {
+                let text = host.string();
+                if text != "" && "0123456789".contains(text.slice(0, 1)) {
+                    let canonical is UrlHost = try {
+                        AddressUrlHost(IpAddress(text));
+                    }
+                    catch e is InvalidIpAddress {
+                        host;
+                    };
+                    return [canonical];
+                }
+            }
+            [host];
+        }
+        else {
+            let empty is @UrlHost = [];
+            empty;
+        }
+    }
 
     scheme() is string {
         pieces.scheme();
@@ -1955,4 +1983,47 @@ test "dot segment removal follows RFC 3986 section 5.2.4 within the path limits"
             UrlDotSegments(path).path();
         };
     }
+}
+
+test "host projections retain canonical identity across repeated observations" {
+    for ["https://Example.COM./a", "http://127.0.0.1", "http://[::1]", "http://[v1.a]"] -> text {
+        let left = ParsedUrl(text).parts();
+        let right = ParsedUrl(text).parts();
+        test.is(left.host_kind(), right.host_kind());
+        test.is(left.host_kind(), right.host_kind());
+        test.ok(left == right);
+        test.is(left.string(), right.string());
+    }
+    let named = ParsedUrl("https://BÜCHER.example").parts();
+    test.is(named.host_name().ascii(), "xn--bcher-kva.example");
+    test.is(named.host_name().ascii(), "xn--bcher-kva.example");
+    test.throws(UrlHostIsNotAddress) {
+        named.host_address();
+    };
+    let address = ParsedUrl("http://[::1]").parts();
+    test.is(address.host_address().string(), "::1");
+    test.throws(UrlHostIsNotName) {
+        address.host_name();
+    };
+    test.throws(MissingUrlAuthority) {
+        ParsedUrl("/a").parts().host_kind();
+    };
+}
+
+test "normalization preserves clean paths and removes dot segments only" {
+    let plain = ParsedUrl("https://example.test/a//b?q#f").parts();
+    test.ok(plain.normalized() == plain);
+    test.is(plain.normalized().string(), "https://example.test/a//b?q#f");
+    test.is(
+        ParsedUrl("https://example.test/a/../b/./?q#f").parts().normalized().string(),
+        "https://example.test/b/?q#f"
+    );
+}
+
+test "structured Unicode numeric hosts retain their canonical address kind" {
+    let url = UrlParts(scheme: "http", host: Maybe.some("１２７.０.０.１"));
+    test.is(url::Parts::host, Maybe.some("127.0.0.1"));
+    test.is(url.host_kind(), UrlHostKind.address);
+    test.is(url.host_address().string(), "127.0.0.1");
+    test.ok(url == ParsedUrl(url.string()).parts());
 }

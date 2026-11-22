@@ -8,6 +8,9 @@ module http/http1_reading v1.0.0;
 //
 // A failure part way may have consumed input: the connection is then discarded.
 
+import "http/body" take ByteBodyInput;
+import "encoding/utf" take Utf8Encoded;
+import "http/status" take Status;
 import "http/http1_head" take Http1Limits, Http1LimitExceeded, Http1RequestHead, Http1ResponseHead,
     ParsedHttp1RequestHead, ParsedHttp1ResponseHead;
 import "http/message" take InvalidHttpMessage;
@@ -351,4 +354,24 @@ test "head delimiter scan remembers only its boundary" {
     test.ok(first.after() < 0 && first.tail() == "\r\n\r");
     let end = Http1HeadBoundary(prefix: first.tail(), chunk: [10.byte(), 0.byte()]);
     test.ok(end.after() == 1);
+}
+
+async test "fragmented response head preserves prefix fields and tunnel bytes" {
+    let wire = "HTTP/1.1 200 OK\r\nX-Value: retained\r\n\r\n";
+    for [1, 2, 7, 64] -> chunk {
+        let prefix = Utf8Encoded(wire.slice(0, 5)).bytes();
+        let input = ByteBodyInput(Utf8Encoded(wire.slice(5, wire.length()) + "TLS").bytes());
+        defer input.close();
+        let result = await Http1ResponseHeadReading(input, prefix, Http1Limits(), chunk).head();
+        test.is(result.head()::Head::status, Status.ok);
+        test.is(result.head().headers().text("X-Value"), "retained");
+        test.is(result.consumed(), wire.length());
+        let rest = result.remainder() + await input.bytes(64);
+        test.is(Latin1Decoded(rest).string(), "TLS");
+    }
+    let truncated = ByteBodyInput(Utf8Encoded("HTTP/1.1 200 OK\r\n").bytes());
+    defer truncated.close();
+    test.throws(InvalidHttpMessage) {
+        await Http1ResponseHeadReading(truncated).head();
+    };
 }
