@@ -331,22 +331,19 @@ fn joined_zwnj(label: &[u32], start: usize) -> bool {
 }
 
 fn validate_contextj(label: &[u32]) -> Checked<()> {
-    for start in 0..label.len() {
-        if virama(label[start]) && label.get(start + 1) == Some(&0x200C) {
-            break;
+    for index in 0..label.len() {
+        if label[index] != 0x200C || (index > 0 && virama(label[index - 1])) {
+            continue;
         }
-        if joined_zwnj(label, start) {
-            break;
-        }
-        if label[start] == 0x200C {
+        let start = label[..index]
+            .iter()
+            .rposition(|point| joining(*point) != "T");
+        if !start.is_some_and(|start| joined_zwnj(label, start)) {
             return Err(Invalid);
         }
     }
-    for start in 0..label.len() {
-        if virama(label[start]) && label.get(start + 1) == Some(&0x200D) {
-            break;
-        }
-        if label[start] == 0x200D {
+    for index in 0..label.len() {
+        if label[index] == 0x200D && (index == 0 || !virama(label[index - 1])) {
             return Err(Invalid);
         }
     }
@@ -379,7 +376,9 @@ fn process(input: &str, ascii: bool) -> Checked<String> {
     let mut is_bidi = false;
     let mut decoded = Vec::new();
     for part in labels {
-        let value = if part.len() > 4 && part[..4].eq_ignore_ascii_case("xn--") && part[4..].is_ascii()
+        let value = if part.len() > 4
+            && part.as_bytes()[..4].eq_ignore_ascii_case(b"xn--")
+            && part[4..].is_ascii()
         {
             let value = decode(&part[4..]).map_err(|_| Invalid)?;
             validate_label(&value, false)?;
@@ -567,5 +566,87 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idna_981_two_cjk_and_uppercase_alabel() {
+        assert_eq!(
+            process("XN--FIQ228C.example", false).ok().as_deref(),
+            Some("中文.example")
+        );
+        assert_eq!(
+            hostname_ascii("XN--WGV71A.example"),
+            Ok("xn--wgv71a.example".into())
+        );
+        for (input, expected) in [
+            ("中文.example", "xn--fiq228c.example"),
+            ("日本.example", "xn--wgv71a.example"),
+        ] {
+            assert_eq!(hostname_ascii(input), Ok(expected.into()), "{input}");
+        }
+    }
+
+    #[test]
+    fn idna_981_three_cjk_and_embedded_alabel() {
+        assert_eq!(
+            hostname_ascii("中xn--fiq228c.example"),
+            Ok("xn--xn--fiq228c-z18q.example".into())
+        );
+        assert_eq!(
+            hostname_ascii("中文网.example"),
+            Ok("xn--fiq228c5hs.example".into())
+        );
+    }
+
+    #[test]
+    fn idna_981_every_zwnj_after_virama() {
+        // RFC 5892 A.1: a virama justifies only the immediately following ZWNJ.
+        for label in ["a\u{94d}\u{200c}b", "a\u{94d}\u{200c}b\u{94d}\u{200c}c"] {
+            assert!(validate_contextj(&points(label)).is_ok(), "{label:?}");
+            assert!(hostname_ascii(label).is_ok(), "{label:?}");
+        }
+        for label in ["\u{200c}ab", "a\u{200c}b", "ab\u{200c}"] {
+            assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+        }
+        let label = "a\u{94d}\u{200c}b\u{200c}";
+        assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+        assert!(hostname_ascii(label).is_err(), "{label:?}");
+    }
+
+    #[test]
+    fn idna_981_every_zwnj_in_joining_context() {
+        // RFC 5892 A.1: (L|D) T* ZWNJ T* (R|D), for each occurrence.
+        for label in [
+            "\u{628}\u{200c}\u{62a}",
+            "\u{628}\u{64e}\u{200c}\u{64e}\u{62a}",
+            "\u{628}\u{200c}\u{62a}\u{200c}\u{62a}",
+        ] {
+            assert!(validate_contextj(&points(label)).is_ok(), "{label:?}");
+        }
+        for label in ["a\u{200c}\u{62a}", "\u{628}\u{200c}a"] {
+            assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+        }
+        let label = "\u{628}\u{64e}\u{200c}\u{64e}\u{62a}a\u{200c}";
+        assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+    }
+
+    #[test]
+    fn idna_981_every_zwj_after_virama() {
+        // RFC 5892 A.2: every ZWJ must immediately follow a virama.
+        for label in ["a\u{94d}\u{200d}b", "a\u{94d}\u{200d}b\u{94d}\u{200d}c"] {
+            assert!(validate_contextj(&points(label)).is_ok(), "{label:?}");
+            assert!(hostname_ascii(label).is_ok(), "{label:?}");
+        }
+        for label in ["\u{200d}ab", "a\u{200d}b", "ab\u{200d}"] {
+            assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+        }
+        let label = "a\u{94d}\u{200d}b\u{200d}";
+        assert!(validate_contextj(&points(label)).is_err(), "{label:?}");
+        assert!(hostname_ascii(label).is_err(), "{label:?}");
     }
 }
