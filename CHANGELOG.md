@@ -190,8 +190,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs,
   most of `uuid` (parsing, printing, version, variant, v4/v8 layout), text indentation, CSV reading (whole and
   streaming; 0.7–1.3× the native time, 8 natives retired), TOML reading (0.7–1.2×, 16 natives retired), the
-  XML tokenizer under xml and plist (1.0–1.1×, 11 natives retired) and the HTML tokenizer with entity decoding
-  (0.7–1.3×, 12 natives retired) are now Okkama; the
+  XML tokenizer under xml and plist (1.0–1.1×, 11 natives retired) , the HTML tokenizer with entity decoding
+  (0.7–1.3×, 12 natives retired) and time patterns (`FormattedDate`, `FormattedLocalDateTime`; 0.7–1.2×, 5 natives
+  retired) are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
   (template, json, bigint) are gone. `diff`, hex, base32/64/85, quoted-printable, `dedent`, `wrap`, `shorten` and
   `uuid_named` stay native on measured evidence (2–30× slower in Okkama). `docs/format-natives-13.md` records every

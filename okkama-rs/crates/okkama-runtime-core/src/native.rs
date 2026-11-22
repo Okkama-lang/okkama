@@ -226,7 +226,7 @@ fn route(native: Native) -> Provider {
             return Provider::Input;
         }
         "runtime/process" => return Provider::Process,
-        "runtime/time_format" | "runtime/time_zone" => return Provider::Time,
+        "runtime/time_zone" => return Provider::Time,
         "runtime/io_decorators" | "runtime/testing" | "runtime/pem"
         | "runtime/template" => return Provider::Formats,
         "runtime/binary" | "runtime/hpack" | "runtime/collections" | "runtime/number_text" => {

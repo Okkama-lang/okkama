@@ -401,11 +401,6 @@ natives! {
     TimeMonotonicClock = 457, "runtime/time@1::monotonic_clock/0", "() -> int";
     TimeClockDomain = 458, "runtime/time@1::clock_domain/1", "(bool) -> string";
     TimeSleepNanoseconds = 459, "runtime/time@1::sleep_nanoseconds/1", "async (string) -> bool";
-    TimeFormatTimePatternInvalidOffset = 460, "runtime/time_format@1::time_pattern_invalid_offset/3", "(string, bool, bool) -> int";
-    TimeFormatTimeFormatDate = 461, "runtime/time_format@1::time_format_date/4", "(int, int, int, string) -> string";
-    TimeFormatTimeFormatLocal = 462, "runtime/time_format@1::time_format_local/8", "(int, int, int, int, int, int, int, string) -> string";
-    TimeFormatTimeParseInvalidOffset = 463, "runtime/time_format@1::time_parse_invalid_offset/3", "(string, string, bool) -> int";
-    TimeFormatTimeParseParts = 464, "runtime/time_format@1::time_parse_parts/3", "(string, string, bool) -> @int";
     TimeZoneTimezoneVersion = 465, "runtime/time_zone@1::timezone_version/0", "() -> string";
     TimeZoneTimezoneKnown = 466, "runtime/time_zone@1::timezone_known/1", "(string) -> bool";
     TimeZoneTimezoneOffset = 467, "runtime/time_zone@1::timezone_offset/2", "(string, rat) -> int";
@@ -580,4 +575,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668

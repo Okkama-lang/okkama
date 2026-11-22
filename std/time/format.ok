@@ -4,8 +4,6 @@ import "compare" take Order;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
 import "time/local_datetime" take LocalDateTime;
-import "runtime/time_format" take time_pattern_invalid_offset, time_format_date, time_format_local,
-    time_parse_invalid_offset, time_parse_parts;
 
 // Explicit, locale-free formatting and parsing.
 //
@@ -65,34 +63,23 @@ object FormattedDate {
     }
 
     hidden read() is Date {
-        let pattern_offset is int = time_pattern_invalid_offset(
-            pattern,
-            false,
-            true,
-        );
+        let written = TimePattern(pattern);
+        let pattern_offset = written.invalid(false, true);
         confirm pattern_offset == -1
             else throw InvalidTimePattern.located(pattern, pattern_offset);
-        let source_offset is int = time_parse_invalid_offset(
-            source,
-            pattern,
-            false,
-        );
-        confirm source_offset == -1
-            else throw InvalidFormattedDate.located(source, source_offset);
-        let parts is @int = time_parse_parts(source, pattern, false);
-        Date(year: parts[0], month: parts[1], day: parts[2]);
+        let parts = written.read(source);
+        confirm parts[0] == -1 else throw InvalidFormattedDate.located(source, parts[0]);
+        Date(year: parts[1], month: parts[2], day: parts[3]);
     }
 
     // The date as text; InvalidTimePattern for a bad pattern.
     string() is string {
-        let invalid is int = time_pattern_invalid_offset(pattern, false, false);
-        confirm invalid == -1 else throw InvalidTimePattern.located(pattern, invalid);
+        // A reading checks the pattern first itself, with the same offset
+        // for any pattern text() refuses.
         let date = self.date();
-        time_format_date(
-            date::Calendar::year,
-            date::Calendar::month,
-            date::Calendar::day,
-            pattern,
+        TimePattern(pattern).text(
+            false,
+            [date::Calendar::year, date::Calendar::month, date::Calendar::day, 0, 0, 0, 0]
         );
     }
 }
@@ -140,49 +127,423 @@ object FormattedLocalDateTime {
     }
 
     hidden read() is LocalDateTime {
-        let pattern_offset is int = time_pattern_invalid_offset(
-            pattern,
-            true,
-            true,
-        );
+        let written = TimePattern(pattern);
+        let pattern_offset = written.invalid(true, true);
         confirm pattern_offset == -1
             else throw InvalidTimePattern.located(pattern, pattern_offset);
-        let source_offset is int = time_parse_invalid_offset(
-            source,
-            pattern,
-            true,
-        );
-        confirm source_offset == -1
-            else throw InvalidFormattedLocalDateTime.located(source, source_offset);
-        let parts is @int = time_parse_parts(source, pattern, true);
+        let parts = written.read(source);
+        confirm parts[0] == -1 else throw InvalidFormattedLocalDateTime.located(source, parts[0]);
         LocalDateTime(
-            date: Date(year: parts[0], month: parts[1], day: parts[2]),
+            date: Date(year: parts[1], month: parts[2], day: parts[3]),
             time: TimeOfDay(
-                hour: parts[3],
-                minute: parts[4],
-                second: parts[5],
-                nanosecond: parts[6],
+                hour: parts[4],
+                minute: parts[5],
+                second: parts[6],
+                nanosecond: parts[7],
             ),
         );
     }
 
     // The date-time as text.
     string() is string {
-        let invalid is int = time_pattern_invalid_offset(pattern, true, false);
-        confirm invalid == -1 else throw InvalidTimePattern.located(pattern, invalid);
         let local is LocalDateTime = self.local_date_time();
         let date is Date = local.date();
         let time is TimeOfDay = local.time();
-        time_format_local(
+        TimePattern(pattern).text(true, [
             date::Calendar::year,
             date::Calendar::month,
             date::Calendar::day,
             time::Clock::hour,
             time::Clock::minute,
             time::Clock::second,
-            time::Clock::nanosecond,
-            pattern,
+            time::Clock::nanosecond
+        ]);
+    }
+}
+
+// A pattern split at its `%` signs (#13): a part after a `%` starts with the
+// directive, except after `%%`, whose second sign begins a plain part.
+// Offsets count Unicode scalars; a bad directive or a lone `%` at the end is
+// refused at its `%`.
+hidden object TimePattern {
+    has pattern is string;
+
+    TimePattern(pattern is string) {
+        self.pattern = pattern;
+    }
+
+    // The field index of a directive (Y m d H M S f), or -1.
+    hidden field(directive is string) is int {
+        "YmdHMSf".find(directive) else -1;
+    }
+
+    // The width of field index.
+    hidden width(field is int) is int {
+        if field == 0 {
+            4;
+        }
+        else if field == 6 {
+            9;
+        }
+        else {
+            2;
+        }
+    }
+
+    // Where the pattern is not valid, or -1: a bad directive first, then a
+    // time field in a date pattern, then (for reading) a missing field at the
+    // end of the pattern.
+    invalid(local is bool, parsing is bool) is int {
+        let parts = pattern.split("%");
+        // Without `%%`, every part after the first starts with a directive:
+        // one pass gathers the fields met, or -1 for any doubt.
+        let seen = if pattern.contains("%%") {
+            -1;
+        }
+        else {
+            (1..parts.size()).reduce(0) -> bits, index {
+                let field = if parts[index] == "" {
+                    -1;
+                }
+                else {
+                    self.field(parts[index].slice(0, 1));
+                };
+                if bits < 0 || field < 0 || (!local && field >= 3) {
+                    -1;
+                }
+                else {
+                    bits | (1 << field);
+                }
+            };
+        };
+        let required = if local {
+            63;
+        }
+        else {
+            7;
+        };
+        if seen >= 0 && (!parsing || (seen & required) == required) {
+            return -1;
+        }
+        self.checked(parts, 1, parts[0].length(), false, -1, 0, local, parsing);
+    }
+
+    // The check from parts[index], whose `%` is at offset; seen holds a bit
+    // per field met so far.
+    hidden checked(
+        parts is @string,
+        index is int,
+        offset is int,
+        escaped is bool,
+        time_at is int,
+        seen is int,
+        local is bool,
+        parsing is bool
+    ) is int {
+        if index == parts.size() {
+            if time_at >= 0 {
+                return time_at;
+            }
+            let required = if local {
+                63;
+            }
+            else {
+                7;
+            };
+            return if parsing && (seen & required) != required {
+                pattern.length();
+            }
+            else {
+                -1;
+            };
+        }
+        let part = parts[index];
+        let following = offset + 1 + part.length();
+        if escaped {
+            return self.checked(parts, index + 1, following, false, time_at, seen, local, parsing);
+        }
+        if part == "" {
+            if index == parts.size() - 1 {
+                return offset;
+            }
+            return self.checked(parts, index + 1, following, true, time_at, seen, local, parsing);
+        }
+        let field = self.field(part.slice(0, 1));
+        if field < 0 {
+            return offset;
+        }
+        let time = if !local && field >= 3 && time_at < 0 {
+            offset;
+        }
+        else {
+            time_at;
+        };
+        self.checked(parts, index + 1, following, false, time, seen | (1 << field), local, parsing);
+    }
+
+    // The pattern with each field written from values (year, month, day,
+    // hour, minute, second, nanosecond), zero padded to its width; a
+    // negative value keeps its sign inside the width. InvalidTimePattern
+    // where the pattern is not valid.
+    text(local is bool, values is @int) is string {
+        let plain = self.marked();
+        if plain != "" {
+            // Every `%` left starts a directive and no written field holds
+            // one: replacing the valid directives leaves a `%` only if one is
+            // bad.
+            let written = self.replaced(plain, local, values);
+            if !written.contains("%") {
+                return if plain == pattern {
+                    written;
+                }
+                else {
+                    written.replace(1.char().string(), "%");
+                };
+            }
+        }
+        let invalid = self.invalid(local, false);
+        confirm invalid == -1 else throw InvalidTimePattern.located(pattern, invalid);
+        let parts = pattern.split("%");
+        parts[0] + self.pieces(parts, 1, false, values).join("");
+    }
+
+    // The pattern with each `%%` as U+0001, read left to right as the
+    // directives are; "" when the pattern holds U+0001 itself or is empty.
+    hidden marked() is string {
+        if !pattern.contains("%%") {
+            return pattern;
+        }
+        let mark = 1.char().string();
+        if pattern.contains(mark) {
+            "";
+        }
+        else {
+            pattern.replace("%%", mark);
+        }
+    }
+
+    // plain with its directives written.
+    hidden replaced(plain is string, local is bool, values is @int) is string {
+        let date = plain.replace("%Y", self.padded(values[0], 4))
+            .replace("%m", self.padded(values[1], 2))
+            .replace("%d", self.padded(values[2], 2));
+        if local {
+            date.replace("%H", self.padded(values[3], 2))
+                .replace("%M", self.padded(values[4], 2))
+                .replace("%S", self.padded(values[5], 2))
+                .replace("%f", self.padded(values[6], 9));
+        }
+        else {
+            date;
+        }
+    }
+
+    hidden pieces(parts is @string, index is int, escaped is bool, values is @int) is @string {
+        if index == parts.size() {
+            let finished is @string = [];
+            return finished;
+        }
+        let part = parts[index];
+        if escaped {
+            return [part] + self.pieces(parts, index + 1, false, values);
+        }
+        if part == "" {
+            return ["%"] + self.pieces(parts, index + 1, true, values);
+        }
+        let field = self.field(part.slice(0, 1));
+        [self.padded(values[field], self.width(field)) + part.slice(1, part.length())] +
+            self.pieces(parts, index + 1, false, values);
+    }
+
+    hidden padded(value is int, width is int) is string {
+        if value >= 0 {
+            let digits = value.string();
+            return if digits.length() >= width {
+                digits;
+            }
+            else {
+                "000000000".slice(0, width - digits.length()) + digits;
+            };
+        }
+        let negative = value < 0;
+        let digits = if negative {
+            (0 - value).string();
+        }
+        else {
+            value.string();
+        };
+        let size = if negative {
+            width - 1;
+        }
+        else {
+            width;
+        };
+        let zeros = if digits.length() < size {
+            "0".repeat(size - digits.length());
+        }
+        else {
+            "";
+        };
+        if negative {
+            "-" + zeros + digits;
+        }
+        else {
+            zeros + digits;
+        }
+    }
+
+    // origin read by a valid pattern: [-1, year, month, day, hour, minute,
+    // second, nanosecond], or [offset] where origin first fails to match.
+    // A repeated field must repeat its value; nanoseconds default to zero.
+    // Without mutable state, so that a reading can be kept (#491).
+    read(origin is string) is @int {
+        let plain = self.marked();
+        let parts = plain.split("%");
+        if plain != "" && parts.size() > 8 {
+            // Fields have fixed widths, so the pattern alone places them:
+            // read each where it stands, write the pattern again and compare.
+            // Any doubt goes to the exact reading below. It pays from about
+            // eight fields; shorter patterns are read part by part at once.
+            let places = (1..parts.size()).reduce([parts[0].length(), -1, -1, -1, -1, -1, -1, -1]) -> found, index {
+                let field = self.field(parts[index].slice(0, 1));
+                let width = self.width(field);
+                let at = found[0];
+                let marked = if found[field + 1] < 0 {
+                    found.replaced(field + 1, at);
+                }
+                else {
+                    found;
+                };
+                marked.replaced(0, at + width + parts[index].length() - 1);
+            };
+            if places[0] == origin.length() {
+                let values is @int = (0..7).map() -> field {
+                    let at = places[field + 1];
+                    if at < 0 {
+                        -1;
+                    }
+                    else {
+                        origin.slice(at, at + self.width(field)).characters().reduce(0) -> total, character {
+                            let code = character.code();
+                            if total < 0 || code < 48 || code > 57 {
+                                -1;
+                            }
+                            else {
+                                total * 10 + code - 48;
+                            }
+                        };
+                    }
+                };
+                if !values.contains(-1) || self.complete(values, places) {
+                    if self.replaced(plain, true, values).replace(1.char().string(), "%") == origin {
+                        return [-1] + values.take(6) + [if values[6] < 0 {
+                            0;
+                        }
+                        else {
+                            values[6];
+                        }];
+                    }
+                }
+            }
+        }
+        let exact = if plain == pattern {
+            parts;
+        }
+        else {
+            pattern.split("%");
+        };
+        self.reading(origin, exact, 0, 0, [-1, -1, -1, -1, -1, -1, -1], false);
+    }
+
+    // Whether every field the pattern holds was read as digits.
+    hidden complete(values is @int, places is @int) is bool {
+        (0..7).reduce(true) -> good, field {
+            good && (places[field + 1] < 0 || values[field] >= 0);
+        };
+    }
+
+    hidden reading(
+        origin is string,
+        parts is @string,
+        index is int,
+        at is int,
+        values is @int,
+        escaped is bool
+    ) is @int {
+        if index == parts.size() {
+            if at != origin.length() {
+                return [at];
+            }
+            return [-1] + values.take(6) + [if values[6] < 0 {
+                0;
+            }
+            else {
+                values[6];
+            }];
+        }
+        let part = parts[index];
+        if index == 0 || escaped {
+            return self.matched(origin, parts, index, at, values, part, false);
+        }
+        if part == "" {
+            return self.matched(origin, parts, index, at, values, "%", true);
+        }
+        let field = self.field(part.slice(0, 1));
+        let size = self.width(field);
+        if at + size > origin.length() {
+            return [at];
+        }
+        let value = origin.slice(at, at + size).characters().reduce(0) -> total, character {
+            let code = character.code();
+            if total < 0 || code < 48 || code > 57 {
+                -1;
+            }
+            else {
+                total * 10 + code - 48;
+            }
+        };
+        let known = values[field];
+        if value < 0 || (known >= 0 && known != value) {
+            return [at];
+        }
+        self.matched(
+            origin,
+            parts,
+            index,
+            at + size,
+            values.replaced(field, value),
+            part.slice(1, part.length()),
+            false
         );
+    }
+
+    // literal at `at`, then the parts after index.
+    hidden matched(
+        origin is string,
+        parts is @string,
+        index is int,
+        at is int,
+        values is @int,
+        literal is string,
+        escaped is bool
+    ) is @int {
+        let size = literal.length();
+        if size > 0 && (at + size > origin.length() || origin.slice(at, at + size) != literal) {
+            return [self.mismatch(origin, at, literal)];
+        }
+        self.reading(origin, parts, index + 1, at + size, values, escaped);
+    }
+
+    // Where literal stops matching origin from start.
+    hidden mismatch(origin is string, start is int, literal is string) is int {
+        let expected = literal.characters();
+        let actual = origin.characters();
+        for 0..expected.size() -> index {
+            if start + index >= actual.size() || actual[start + index] != expected[index] {
+                return start + index;
+            }
+        }
+        start + expected.size();
     }
 }
 
@@ -210,4 +571,132 @@ test "patterns format and read dates and local date-times" {
     catch e is InvalidFormattedDate {
         true;
     });
+}
+
+// Test-only: what a public call gives, or its failure and offset.
+hidden object TimeTestOutcome {
+    has pattern is string;
+
+    TimeTestOutcome(pattern is string) {
+        self.pattern = pattern;
+    }
+
+    hidden moment() is LocalDateTime {
+        LocalDateTime(
+            date: Date(year: 9, month: 8, day: 1),
+            time: TimeOfDay(hour: 7, minute: 5, second: 3, nanosecond: 42)
+        );
+    }
+
+    written(local is bool) is string {
+        try {
+            if local {
+                FormattedLocalDateTime(origin: self.moment(), pattern: pattern).string();
+            }
+            else {
+                FormattedDate(origin: self.moment().date(), pattern: pattern).string();
+            }
+        }
+        catch InvalidTimePattern.located(_pattern, offset) {
+            "pattern " + offset.string();
+        }
+    }
+
+    read(text is string, local is bool) is string {
+        try {
+            let moment = if local {
+                FormattedLocalDateTime(text: text, pattern: pattern).local_date_time();
+            }
+            else {
+                LocalDateTime(
+                    date: FormattedDate(text: text, pattern: pattern).date(),
+                    time: TimeOfDay(hour: 0, minute: 0, second: 0, nanosecond: 0)
+                );
+            };
+            FormattedLocalDateTime(origin: moment, pattern: "%Y-%m-%d %H:%M:%S.%f").string();
+        }
+        catch InvalidTimePattern.located(_pattern, offset) {
+            "pattern " + offset.string();
+        }
+        catch InvalidFormattedDate.located(_origin, offset) {
+            "text " + offset.string();
+        }
+        catch InvalidFormattedLocalDateTime.located(_origin, offset) {
+            "text " + offset.string();
+        }
+    }
+}
+
+test "fields are padded to their widths and %% is a percent sign" {
+    test.is(TimeTestOutcome("%Y|%m|%d").written(false), "0009|08|01");
+    test.is(TimeTestOutcome("%H:%M:%S.%f").written(true), "07:05:03.000000042");
+    test.is(TimeTestOutcome("%%Y %%%d%% 年%Y%%").written(false), "%Y %01% 年0009%");
+    test.is(TimeTestOutcome("%d %d").written(false), "01 01");
+    test.is(TimeTestOutcome("plain").written(true), "plain");
+    test.is(
+        TimeTestOutcome("a" + 1.char().string() + "%Y%%").written(false),
+        "a" + 1.char().string() + "0009%"
+    );
+}
+
+test "patterns are refused where they go wrong" {
+    test.is(TimeTestOutcome("%q").written(true), "pattern 0");
+    test.is(TimeTestOutcome("ab%").written(true), "pattern 2");
+    test.is(TimeTestOutcome("%%%").written(true), "pattern 2");
+    test.is(TimeTestOutcome("é%Y %H").written(false), "pattern 4");
+    test.is(TimeTestOutcome("%Y %H %q").written(false), "pattern 6");
+    test.is(TimeTestOutcome("%Y %f").written(false), "pattern 3");
+    test.is(TimeTestOutcome("%Y-%m").read("2026-08", false), "pattern 5");
+    test.is(TimeTestOutcome("%Y-%m-%d %H:%M").read("2026-08-11 12:30", true), "pattern 14");
+    test.is(TimeTestOutcome("%Y-%m-%d %H:%M %S").read("x", false), "pattern 9");
+}
+
+test "texts are read by the pattern and refused at the first difference" {
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11/08/2026", false), "2026-08-11 00:00:00.000000000");
+    test.is(
+        TimeTestOutcome("%Y-%m-%dT%H:%M:%S").read("2026-08-11T12:30:45", true),
+        "2026-08-11 12:30:45.000000000"
+    );
+    test.is(
+        TimeTestOutcome("%S.%f %H:%M %d.%m.%Y").read("45.000000007 12:30 11.08.2026", true),
+        "2026-08-11 12:30:45.000000007"
+    );
+    test.is(
+        TimeTestOutcome("%Y %%%m %d").read("2026 %08 11", false),
+        "2026-08-11 00:00:00.000000000"
+    );
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11-08-2026", false), "text 2");
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11/08/202", false), "text 6");
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11/08/2026!", false), "text 10");
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11/0x/2026", false), "text 3");
+    test.is(TimeTestOutcome("%d/%m/%Y").read("11/０8/2026", false), "text 3");
+    test.is(TimeTestOutcome("%Y-%m-%d %Y").read("2026-08-11 2027", false), "text 11");
+    test.is(
+        TimeTestOutcome("%Y-%m-%d %Y").read("2026-08-11 2026", false),
+        "2026-08-11 00:00:00.000000000"
+    );
+    test.is(TimeTestOutcome("at %Y-%m-%d").read("an 2026-08-11", false), "text 1");
+    test.is(
+        TimeTestOutcome("%Y年%m月%d日").read("2026年08月11日", false),
+        "2026-08-11 00:00:00.000000000"
+    );
+    // A long pattern is placed by its widths; a difference is still found
+    // where it is.
+    let long = "%Y-%m-%d %H:%M:%S.%f | %Y/%m/%d | %H.%M.%S";
+    test.is(
+        TimeTestOutcome(long).read("2026-08-11 12:30:45.000000001 | 2026/08/11 | 12.30.45", true),
+        "2026-08-11 12:30:45.000000001"
+    );
+    test.is(
+        TimeTestOutcome(long).read("2026-08-11 12:30:45.000000001 | 2026/08/11 | 12.31.45", true),
+        "text 48"
+    );
+    test.is(
+        TimeTestOutcome(long).read("2026-08-11 12:30:45.000000001 | 2026-08/11 | 12.30.45", true),
+        "text 36"
+    );
+    test.is(
+        TimeTestOutcome(long).read("2026-08-11 12:30:45.000000001 | 2026/08/11 | 12.30.4", true),
+        "text 51"
+    );
 }

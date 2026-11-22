@@ -6405,22 +6405,6 @@
       "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
     },
     {
-      "id": "STD.RUNTIME.TIME_FORMAT",
-      "title": "std runtime/time_format public contract (no public declarations)",
-      "family": "Standard library: runtime",
-      "spec_refs": [
-        "std/runtime/time_format.ok"
-      ],
-      "status": "informative",
-      "aspects": {
-        "normal": "required",
-        "boundary": "n/a: module owns no public declarations",
-        "invalid": "n/a: module owns no public declarations",
-        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-      },
-      "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
-    },
-    {
       "id": "STD.RUNTIME.TIME_ZONE",
       "title": "std runtime/time_zone public contract (no public declarations)",
       "family": "Standard library: runtime",

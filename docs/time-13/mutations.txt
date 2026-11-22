@@ -1,0 +1,15 @@
+CAUGHT unknown directive: --- FAIL: patterns are refused where they go wrong
+CAUGHT nanosecond width: --- FAIL: texts are read by the pattern and refused at the first difference
+CAUGHT zero padding: --- FAIL: patterns format and read dates and local date-times
+CAUGHT time field in a date pattern: --- FAIL: patterns are refused where they go wrong
+CAUGHT required local fields: --- FAIL: patterns are refused where they go wrong
+CAUGHT lone % at the end: --- FAIL: patterns are refused where they go wrong
+CAUGHT %% writes one sign: --- FAIL: fields are padded to their widths and %% is a percent sign
+CAUGHT mark conflict: --- FAIL: fields are padded to their widths and %% is a percent sign
+CAUGHT repeated field must repeat: --- FAIL: texts are read by the pattern and refused at the first difference
+CAUGHT digits only: --- FAIL: texts are read by the pattern and refused at the first difference
+CAUGHT whole text: --- FAIL: texts are read by the pattern and refused at the first difference
+CAUGHT fraction defaults to zero: --- FAIL: patterns format and read dates and local date-times
+CAUGHT mismatch offset: --- FAIL: texts are read by the pattern and refused at the first difference
+CAUGHT layout fallback: --- FAIL: texts are read by the pattern and refused at the first difference
+14 of 14
