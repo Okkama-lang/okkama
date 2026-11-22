@@ -67,6 +67,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   the test that hold it (#962): exact payload agreement of channel endpoints and its scope, the permissive
   native default and an explicitly restricted configuration, process- and runtime-scoped memory budgets, and
   why cancellation inside a native call is cooperative. OS isolation stays the boundary for hostile code.
+- **Six std doc comments** wrote literal brackets (`[section]`, `[index]`, `[[replica]]`, …) that `okkama man` read
+  as unresolved links; they are code spans now, and the reference builds without warnings (#951).
 - **The Okkama Book (EN/RU)** checked against the 0.6.2 source as well: the Rust implementation and Sparrow
   instead of the retired Perl interpreter, static errors no longer called runtime errors, removed modules and
   natives replaced by the current std (`math/decimal`, `regex/pattern`, `debug/dumper`, `testing/check`),

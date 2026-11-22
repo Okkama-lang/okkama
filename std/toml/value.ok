@@ -408,12 +408,12 @@ object TomlTable does TomlValue {
         TomlRead(name: name, value: self.value(name)).boolean();
     }
 
-    // The nested table under name: [server] or server = { … }.
+    // The nested table under name: `[server]` or server = { … }.
     get(name is string) is TomlTable {
         TomlRead(name: name, value: self.value(name)).table();
     }
 
-    // The tables of an array of tables: [[replica]].
+    // The tables of an array of tables: `[[replica]]`.
     tables(name is string) is @TomlTable {
         TomlRead(name: name, value: self.value(name)).tables();
     }
@@ -550,7 +550,7 @@ object TomlMaybeReader {
     }
 }
 
-// A value of another kind than the read asked for: the key (with [index] for
+// A value of another kind than the read asked for: the key (with `[index]` for
 // an array item), the kind asked for and the kind found, as TOML names them:
 // string, integer, float, inf, nan, boolean, array, table, local date, local
 // time, local date-time, offset date-time.

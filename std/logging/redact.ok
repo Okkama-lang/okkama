@@ -21,7 +21,7 @@ object RedactedLogs does LogWriting {
     has names is @string;
     has replacement is Json;
 
-    // The named fields are written as "[redacted]" unless a replacement is given.
+    // The named fields are written as `"[redacted]"` unless a replacement is given.
     RedactedLogs(
         origin is LogWriting,
         names is Sequencing<string>,

@@ -517,7 +517,7 @@ object PlistMaybeReader {
     }
 }
 
-// A value of another kind than the read asked for: the key (with [index] for
+// A value of another kind than the read asked for: the key (with `[index]` for
 // an array item), the kind asked for and the kind found.
 enum PlistKindMismatch is Error = (
     member(name is string, expected is PlistKind, found is PlistKind)

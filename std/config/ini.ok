@@ -260,7 +260,7 @@ object IniDocument does IniContent {
 
 // Lazy bounded parser. Defaults: 1 Mi Unicode scalars, 128 sections, 10000 total
 // entries; each section <=1024 entries. Negative configuration fails immediately.
-// LF/CRLF, blank lines, whole-line #/; comments, explicit [section], name=value.
+// LF/CRLF, blank lines, whole-line #/; comments, explicit `[section]`, name=value.
 // Bare tokens trim ASCII space/tab. Double quotes support backslash/quote,
 // b/t/n/f/r, uXXXX/UXXXXXXXX scalar escapes. No multiline or inline comments.
 // Raw controls except tab, duplicate decoded names and trailing material fail.
