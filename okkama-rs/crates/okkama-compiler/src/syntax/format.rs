@@ -333,6 +333,19 @@ impl<'s> Printer<'s> {
         (!scratch.out.contains('\n')).then(|| scratch.out.chars().count())
     }
 
+    /// The module version as the source spells it (#980). `v1.0 .0` is a valid way to write v1.0.0,
+    /// but it lexes differently (`0` `.` `0`, not the float `0.0`), so printing `v1.0.0` would
+    /// change the tokens; inner spaces are kept, one per gap. Comments inside fall back to the
+    /// canonical form, as before.
+    fn version_as_written(&self, version: &crate::syntax::ast::Version) -> String {
+        let canonical = version.text();
+        let written = self.text.get(version.span.range()).unwrap_or("");
+        if written == canonical || written.contains('/') {
+            return canonical;
+        }
+        written.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     // ---- файл ----
 
     fn program(&mut self, program: &Program) {
@@ -347,7 +360,8 @@ impl<'s> Printer<'s> {
             p.word(&path.join("/"));
             if let Some(version) = &program.module.version {
                 p.word(" ");
-                p.word(&version.text());
+                let written = p.version_as_written(version);
+                p.word(&written);
             }
             p.word(";");
         });

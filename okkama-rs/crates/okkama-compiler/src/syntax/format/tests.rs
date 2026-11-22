@@ -324,3 +324,15 @@ main() is int {
 "
     );
 }
+
+/// A version written with a space inside (`v1.0 .0`, the same version as v1.0.0) keeps its
+/// spelling: `v1.0.0` would lex `0.0` as one float and change the tokens (#980). A version
+/// written as one word stays canonical, and both forms are stable under a second pass.
+#[test]
+fn a_module_version_keeps_its_tokens() {
+    assert_eq!(fmt("module x v1.0 .0;\nmain() is int { 0; }\n"), "module x v1.0 .0;\n\nmain() is int {\n    0;\n}\n");
+    assert_eq!(fmt("module x v1.0   .0;\n"), "module x v1.0 .0;\n");
+    assert_eq!(fmt("module x v1.2.3;\n"), "module x v1.2.3;\n");
+    let once = fmt("module x v1.0 .0;\nmain() is int { 0; }\n");
+    assert_eq!(fmt(&once), once);
+}
