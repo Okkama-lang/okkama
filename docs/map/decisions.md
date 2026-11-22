@@ -181,6 +181,15 @@ programs preserve protocol v2 and validate measured and warmup checksums at smal
 and larger N; correctness checks establish no performance result. Evidence and
 scope: [m–z record](../../bench/micro/REVIEW-244-MZ.md).
 
+## The Okkama Bible: source of truth (owner, 2026-11-22)
+
+- The Bible is checked against the source code and the behaviour of the current toolchain only; the
+  specification in okkama-docs may be stale and is not consulted. Where the book and the code disagree, the
+  book is fixed; where the code looks wrong or the intent is unclear, a ticket goes to the milestone
+  "Bible findings", to be assigned to releases later.
+- The Bible lives in the main repository (`docs/OkkamaBible`) from 2026-11-22; it no longer stays on an
+  unpushed branch.
+
 ## URL transformation semantics (#133, 2026-11-22)
 
 Implementation choices under the owner's supplied review of 2026-11-21 and

@@ -1,5 +1,13 @@
 # State (update at the end of every task)
 
+## The Okkama Bible (2026-11-22)
+
+`docs/OkkamaBible` is on develop (fast-forward of feature/okkama-bible, owner 2026-11-22). Every chapter was
+checked against the 0.6.2 source; appendices A–E and the PDFs (662 pages EN, 703 RU) are built. 246 examples
+pass with `build.py --check` on the installed 0.6.2. Findings: milestone "Bible findings" (#952–#959,
+#964–#968), not yet assigned to releases. The PDF toolchain is the `okkama-bible-pdf` image from
+`docs/OkkamaBible/pdf/Dockerfile`.
+
 Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/0.6.0`; develop is behind it.
 
 ## #133 URL construction and transformation (2026-11-22, l-codex)

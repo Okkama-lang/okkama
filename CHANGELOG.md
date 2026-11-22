@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Documentation
+- **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
+  builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the
+  compiler's tokens. Every chapter was checked against the 0.6.2 source, and its 246 examples run with
+  `build.py --check`. The defects and doubts found are in the milestone "Bible findings" (#952–#959,
+  #964–#968).
+
 ## [0.6.2] — 2026-11-22
 
 0.6.2 moves the format parsers into Okkama, gives every std action that does real work a benchmark, makes an
