@@ -102,8 +102,12 @@ error everywhere.
 The functional operations `map`, `filter`, `reduce`, `any`, `all` and
 `find` are written with a block, `xs.map() -> x { … }` (Section 8.2), and
 are the only names the parser accepts after `->` in that position. `+`
-concatenates two arrays of one element type, and ranges expand inside an
-array literal: `[0, 2..=4]`.
+concatenates two arrays of one element type, `-` removes every element equal
+to one on the right (`[1, 2, 1] - [1]` is `[2]`), and ranges expand inside
+an array literal: `[0, 2..=4]`. An array cast converts every element:
+`@float(xs...)`, `@string(1, 2.5)`, `@byte(255, 3)` and `@int(…)` take
+positional values and spreads, and fail on the first element that does not
+convert.
 
 ## B.5 Maps `%K:V`
 
@@ -117,7 +121,7 @@ array literal: `[0, 2..=4]`.
 
 `map`, `filter` and `reduce` take `key, value` (`reduce` an accumulator
 first), and `filter` gives a map. `m + ["k": v]` sets entries and
-`m - ["k": _]` removes them, by key.
+`m - ["k": v]` removes them by key; the values on the right are ignored.
 
 ## B.6 `Future<T>`
 
@@ -133,6 +137,8 @@ The value is reached only through `await` (Chapter 20).
 
 Five conversions are also written as functions: `int(x)`, `byte(x)`,
 `float(x)`, `string(x)` and `char(n)` mean `x.int()`, `x.byte()`,
-`x.float()`, `x.string()` and `n.char()`. `rat(numerator, denominator)`
+`x.float()`, `x.string()` and `n.char()`, and the functions also accept a
+value that already has the target type (`string("s")`, `char('a')`), where
+the method does not exist. `rat(numerator, denominator)`
 takes two integers and makes the reduced fraction; a single argument is an
 error, and `x.rat()` converts one value.
