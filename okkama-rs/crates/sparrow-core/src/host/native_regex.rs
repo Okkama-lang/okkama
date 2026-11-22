@@ -3,6 +3,8 @@
 use crate::host::*;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
+// One input preparation and one limit for both engines (#961).
+use okkama_runtime_core::native::regex::{MAX_INPUT, input_scalars};
 use okkama_runtime_abi::{Native, NativeFailure};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 fn failure(domain: &str, code: &str, native: Native, message: &str) -> ProviderError {
@@ -19,7 +21,6 @@ const MAX_STATES: usize = 16384;
 const MAX_REPETITION: i64 = 4096;
 const MAX_NESTING: usize = 256;
 const MAX_GROUPS: usize = 1024;
-const MAX_INPUT: usize = 1_048_576;
 
 enum CompileFailure {
     Syntax(i64),
@@ -1532,25 +1533,6 @@ impl Heap {
     }
 }
 
-/// How many scalars `chars` yields, or `None` past `limit`: it reads at most
-/// `limit + 1` of them and stores none (#961).
-fn bounded_scalar_count(chars: impl Iterator<Item = char>, limit: usize) -> Option<usize> {
-    let count = chars.take(limit.saturating_add(1)).count();
-    (count <= limit).then_some(count)
-}
-
-/// The scalars of a regex input within `limit`: counted before anything is
-/// stored, so an input past the limit is refused with no storage, and an
-/// admitted one is stored once at its exact size (#961).
-fn input_scalars(input: &str, limit: usize) -> Result<Vec<u32>, &'static str> {
-    let Some(count) = bounded_scalar_count(input.chars(), limit) else {
-        return Err("Regex input resource limit exceeded\n");
-    };
-    let mut points = Vec::with_capacity(count);
-    points.extend(input.chars().map(u32::from));
-    Ok(points)
-}
-
 #[cfg(test)]
 mod tests {
     /// #463: a visited mark lasts one generation, and the generation after the last one starts clean.
@@ -1847,40 +1829,20 @@ mod tests {
         );
     }
 
-    /// #961: at the scalar limit an input is admitted and stored at its exact
-    /// size; one scalar beyond it is refused with the same diagnostic, for
-    /// ASCII and for 2- and 4-byte scalars.
+    /// #961: Sparrow prepares input with the shared runtime-core helper, so a
+    /// search admits exactly `MAX_INPUT` scalars and refuses one more with the
+    /// same diagnostic, before storing it.
     #[test]
-    fn regex_input_is_admitted_at_the_limit_and_refused_one_beyond() {
-        for scalar in ['a', '\u{e9}', '\u{1d11e}'] {
-            let at: String = std::iter::repeat_n(scalar, MAX_INPUT).collect();
-            let points = input_scalars(&at, MAX_INPUT).expect("at the limit");
-            assert_eq!(points.len(), MAX_INPUT, "{scalar:?}");
-            assert_eq!(points.capacity(), MAX_INPUT, "{scalar:?}: stored at its exact size");
-            assert!(points.iter().all(|&point| point == u32::from(scalar)), "{scalar:?}");
-            let beyond = format!("{at}{scalar}");
-            assert_eq!(input_scalars(&beyond, MAX_INPUT), Err("Regex input resource limit exceeded\n"), "{scalar:?}");
-        }
-    }
-
-    /// #961: refusing an input reads at most `limit + 1` scalars and stores
-    /// none, however long the input is; an admitted input is read whole.
-    #[test]
-    fn regex_input_refusal_reads_a_bounded_prefix() {
-        let pulled = std::cell::Cell::new(0usize);
-        let counted = |text: &'static str| {
-            pulled.set(0);
-            text.chars().inspect(|_| pulled.set(pulled.get() + 1))
-        };
-        let long: &'static str = Box::leak("\u{e9}".repeat(10_000).into_boxed_str());
-        assert_eq!(bounded_scalar_count(counted(long), 4), None);
-        assert_eq!(pulled.get(), 5, "a refusal stops after limit + 1 scalars");
-        assert_eq!(bounded_scalar_count(counted("ab\u{e9}d"), 4), Some(4));
-        assert_eq!(pulled.get(), 4);
-        assert_eq!(bounded_scalar_count(counted(""), 0), Some(0));
-        assert_eq!(input_scalars("abcde", 4), Err("Regex input resource limit exceeded\n"));
-        let small = input_scalars("ab\u{e9}", 4).expect("within the limit");
-        assert_eq!((small.len(), small.capacity()), (3, 3));
+    fn regex_search_input_stops_at_the_shared_limit() {
+        let program = regex_program("x", false, false);
+        let at = "\u{e9}".repeat(MAX_INPUT);
+        let end = BigInt::from(MAX_INPUT);
+        assert_eq!(program.selected_spans(&at, &BigInt::from(0), &end, 0), Ok(Vec::new()));
+        let beyond = format!("{at}\u{e9}");
+        assert_eq!(
+            program.selected_spans(&beyond, &BigInt::from(0), &end, 0),
+            Err("Regex input resource limit exceeded\n")
+        );
     }
 
     /// #961: offsets of admitted inputs stay scalar offsets, with multibyte
