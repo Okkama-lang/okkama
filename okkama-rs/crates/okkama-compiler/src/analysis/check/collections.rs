@@ -216,9 +216,6 @@ impl Checker<'_, '_> {
             let value = Self::poisoned(span);
             return (StmtKind::Expr(value.clone()), Flow { ty: value.ty, diverges: false });
         };
-        if binding.batch.is_some() {
-            self.error(binding.span, "for await does not support batched bindings");
-        }
         let expr = |kind| ast::Expr { kind, span };
         let name = |text: &str| ast::Name { text: text.into(), span };
         // NUL cannot occur in a source identifier; nested scopes isolate it.
@@ -298,12 +295,6 @@ impl Checker<'_, '_> {
                 },
             );
         };
-        if binding.batch.is_some() {
-            self.unsupported(
-                binding.span,
-                "Analysis of batched `for` bindings is not implemented yet.",
-            );
-        }
         let (item, source_thir, diverges) = match checked {
             // Пустой нетегированный источник: тело не исполняется ни разу.
             Some(checked) if checked.untagged => (Ty::Error, checked.source, checked.diverges),

@@ -3,10 +3,10 @@
 use super::{PResult, Parser};
 use crate::source::Span;
 use crate::syntax::ast::{
-    BatchSize, Block, CatchClause, ConfirmFallback, ElseBranch, Expr, ExprKind, ForBinding, IfStmt,
+    Block, CatchClause, ConfirmFallback, ElseBranch, Expr, ExprKind, ForBinding, IfStmt,
     MatchBody, MatchCase, Stmt, StmtKind, TryBody,
 };
-use crate::syntax::token::{TokenKind, TokenValue};
+use crate::syntax::token::TokenKind;
 
 impl Parser<'_> {
     /// `block = "{" statement* "}"`
@@ -557,22 +557,15 @@ impl Parser<'_> {
 
     fn for_binding(&mut self) -> PResult<ForBinding> {
         let name = self.consume_binding_name("Expect loop binding name after \"->\".")?;
-        let mut span = name.span;
-        let mut batch = None;
-        if self.eat(TokenKind::LeftBracket) {
-            let token = self.consume(TokenKind::Int, "Expect batch size integer.")?;
-            let literal = match &token.value {
-                Some(TokenValue::Int(literal)) => literal.clone(),
-                _ => return Err(self.error_at(&token, "Expect batch size integer.")),
-            };
-            batch = Some(BatchSize {
-                literal,
-                span: token.span,
-            });
-            let close = self.consume(TokenKind::RightBracket, "Expect \"]\" after batch size.")?;
-            span = span.to(close.span);
+        // `name[N]` is not a batched binding by design (#967): a binding is
+        // one name, and batching is an operation on the source.
+        if self.check(TokenKind::LeftBracket) {
+            return Err(self.error_here(
+                "A for binding is one name; batched bindings like \"name[2]\" are not part of Okkama. Batch the source instead: a source that does Batching<T> binds one @T batch per step.",
+            ));
         }
-        Ok(ForBinding { name, batch, span })
+        let span = name.span;
+        Ok(ForBinding { name, span })
     }
 
     /// `next ("if" expr)? ";"` — `next` never carries a value.

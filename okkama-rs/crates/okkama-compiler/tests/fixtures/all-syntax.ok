@@ -166,9 +166,6 @@ async main() is int {
     for table -> key, value {
         key;
     }
-    for list -> chunk[2] {
-        chunk;
-    }
     loop {
         last;
     }

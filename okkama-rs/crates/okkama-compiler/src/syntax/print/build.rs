@@ -405,14 +405,7 @@ fn stmt_node(stmt: &Stmt) -> Node {
             .field(
                 "bindings",
                 list(bindings, |binding| {
-                    Node::new("ForBinding", binding.span)
-                        .field("name", name(&binding.name))
-                        .field(
-                            "batch",
-                            opt_node(binding.batch.as_ref(), |batch| {
-                                int_literal_node(&batch.literal, batch.span)
-                            }),
-                        )
+                    Node::new("ForBinding", binding.span).field("name", name(&binding.name))
                 }),
             )
             .field("body", Value::node(block_node(body))),

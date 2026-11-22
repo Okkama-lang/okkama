@@ -105,6 +105,9 @@ pub struct FieldInfo<'a> {
     pub ty: Ty,
     pub default: Option<&'a ast::Expr>,
     pub span: Span,
+    /// `has name = value;` (#967): the type is inferred from the initializer
+    /// once every signature is known; until then `ty` is `Ty::Error`.
+    pub inferred: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -441,10 +444,13 @@ impl<'a> Registry<'a> {
             registry.current = module;
             registry.collect_does(module);
         }
+        registry.find_standard();
+        // Every signature is known: inferred field types (#967) come from
+        // their initializers, before the checks that read field types.
+        super::check::infer_field_types(&mut registry);
         registry.check_variant_recursion();
         registry.check_error_payloads();
         registry.check_hidden_leaks();
-        registry.find_standard();
         registry.check_cell_fields();
         registry.add_adapters();
         for (module, ty, span) in std::mem::take(&mut registry.pending_bounds) {
@@ -2241,21 +2247,28 @@ impl<'a> Registry<'a> {
         let scope = self.object_scope(id);
         let self_type = self.self_type(id);
         let mut fields: Vec<FieldInfo<'a>> = Vec::new();
-        let mut untyped: Vec<String> = Vec::new();
         let mut ctor_decls = Vec::new();
         let mut actions: Vec<&'a ast::ActionDecl> = Vec::new();
         let mut destroy = None;
         for member in &decl.members {
             match member {
                 ast::ObjectMember::Has(has) => {
+                    // Without a type the initializer gives it (#967), never a
+                    // constructor's assignment; with neither the type is missing.
                     let ty = match &has.ty {
                         Some(ty) => self.resolve(ty, &scope),
                         None => {
-                            self.unsupported(
-                                has.span,
-                                "Fields without an explicit type are not supported by the analysis yet.",
-                            );
-                            untyped.extend(has.names.iter().map(|name| name.text.clone()));
+                            if has.default.is_none() {
+                                for field_name in &has.names {
+                                    self.error(
+                                        field_name.span,
+                                        format!(
+                                            "Field \"{0}\" of object \"{name}\" needs a type: write \"has {0} is T;\", or give it an initializer to infer the type from",
+                                            field_name.text
+                                        ),
+                                    );
+                                }
+                            }
                             Ty::Error
                         }
                     };
@@ -2275,6 +2288,7 @@ impl<'a> Registry<'a> {
                             ty: ty.clone(),
                             default: has.default.as_ref(),
                             span: field_name.span,
+                            inferred: has.ty.is_none() && has.default.is_some(),
                         });
                     }
                 }
@@ -2343,17 +2357,6 @@ impl<'a> Registry<'a> {
                     let mut indices = Vec::new();
                     let mut valid = true;
                     for field in listed {
-                        if untyped.contains(&field.text) {
-                            self.error(
-                                field.span,
-                                format!(
-                                    "Constructor shorthand field \"{}\" must have an explicit type",
-                                    field.text
-                                ),
-                            );
-                            valid = false;
-                            continue;
-                        }
                         let info = &self.objects[id.0];
                         let Some(index) = info
                             .fields
@@ -2812,6 +2815,7 @@ impl<'a> Registry<'a> {
             ty,
             default: None,
             span: Span::empty(0),
+            inferred: false,
         };
         let param = |registry: &mut Self, name: &str| {
             registry.params.push(ParamInfo {

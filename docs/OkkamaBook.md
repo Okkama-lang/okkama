@@ -1861,8 +1861,14 @@ only through `self`.
 has digit is int;              // required: must be bound by construction
 has cents is int = 0;          // optional: default value
 has digit, cents is int;       // several names may share one declaration
+has label = "cash";            // the type comes from the initializer: string
 ```
 
+- A field without `is T` takes the static type of its initializer at compile
+  time, and is then an ordinary typed field: constructors and successors are
+  checked against that type. Only the initializer gives the type (never a
+  constructor's assignment), so `has digit;` asks for the type, and an
+  initializer that settles none (`[]`, `[:]`) needs it written.
 - Field names must be unique within the object (across all `has`
   declarations).
 - Field defaults are evaluated per construction, *before* the constructor

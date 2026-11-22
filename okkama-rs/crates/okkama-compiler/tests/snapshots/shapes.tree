@@ -318,7 +318,6 @@ Program
             bindings:
               - ForBinding
                 name: shape
-                batch: (none)
             body: Block
               statements:
                 - LetStatement

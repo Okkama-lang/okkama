@@ -1000,11 +1000,6 @@ impl<'s> Printer<'s> {
                         self.word(", ");
                     }
                     self.word(&binding.name.text);
-                    if let Some(batch) = &binding.batch {
-                        self.word("[");
-                        self.word(self.slice(batch.span));
-                        self.word("]");
-                    }
                 }
                 self.word(" ");
                 self.block(body);

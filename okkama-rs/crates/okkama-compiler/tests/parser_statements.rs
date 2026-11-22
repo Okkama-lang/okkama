@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{assert_rejects, body_sexpr, parse_ok};
+use common::{assert_rejects, body_sexpr, parse_in, parse_ok};
+use okkama_compiler::syntax::ParseMode;
 
 fn wrap(body: &str) -> String {
     format!("module app v1.0.0; main() is int {{ {body} }}")
@@ -130,34 +131,30 @@ fn match_statements() {
 fn for_statements_own_the_top_level_arrow() {
     assert_eq!(
         body_sexpr("for users -> user { user.name; }"),
-        "(ForStatement source=users bindings=[(ForBinding name=user batch=_)] body={(. user name)})"
+        "(ForStatement source=users bindings=[(ForBinding name=user)] body={(. user name)})"
     );
     assert_eq!(
         body_sexpr("for pairs -> key, value { key; }"),
-        "(ForStatement source=pairs bindings=[(ForBinding name=key batch=_) (ForBinding name=value batch=_)] body={key})"
-    );
-    assert_eq!(
-        body_sexpr("for rows -> batch[10] { batch; }"),
-        "(ForStatement source=rows bindings=[(ForBinding name=batch batch=10)] body={batch})"
+        "(ForStatement source=pairs bindings=[(ForBinding name=key) (ForBinding name=value)] body={key})"
     );
     // A member call before the arrow is the source, not a functional suffix.
     assert_eq!(
         body_sexpr("for mapper.map() -> value { value; }"),
-        "(ForStatement source=(call (. mapper map)) bindings=[(ForBinding name=value batch=_)] body={value})"
+        "(ForStatement source=(call (. mapper map)) bindings=[(ForBinding name=value)] body={value})"
     );
     assert_eq!(
         body_sexpr("for (values.map() -> item { item; }) -> value { value; }"),
-        "(ForStatement source=(group (map values -> [item] {item})) bindings=[(ForBinding name=value batch=_)] body={value})"
+        "(ForStatement source=(group (map values -> [item] {item})) bindings=[(ForBinding name=value)] body={value})"
     );
     // Only the top level of the source gives the arrow to the `for`; nested
     // expressions such as arguments complete their functional calls.
     assert_eq!(
         body_sexpr("for mapper.items(values.map() -> item { item; }) -> value { value; }"),
-        "(ForStatement source=(call (. mapper items) (map values -> [item] {item})) bindings=[(ForBinding name=value batch=_)] body={value})"
+        "(ForStatement source=(call (. mapper items) (map values -> [item] {item})) bindings=[(ForBinding name=value)] body={value})"
     );
     assert_eq!(
         body_sexpr("for a + mapper.map() -> value { value; }"),
-        "(ForStatement source=(+ a (call (. mapper map))) bindings=[(ForBinding name=value batch=_)] body={value})"
+        "(ForStatement source=(+ a (call (. mapper map))) bindings=[(ForBinding name=value)] body={value})"
     );
     for (body, expected) in [
         (
@@ -172,8 +169,6 @@ fn for_statements_own_the_top_level_arrow() {
             "for [1, 2] { 1; }",
             "Expect \"->\" and a binding after for source.",
         ),
-        ("for rows -> batch[n] { }", "Expect batch size integer."),
-        ("for rows -> batch[1 { }", "Expect \"]\" after batch size."),
     ] {
         assert_rejects(&wrap(body), expected);
     }
@@ -420,4 +415,36 @@ fn for_await_preserves_syntax_and_formatting() {
     let again = SourceFile::new("async.ok", &formatted).unwrap();
     assert_eq!(formatted, syntax::format::format(&again).unwrap());
     assert!(body_sexpr("for await source -> row { next; }").contains("ForAwaitStatement"));
+}
+
+/// #967: a `for` binding is one name; `name[N]` is rejected by design at the
+/// `[`, with a message that says batching belongs to the source.
+#[test]
+fn batched_for_bindings_are_rejected_by_design() {
+    let wrap = |body: &str| format!("module app v1.0.0;\nmain() is int {{\n{body}\n0; }}");
+    let expected = "A for binding is one name; batched bindings like \"name[2]\" are not part of Okkama. Batch the source instead: a source that does Batching<T> binds one @T batch per step.";
+    for body in [
+        "for rows -> batch[10] { batch; }",
+        "for rows -> batch[n] { }",
+        "for table -> key, value[2] { }",
+        "for await stream -> item[2] { }",
+        "for rows -> row { for row -> cell[3] { } }",
+    ] {
+        let (message, found, line) = parse_in(&wrap(body), ParseMode::Full).expect_err(body);
+        assert_eq!((message.as_str(), found.as_str(), line), (expected, "[", 3), "{body}");
+    }
+}
+
+/// #967: ordinary, multiple and nested bindings are unchanged; indexing in
+/// the source or the body still parses.
+#[test]
+fn single_multiple_and_nested_for_bindings_still_parse() {
+    assert_eq!(
+        body_sexpr("for rows[0] -> row { for row -> cell { cell[1]; } }"),
+        "(ForStatement source=(index rows 0) bindings=[(ForBinding name=row)] body={(ForStatement source=row bindings=[(ForBinding name=cell)] body={(index cell 1)})})"
+    );
+    assert_eq!(
+        body_sexpr("for table -> key, value { key; }"),
+        "(ForStatement source=table bindings=[(ForBinding name=key) (ForBinding name=value)] body={key})"
+    );
 }
