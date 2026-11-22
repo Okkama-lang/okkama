@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 238 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36359 lines
+## other — 87 files, 36399 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -209,10 +209,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 23
 - `okkama-native/src/lib.rs` 5 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc
-- `okkama-native/src/ops.rs` 752 — Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
+- `okkama-native/src/ops.rs` 770 — Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
 - `okkama-native/src/rsa_public.rs` 84 — Открытые операции RSA через низкоуровневый API aws-lc: проверка подписей
 - `okkama-native/src/secure.rs` 31 — Криптостойкие случайные байты от генератора платформы (#195).
-- `okkama-native/src/x509.rs` 266 — Подписи сертификатов X.509: проверка `signatureValue` над `tbsCertificate`
+- `okkama-native/src/x509.rs` 288 — Подписи сертификатов X.509: проверка `signatureValue` над `tbsCertificate`
 - `okkama-persistent/examples/fatkey.rs` 68 — Lookups with a key shaped like Tomato's map key (#252): a 40-byte enum
 - `okkama-persistent/examples/mbench.rs` 97 — Native cost of the persistent map against the standard B-tree (#252).
 - `okkama-persistent/examples/pbench.rs` 217 — Native cost of the candidate array representations (#246, phase 1).
