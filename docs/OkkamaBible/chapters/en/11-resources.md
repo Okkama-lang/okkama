@@ -310,9 +310,9 @@ An async destroy replaces a pattern that needed two `defer`s, a `close` and
 an awaited `settled()`. In 0.4.2 the standard library dropped 33 helper
 objects that existed only to await one child in cleanup, because a
 structured `await` already waits for it
-([#264](https://github.com/shootnix/okkama/issues/264)). Its remaining
+([#264](https://github.com/Okkama-lang/okkama/issues/264)). Its remaining
 cleanup guards still close through `defer await`; moving them onto
-`async destroy` is [#329](https://github.com/shootnix/okkama/issues/329).
+`async destroy` is [#329](https://github.com/Okkama-lang/okkama/issues/329).
 
 ## 11.9 Resources and tasks
 

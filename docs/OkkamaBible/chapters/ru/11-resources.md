@@ -329,10 +329,10 @@ object Handle {
 `close` и ожидаемый `settled()`. В 0.4.2 стандартная библиотека избавилась
 от 33 вспомогательных объектов, которые существовали только для того, чтобы
 дождаться одного дочернего future при уборке: структурное `await` и так
-его дожидается ([#264](https://github.com/shootnix/okkama/issues/264)). Её
+его дожидается ([#264](https://github.com/Okkama-lang/okkama/issues/264)). Её
 оставшиеся страховочные объекты очистки по-прежнему закрываются через
 `defer await`; их перевод на `async destroy` —
-[#329](https://github.com/shootnix/okkama/issues/329).
+[#329](https://github.com/Okkama-lang/okkama/issues/329).
 
 ## 11.9 Ресурсы и задачи
 

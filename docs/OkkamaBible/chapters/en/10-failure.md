@@ -178,8 +178,8 @@ no stack is held open while it is made.
 These end the run, whatever `catch` clauses surround them:
 
 - `panic "message"` — the program's own declaration that something
-  impossible happened. The message must be a literal string: a panic carries
-  a fixed sentence, not data.
+  impossible happened. The message is any `string`, usually a literal
+  sentence that names the assumption that broke.
 - A bare `confirm condition;` whose condition is false (§10.9).
 - **Runtime errors.** An index or slice out of bounds, division or modulo by
   zero, a failed narrowing of a role or `any` value. Each is detected during execution and reported as `RuntimeError: …`.
@@ -583,7 +583,7 @@ Two rules make concurrent failure as strict as sequential failure.
   it, the run itself fails: the report is printed and the process exits
   with status 1, even when `main` returned 0. A forgotten task cannot hide
   an error. This is a deliberate choice, and the conformance suite pins it
-  (`ASYNC.UNOBSERVED-FAILURE`).
+  (`L08.shutdown.unobserved-failure`).
 - **Cancellation is a failure value of its own.** When the work a task
   awaited is cancelled, the task sees `Cancelled`, which does `Error` and
   can be caught. Structured await (Chapter 20) guarantees that the task
@@ -719,7 +719,7 @@ The two channels are a strong opinion, and opinions cost something.
 - **No named handlers yet.** A handler shared by several `try` blocks has to
   be an action called from each clause. Named catch handlers were proposed
   and postponed as too magical for 0.4.1
-  ([#148](https://github.com/shootnix/okkama/issues/148)).
+  ([#148](https://github.com/Okkama-lang/okkama/issues/148)).
 
 Against these costs stands what the design removes:
 
