@@ -336,3 +336,19 @@ fn a_module_version_keeps_its_tokens() {
     let once = fmt("module x v1.0 .0;\nmain() is int { 0; }\n");
     assert_eq!(fmt(&once), once);
 }
+
+/// Nested calls: each level measured its arguments again inside the measurement of its parent,
+/// so the time doubled per level (depth 24 took 1.9 s in a 0.6.3 release build). The one-line
+/// width of each list item is measured once now (#979). The bound is generous for a debug build.
+#[test]
+fn deeply_nested_calls_format_in_linear_time() {
+    let mut call = String::from("x");
+    for _ in 0..26 {
+        call = format!("f(a, {call})");
+    }
+    let started = std::time::Instant::now();
+    let text = fmt(&format!("module app v1.0.0;\n\nmain() is int {{\n    let v = {call};\n    0;\n}}\n"));
+    let elapsed = started.elapsed();
+    assert!(text.ends_with("    0;\n}\n"), "{text}");
+    assert!(elapsed < std::time::Duration::from_secs(10), "formatting took {elapsed:?}");
+}

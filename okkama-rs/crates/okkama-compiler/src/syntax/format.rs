@@ -152,7 +152,14 @@ struct Printer<'s> {
     comments: Vec<Comment>,
     next_comment: usize,
     width: usize,
+    /// One-line widths of list items already measured (#979), shared with every scratch printer.
+    /// A width is measured in a scratch printer with no width limit and no comments, so it does
+    /// not depend on where the item stands; without the cache each nesting level measured its
+    /// items again inside the measurement of its parent, doubling the time per level.
+    flat_widths: FlatWidths,
 }
+
+type FlatWidths = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u32, u32, std::any::TypeId), Option<usize>>>>;
 
 impl<'s> Printer<'s> {
     fn new(text: &'s str, comments: Vec<Comment>, width: usize) -> Self {
@@ -165,7 +172,16 @@ impl<'s> Printer<'s> {
             comments,
             next_comment: 0,
             width,
+            flat_widths: FlatWidths::default(),
         }
+    }
+
+    /// A scratch printer for measuring: no width limit, no comments, the shared width cache.
+    fn scratch(&self) -> Printer<'s> {
+        let mut scratch = Printer::new(self.text, Vec::new(), usize::MAX);
+        scratch.flat_widths = self.flat_widths.clone();
+        scratch.line_start = false;
+        scratch
     }
 
     fn finish(mut self) -> String {
@@ -315,8 +331,7 @@ impl<'s> Printer<'s> {
 
     /// Ширина первой строки `print`.
     fn first_line(&self, print: impl FnOnce(&mut Printer<'s>)) -> usize {
-        let mut scratch = Printer::new(self.text, Vec::new(), usize::MAX);
-        scratch.line_start = false;
+        let mut scratch = self.scratch();
         print(&mut scratch);
         scratch
             .out
@@ -327,10 +342,20 @@ impl<'s> Printer<'s> {
 
     /// Ширина `print` в одну строку (`None` — многострочное).
     fn flat(&self, print: impl FnOnce(&mut Printer<'s>)) -> Option<usize> {
-        let mut scratch = Printer::new(self.text, Vec::new(), usize::MAX);
-        scratch.line_start = false;
+        let mut scratch = self.scratch();
         print(&mut scratch);
         (!scratch.out.contains('\n')).then(|| scratch.out.chars().count())
+    }
+
+    /// [`Printer::flat`] of a list item, measured once per item (#979).
+    fn flat_item<T: 'static>(&self, span: Span, print: impl FnOnce(&mut Printer<'s>)) -> Option<usize> {
+        let key = (span.start, span.end, std::any::TypeId::of::<T>());
+        if let Some(width) = self.flat_widths.borrow().get(&key) {
+            return *width;
+        }
+        let width = self.flat(print);
+        self.flat_widths.borrow_mut().insert(key, width);
+        width
     }
 
     /// The module version as the source spells it (#980). `v1.0 .0` is a valid way to write v1.0.0,
@@ -793,7 +818,7 @@ impl<'s> Printer<'s> {
     /// многострочный элемент (блок, closure) остаётся «прижатым»: `f(a, b -> {`.
     /// `close` — смещение закрывающей скобки или позже (висячая запятая
     /// ищется между последним элементом и ним).
-    fn list<T>(
+    fn list<T: 'static>(
         &mut self,
         open: &str,
         close: &str,
@@ -821,7 +846,7 @@ impl<'s> Printer<'s> {
         let mut widths = Vec::new();
         if !broken {
             for item in items {
-                widths.push(self.flat(|p| print(p, item)));
+                widths.push(self.flat_item::<T>(span(item), |p| print(p, item)));
             }
             let hug = widths[..widths.len() - 1].iter().all(Option::is_some)
                 && widths[widths.len() - 1].is_none();
