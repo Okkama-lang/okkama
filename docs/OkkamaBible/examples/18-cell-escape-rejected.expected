@@ -1,0 +1,1 @@
+18-cell-escape-rejected.ok:12:41: semantic error: An action that retains a Cell cannot be passed to an action: a cell stays in its synchronous frame; share state between tasks with Atomic

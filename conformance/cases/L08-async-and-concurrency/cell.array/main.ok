@@ -1,0 +1,12 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+main() is int {
+    let c = Cell(1);
+    let f = () is int {
+        c.value();
+    };
+    let fs = [f];
+    0;
+}

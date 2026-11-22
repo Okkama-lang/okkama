@@ -205,6 +205,9 @@ impl Checker<'_, '_> {
         args: &[Ty],
         span: Span,
     ) -> bool {
+        if Some(object) != self.reg.standard.cell && !self.check_cell_arguments(args, span) {
+            return false;
+        }
         self.reg.key_uses.push((self.module, object, args.to_vec(), span));
         let params = self.reg.objects[object.0].params.clone();
         let env: Vec<(ParamId, Ty)> = params.iter().copied().zip(args.iter().cloned()).collect();
@@ -224,6 +227,15 @@ impl Checker<'_, '_> {
                 self.type_name(&required)
             );
             self.error(span, message);
+            return false;
+        }
+        true
+    }
+
+    /// Check solved arguments, including evidence obtained through action signatures.
+    pub(super) fn check_cell_arguments(&mut self, args: &[Ty], span: Span) -> bool {
+        if self.reg.standard.cell.is_some_and(|cell| args.iter().any(|ty| ty.holds_object(cell))) {
+            self.error(span, "A Cell cannot bind a generic parameter: a cell stays in synchronous code; share state between tasks with Atomic");
             return false;
         }
         true

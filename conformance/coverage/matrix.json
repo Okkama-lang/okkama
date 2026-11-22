@@ -9556,15 +9556,37 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L08.cell.any",
+      "L08.cell.array",
+      "L08.cell.bound-spawn",
+      "L08.cell.enum-payload",
+      "L08.cell.forwarder",
+      "L08.cell.generic-signature",
+      "L08.cell.nested-escape",
+      "L08.cell.once-field"
+     ],
+     "mandatory_cases": [
+      "L08.cell.any",
+      "L08.cell.array",
+      "L08.cell.bound-spawn",
+      "L08.cell.enum-payload",
+      "L08.cell.forwarder",
+      "L08.cell.generic-signature",
+      "L08.cell.nested-escape",
+      "L08.cell.once-field"
+     ],
      "requirement": "required"
     },
     "normal": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L08.cell.functional",
+      "L08.cell.local"
+     ],
+     "mandatory_cases": [
+      "L08.cell.functional",
+      "L08.cell.local"
+     ],
      "requirement": "required"
     }
    },
@@ -29886,9 +29908,7 @@
    "STD.CALENDAR [normal]",
    "STD.CALENDAR [boundary]",
    "STD.CALENDAR [invalid]",
-   "STD.CELL [normal]",
    "STD.CELL [boundary]",
-   "STD.CELL [invalid]",
    "STD.CHECKSUM.ADLER32 [invalid]",
    "STD.CHECKSUM.STATE [normal]",
    "STD.CHECKSUM.STATE [boundary]",
@@ -30975,7 +30995,6 @@
    "STD.ASYNC.LOCK",
    "STD.ASYNC.SEMAPHORE",
    "STD.CALENDAR",
-   "STD.CELL",
    "STD.CHECKSUM.STATE",
    "STD.CLI.COMMAND",
    "STD.COLLECTIONS.COMBINATORICS",
@@ -31324,5 +31343,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "d7da766469f36d0fa1e729e7755af7d6dfdbb5be1c5a357baa70aefc6cae44b7"
+ "suite_tree_sha256": "041f6b168b228119caebc005af3e2651a5fe5611bf9bc9396438647a673bb7b0"
 }

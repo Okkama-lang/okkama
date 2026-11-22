@@ -688,6 +688,11 @@ impl Checker<'_, '_> {
     /// only fields, `self`, constants and earlier `once let`s. A parameter or
     /// an ordinary local would make the kept value wrong for the next call.
     fn check_once(&mut self, value: &Expr, span: Span, mark: usize) {
+        // A once local is a hidden object field. Effect checks trust action
+        // calls, so a fresh Cell returned by an action must be refused here.
+        if self.reg.standard.cell.is_some_and(|cell| Self::ty_of(value).holds_object(cell)) {
+            self.error(span, "A once let cannot hold a Cell: a cell stays in synchronous code; share state between tasks with Atomic");
+        }
         if !matches!(self.kind, Kind::Method | Kind::Successor) {
             self.error(span, "once let is only allowed in an object's action");
             return;

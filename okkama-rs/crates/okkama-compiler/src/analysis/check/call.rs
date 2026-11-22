@@ -1508,6 +1508,9 @@ impl Checker<'_, '_> {
         on_self: bool,
         span: Span,
     ) -> Expr {
+        if Some(object) != self.reg.standard.cell {
+            self.check_cell_arguments(&type_args, span);
+        }
         let object_name = self.type_name(&Ty::Object(object, type_args.clone()));
         let shapes = self.method_shapes(object, &type_args, &name.text);
         if shapes.is_empty() {
@@ -1589,6 +1592,7 @@ impl Checker<'_, '_> {
         args: &[ast::Argument],
         span: Span,
     ) -> Expr {
+        self.check_cell_arguments(&role_args, span);
         let role_name = self.type_name(&Ty::Role(role, role_args.clone()));
         let shapes = self.role_shapes(role, &role_args, &name.text);
         if shapes.is_empty() {

@@ -1,0 +1,10 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+enum Hidden = (held(value is Cell<int>));
+
+main() is int {
+    let h = Hidden.held(Cell(1));
+    0;
+}

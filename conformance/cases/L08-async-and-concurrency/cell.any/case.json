@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cell.any",
+  "title": "Cell local frame rule: any",
+  "purpose": "Cell-retaining actions stay in their synchronous frame; Cell storage and erasure cannot bypass the restriction.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "STD.CELL",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "check",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {},
+  "expect": {
+    "outcome": "reject",
+    "rejection": {
+      "stages": [
+        "check"
+      ],
+      "categories": [
+        "semantic"
+      ]
+    }
+  },
+  "spec_refs": [
+    "std/cell.ok",
+    "docs/OkkamaBible/chapters/en/18-closures.md"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #957",
+    "expected_basis": "Owner-approved local non-escaping design, bound-receiver/enum amendment, and hidden once-field storage restriction."
+  },
+  "status": "mandatory"
+}

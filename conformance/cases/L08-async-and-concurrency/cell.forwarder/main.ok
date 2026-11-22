@@ -1,0 +1,20 @@
+module bible/cell_escape v1.0.0;
+
+import "cell" take Cell;
+
+object Forwarder {
+    Forwarder();
+
+    forwarded(f is () is int) is () is int {
+        f;
+    }
+}
+
+main() is int {
+    let count = Cell(0);
+    let read = () is int {
+        count.value();
+    };
+    let escaped = Forwarder().forwarded(read);
+    0;
+}

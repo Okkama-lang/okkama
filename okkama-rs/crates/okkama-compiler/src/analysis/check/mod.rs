@@ -14,6 +14,7 @@ mod call;
 mod collections;
 mod consts;
 mod expr;
+mod frame;
 mod generics;
 mod stmt;
 mod variants;
@@ -494,6 +495,9 @@ impl<'r, 'a> Checker<'r, 'a> {
             is_async: self.is_async,
             span,
         };
+        if self.kind != Kind::Closure {
+            frame::check(self.reg, &body, self.self_ty.as_ref());
+        }
         super::flow::check(self.reg, &body);
         body
     }
@@ -759,6 +763,12 @@ impl<'r, 'a> Checker<'r, 'a> {
         };
         if value.diverges || actual.is_error() || expected.is_error() || actual == *expected {
             return Ok(value);
+        }
+        if self.reg.standard.cell.is_some_and(|cell| actual.holds_object(cell))
+            && matches!(expected.taken(), Ty::Any | Ty::Role(..))
+        {
+            self.error(value.span, "A Cell cannot be hidden in any or a role: a cell stays in synchronous code; share state between tasks with Atomic");
+            return Ok(Self::poisoned_call(value.span, vec![value]));
         }
         let wrap = |coercion: Coercion, value: Expr, ty: Ty| {
             let span = value.span;

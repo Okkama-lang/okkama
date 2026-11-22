@@ -14,6 +14,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Batched `for` bindings are not part of Okkama (#967).** `for xs -> b[2]` is a syntax error that points to
   sources that do `Batching<T>`; it used to parse and then fail as "not implemented yet".
 
+- **A `Cell` stays in its synchronous frame, also through a closure (#957, owner decision).** A closure that
+  captures a `Cell` (or a bound action on one, `c.value`) may be called, kept in a local or captured by another
+  closure, and nothing else: returning it, passing it to any action (synchronous ones too — a parameter promises
+  nothing about where the value goes), storing it in a field, collection, enum payload or `once let`, `await`
+  and `spawn` are compile-time errors. A `Cell` itself can no longer hide in a type that does not show it: no
+  coercion to `any` or a role, no generic type argument, no enum payload, no `once let` value. The six functional
+  operations take a block, not an action, so a `Cell` inside `xs.map() -> x { … }` stays legal. A local check per
+  body: `okkama check` time unchanged (+0.5–1.4%, against +33–40% for the whole-program analysis it replaces).
+
 ### Performance
 - **`parallel/map` reuses its worker processes within one run (#946).** A `results()` call keeps up to `workers`
   Unix processes for its items instead of starting one per item: 4 items on 2 workers take 5.7 ms instead of

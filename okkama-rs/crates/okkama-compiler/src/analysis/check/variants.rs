@@ -101,6 +101,7 @@ impl Checker<'_, '_> {
             self.error(span, format!("Cannot infer type arguments for {}.{}; provide an expected type or explicit type arguments", decl.name, name.text));
             return Self::poisoned(span);
         };
+        self.check_cell_arguments(&types, span);
         let env: Vec<_> = decl.params.iter().copied().zip(types.clone()).collect();
         for (value, (_, pattern)) in values.iter_mut().zip(fields) {
             let target = pattern.subst(&env);

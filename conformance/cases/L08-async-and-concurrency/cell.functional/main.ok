@@ -1,0 +1,12 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+main() is int {
+    let c = Cell(0);
+    let xs = (0..3).map() -> i {
+        c.replace(i);
+        c.value();
+    };
+    0;
+}

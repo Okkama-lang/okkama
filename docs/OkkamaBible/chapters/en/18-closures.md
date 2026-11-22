@@ -318,11 +318,32 @@ action value. The most common is a sort key.
   (Section 18.5). The ranking lives in an object with a name and a test,
   and the sort call stays one line.
 - **A `Cell` gathers the names.** `Listing.names` walks any `Iterating<Job>`
-  and appends to a `Cell`, the mutable value of synchronous code. A `for`
-  block is not a closure, so it may update the cell. An anonymous action may
-  capture a `Cell` too, and today nothing stops such an action from reaching
-  async code, where a cell must not go (issue #957); keep cells in the
-  synchronous code that made them.
+  and appends to a `Cell`, the mutable value of synchronous code. `for` and
+  the six functional operations (`map`, `filter`, `reduce`, `any`, `all`,
+  `find`) execute blocks in the current frame; those blocks may use a Cell.
+
+An action that captures a Cell, a collection containing one, or another such
+local action is **frame-bound**. A bound action on a Cell, such as
+`count.value`, has the same restriction. It may be called synchronously,
+bound to a local name, or captured by another frame-bound action. Repeated
+local calls are allowed:
+
+{{example:18-cell-local}}
+
+Every other use is rejected: returning it, passing it to any action (even a
+synchronous callback), storing it in a field, enum payload or collection,
+boxing it into `any` or a role, awaiting it, or spawning it. A synchronous
+forwarder could return or retain its callback, so it cannot receive one:
+
+{{example:18-cell-escape-rejected}}
+
+The Cell itself cannot be hidden in `any`, a role or a generic parameter.
+This includes inferred parameters, even those inferred from an action's
+signature. `Cell<T>` itself and builtin collections keep Cell types visible;
+ordinary synchronous Cell use remains valid. Object fields, enum payloads
+and cached `once let` values cannot hold a Cell. For state retained by an
+object or shared between tasks, use `Atomic`. Closures with ordinary
+immutable captures and Atomic captures keep their usual behavior.
 
 The same shape recurs across the library: keys in `SortedBy`, mappings
 and conditions in the lazy views of `collections/views`, and the condition

@@ -1,0 +1,16 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+object Box<T> {
+    has f is () is T;
+
+    Box(:f);
+}
+
+main() is int {
+    let b = Box(f: () is Cell<int> {
+        Cell(1);
+    });
+    0;
+}

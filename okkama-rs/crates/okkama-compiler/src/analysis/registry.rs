@@ -452,6 +452,7 @@ impl<'a> Registry<'a> {
         registry.check_error_payloads();
         registry.check_hidden_leaks();
         registry.check_cell_fields();
+        registry.check_cell_payloads();
         registry.add_adapters();
         for (module, ty, span) in std::mem::take(&mut registry.pending_bounds) {
             registry.current = module;
@@ -2746,6 +2747,22 @@ impl<'a> Registry<'a> {
                     span,
                     format!("Field \"{name}\" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic"),
                 );
+            }
+        }
+    }
+
+    /// Nominal enum payloads must obey the same storage rule as fields (#957).
+    fn check_cell_payloads(&mut self) {
+        let Some(cell) = self.standard.cell else { return; };
+        for index in 0..self.enums.len() {
+            let info = &self.enums[index];
+            let found: Vec<_> = info.payloads.iter().flatten()
+                .filter(|(_, ty)| ty.holds_object(cell))
+                .map(|(name, _)| name.clone()).collect();
+            let (module, span) = (info.module, info.span);
+            self.current = module;
+            for name in found {
+                self.error(span, format!("Case payload \"{name}\" cannot hold a Cell: a cell stays in synchronous code; share state between tasks with Atomic"));
             }
         }
     }

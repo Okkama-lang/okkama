@@ -1,0 +1,20 @@
+module bible/cell_local v1.0.0;
+
+import "cell" take Cell;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let count = Cell(0);
+    let step = () is int {
+        count.replace(count.value() + 1);
+        count.value();
+    };
+    let nested = () is int {
+        step();
+    };
+    let read is () is int = count.value;
+    Stdout().writeln(step().string());
+    Stdout().writeln(nested().string());
+    Stdout().writeln(read().string());
+    0;
+}

@@ -681,7 +681,7 @@ fn source_uses_receiver(source: &Source) -> bool {
     }
 }
 
-fn expr_uses_receiver(expr: &Expr) -> bool {
+pub(crate) fn expr_uses_receiver(expr: &Expr) -> bool {
     let any = |values: &[Expr]| values.iter().any(expr_uses_receiver);
     match &expr.kind {
         ExprKind::SelfValue | ExprKind::Field(_) | ExprKind::PendingField(_) | ExprKind::OwnerField(_) => true,

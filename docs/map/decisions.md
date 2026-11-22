@@ -20,6 +20,18 @@ the session's memory; older rulings live in the commits and tickets named.
   execution never acquires a worker command. Scope settlement and shielded
   pool close kill/reap active and idle workers before publishing results.
 
+- **2026-11-22. #957 local Cell rule (owner design and amendment).**
+  A Cell-bearing value cannot be erased into any/roles or bind a generic
+  parameter; Cell itself and builtin collections preserve visibility.
+  Cell-retaining closures and bound actions may only be locally bound,
+  captured by another frame-bound action, or called synchronously. Arbitrary
+  synchronous callbacks are not non-escaping contracts. Enum payloads obey
+  the field restriction. Further implementation amendment, authorized by the
+  task's counterexample policy: `once let` is hidden field storage and cannot
+  hold Cell, even through a pure-looking action-field call. One lexical
+  body walk plus existing coercion/instantiation checks; no fixed point or
+  public effect types. Source: #957 owner comments and amended task design.
+
 - **2026-11-22. Security refresh #960/#963/#962 (owner task).** Keep one
   advisory failure policy for main/fuzz lockfiles. cargo-fuzz lacks a locked
   option, so its child Cargo build/check/metadata commands are wrapped with

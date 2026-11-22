@@ -1,0 +1,8 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+main() is int {
+    let c is any = Cell(1);
+    0;
+}

@@ -1,0 +1,20 @@
+module app v1.0.0;
+
+import "cell" take Cell;
+
+object W {
+    has factory is () is Cell<int>;
+
+    W(:factory);
+
+    read() is int {
+        once let c = factory();
+        c.value();
+    }
+}
+
+async main() is int {
+    W(factory: () is Cell<int> {
+        Cell(1);
+    }).read();
+}

@@ -18,12 +18,16 @@ the only Okkama engine since 0.6.0 (#584) (OKKAMA, default the release build), a
 compares stdout plus a final "exit N" line with examples/NAME.expected (for
 NAME-rejected, the compiler's diagnostic on stderr; NAME-tests runs as a test
 suite with -t);
+OKKAMA_BIBLE_CHECK_FILTER limits --check to example names containing that text.
+OKKAMA_BIBLE_RUNNER supplies an isolated command runner in place of the macOS cage
+(for example, a wrapper launching a bounded Docker container).
 --stats prints characters and pages (2,500 characters) per chapter;
 --issues lists every issue the chapters cite with its current title (gh).
 """
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -197,6 +201,8 @@ def check():
         if not name.endswith(".ok"):
             continue
         stem = name[:-3]
+        if os.environ.get("OKKAMA_BIBLE_CHECK_FILTER", "") not in stem:
+            continue
         expected_path = os.path.join(examples, stem + ".expected")
         expected = open(expected_path).read().rstrip("\n").splitlines() if os.path.exists(expected_path) else None
         for engine in ("sparrow",):
@@ -208,6 +214,8 @@ def check():
             # cage forbids; these few examples run outside it.
             if stem in UNCAGED:
                 cage = []
+            if runner := os.environ.get("OKKAMA_BIBLE_RUNNER"):
+                cage = shlex.split(runner)
             # A `-tests` example is a test suite: its report is the output.
             tests = ["-t"] if stem.endswith("-tests") else []
             p = subprocess.run(cage + [OKKAMA, "run", *tests, *flag, name], cwd=examples,

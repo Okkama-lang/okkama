@@ -11,7 +11,15 @@ module cell v1.0.0;
 //     total.value();
 //
 // A Cell stays in synchronous code, and the compiler checks it: an async action
-// cannot create, receive or use one, and an object's field cannot hold one. With
+// cannot create, receive or use one. Object fields, enum payloads and once-let
+// caches cannot hold one. A Cell cannot be hidden in any, a role or a generic
+// parameter (Cell itself and builtin collections keep its type visible).
+//
+// An action capturing a Cell or another frame-bound action, and a bound action
+// on a Cell, stays in its synchronous frame. It may be called locally, bound to
+// a local, or captured by another such action. It cannot be returned, passed
+// to any action (including synchronous callbacks), stored, boxed or spawned.
+// Functional-operation blocks run in the current frame and may use a Cell. With
 // no suspension point in synchronous code, every read and write is whole with
 // respect to tasks. State shared between tasks is async/atomic's Atomic.
 //

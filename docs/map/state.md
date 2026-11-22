@@ -26,6 +26,28 @@ state within one run; it is not fresh-process isolation or an untrusted-item
 boundary. Non-Unix transport retains one-shot behavior. Implementation is left
 uncommitted for the lead session; no unresolved implementation blocker.
 
+## #957 local Cell rule implemented (2026-11-22)
+
+- Local checker-only frame classification reuses closure capture pairs and
+  covers bound object/role receivers, nested captures, branch/block tails,
+  synchronous calls versus spawn/async entry, and every consuming operand.
+- Coercion and resolved generic substitutions refuse Cell erasure; enum
+  payloads mirror the field rule. Further audit amendment: hidden `once let`
+  fields cannot hold a Cell returned through an action field.
+- Focused tests: 82 pass. Base mutation: all 72 new-restriction assertions fail;
+  10 positive controls pass. Old patch's 27 boundary cases are preserved.
+- All 1,914 existing std/corpus files checked before/after: no changed
+  diagnostics. 21 pre-existing ownership-linearity failures and intentional
+  rejection fixtures remain; t/ passes 51/51 with its support import root.
+- Five debug-check runs per binary/program: median 24-postgres-wiring
+  2.1528 → 2.1826 s (+1.38%); 24-notes-tests
+  4.0065 → 4.0279 s (+0.53%).
+- Ten new conformance cases pass their check outcomes and schema validation.
+  Bible §18.6 EN/RU updated; accepted/rejected examples pass in bounded Docker.
+- No whole-program Cell pass, public action effects, runtime/VM changes,
+  std API changes, commits or CHANGELOG edits. External spec proposal is in
+  the task report because that repository is outside writable roots.
+
 ## Security release 0.6.3 (#960, #963, #962; 2026-11-22)
 
 - [x] #960: fuzz lockfile regenerated from the current manifests; both

@@ -15456,12 +15456,80 @@ by team: refund deploy backup reindex
   объекта, а записанный тип параметра — та самая граница, которой требует
   связанное действие (раздел 18.5). Ранжирование живёт в объекте с именем
   и тестами, а вызов сортировки остаётся одной строкой.
-- **`Cell` собирает имена.** `Listing.names` обходит любой
-  `Iterating<Job>` и дописывает в `Cell` — изменяемое значение синхронного
-  кода. Блок `for` не замыкание, поэтому может обновлять ячейку. Анонимное
-  действие тоже может захватить `Cell`, и сейчас ничто не мешает такому
-  действию попасть в асинхронный код, куда ячейке нельзя (тикет #957);
-  держите ячейки в том синхронном коде, который их создал.
+- **`Cell` собирает имена.** `Listing.names` обходит любой `Iterating<Job>`
+  и дописывает в `Cell` — изменяемое значение синхронного кода. `for` и шесть
+  функциональных операций (`map`, `filter`, `reduce`, `any`, `all`, `find`)
+  исполняют блоки в текущем кадре; эти блоки могут использовать Cell.
+
+Действие, захватывающее Cell, коллекцию с Cell или другое такое локальное
+действие, **привязано к кадру** (frame-bound). Связанное действие Cell,
+например `count.value`, имеет то же ограничение. Его можно синхронно вызвать,
+связать с локальным именем или захватить другим действием, которое тоже
+станет привязанным к кадру. Повторные локальные вызовы разрешены:
+
+```okkama
+module bible/cell_local v1.0.0;
+import "cell" take Cell;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let count = Cell(0);
+    let step = () is int {
+        count.replace(count.value() + 1);
+        count.value();
+    };
+    let nested = () is int { step(); };
+    let read is () is int = count.value;
+    Stdout().writeln(step().string());
+    Stdout().writeln(nested().string());
+    Stdout().writeln(read().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+1
+2
+2
+```
+
+Любое другое использование запрещено: возврат, передача в любое действие
+(даже синхронный callback), сохранение в поле, payload enum или коллекцию,
+упаковка в `any` или роль, `await` и `spawn`. Синхронный посредник может
+вернуть или сохранить callback, поэтому передать ему такое действие нельзя:
+
+```okkama
+module bible/cell_escape v1.0.0;
+import "cell" take Cell;
+
+object Forwarder {
+    Forwarder();
+    forwarded(f is () is int) is () is int { f; }
+}
+
+main() is int {
+    let count = Cell(0);
+    let read = () is int { count.value(); };
+    let escaped = Forwarder().forwarded(read);
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+18-cell-escape-rejected.ok:12:41: semantic error: An action that retains a Cell cannot be passed to an action: a cell stays in its synchronous frame; share state between tasks with Atomic
+```
+
+Саму Cell нельзя скрыть в `any`, роли или generic-параметре. Это относится и
+к выведенным параметрам, включая вывод по сигнатуре действия. Сам `Cell<T>`
+и встроенные коллекции сохраняют Cell видимой в типе; обычное синхронное
+использование Cell остаётся разрешённым. Поля объектов, payload enum и
+кэшируемые значения `once let` не могут хранить Cell. Для состояния,
+сохраняемого объектом или разделяемого задачами, используй `Atomic`.
+Замыкания с обычными неизменяемыми захватами или Atomic работают по-прежнему.
 
 Та же форма повторяется по всей библиотеке: ключи в `SortedBy`,
 преобразования и условия в ленивых представлениях `collections/views`,
