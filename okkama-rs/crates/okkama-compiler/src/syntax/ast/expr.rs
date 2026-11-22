@@ -89,7 +89,7 @@ pub enum ExprKind {
         operand: Box<Expr>,
         ellipsis: Span,
     },
-    /// `receiver.map() -> a { }`, `.filter() -> a { }`, `.reduce(init) -> acc, a { }`.
+    /// `receiver.map() -> a { }`, `.filter()`, `.reduce(init) -> acc, a { }`, `.any()`, `.all()`, `.find()`.
     Functional {
         operation: FunctionalOp,
         operation_name: Name,
@@ -242,7 +242,7 @@ impl BinaryOp {
     }
 }
 
-/// The three functional collection operations.
+/// The six functional collection operations.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionalOp {
     Map,

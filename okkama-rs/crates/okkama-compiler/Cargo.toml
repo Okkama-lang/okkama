@@ -1,6 +1,6 @@
 [package]
 name = "okkama-compiler"
-description = "Okkama compiler library: source model, diagnostics, lexer, parser, AST and AST printers"
+description = "Okkama compiler library: parser, analysis, OIR-2 lowering and Sparrow bytecode generation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

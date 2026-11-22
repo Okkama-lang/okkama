@@ -2,7 +2,7 @@
 //!
 //! Machine code is produced at run time by Sparrow
 //! (`crates/sparrow-core/src/jit.rs`, Cranelift) from verified SPB bytecode:
-//! hot functions of a running program are compiled there, so the compiler's
+//! every function is compiled there before its first call, so the compiler's
 //! output — OIR and SPB — is the same with or without JIT.
 //!
 //! This module stays empty and must not become a dependency of any earlier

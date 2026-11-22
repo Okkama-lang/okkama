@@ -297,23 +297,4 @@ impl Ty {
             _ => false,
         }
     }
-
-    /// Встречается ли параметр типа.
-    pub fn mentions_param(&self) -> bool {
-        match self {
-            Ty::Param(_) => true,
-            Ty::Array(inner) | Ty::Successor(inner) | Ty::Varargs(inner) => inner.mentions_param(),
-            Ty::Map(key, value) => key.mentions_param() || value.mentions_param(),
-            Ty::Object(_, args)
-            | Ty::Role(_, args)
-            | Ty::Variant(_, args)
-            | Ty::Cap(_, args, _) => args.iter().any(Ty::mentions_param),
-            Ty::Action(action) => {
-                action.params.iter().any(Ty::mentions_param)
-                    || action.result.as_ref().is_some_and(Ty::mentions_param)
-            }
-            Ty::Future(Some(inner)) => inner.mentions_param(),
-            _ => false,
-        }
-    }
 }

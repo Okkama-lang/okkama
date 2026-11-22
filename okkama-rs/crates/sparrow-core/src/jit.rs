@@ -40,11 +40,6 @@ pub enum Effect {
     Fails,
 }
 
-const fn registered_effects(name: &str, legacy: &'static [Effect]) -> &'static [Effect] {
-    let _ = name;
-    legacy
-}
-
 /// One description per helper (H-06): its Rust signature, checked at compile
 /// time (the function must coerce to exactly that `extern "C"` pointer type;
 /// each scalar is 8 bytes), the Cranelift signature derived from it, and its
@@ -59,7 +54,7 @@ macro_rules! helpers {
         struct Helpers { $($(#[$meta])* $field: FuncId,)* }
 
         /// Every helper and its effects, in declaration order.
-        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), registered_effects(stringify!($field), &[$(Effect::$effect),*])),)*];
+        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), &[$(Effect::$effect),*]),)*];
 
 
         $(
@@ -3155,7 +3150,6 @@ mod frame_resident_tests {
     }
 }
 
-/// Instructions executed by `failures::rt_failure_op`.
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
 fn suspends(instruction: &I) -> bool {
@@ -3170,6 +3164,7 @@ fn suspends(instruction: &I) -> bool {
     )
 }
 
+/// Instructions executed by `failures::rt_failure_op`.
 fn failure_or_region(instruction: &I) -> bool {
     matches!(
         instruction,
@@ -3204,7 +3199,6 @@ fn accessor(function: &okkama_sparrow::Function) -> Option<(usize, u32)> {
     }
 }
 
-/// Instructions executed by `ops::rt_exec`.
 /// Atomic operations compiled inline (see `Emitter::atomic`).
 fn atomic_access(callee: &okkama_sparrow::Function) -> Option<Intrinsic> {
     let intrinsic = Intrinsic::resolve(&callee.intrinsic.as_ref()?.name)?;
@@ -3219,6 +3213,7 @@ fn atomic_access(callee: &okkama_sparrow::Function) -> Option<Intrinsic> {
     .then_some(intrinsic)
 }
 
+/// Instructions executed by `ops::rt_exec`.
 fn generic(instruction: &I) -> bool {
     matches!(
         instruction,

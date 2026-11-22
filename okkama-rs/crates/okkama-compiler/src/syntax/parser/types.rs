@@ -154,7 +154,7 @@ impl Parser<'_> {
     }
 
     /// `"<" TYPE_NAME (":" bound)? ("," TYPE_NAME (":" bound)?)* ","? ">"`
-    /// after an object or role name. `owner_kind` is `object` or `role`.
+    /// after an object, role or enum name. `owner_kind` names it in messages.
     pub(super) fn generic_params(
         &mut self,
         owner_kind: &str,

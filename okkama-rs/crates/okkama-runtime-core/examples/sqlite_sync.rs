@@ -76,7 +76,7 @@ fn main() -> rusqlite::Result<()> {
     db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE entries(id INTEGER PRIMARY KEY,name TEXT NOT NULL,nick TEXT); CREATE TABLE inserted(id INTEGER PRIMARY KEY,name TEXT NOT NULL);")?;
     db.execute("WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM seq WHERE i+1<?) INSERT INTO entries SELECT i, 'user-' || i, CASE WHEN i%3=0 THEN NULL WHEN i%5=0 THEN '' ELSE 'nick' END FROM seq", [count])?;
     let sample = db.query_row("SELECT id,name,nick FROM entries WHERE id=0", [], snapshot)?;
-    eprintln!("rusqlite=0.37.0 sqlite={}", rusqlite::version());
+    eprintln!("sqlite={}", rusqlite::version());
     for phase in ["projection_only", "scan_raw", "scan_stream", "scan_all", "lookup_prepared", "lookup_statement", "insert_transaction"] {
         for _ in 0..warmups { black_box(run(&db, &sample, phase, count, lookups)?); }
         let start = Instant::now();

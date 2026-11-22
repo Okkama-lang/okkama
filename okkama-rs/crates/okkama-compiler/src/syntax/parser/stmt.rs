@@ -400,8 +400,6 @@ impl Parser<'_> {
         })
     }
 
-    /// After `if`: `expr block ("else" (if_stmt | block))?`. `else if`
-    /// chains recurse, so each link counts against the nesting limit.
     /// `if` in statement position: the block form as a statement, or the compact form (#921) as the
     /// expression it is.
     fn if_statement_or_compact(&mut self, start: Span) -> PResult<Result<IfStmt, Expr>> {
@@ -415,6 +413,8 @@ impl Parser<'_> {
         })
     }
 
+    /// After `if`: `expr block ("else" (if_stmt | block))?`. `else if`
+    /// chains recurse, so each link counts against the nesting limit.
     fn if_statement(&mut self, start: Span) -> PResult<IfStmt> {
         self.nested(|parser| {
             let condition = parser.expression()?;

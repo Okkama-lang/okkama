@@ -1,6 +1,6 @@
 //! Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
 //!
-//! Таблица действий повторяет `BuiltinActions.pm`: категория получателя,
+//! Таблица действий: категория получателя,
 //! точная арность, параметры той же категории (`same`) без расширения,
 //! только позиционные аргументы.
 
@@ -97,13 +97,13 @@ impl Checker<'_, '_> {
         })
     }
 
-    /// Сигнатура builtin-действия: параметры и результат (`None` — нет такого).
     /// Whether a builtin value has `string()` answering a string.
     pub(super) fn builtin_text(&self, receiver: &Ty) -> bool {
         self.builtin_signature(receiver, "string")
             .is_some_and(|(_, params, result)| params.is_empty() && result == Some(Ty::Str))
     }
 
+    /// Сигнатура builtin-действия: параметры и результат (`None` — нет такого).
     fn builtin_signature(
         &self,
         receiver: &Ty,

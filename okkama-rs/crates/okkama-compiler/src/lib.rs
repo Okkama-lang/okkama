@@ -1,23 +1,17 @@
-//! Okkama compiler library.
-//!
-//! The crate currently implements the syntactic front end and initial IR:
+//! Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 //!
 //! * [`source`] — source files, byte spans and line/column mapping;
 //! * [`diagnostics`] — structured lexical and syntax diagnostics;
-//! * [`syntax`] — tokens, lexer, typed AST, parser, production pruning and
-//!   AST printers (`tree` and `json`);
-//! * [`ir`] — OIR-1: typed SSA modules, objects, functions and blocks, the
-//!   canonical text form and the verifier (`docs/compiler/OIR-1.md`);
-//! * [`lowering`] — typed AST-to-OIR lowering of the supported subset:
-//!   scalars, control flow, loops, objects, constructors, actions, successors;
-//! * [`codegen`] — Sparrow bytecode generation.
+//! * [`syntax`] — tokens, lexer, typed AST, parser, production pruning, AST printers and the formatter;
+//! * [`analysis`] — names, types, overloads, successors and the rest of the language rules, producing THIR;
+//! * [`lowering`] — THIR to OIR-2 (specialization, ownership regions, passes);
+//! * [`ir`] — OIR-2: typed SSA modules, the text form and the verifier (stages: `docs/map/pipeline.md`);
+//! * [`codegen`] — Sparrow bytecode generation;
+//! * [`ide`] and [`doc`] — the language server's index and `okkama man`;
+//! * [`jit`] — an empty boundary: machine code is Sparrow's business.
 //!
-//! The later pipeline stages are present only as documented module
-//! boundaries: [`analysis`] and [`jit`]. General analysis and a native-code
-//! backend are not implemented yet. Programs run on Sparrow.
-//!
-//! The library never reads command-line arguments, never prints and never
-//! terminates the process. Callers receive values and diagnostics and decide
+//! The library never reads command-line arguments and never terminates the process; it prints only
+//! development diagnostics a variable asks for (`OKKAMA_PROFILE_REGISTERS`, `OKKAMA_DEV`). Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
 
 pub mod analysis;

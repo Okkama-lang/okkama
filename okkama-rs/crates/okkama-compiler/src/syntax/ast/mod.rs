@@ -2,9 +2,10 @@
 //!
 //! The AST is a faithful, purely syntactic representation of one source
 //! file. It contains no symbol tables, resolved names, computed types or
-//! runtime values, and it does not desugar anything: `async`, casts,
-//! projections, functional suffixes, `test`/`fake` blocks and similar forms
-//! stay exactly as written so that later stages can analyse them.
+//! runtime values. It stays close to the source: `async`, casts, projections,
+//! functional suffixes and `test`/`fake` blocks are kept as written. The parser
+//! does rewrite a few forms into ordinary nodes: `test.throws`/`test.case` and the
+//! compact `if`/`case` (#921), which keep their spans.
 //!
 //! Every node carries the byte [`Span`] of the source text it was parsed
 //! from. Names are [`Name`] values (text plus span). Declarations, statements,

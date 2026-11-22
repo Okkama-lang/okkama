@@ -208,7 +208,7 @@ impl Checker<'_, '_> {
                 object,
                 index,
                 fallback,
-            } => self.index(object, index, fallback.as_deref(), want, expected, span),
+            } => self.index(object, index, fallback.as_deref(), expected, span),
             ast::ExprKind::Functional {
                 operation,
                 receiver,
@@ -1693,7 +1693,6 @@ impl Checker<'_, '_> {
         object: &ast::Expr,
         index: &ast::Expr,
         fallback: Option<&ast::Expr>,
-        want: bool,
         expected: Option<&Ty>,
         span: Span,
     ) -> Expr {
@@ -1748,7 +1747,7 @@ impl Checker<'_, '_> {
         let (ty, diverges) = match &other {
             None => (Some(element), false),
             Some(other) if element == Ty::Never => (other.ty.clone(), other.diverges),
-            Some(other) => self.join(&[&found, other], want || true, span),
+            Some(other) => self.join(&[&found, other], true, span),
         };
         let diverges = diverges || target.diverges || position.diverges;
         Expr {

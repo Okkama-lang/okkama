@@ -206,7 +206,7 @@ impl Parser<'_> {
     /// `logic_or` in the grammar: the whole binary-operator part of an
     /// expression, i.e. everything below the functional suffix.
     ///
-    /// The grammar spells the binary operators as a ladder of ten levels
+    /// The grammar spells the binary operators as a ladder of twelve levels
     /// (`logic_or` ... `factor`). Parsing them with one function per level
     /// would push about thirty stack frames for every parenthesised
     /// sub-expression, so they are parsed here by precedence climbing over

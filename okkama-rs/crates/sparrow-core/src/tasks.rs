@@ -1,9 +1,10 @@
 //! Stackless async: the heap frame of an async call is also its Future.
 //!
 //! Frame words after the header: state, result, failure, waiter, awaiting,
-//! resume point, flags, the outcome and input ownership regions (OWNED,
-//! INPUTS), then every register of the function, an optional driver slot, and
-//! retained copies of the arguments (registers can be reused). An async body is
+//! resume point, flags, then every register of the function and an optional
+//! driver slot; in programs with resources, then the outcome and input
+//! ownership regions (OWNED, INPUTS), retained copies of the arguments
+//! (registers can be reused) and the two words of the inline identity. An async body is
 //! compiled as `(ctx, frame) -> 0 | 1` (completed or pending): it starts at
 //! resume point 0 with its parameters in the frame, and a suspended `await` at
 //! `pc` re-enters at `pc + 1` with every register reloaded. Whoever runs a body

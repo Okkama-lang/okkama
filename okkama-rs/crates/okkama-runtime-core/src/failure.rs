@@ -1,4 +1,5 @@
-//! Engine-independent, immutable records carried on exceptional control-flow edges.
+//! Engine-independent failure records carried on exceptional control-flow edges. A record's kind and
+//! message do not change; its cause and secondary links are set as failures are linked (`RefCell`).
 use std::{
     cell::RefCell,
     fmt,

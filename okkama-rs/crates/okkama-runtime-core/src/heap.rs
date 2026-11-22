@@ -1571,7 +1571,7 @@ mod tests {
                 expected[(step * 7) % 100] = 1000 + step as i64;
             }
         }
-        // Reads by index, then flat after two passes.
+        // Reads by index, then flat after one pass (`reads >= len`).
         let Value::Array(last) = versions.last().unwrap() else { unreachable!() };
         for pass in 0..3 {
             for (i, &want) in expected.iter().enumerate() {
