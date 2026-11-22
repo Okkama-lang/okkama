@@ -805,7 +805,6 @@ fn for_await_checks_async_next_and_maybe_payload() {
     assert!(!messages("object Stream { Stream(); async next() is int { 1; } } async main() is int { for await Stream() -> item {} 0; }").is_empty());
     assert!(!messages("object Stream { Stream(); async next() is Presence<int> { Presence.none; } } async main() is int { for await Stream() -> item {} 0; }").is_empty());
     assert!(messages(&format!("{valid} async main() is int {{ for await Stream() -> a, b {{}} 0; }}")).iter().any(|m| m.contains("exactly one binding")));
-    assert!(messages(&format!("{valid} async main() is int {{ for await Stream() -> a[2] {{}} 0; }}")).iter().any(|m| m.contains("batched")));
     assert!(messages(&format!("{valid} async main() is int {{ for await Stream() -> item {{}} item; }}")).iter().any(|m| m.contains("Undefined variable")));
 }
 
@@ -1512,4 +1511,98 @@ fn a_repeated_constant_key_in_a_map_literal_is_rejected() {
     ] {
         assert!(messages(&format!("main() is int {{ {body} 0; }}")).is_empty(), "{body}");
     }
+}
+
+/// The type of `object.field` after analysis, as diagnostics name it.
+fn field_type(text: &str, object: &str, field: &str) -> String {
+    let source = SourceFile::new("test.ok", format!("module app v1.0.0; {text}")).expect("small source");
+    let program = prune::strip_test_items(syntax::parse(&source, &ParseOptions::default()).expect("valid syntax"));
+    let module = SourceModule { path: "app".to_string(), program: &program, imports: Vec::new() };
+    let analysis = analysis::analyze(vec![module]).unwrap_or_else(|errors| panic!("{text}: {errors:?}"));
+    let registry = &analysis.registry;
+    let info = registry.objects.iter().find(|info| info.name == object).expect("object");
+    let found = info.fields.iter().find(|info| info.name == field).expect("field");
+    registry.type_name_in(info.module, &found.ty)
+}
+
+/// #967: a field with an initializer and no type takes the initializer's
+/// static type, exactly as if it were written: scalars, objects, enums,
+/// collections, constants, generic and role-typed values keep their type.
+#[test]
+fn a_field_initializer_gives_the_field_its_static_type() {
+    let decls = "enum Color = (red, green); role Named { name() is string; } \
+                 object Item does Named { Item(); name() is string { \"item\"; } } \
+                 object Maker { Maker(); make() is Named { Item(); } } \
+                 object Pair<A> { has a is A; Pair(:a); } const LIMIT = 3;";
+    for (init, expected) in [
+        ("1", "int"),
+        ("\"text\"", "string"),
+        ("true", "bool"),
+        ("1.5", "float"),
+        ("rat(1, 2)", "rat"),
+        ("Item()", "Item"),
+        ("Color.red", "Color"),
+        ("[1, 2]", "@int"),
+        ("[\"a\": 1]", "%string:int"),
+        ("[[1], []]", "@@int"),
+        ("LIMIT + 1", "int"),
+        ("Maker().make()", "Named"),
+        ("Pair(a: \"x\")", "Pair<string>"),
+    ] {
+        let text = format!("{decls} object Q {{ has value = {init}; Q(); }} main() is int {{ 0; }}");
+        assert_eq!(field_type(&text, "Q", "value"), expected, "{init}");
+    }
+    // Inside a generic object the inferred type is the same in every specialization.
+    let text = format!("{decls} object Box<T> {{ has count = 0; has item is T; Box(:item); }} main() is int {{ let b = Box(item: \"x\"); 0; }}");
+    assert_eq!(field_type(&text, "Box", "count"), "int");
+    // Declaration order does not matter: a later object's constructor is known.
+    let text = "object A { has b = B(); A(); } object B { has n = 1; B(); } main() is int { 0; }";
+    assert_eq!(field_type(text, "A", "b"), "B");
+    assert_eq!(field_type(text, "B", "n"), "int");
+}
+
+/// #967: an inferred field is an ordinary typed field: shorthand and full
+/// constructors, successors and the default itself are checked against it.
+#[test]
+fn an_inferred_field_is_checked_like_a_written_one() {
+    let counter = "object Counter { has value = 1; Counter(:value); Counter(text is string) { value = text.length(); } \
+                   get() is int { value; } incremented() is ^Counter { ^value = value + 1; } }";
+    let check = |body: &str| messages(&format!("{counter} main() is int {{ {body} 0; }}"));
+    for body in ["let c = Counter(value: 5).incremented(); c.get();", "let c = Counter(); c.get();", "let c = Counter(\"abc\"); c.get();"] {
+        assert!(check(body).is_empty(), "{body}: {:?}", check(body));
+    }
+    assert_eq!(
+        check("let c = Counter(value: \"five\");"),
+        ["Constructor \"Counter\" argument \"value\" must be int, got string"]
+    );
+    let wrong = |member: &str| messages(&format!("object Counter {{ has value = 1; Counter(); {member} }} main() is int {{ 0; }}"));
+    assert_eq!(wrong("again() is ^Counter { ^value = \"x\"; }").len(), 1, "a successor keeps the type");
+    assert_eq!(wrong("Counter(text is string) { value = text; }").len(), 1, "a constructor keeps the type");
+}
+
+/// #967: no type is inferred when the initializer does not determine one or
+/// when there is no initializer; the field is named, at its name, and the
+/// initializer's own errors are reported once, without `any`.
+#[test]
+fn a_field_without_a_determined_type_is_reported_at_its_name() {
+    let located_one = |member: &str| located(&format!("object Q {{ {member} Q(); }} main() is int {{ 0; }}"));
+    let empty = |name: &str| format!("Field \"{name}\" of object \"Q\" needs a type: an empty [] or [:] in its initializer has no element type; write \"has {name} is T = ...;\"");
+    assert_eq!(located_one("has items = [];"), [("items".to_string(), empty("items"))]);
+    assert_eq!(located_one("has entries = [:];"), [("entries".to_string(), empty("entries"))]);
+    assert_eq!(located_one("has nested = [[]];"), [("nested".to_string(), empty("nested"))]);
+    assert_eq!(
+        located_one("has span = 1..3;"),
+        [("span".to_string(), "Field \"span\" of object \"Q\" needs a type: its initializer has type range, which a field type cannot name; write \"has span is T = ...;\"".to_string())]
+    );
+    assert_eq!(
+        located_one("has value;")[0],
+        ("value".to_string(), "Field \"value\" of object \"Q\" needs a type: write \"has value is T;\", or give it an initializer to infer the type from".to_string())
+    );
+    // The initializer's own error, once; no second message about the field.
+    assert_eq!(located_one("has value = missing;"), [("missing".to_string(), "Undefined variable \"missing\"".to_string())]);
+    // A constructor's assignment never gives a type.
+    assert_eq!(
+        messages("object Q { has value; Q(v is int) { value = v; } } main() is int { 0; }")[0],
+        "Field \"value\" of object \"Q\" needs a type: write \"has value is T;\", or give it an initializer to infer the type from"
+    );
 }

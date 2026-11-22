@@ -437,3 +437,18 @@ fn a_string_spread_still_forwards_into_a_string_tail() {
         ir::verify(&module).unwrap_or_else(|error| panic!("{make}: {error}"));
     }
 }
+
+/// #967: inferred fields reach the IR as typed fields; lowering repeats no
+/// inference, and the program verifies like the written form.
+#[test]
+fn inferred_fields_lower_like_written_ones() {
+    let program = |fields: &str| format!(
+        "module app v1.0.0; object Counter {{ {fields} Counter(); \
+         get() is int {{ value + label.length(); }} incremented() is ^Counter {{ ^value = value + 1; }} }} \
+         main() is int {{ let c = Counter().incremented(); c.get(); }}"
+    );
+    let inferred = lower(&program("has value = 1; has label = \"ab\";")).unwrap_or_else(|error| panic!("{error}"));
+    ir::verify(&inferred).expect("verifies");
+    let written = lower(&program("has value is int = 1; has label is string = \"ab\";")).expect("written form");
+    assert_eq!(inferred.to_string(), written.to_string());
+}

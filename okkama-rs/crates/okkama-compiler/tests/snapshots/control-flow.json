@@ -308,8 +308,7 @@
             "bindings": [
               {
                 "node": "ForBinding",
-                "name": "number",
-                "batch": null
+                "name": "number"
               }
             ],
             "body": {

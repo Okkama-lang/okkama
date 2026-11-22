@@ -632,8 +632,7 @@
             "bindings": [
               {
                 "node": "ForBinding",
-                "name": "shape",
-                "batch": null
+                "name": "shape"
               }
             ],
             "body": {

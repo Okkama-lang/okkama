@@ -65,7 +65,18 @@ to a contract.
 has digit is int;                 // required: a constructor must bind it
 has cents is int = 0;             // optional: a default
 has given, family is string;      // several names, one type
+has currency = "USD";             // the type comes from the initializer: string
 ```
+
+**A field's type may come from its initializer.** `has currency = "USD";`
+declares a `string` field exactly as `has currency is string = "USD";` does.
+This is inference at compile time, not dynamic typing: the compiler takes
+the initializer's static type once, every object keeps that one type, and
+constructors and successors are checked against it as against a written
+type. Only the initializer gives the type, never a constructor's
+assignment, so `has digit;` is an error that asks for the type. An
+initializer that settles no type, such as an empty `[]` or `[:]`, needs the
+type written (`has items is @string = [];`), and nothing widens to `any`.
 
 Two rules make fields different from fields in most languages.
 

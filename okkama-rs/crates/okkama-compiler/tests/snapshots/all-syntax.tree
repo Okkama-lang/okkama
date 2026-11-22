@@ -1538,7 +1538,6 @@ Program
             bindings:
               - ForBinding
                 name: item
-                batch: (none)
             body: Block
               statements:
                 - NextStatement
@@ -1555,30 +1554,13 @@ Program
             bindings:
               - ForBinding
                 name: key
-                batch: (none)
               - ForBinding
                 name: value
-                batch: (none)
             body: Block
               statements:
                 - ExpressionStatement
                   expression: NameExpression
                     name: key
-                  condition: (none)
-          - ForStatement
-            source: NameExpression
-              name: list
-            bindings:
-              - ForBinding
-                name: chunk
-                batch: IntLiteral
-                  radix: decimal
-                  digits: 2
-            body: Block
-              statements:
-                - ExpressionStatement
-                  expression: NameExpression
-                    name: chunk
                   condition: (none)
           - ExpressionStatement
             expression: LoopExpression

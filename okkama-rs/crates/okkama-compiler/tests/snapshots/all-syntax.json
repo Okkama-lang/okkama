@@ -3087,8 +3087,7 @@
             "bindings": [
               {
                 "node": "ForBinding",
-                "name": "item",
-                "batch": null
+                "name": "item"
               }
             ],
             "body": {
@@ -3122,13 +3121,11 @@
             "bindings": [
               {
                 "node": "ForBinding",
-                "name": "key",
-                "batch": null
+                "name": "key"
               },
               {
                 "node": "ForBinding",
-                "name": "value",
-                "batch": null
+                "name": "value"
               }
             ],
             "body": {
@@ -3139,37 +3136,6 @@
                   "expression": {
                     "node": "NameExpression",
                     "name": "key"
-                  },
-                  "condition": null
-                }
-              ]
-            }
-          },
-          {
-            "node": "ForStatement",
-            "source": {
-              "node": "NameExpression",
-              "name": "list"
-            },
-            "bindings": [
-              {
-                "node": "ForBinding",
-                "name": "chunk",
-                "batch": {
-                  "node": "IntLiteral",
-                  "radix": "decimal",
-                  "digits": "2"
-                }
-              }
-            ],
-            "body": {
-              "node": "Block",
-              "statements": [
-                {
-                  "node": "ExpressionStatement",
-                  "expression": {
-                    "node": "NameExpression",
-                    "name": "chunk"
                   },
                   "condition": null
                 }

@@ -45,8 +45,7 @@
             "bindings": [
               {
                 "node": "ForBinding",
-                "name": "i",
-                "batch": null
+                "name": "i"
               }
             ],
             "body": {

@@ -2,7 +2,6 @@
 
 use super::{Expr, Name, TypeExpr};
 use crate::source::Span;
-use crate::syntax::token::IntLiteral;
 
 /// `{ statement* }`
 #[derive(Clone, Debug, PartialEq)]
@@ -150,17 +149,10 @@ pub struct CatchClause {
     pub span: Span,
 }
 
-/// A `for` binding: `name` or the batched form `name[INT]`.
+/// A `for` binding: one name per value of the step. There is no batched
+/// form `name[INT]` (#967): batching belongs to the source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ForBinding {
     pub name: Name,
-    pub batch: Option<BatchSize>,
-    pub span: Span,
-}
-
-/// The integer literal inside `name[INT]`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BatchSize {
-    pub literal: IntLiteral,
     pub span: Span,
 }

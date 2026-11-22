@@ -151,6 +151,104 @@ pub(super) fn check_bodies(reg: &mut Registry<'_>) -> Vec<Body> {
     bodies
 }
 
+/// Field types written as `has name = value;` (#967), inferred from the
+/// initializer once every signature is known and before anything reads
+/// field types. Compile-time only, with the ordinary checker: the
+/// initializer is checked where it is declared (no constructor, no `self`,
+/// no other field), so its type never depends on another inferred field and
+/// the order of declarations does not matter. A type an annotation could
+/// not write (an empty `[]` or `[:]` without an element type, a range, …)
+/// is not inferred, and nothing widens to `any`; such a field is reported
+/// at its name and needs its type written.
+pub(super) fn infer_field_types(reg: &mut Registry<'_>) {
+    let pending: Vec<(usize, usize)> = (0..reg.objects.len())
+        .flat_map(|object| {
+            let fields = &reg.objects[object].fields;
+            (0..fields.len())
+                .filter(move |field| fields[*field].inferred && fields[*field].default.is_some())
+                .map(move |field| (object, field))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let module = reg.current_module();
+    // An initializer may read constants: they are computed once, with their
+    // own errors, as `check_bodies` would compute them first.
+    for id in 0..reg.consts.len() {
+        let _ = consts::evaluate(reg, id);
+    }
+    let mut found = Vec::new();
+    for &(object, field) in &pending {
+        let default = reg.objects[object].fields[field].default.expect("pending fields have an initializer");
+        let marks = (reg.errors.len(), reg.warnings.len(), reg.key_uses.len());
+        let mut checker = Checker::new(reg, Kind::Default, Some(ObjectId(object)), None);
+        let value = checker.value(default, None);
+        let ty = Checker::ty_of(&value).taken();
+        let diverges = value.diverges;
+        let reported = reg.errors.len() > marks.0;
+        // Inferred: the body is checked again against the type, with its
+        // errors, by `check_object`; this run leaves no trace.
+        let inferred = !reported && !diverges && value.ty.is_some() && writable(&ty);
+        if inferred {
+            reg.errors.truncate(marks.0);
+            reg.warnings.truncate(marks.1);
+            reg.key_uses.truncate(marks.2);
+        }
+        found.push((inferred, ty, diverges, reported, value.ty.is_some()));
+    }
+    for ((object, field), (inferred, ty, diverges, reported, has_value)) in pending.into_iter().zip(found) {
+        if inferred {
+            reg.objects[object].fields[field].ty = ty;
+            continue;
+        }
+        // Not inferred: the field stays `Ty::Error` and its initializer is
+        // not checked again (`check_object`), so each problem is said once.
+        if reported && !diverges {
+            continue;
+        }
+        let info = &reg.objects[object];
+        let (name, owner, span) = (info.fields[field].name.clone(), info.name.clone(), info.fields[field].span);
+        let why = if diverges || !has_value {
+            "its initializer produces no value".to_string()
+        } else if mentions_never(&ty) {
+            "an empty [] or [:] in its initializer has no element type".to_string()
+        } else {
+            format!("its initializer has type {}, which a field type cannot name", reg.type_name_in(info.module, &ty))
+        };
+        reg.set_module(info.module);
+        reg.error(span, format!("Field \"{name}\" of object \"{owner}\" needs a type: {why}; write \"has {name} is T = ...;\""));
+    }
+    reg.set_module(module);
+}
+
+/// A type a field annotation can write (#967): an inferred field type is one
+/// of these, so inference adds no type a declaration could not have.
+fn writable(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int | Ty::Bool | Ty::Byte | Ty::Char | Ty::Float | Ty::Rat | Ty::Str | Ty::Any => true,
+        Ty::Enum(_) | Ty::Handle(_) | Ty::Param(_) => true,
+        Ty::Array(element) => writable(element),
+        Ty::Map(key, value) => writable(key) && writable(value),
+        Ty::Object(_, args) | Ty::Role(_, args) | Ty::Variant(_, args) | Ty::Cap(_, args, _) => args.iter().all(writable),
+        Ty::Action(action) => action.params.iter().all(writable) && action.result.as_ref().is_none_or(writable),
+        Ty::Future(Some(result)) => writable(result),
+        Ty::Future(None) | Ty::Range | Ty::Successor(_) | Ty::Varargs(_) | Ty::Test | Ty::Never | Ty::Error => false,
+    }
+}
+
+/// `ty` has an untyped empty collection somewhere: `@never`, `%never:never`.
+fn mentions_never(ty: &Ty) -> bool {
+    match ty {
+        Ty::Never => true,
+        Ty::Array(element) => mentions_never(element),
+        Ty::Map(key, value) => mentions_never(key) || mentions_never(value),
+        Ty::Object(_, args) | Ty::Role(_, args) | Ty::Variant(_, args) | Ty::Cap(_, args, _) => args.iter().any(mentions_never),
+        _ => false,
+    }
+}
+
 /// Default values of parameters (#149), checked once where they are
 /// declared: each call that leaves a parameter out checks its value again at
 /// the call (so it is evaluated there) without repeating these errors.
@@ -189,6 +287,10 @@ fn check_object(reg: &mut Registry<'_>, object: ObjectId, bodies: &mut Vec<Body>
         let (Some(default), ty) = (info.default, info.ty.clone()) else {
             continue;
         };
+        // A field whose type could not be inferred has said why (#967).
+        if info.inferred && ty.is_error() {
+            continue;
+        }
         let mut checker = Checker::new(reg, Kind::Default, Some(object), Some(ty.clone()));
         let value = checker.value(default, Some(&ty));
         let value = checker.coerce(value, &ty, default.span, "Field default");
@@ -406,11 +508,6 @@ impl<'r, 'a> Checker<'r, 'a> {
     pub fn warn(&mut self, span: Span, message: impl Into<String>) {
         self.reg.set_module(self.module);
         self.reg.warn(span, message);
-    }
-
-    pub fn unsupported(&mut self, span: Span, message: impl Into<String>) {
-        self.reg.set_module(self.module);
-        self.reg.unsupported(span, message);
     }
 
     /// The name of `ty` in this module's diagnostics (#338).

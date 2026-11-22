@@ -26,7 +26,6 @@ Program
             bindings:
               - ForBinding
                 name: i
-                batch: (none)
             body: Block
               statements:
                 - NextStatement

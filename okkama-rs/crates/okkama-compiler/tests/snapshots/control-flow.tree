@@ -160,7 +160,6 @@ Program
             bindings:
               - ForBinding
                 name: number
-                batch: (none)
             body: Block
               statements:
                 - NextStatement
