@@ -4762,7 +4762,8 @@ The language's answer today has three parts.
    rebound (`counter = counter.increment();`) only when its type is an object
    with successor actions; `let n = 1; n = 2;` is rejected. Scalar and
    collection locals cannot be rebound at all, which is why accumulation goes
-   through `reduce` — or, in synchronous code, through a `cell::Cell`, the one
+   through `reduce` — or, in synchronous code, through a `Cell` from the std
+   module `cell`, the one
    explicit mutable container, which the compiler keeps out of async actions
    and object fields (issue #152).
 
@@ -10562,7 +10563,7 @@ implement a role's action.
 Some state really is a variable: a running total, a parser's position,
 headers gathered while reading. `reduce` covers most accumulations. Where
 it reads badly, the standard library has one explicit mutable container,
-`cell::Cell`:
+`Cell` from the module `cell`:
 
 ```okkama
 let lengths = Cell(0);

@@ -344,7 +344,7 @@ implement a role's action.
 Some state really is a variable: a running total, a parser's position,
 headers gathered while reading. `reduce` covers most accumulations. Where
 it reads badly, the standard library has one explicit mutable container,
-`cell::Cell`:
+`Cell` from the module `cell`:
 
 ```okkama
 let lengths = Cell(0);
