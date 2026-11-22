@@ -355,12 +355,14 @@ mod tests {
     use super::*;
 
     fn usage(path: &str) -> std::collections::HashMap<String, u128> {
-        let value = storage_usage(Native::SystemStorageUsage, path).ok().expect("usage");
-        super::super::support::entries(&value)
-            .ok()
-            .expect("map")
+        let Ok(value) = storage_usage(Native::SystemStorageUsage, path) else { panic!("usage of {path}") };
+        let Ok(entries) = super::super::support::entries(&value) else { panic!("a map") };
+        entries
             .into_iter()
-            .map(|(key, value)| (key, value.as_string().ok().expect("text").parse().expect("number")))
+            .map(|(key, value)| {
+                let Ok(text) = value.as_string() else { panic!("text") };
+                (key, text.parse().expect("number"))
+            })
             .collect()
     }
 
