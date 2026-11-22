@@ -8,7 +8,7 @@ object Bench {
     Bench();
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        self.run(i + 1, n, acc + ([i: 1, 2: 2, 3: 3].size() + i) % 7);
+        self.run(i + 1, n, acc + ([i: 1, -2: 2, -3: 3].size() + i) % 7);
     }
 }
 
