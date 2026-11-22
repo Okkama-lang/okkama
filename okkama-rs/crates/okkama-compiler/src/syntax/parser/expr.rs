@@ -298,17 +298,25 @@ impl Parser<'_> {
                 },
             });
         }
-        // `spawn(` is an ordinary call of an action labelled `spawn` (for
-        // example the native `runtime/process` action); `spawn expr` is the
-        // task operator and requires a call operand.
-        if self.check(TokenKind::Spawn) && self.check_next(TokenKind::LeftParen) {
+        // `spawn(`, written without a space, is an ordinary call of an action
+        // labelled `spawn` (for example the native `runtime/process` action);
+        // `spawn expr` is the task operator and requires a call operand, which
+        // may be parenthesised: `spawn (f())` (#987).
+        if self.check(TokenKind::Spawn)
+            && self.check_next(TokenKind::LeftParen)
+            && self.peek().span.end == self.nth(1).span.start
+        {
             return self.postfix();
         }
         if self.eat(TokenKind::Spawn) {
             let keyword = self.previous().clone();
             let call = self.operand()?;
+            let mut inner = &call;
+            while let ExprKind::Grouping(grouped) = &inner.kind {
+                inner = grouped;
+            }
             if !matches!(
-                call.kind,
+                inner.kind,
                 ExprKind::Call { .. } | ExprKind::ArrayCast { .. }
             ) {
                 return Err(self.error_at(&keyword, "spawn requires an action call"));

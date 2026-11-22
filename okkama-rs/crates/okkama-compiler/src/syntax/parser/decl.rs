@@ -179,12 +179,6 @@ impl Parser<'_> {
             );
         }
         let params = self.parameter_list(ParamContext::Native)?;
-        if let Some(variadic) = params.iter().find(|param| param.variadic) {
-            return Err(self.error_at_span(
-                variadic.name.span,
-                "Native parameters cannot be variadic.",
-            ));
-        }
         self.consume(
             TokenKind::Is,
             &format!(
@@ -212,7 +206,7 @@ impl Parser<'_> {
     }
 
     fn native_object(&mut self, keyword: Span) -> PResult<NativeObjectDecl> {
-        self.consume(TokenKind::Object, "Expect \"object\" after \"native\".")?;
+        self.advance(); // `object`: the caller checked it.
         let name = self.consume_type_name("Expect native object type name.")?;
         if self.check(TokenKind::Less) {
             return Err(self.error_here("Native object declarations cannot have type parameters."));
@@ -374,9 +368,8 @@ impl Parser<'_> {
             ));
         }
         if self.eat(TokenKind::Hash) {
-            self.reject_action_directive()?;
-            return Ok(ObjectMember::Action(
-                self.action_declaration(Visibility::Public)?,
+            return Err(self.error_here(
+                "Action directives have been removed; use an explicit result type and an ordinary method call.",
             ));
         }
         if self.eat(TokenKind::Amp) {
@@ -425,7 +418,9 @@ impl Parser<'_> {
 
     /// `Name(params) { }`, `Name(:a, :b);`, `Name(:a) { }` or `Name();`.
     fn constructor_declaration(&mut self, owner: Option<&Name>) -> PResult<ConstructorDecl> {
-        let name = self.consume_type_name("Expect constructor name.")?;
+        // The caller saw a type name followed by `(`.
+        let token = self.advance();
+        let name = self.name_of(&token);
         if let Some(owner) = owner
             && name.text != owner.text {
                 return Err(
@@ -464,10 +459,7 @@ impl Parser<'_> {
     /// the reference parser rejects it, which is recorded there as defect
     /// DEF-001.
     fn constructor_shorthand(&mut self, name: Name) -> PResult<ConstructorDecl> {
-        self.consume(
-            TokenKind::LeftParen,
-            "Expect \"(\" before constructor shorthand fields.",
-        )?;
+        self.advance(); // `(`: the caller checked it.
         let mut fields = Vec::new();
         loop {
             if self.check_name() && self.check_next(TokenKind::Is) {
@@ -508,11 +500,6 @@ impl Parser<'_> {
             name,
             form: ConstructorForm::Shorthand { fields, body: None },
         })
-    }
-
-    /// After `#`: `projected` or `projected(alias)`.
-    fn reject_action_directive(&mut self) -> PResult<()> {
-        Err(self.error_here("Action directives have been removed; use an explicit result type and an ordinary method call."))
     }
 
     /// `async? name(params) is Result { body }`
@@ -590,6 +577,13 @@ impl Parser<'_> {
                     && let Some(default) = group.iter().find_map(|param| param.default.as_ref())
                 {
                     return Err(self.error_at_span(default.span, "Native parameters cannot have default values."));
+                }
+                // Before the placement checks, which would name a rule that
+                // does not apply to natives (#987).
+                if context == ParamContext::Native
+                    && let Some(variadic) = group.iter().find(|param| param.variadic)
+                {
+                    return Err(self.error_at_span(variadic.name.span, "Native parameters cannot be variadic."));
                 }
                 params.extend(group);
                 if !self.eat(TokenKind::Comma) || self.check(TokenKind::RightParen) {
@@ -684,9 +678,12 @@ impl Parser<'_> {
         let name = self.consume_identifier("Expect parameter name.")?;
         self.consume(TokenKind::Is, "Expect \"is\" after parameter name.")?;
         let variadic = self.eat(TokenKind::Ellipsis);
+        // The element is any type (`parameter = LOWER_NAME "is" ["..."] type`):
+        // an action type too, with or without `async` (#987).
         if variadic
             && !self.check(TokenKind::At)
             && !self.check(TokenKind::Percent)
+            && !self.check(TokenKind::LeftParen)
             && !self.check_name()
         {
             let ellipsis = self.previous().clone();
@@ -718,7 +715,9 @@ impl Parser<'_> {
     fn cap_declaration(&mut self, external: bool) -> PResult<CapDecl> {
         let keyword = self.advance().span;
         let owner = if external {
-            let owner = self.consume_name("Expect owner type before external cap name.")?;
+            // `check_cap_declaration` saw an identifier after `cap`.
+            let token = self.advance();
+            let owner = self.name_of(&token);
             self.consume(
                 TokenKind::DoubleColon,
                 "A module-level cap requires Owner::Name.",
@@ -924,7 +923,7 @@ impl Parser<'_> {
 
     fn async_test_block(&mut self) -> PResult<TestDecl> {
         let async_keyword = self.advance().span;
-        self.consume(TokenKind::Test, "Expect \"test\" after \"async\".")?;
+        self.advance(); // `test`: `check_async_test` saw it.
         let mut test = self.test_block(true)?;
         test.span = async_keyword.to(test.span);
         Ok(test)

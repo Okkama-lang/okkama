@@ -122,6 +122,20 @@ fn errors_are_capped() {
     assert_eq!(errors.len(), MAX_RECOVERED_ERRORS);
 }
 
+/// #987: the last diagnostic under the cap says that the parse stopped there.
+#[test]
+fn the_cap_says_that_the_parse_stopped() {
+    let body: String = (0..MAX_RECOVERED_ERRORS * 3).map(|_| "    let = ;\n").collect();
+    let (_, errors) = recover(&format!("{MODULE}\nmain() is int {{\n{body}    0;\n}}\n"));
+    assert!(errors.last().is_some_and(|last| last.ends_with(": Too many syntax errors.")), "{errors:?}");
+    assert_eq!(errors.iter().filter(|error| error.ends_with("Too many syntax errors.")).count(), 1);
+    // Errors spread over declarations reach the same notice.
+    let items: String = (0..MAX_RECOVERED_ERRORS * 2).map(|index| format!("object O{index} {{ has = ; }}\n")).collect();
+    let (_, errors) = recover(&format!("{MODULE}\n{items}"));
+    assert_eq!(errors.len(), MAX_RECOVERED_ERRORS);
+    assert!(errors.last().is_some_and(|last| last.ends_with(": Too many syntax errors.")), "{errors:?}");
+}
+
 #[test]
 fn lexical_and_syntax_errors_come_together() {
     let (kept, errors) = recover(&format!("{MODULE}\nmain() is int {{\n    let a = 0b102;\n    let b = ;\n    0;\n}}\n"));

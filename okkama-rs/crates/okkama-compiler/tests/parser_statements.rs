@@ -127,6 +127,24 @@ fn match_statements() {
     );
 }
 
+/// #987: the else branch of a match comes after every case, in both forms,
+/// as the formatter prints it; an earlier one is refused at the next case.
+#[test]
+fn a_match_else_branch_comes_last() {
+    for body in [
+        "match x { else { 0; } case 1 { 1; } }",
+        "match x { case _ { 0; } case 1 { 1; } }",
+        "match x { case 1 { 1; } else { 0; } case 2 { 2; } }",
+        "match x { case _: 0; case 1: 1; }",
+    ] {
+        let (message, found, _) = parse_in(&wrap(body), ParseMode::Full).expect_err(body);
+        assert_eq!((message.as_str(), found.as_str()), ("Match else branch must come after every case.", "case"), "{body}");
+    }
+    for body in ["match x { case 1 { 1; } else { 0; } }", "match x { case 1 { 1; } case _ { 0; } }"] {
+        parse_ok(&wrap(body));
+    }
+}
+
 #[test]
 fn for_statements_own_the_top_level_arrow() {
     assert_eq!(

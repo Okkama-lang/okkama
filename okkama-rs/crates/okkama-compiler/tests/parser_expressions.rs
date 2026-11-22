@@ -463,6 +463,15 @@ fn async_await_and_spawn() {
     assert_eq!(expr_sexpr("spawn run(1) + 2"), "(+ (spawn (call run 1)) 2)");
     // `spawn(` is an ordinary call of an action labelled `spawn`.
     assert_eq!(expr_sexpr("spawn(1, 2)"), "(call spawn 1 2)");
+    // With a space, `spawn` is the operator and its call may be grouped (#987).
+    assert_eq!(
+        expr_sexpr("spawn (worker.build(input))"),
+        "(spawn (group (call (. worker build) input)))"
+    );
+    assert_rejects(
+        "module app v1.0.0; main() is int { spawn (value); }",
+        "spawn requires an action call",
+    );
     assert_rejects(
         "module app v1.0.0; main() is int { spawn value; }",
         "spawn requires an action call",

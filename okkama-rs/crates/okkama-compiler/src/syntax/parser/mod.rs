@@ -43,6 +43,9 @@ pub(crate) type PResult<T> = Result<T, Diagnostic>;
 /// Syntax errors reported by one recovering parse at most.
 pub const MAX_RECOVERED_ERRORS: usize = 50;
 
+/// The last diagnostic of a recovering parse that reached the cap.
+const TOO_MANY_ERRORS: &str = "Too many syntax errors.";
+
 /// A recovering parse: the declarations that parsed cleanly (`None` when
 /// even the module declaration is broken) and every error found.
 #[derive(Debug)]
@@ -147,9 +150,12 @@ impl<'s> Parser<'s> {
     }
 
     /// Record an error of a recovering parse; `false` once the cap is reached.
+    /// The last place under the cap says that the parse stopped there (#987).
     fn recover(&mut self, error: Diagnostic) -> bool {
-        if self.errors.len() < MAX_RECOVERED_ERRORS {
+        if self.errors.len() + 1 < MAX_RECOVERED_ERRORS {
             self.errors.push(error);
+        } else if self.errors.len() + 1 == MAX_RECOVERED_ERRORS {
+            self.errors.push(Diagnostic { message: TOO_MANY_ERRORS.to_string(), ..error });
         }
         self.errors.len() < MAX_RECOVERED_ERRORS
     }

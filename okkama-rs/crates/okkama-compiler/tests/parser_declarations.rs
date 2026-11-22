@@ -495,6 +495,31 @@ fn variadic_parameters() {
     }
 }
 
+/// #987: the element of a variadic parameter is any type, as the grammar
+/// says (`parameter = LOWER_NAME "is" ["..."] type`): an action type with or
+/// without `async`.
+#[test]
+fn variadic_elements_are_any_type() {
+    parse_ok(
+        "module app v1.0.0; object Calls { all(fs is ...(int) is int) is int { 0; } \
+         later(fs is ...async (int) is int) is int { 0; } \
+         maybe(xs is ...Maybe<int>) is int { 0; } }",
+    );
+}
+
+/// #987: a variadic native parameter names the native rule wherever it
+/// stands, not the placement rules of action parameters.
+#[test]
+fn a_variadic_native_parameter_anywhere_names_the_native_rule() {
+    for text in [
+        "module app v1.0.0;\nnative collect(values is ...int, last is int) is int;",
+        "module app v1.0.0;\nnative collect(values is ...int, more is ...int) is int;",
+    ] {
+        let (message, found, line) = common::parse_in(text, ParseMode::Full).expect_err(text);
+        assert_eq!((message.as_str(), found.as_str(), line), ("Native parameters cannot be variadic.", "values", 2), "{text}");
+    }
+}
+
 #[test]
 fn generic_declarations() {
     let program = parse_ok(

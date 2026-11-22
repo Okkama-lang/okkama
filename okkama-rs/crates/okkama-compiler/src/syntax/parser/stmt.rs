@@ -40,6 +40,8 @@ impl Parser<'_> {
                     (self.for_source, self.confirm_condition, self.external_cap_owner) =
                         (for_source, confirm_condition, owner);
                     if !self.recover(error) {
+                        // The cap is reached and reported: this error only
+                        // unwinds the declaration, and is not recorded.
                         return Err(self.error_here("Too many syntax errors."));
                     }
                     self.synchronize_statement(from);
@@ -463,6 +465,11 @@ impl Parser<'_> {
                     else_block = Some(body);
                     else_compact = compact;
                     continue;
+                }
+                // The formatter prints the cases first: an earlier else
+                // branch would not survive formatting (#987).
+                if else_block.is_some() {
+                    return Err(self.error_at(&keyword, "Match else branch must come after every case."));
                 }
                 let mut patterns = vec![self.expression()?];
                 while self.eat(TokenKind::Comma) {
