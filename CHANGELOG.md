@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Fixed
+- **An object the runtime holds compares by identity (#956).** `==` on two `Atomic`s, two channels or
+  channel ends, two events, locks or other async primitives was always `true`: their state lives in the
+  runtime, not in fields, so structural equality compared nothing. They are now equal only to themselves,
+  and so is a `Cell`, which holds an `Atomic`. Such an object cannot key a map any more ("is held by the
+  runtime and compares by identity").
+
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the

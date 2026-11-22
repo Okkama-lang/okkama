@@ -36,6 +36,12 @@ const OBJECTS: [(&str, &str); 22] = [
     ("async/timeout", "Before"),
 ];
 
+/// Whether the runtime holds the state of std object `name` of `module` (#956):
+/// such an object is not a value, it compares by identity and cannot key a map.
+pub(crate) fn runtime_backed(module: &str, name: &str) -> bool {
+    OBJECTS.contains(&(module, name))
+}
+
 /// Действие или конструктор объекта.
 #[derive(Copy, Clone)]
 pub(super) enum Member {

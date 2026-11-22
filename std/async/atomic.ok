@@ -8,8 +8,9 @@ module async/atomic v1.0.0;
 //
 // Every operation is synchronous and has no suspension point, so it is whole
 // with respect to other tasks. compare_and_replace publishes only when the
-// value equals expected; equality is structural. For a value only synchronous
-// code touches, cell's Cell is enough.
+// value equals expected; equality is structural. Two atomics are equal only
+// when they are the same atomic, whatever they hold, and an atomic cannot key a
+// map. For a value only synchronous code touches, cell's Cell is enough.
 
 import "io/stream" take Closing;
 

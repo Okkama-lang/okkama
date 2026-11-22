@@ -18,7 +18,7 @@ mod body;
 mod builder;
 mod ctx;
 mod futures;
-mod intrinsics;
+pub(crate) mod intrinsics;
 mod modules;
 pub mod std_paths;
 

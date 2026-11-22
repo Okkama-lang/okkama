@@ -877,6 +877,13 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
                 if heap::payload(ha) != heap::payload(hb) {
                     return Ok(false);
                 }
+                // The runtime holds this object's state, not its fields (#956).
+                if runtime.held.get(heap::payload(ha) as usize).copied().unwrap_or(false) {
+                    if a != b {
+                        return Ok(false);
+                    }
+                    continue;
+                }
                 if a != b && seen.insert((a, b)) {
                     let fields = &program.objects[heap::payload(ha) as usize].fields;
                     for (index, (name, field)) in fields.iter().enumerate().rev() {

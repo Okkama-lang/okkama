@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.atomic.identity-equality",
+  "title": "Atomics, channels and cells compare by identity",
+  "purpose": "An object whose state the runtime holds is equal only to itself, whatever it holds.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "STD.ASYNC.ATOMIC",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "atomic false true\nchannel false true\ncell false true\n"
+    }
+  },
+  "spec_refs": [
+    "std/async/atomic.ok",
+    "std/cell.ok"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #956",
+    "expected_basis": "std/cell.ok: cells compare by identity, not by content; an Atomic or a channel end is the same kind of runtime-held object (#956)."
+  },
+  "status": "mandatory"
+}

@@ -523,3 +523,23 @@ fn repeated_awaits_share_identity_and_escaped_futures_taint_results() {
     assert!(stored.creations.iter().filter(|site| site.kind == "await.result")
         .all(|site| matches!(&site.owner, Owner::Unknown(reasons) if reasons.contains("future"))), "{stored:?}");
 }
+
+/// #956: an object whose state the runtime holds is not a value, so it cannot key a map;
+/// an ordinary object without fields still can.
+#[test]
+fn runtime_backed_objects_are_not_map_keys() {
+    let held = "module app v1.0.0; import \"async/atomic\" take Atomic; \
+        main() is int { let a = Atomic(1); let m = [a: 1]; m.size(); }";
+    let source = SourceFile::new("test.ok", held).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let errors = match lowering::lower_linked(&prune::strip_test_items(program), source.name(), &mut Std) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![format!("{error:?}")],
+    };
+    assert!(errors.iter().any(|e| e.contains("Atomic<int> is held by the runtime and compares by identity")), "{errors:?}");
+
+    let plain = "module app v1.0.0; object Marker { Marker(); } main() is int { let m = [Marker(): 1]; m.size(); }";
+    let source = SourceFile::new("test.ok", plain).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    assert!(lowering::lower_linked(&prune::strip_test_items(program), source.name(), &mut Std).is_ok());
+}

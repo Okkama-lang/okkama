@@ -562,6 +562,9 @@ impl<'a> Registry<'a> {
         if !info.caps.is_empty() {
             return Some(format!("{} holds capabilities", self.type_name(ty)));
         }
+        if crate::lowering::intrinsics::runtime_backed(&self.modules[info.module].name, &info.name) {
+            return Some(format!("{} is held by the runtime and compares by identity", self.type_name(ty)));
+        }
         let env: Vec<(ParamId, Ty)> = info.params.iter().copied().zip(args.iter().cloned()).collect();
         visiting.push(*id);
         let problem = info.fields.iter().find_map(|field| {
