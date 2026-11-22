@@ -530,13 +530,15 @@ impl<'s> Printer<'s> {
             }
         }
         self.word(" ");
-        self.members(&decl.members, decl.span.end);
+        self.members(&decl.members, decl.span);
     }
 
     /// Тело объекта или fake: члены через пустую строку, кроме подряд идущих `has`.
-    fn members(&mut self, members: &[ObjectMember], end: u32) {
+    /// `span` — всё объявление: его ещё не напечатанные комментарии лежат в теле.
+    fn members(&mut self, members: &[ObjectMember], span: Span) {
+        let end = span.end;
         self.word("{");
-        if members.is_empty() && !self.has_comment_in(Span::new(self.offset_before(end), end)) {
+        if members.is_empty() && !self.has_comment_in(span) {
             self.word("}");
             return;
         }
@@ -552,13 +554,6 @@ impl<'s> Printer<'s> {
         self.newline();
         self.indent -= 1;
         self.word("}");
-    }
-
-    /// Начало содержимого блока `{ ... }`, кончающегося в `end`.
-    fn offset_before(&self, end: u32) -> u32 {
-        self.text[..end as usize]
-            .rfind('{')
-            .map_or(0, |at| at as u32)
     }
 
     fn member(&mut self, member: &ObjectMember) {
@@ -629,7 +624,8 @@ impl<'s> Printer<'s> {
         }
         self.word(&cap.name.text);
         self.word(" {");
-        if cap.fields.is_empty() {
+        // An empty body keeps the comments written inside it (#988).
+        if cap.fields.is_empty() && !self.has_comment_in(cap.span) {
             self.word("}");
             return;
         }
@@ -643,7 +639,7 @@ impl<'s> Printer<'s> {
                 p.block(&field.body);
             });
         }
-        self.leading_comments(cap.span.end.saturating_sub(1), false);
+        self.leading_comments(cap.span.end.saturating_sub(1), cap.fields.is_empty());
         self.newline();
         self.indent -= 1;
         self.word("}");
@@ -684,7 +680,7 @@ impl<'s> Printer<'s> {
         self.word(&decl.name.text);
         self.generics(&decl.generics);
         self.word(" {");
-        if decl.members.is_empty() {
+        if decl.members.is_empty() && !self.has_comment_in(decl.span) {
             self.word("}");
             return;
         }
@@ -706,7 +702,7 @@ impl<'s> Printer<'s> {
                 RoleMember::Fake(fake) => {
                     p.word("fake ");
                     match &fake.body {
-                        FakeBody::Parsed(members) => p.members(members, fake.span.end),
+                        FakeBody::Parsed(members) => p.members(members, fake.span),
                         FakeBody::Skipped(span) => p.word(p.slice(*span)),
                     }
                 }
@@ -714,7 +710,7 @@ impl<'s> Printer<'s> {
             });
             previous_signature = signature;
         }
-        self.leading_comments(decl.span.end.saturating_sub(1), false);
+        self.leading_comments(decl.span.end.saturating_sub(1), decl.members.is_empty());
         self.newline();
         self.indent -= 1;
         self.word("}");
@@ -978,10 +974,13 @@ impl<'s> Printer<'s> {
                 condition,
                 fallback,
             } => {
+                // Only this statement's output is searched: recounting the
+                // whole output was quadratic on large files (#988). The start
+                // is taken before the keyword, which `newline` never trims.
+                let start = self.out.len();
                 self.word("confirm ");
-                let lines = self.out.matches('\n').count();
                 self.expr(condition);
-                let multiline = self.out.matches('\n').count() > lines;
+                let multiline = self.out[start..].contains('\n');
                 if let Some(fallback) = fallback {
                     let (keyword, word, value) = match fallback {
                         ConfirmFallback::Panic { keyword, value } => (*keyword, "panic ", value),
@@ -1478,8 +1477,7 @@ impl<'s> Printer<'s> {
             return self.expr(expr);
         };
         let mut operands = Vec::new();
-        let mut spans = Vec::new();
-        collect_chain(expr, *op, &mut operands, &mut spans);
+        collect_chain(expr, *op, &mut operands);
         let user_broken = operands
             .windows(2)
             .any(|pair| self.broken(pair[0].span.end, pair[1].span.start));
@@ -1533,16 +1531,15 @@ fn else_if(block: &Block) -> Option<&Expr> {
 }
 
 /// Операнды левоассоциативной цепочки одного логического оператора.
-fn collect_chain<'e>(expr: &'e Expr, op: BinaryOp, out: &mut Vec<&'e Expr>, spans: &mut Vec<Span>) {
+fn collect_chain<'e>(expr: &'e Expr, op: BinaryOp, out: &mut Vec<&'e Expr>) {
     match &expr.kind {
         ExprKind::Binary {
             op: inner,
             left,
             right,
-            op_span,
+            ..
         } if *inner == op => {
-            collect_chain(left, op, out, spans);
-            spans.push(*op_span);
+            collect_chain(left, op, out);
             out.push(right);
         }
         _ => out.push(expr),

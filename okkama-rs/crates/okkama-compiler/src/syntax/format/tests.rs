@@ -352,3 +352,17 @@ fn deeply_nested_calls_format_in_linear_time() {
     assert!(text.ends_with("    0;\n}\n"), "{text}");
     assert!(elapsed < std::time::Duration::from_secs(10), "formatting took {elapsed:?}");
 }
+
+/// #988: a comment inside an empty role, cap, object or fake body stays inside
+/// it; a truly empty body is still `{}`.
+#[test]
+fn comments_in_empty_bodies_stay_inside() {
+    let source = "module m v1.0.0;\nrole Marker {\n    // nothing yet\n}\nrole Empty {}\nrole Counter {\n    count() is int;\n    fake {\n        // no state\n    }\n}\nobject Thing {\n    Thing();\n    cap Extra {\n        // to be filled\n    }\n}\nobject Bare {\n    // only a note\n}\nmain() is int {\n    0;\n}\n";
+    let out = fmt(source);
+    assert!(out.contains("role Marker {\n    // nothing yet\n}"), "{out}");
+    assert!(out.contains("role Empty {}"), "{out}");
+    assert!(out.contains("fake {\n        // no state\n    }"), "{out}");
+    assert!(out.contains("cap Extra {\n        // to be filled\n    }"), "{out}");
+    assert!(out.contains("object Bare {\n    // only a note\n}"), "{out}");
+    assert_eq!(fmt(&out), out, "idempotent");
+}
