@@ -1052,14 +1052,17 @@ hidden object TomlReader {
             let moment is TomlValue = local;
             return moment;
         }
+        let marker = self.tcode(start, end, zone);
         if end - zone == 1 {
             let utc is TomlValue = TomlOffsetDateTime(local: local, offset: TomlOffset(0, true));
             return utc;
         }
+        // RFC 3339 time-offset is `Z` or a numeric offset, never both (#947).
+        confirm marker != 90 && marker != 122 else throw TomlStop.at(start, "invalid fixed offset");
         let hours = self.number(zone + 1, 2);
         let minutes = self.number(zone + 4, 2);
         confirm hours <= 23 && minutes <= 59 else throw TomlStop.at(start, "invalid fixed offset");
-        let west = self.tcode(start, end, zone) == 45;
+        let west = marker == 45;
         let amount = (hours * 60 + minutes) * if west {
             -1;
         }
@@ -1799,4 +1802,13 @@ test "limits: depth, nodes, input, members and items" {
         TomlTestFailure("x = [" + items.join(",") + "]", 64, 20000).text(),
         "20005 1 20006 maximum TOML array items exceeded"
     );
+}
+
+test "a date-time takes Z or a numeric offset, not both (#947)" {
+    test.is(TomlTestFailure("t = 1979-05-27T07:32:00Z12:30").text(), "4 1 5 invalid fixed offset");
+    test.is(TomlTestFailure("t = 1979-05-27T07:32:00z12:30").text(), "4 1 5 invalid fixed offset");
+    test.is(TomlTestFailure("t = 1979-05-27T07:32:00Z+01:00").text(), "4 1 5 expected TOML value");
+    test.ok(ParsedToml("t = 1979-05-27T07:32:00Z").root().membership("t"));
+    test.ok(ParsedToml("t = 1979-05-27T07:32:00+12:30").root().membership("t"));
+    test.ok(ParsedToml("t = 1979-05-27T07:32:00-00:00").root().membership("t"));
 }

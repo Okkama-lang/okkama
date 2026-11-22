@@ -157,6 +157,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **`Storage.usage()` asks the file system instead of running `df` (#944).** It took about 1.2 ms per call and
   failed with `unsupported` where no `df` was installed; it now calls `statvfs` and reports exact bytes.
 
+- **A TOML date-time with both `Z` and a numeric offset is refused (#947).** `1979-05-27T07:32:00Z12:30` was read as
+  +12:30; RFC 3339 allows one or the other, so it is now `InvalidToml` ("invalid fixed offset").
+
 ### Changed
 
 - **An `async destroy` guard costs what a deferred close costs (#329, step 4).** A guard with its own async destroy,
