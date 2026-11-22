@@ -1,0 +1,226 @@
+## html/entities
+=== RUN   HTML reference decoding preserves markup and is not recursive
+--- PASS: HTML reference decoding preserves markup and is not recursive
+=== RUN   HTML named and numeric recovery
+--- PASS: HTML named and numeric recovery
+=== RUN   HTML decoding repeats and composes with escaping
+--- PASS: HTML decoding repeats and composes with escaping
+=== RUN   HTML text and quotation policies
+--- PASS: HTML text and quotation policies
+=== RUN   HTML escaping preserves empty text Unicode and whitespace
+--- PASS: HTML escaping preserves empty text Unicode and whitespace
+=== RUN   HTML references are ordinary source and queries repeat
+--- PASS: HTML references are ordinary source and queries repeat
+=== RUN   HTML numeric references recover scalar limits overflow and leading zeros
+--- PASS: HTML numeric references recover scalar limits overflow and leading zeros
+=== RUN   HTML named references use longest case sensitive spellings and multiple scalars
+--- PASS: HTML named references use longest case sensitive spellings and multiple scalars
+PASS
+
+## html/events
+=== RUN   events come in source order, names lowercased, references decoded
+--- PASS: events come in source order, names lowercased, references decoded
+=== RUN   script content stays raw; kinds tell the events apart
+--- PASS: script content stays raw; kinds tell the events apart
+=== RUN   an attribute without a value has none
+--- PASS: an attribute without a value has none
+=== RUN   HTML attributes retain duplicates boolean empties and slash boundaries
+--- PASS: HTML attributes retain duplicates boolean empties and slash boundaries
+=== RUN   HTML Unicode spaces separate names but only ASCII names change case
+--- PASS: HTML Unicode spaces separate names but only ASCII names change case
+=== RUN   HTML references distinguish text and attribute ambiguity
+--- PASS: HTML references distinguish text and attribute ambiguity
+=== RUN   HTML raw text ends only at a matching delimited name
+--- PASS: HTML raw text ends only at a matching delimited name
+=== RUN   HTML comments declarations and instructions recover at EOF
+--- PASS: HTML comments declarations and instructions recover at EOF
+=== RUN   HTML malformed markup and empty instructions merge adjacent text
+--- PASS: HTML malformed markup and empty instructions merge adjacent text
+=== RUN   HTML lexical declarations and ordinary title content
+--- PASS: HTML lexical declarations and ordinary title content
+=== RUN   HTML cursors repeat independently and reject exhausted observations
+--- PASS: HTML cursors repeat independently and reject exhausted observations
+=== RUN   HTML preserves NUL and non-whitespace controls in attribute values
+--- PASS: HTML preserves NUL and non-whitespace controls in attribute values
+=== RUN   HTML has no implicit nesting attribute or text budget
+--- PASS: HTML has no implicit nesting attribute or text budget
+=== RUN   HTML documents retain snapshot identity while repeated cursors agree
+--- PASS: HTML documents retain snapshot identity while repeated cursors agree
+PASS
+
+## http/static
+=== RUN   static policy defaults bound ranges and disable optional file modes
+--- PASS: static policy defaults bound ranges and disable optional file modes
+=== RUN   files are served below a route parameter with a cache rule and content tags
+--- PASS: files are served below a route parameter with a cache rule and content tags
+PASS
+
+## http/xmlrpc
+=== RUN   standard XMLRPC values do not require casts
+--- PASS: standard XMLRPC values do not require casts
+=== RUN   every value reads as its own kind and refuses the others (#517)
+--- PASS: every value reads as its own kind and refuses the others (#517)
+=== RUN   arrays, structs and calls read by position and name (#517)
+--- PASS: arrays, structs and calls read by position and name (#517)
+=== RUN   XMLRPC lookahead advances across comments empty and nested values
+--- PASS: XMLRPC lookahead advances across comments empty and nested values
+=== RUN   XMLRPC joins scalar pieces and writes values in document order
+--- PASS: XMLRPC joins scalar pieces and writes values in document order
+=== RUN   XMLRPC scalar checks preserve legal whitespace and error precedence
+--- PASS: XMLRPC scalar checks preserve legal whitespace and error precedence
+PASS
+
+## template/engine
+=== RUN   values: dotted paths, the current context, comments, escaped delimiters and standalone lines
+--- PASS: values: dotted paths, the current context, comments, escaped delimiters and standalone lines
+=== RUN   every JSON kind as a value: text, canonical number, boolean, nothing for null; others refused
+--- PASS: every JSON kind as a value: text, canonical number, boolean, nothing for null; others refused
+=== RUN   sections: arrays per item, objects once, scalars by truth; inverted sections are the opposite
+--- PASS: sections: arrays per item, objects once, scalars by truth; inverted sections are the opposite
+=== RUN   a source is checked whole before anything is written, and kept for the next rendering
+--- PASS: a source is checked whole before anything is written, and kept for the next rendering
+=== RUN   write goes out piece by piece, and what came before a failure stays written
+--- PASS: write goes out piece by piece, and what came before a failure stays written
+=== RUN   every limit is its own failure
+--- PASS: every limit is its own failure
+=== RUN   partials render in the current context, inside sections and inside each other
+--- PASS: partials render in the current context, inside sections and inside each other
+=== RUN   a partial the library lacks, or one that is not a template, fails before anything is written
+--- PASS: a partial the library lacks, or one that is not a template, fails before anything is written
+=== RUN   a partial may include itself; how deep and how many is bounded
+--- PASS: a partial may include itself; how deep and how many is bounded
+=== RUN   HTML: text escapes markup, a quoted ordinary attribute escapes quotes too
+--- PASS: HTML: text escapes markup, a quoted ordinary attribute escapes quotes too
+=== RUN   HTML: every other place for a value fails closed, before anything is written
+--- PASS: HTML: every other place for a value fails closed, before anything is written
+=== RUN   HTML: a section or an inverted one must leave the context it opens in
+--- PASS: HTML: a section or an inverted one must leave the context it opens in
+=== RUN   HTML: a partial is checked where it is included, and must leave that context
+--- PASS: HTML: a partial is checked where it is included, and must leave that context
+=== RUN   the HTML lexer: text, quoted ordinary attributes, raw text and unfinished markup (from template/html)
+--- PASS: the HTML lexer: text, quoted ordinary attributes, raw text and unfinished markup (from template/html)
+PASS
+
+## template/html
+=== RUN   HTML templates escape text and quoted ordinary attributes
+--- PASS: HTML templates escape text and quoted ordinary attributes
+=== RUN   HTML templates refuse event attributes, raw content and unfinished markup
+--- PASS: HTML templates refuse event attributes, raw content and unfinished markup
+PASS
+
+## template/html_library
+=== RUN   empty and missing templates have explicit behavior
+--- PASS: empty and missing templates have explicit behavior
+=== RUN   empty library permits zero and rejects negative bounds
+--- PASS: empty library permits zero and rejects negative bounds
+=== RUN   an HTML library reads a map of templates by name
+--- PASS: an HTML library reads a map of templates by name
+=== RUN   a repeated HTML name is refused, and names are found by a map (#178)
+--- PASS: a repeated HTML name is refused, and names are found by a map (#178)
+PASS
+
+## template/sections
+=== RUN   section templates render what they always rendered (#178: goldens from the old engine)
+--- PASS: section templates render what they always rendered (#178: goldens from the old engine)
+=== RUN   section templates keep their errors: iterations, partials, depths, limits
+--- PASS: section templates keep their errors: iterations, partials, depths, limits
+=== RUN   section configuration rejects negatives before parsing
+--- PASS: section configuration rejects negatives before parsing
+=== RUN   a section output measures exact UTF-8 contributions and refuses one whole
+--- PASS: a section output measures exact UTF-8 contributions and refuses one whole
+PASS
+
+## web/app
+=== RUN   a web application routes requests over loopback and drains
+--- FAIL: a web application routes requests over loopback and drains
+    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, "Cannot bind TCP listener")
+    Caused by:
+      NativeFailure: Cannot bind TCP listener
+      code: permission_denied
+      domain: core.net
+      operation: runtime/network@1::tcp_bound/4
+=== RUN   a compressed reply reaches the client decoded
+--- FAIL: a compressed reply reaches the client decoded
+    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, "Cannot bind TCP listener")
+    Caused by:
+      NativeFailure: Cannot bind TCP listener
+      code: permission_denied
+      domain: core.net
+      operation: runtime/network@1::tcp_bound/4
+=== RUN   a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN
+--- FAIL: a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN
+    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, "Cannot bind TCP listener")
+    Caused by:
+      NativeFailure: Cannot bind TCP listener
+      code: permission_denied
+      domain: core.net
+      operation: runtime/network@1::tcp_bound/4
+FAIL
+
+## web/around
+=== RUN   an access log writes one line per request
+--- PASS: an access log writes one line per request
+=== RUN   bearer authentication lets only the token through
+--- PASS: bearer authentication lets only the token through
+=== RUN   cors answers preflights and marks replies to its origin
+--- PASS: cors answers preflights and marks replies to its origin
+=== RUN   replies are compressed for clients that accept it
+--- PASS: replies are compressed for clients that accept it
+PASS
+
+## web/reply
+=== RUN   a text reply declares its representation and keeps the given fields
+--- PASS: a text reply declares its representation and keeps the given fields
+=== RUN   redirects and created replies carry their location
+--- PASS: redirects and created replies carry their location
+=== RUN   bytes and streams declare their media type
+--- PASS: bytes and streams declare their media type
+=== RUN   an events reply streams its channel as text/event-stream
+--- PASS: an events reply streams its channel as text/event-stream
+=== RUN   a file reply answers with the file and keeps the given fields
+--- PASS: a file reply answers with the file and keeps the given fields
+PASS
+
+## web/routing
+=== RUN   scope prefixes are absolute and have no trailing slash
+--- PASS: scope prefixes are absolute and have no trailing slash
+=== RUN   routes take one Fallback, and only at the top
+--- PASS: routes take one Fallback, and only at the top
+=== RUN   a resource writes its path once for several methods
+--- PASS: a resource writes its path once for several methods
+=== RUN   Route takes any one method and Any every method
+--- PASS: Route takes any one method and Any every method
+=== RUN   arounds run outer before inner and may answer by themselves
+--- PASS: arounds run outer before inner and may answer by themselves
+=== RUN   an around refuses a WebSocket upgrade or lets it go on
+--- PASS: an around refuses a WebSocket upgrade or lets it go on
+=== RUN   a path with or without its final slash is redirected to the declared one
+--- PASS: a path with or without its final slash is redirected to the declared one
+=== RUN   named routes give links to endpoints
+--- PASS: named routes give links to endpoints
+=== RUN   files are served below a path, passing the arounds
+--- PASS: files are served below a path, passing the arounds
+PASS
+
+## web/session
+=== RUN   a session starts with a signed cookie, is found again and ends
+--- PASS: a session starts with a signed cookie, is found again and ends
+PASS
+
+## web/testing
+=== RUN   a test client calls the routes without a network
+--- PASS: a test client calls the routes without a network
+=== RUN   a test client passes the arounds of the routes
+--- PASS: a test client passes the arounds of the routes
+=== RUN   every method sends headers (#650)
+--- PASS: every method sends headers (#650)
+=== RUN   a client with a jar carries the cookies replies set (#650)
+--- PASS: a client with a jar carries the cookies replies set (#650)
+PASS
+
+## runtime/html
+=== RUN   HTML event coordinates and attributes preserve lexical order
+--- PASS: HTML event coordinates and attributes preserve lexical order
+=== RUN   HTML empty and invalid indices return predictable results
+--- PASS: HTML empty and invalid indices return predictable results
+PASS

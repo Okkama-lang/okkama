@@ -1,0 +1,77 @@
+{
+  "html/entities": {
+    "passed": 8,
+    "failed": 0,
+    "exit": 0
+  },
+  "html/events": {
+    "passed": 14,
+    "failed": 0,
+    "exit": 0
+  },
+  "http/static": {
+    "passed": 2,
+    "failed": 0,
+    "exit": 0
+  },
+  "http/xmlrpc": {
+    "passed": 6,
+    "failed": 0,
+    "exit": 0
+  },
+  "template/engine": {
+    "passed": 14,
+    "failed": 0,
+    "exit": 0
+  },
+  "template/html": {
+    "passed": 2,
+    "failed": 0,
+    "exit": 0
+  },
+  "template/html_library": {
+    "passed": 4,
+    "failed": 0,
+    "exit": 0
+  },
+  "template/sections": {
+    "passed": 4,
+    "failed": 0,
+    "exit": 0
+  },
+  "web/app": {
+    "passed": 0,
+    "failed": 3,
+    "exit": 1
+  },
+  "web/around": {
+    "passed": 4,
+    "failed": 0,
+    "exit": 0
+  },
+  "web/reply": {
+    "passed": 5,
+    "failed": 0,
+    "exit": 0
+  },
+  "web/routing": {
+    "passed": 9,
+    "failed": 0,
+    "exit": 0
+  },
+  "web/session": {
+    "passed": 1,
+    "failed": 0,
+    "exit": 0
+  },
+  "web/testing": {
+    "passed": 4,
+    "failed": 0,
+    "exit": 0
+  },
+  "runtime/html": {
+    "passed": 2,
+    "failed": 0,
+    "exit": 0
+  }
+}

@@ -1,0 +1,21 @@
+module html13/bench v1.0.0;
+import "./harness" take Measurement;
+import "html/events" take HtmlEvents, HtmlEventKind;
+import "html/entities" take UnescapedHtml;
+import "cell" take Cell;
+object Bench {
+ has text is string;
+ Bench(:text);
+ run(n is int) is int {
+  let total = Cell(0);
+  for 0..n -> i { BODY }
+  total.value();
+ }
+}
+main() is int {
+ let m = Measurement();
+ let parts = (0..ROWS).map() -> i { FRAGMENT; };
+ let b = Bench(text: parts.join(""));
+ let warm = b.run(m.warmup()); let before = m.start();
+ let check = b.run(m.n()); m.finish(before, check, warm); 0;
+}
