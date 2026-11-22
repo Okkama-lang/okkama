@@ -25490,8 +25490,8 @@ enum_case = LOWER_NAME [ parameter_list ] ;                        (* payload fi
 
 - Enum type parameters cannot have bounds (syntax error).
 - An upper-case case name is a syntax error: "Expect enum case name."
-- An enum with no cases, `enum E = ();`, parses, and the compiler then fails
-  with an internal error (#966).
+- An enum with no cases, `enum E = ();`, parses, and the checker rejects it:
+  "Enum "E" has no cases; an enum needs at least one" (#966).
 - `is Error` makes an error enum (rejected by the checker: type parameters on
   an error enum, and any role other than `Error`).
 

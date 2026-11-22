@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Fixed
+- **Three compiler crashes are diagnostics now.** An enum with no cases is rejected at its name (#966);
+  `[].join(",")` joins an untyped empty array as an empty `@string` instead of producing invalid IR (#969); a
+  `...any` (or other) spread into a `...string` constructor is rejected at the spread (#970). All three used
+  to stop the compiler with "internal compiler error: lowering produced invalid IR".
+
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the

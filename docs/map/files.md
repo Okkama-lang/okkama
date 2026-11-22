@@ -2,16 +2,16 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21345 lines
+## front — 35 files, 21374 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 115 — `once let` (#491): a kept value must not depend on effects. A value that
-- `okkama-compiler/src/analysis/registry.rs` 3026 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
+- `okkama-compiler/src/analysis/registry.rs` 3032 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 240 — Семантические типы Okkama.
-- `okkama-compiler/src/analysis/check/builtin.rs` 602 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
-- `okkama-compiler/src/analysis/check/call.rs` 1968 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
+- `okkama-compiler/src/analysis/check/builtin.rs` 607 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
+- `okkama-compiler/src/analysis/check/call.rs` 1986 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
 - `okkama-compiler/src/analysis/check/collections.rs` 664 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 317 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
 - `okkama-compiler/src/analysis/check/expr.rs` 1924 — Выражения: литералы, имена, операторы, условные и составные формы.

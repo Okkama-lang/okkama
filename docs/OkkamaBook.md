@@ -991,10 +991,9 @@ Rules:
   target means code-point boundaries: `"ab".replace("", "-")` returns
   `"-a-b-"`; `replace_first("", "-")` prefixes once.
 - `join` exists on exact `@string` values only, including typed empty arrays:
-  `let empty is @string = []; empty.join(",")` returns `""`. An untyped `[]`
-  has no element type yet, and `[].join(",")` currently stops the compiler
-  with an internal error instead of a diagnostic (#969); give the empty array
-  its type first. Removal is
+  `let empty is @string = []; empty.join(",")` returns `""`, and so does
+  `[].join(",")`: `join` reads no element, so an untyped `[]` joins as an
+  empty `@string` (#969). Removal is
   `text.replace(target, "")`, not a separate builtin.
 - Every transformation is immutable: it returns a new string or array.
 - The numeric comparisons `.less`, `.less_or_equal`, `.greater`,
@@ -2375,9 +2374,10 @@ The conversion is static, and it is the last resort: a signature that fits the
 call as written wins, so `kind(1, "a")` still picks `kind(values is ...any)`
 over `kind(values is ...string)`. A value without `string()` is rejected. A
 spread `values...` is not converted; its elements must already be strings, so
-`delegate` above takes `...string`, not `...any`. (Spreading an `...any` into a
-`...string` constructor currently stops the compiler with an internal error
-instead of this diagnostic, #970.)
+`delegate` above takes `...string`, not `...any`; a spread of another element
+type is rejected at the spread: `Constructor "Formatted" takes ...string; a
+spread of @any is not converted, so its elements must already be string`
+(#970).
 
 ```okkama
 out.writeln("count: ", 5, ", ready: ", true);       // count: 5, ready: true
