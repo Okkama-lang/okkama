@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21374 lines
+## front — 35 files, 21451 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -11,10 +11,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 240 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 607 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
-- `okkama-compiler/src/analysis/check/call.rs` 1986 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
-- `okkama-compiler/src/analysis/check/collections.rs` 664 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
+- `okkama-compiler/src/analysis/check/call.rs` 1989 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
+- `okkama-compiler/src/analysis/check/collections.rs` 668 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 317 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
-- `okkama-compiler/src/analysis/check/expr.rs` 1924 — Выражения: литералы, имена, операторы, условные и составные формы.
+- `okkama-compiler/src/analysis/check/expr.rs` 1953 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/generics.rs` 387 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
 - `okkama-compiler/src/analysis/check/mod.rs` 831 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 667 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
@@ -28,9 +28,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/ast/mod.rs` 286 — The typed abstract syntax tree.
 - `okkama-compiler/src/syntax/ast/stmt.rs` 115 — Statements and blocks.
 - `okkama-compiler/src/syntax/ast/types.rs` 45 — Type expressions and action result specifications.
-- `okkama-compiler/src/syntax/lexer/mod.rs` 599 — The Okkama lexer.
+- `okkama-compiler/src/syntax/lexer/mod.rs` 634 — The Okkama lexer.
 - `okkama-compiler/src/syntax/parser/decl.rs` 877 — Module items and object/role members.
-- `okkama-compiler/src/syntax/parser/expr.rs` 1011 — Expressions.
+- `okkama-compiler/src/syntax/parser/expr.rs` 1017 — Expressions.
 - `okkama-compiler/src/syntax/parser/mod.rs` 524 — The Okkama parser.
 - `okkama-compiler/src/syntax/parser/stmt.rs` 545 — Blocks and statements.
 - `okkama-compiler/src/syntax/parser/types.rs` 195 — Type expressions, result specifications and generic parameter lists.
@@ -40,7 +40,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11732 lines
+## lower — 14 files, 11736 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1597 — Контекст lowering из THIR: специализации, функции, объявления OIR.
@@ -51,7 +51,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
 - `okkama-compiler/src/lowering/body/builtins.rs` 199 — Builtins built from existing instructions (#210, #211, #231): searches and
-- `okkama-compiler/src/lowering/body/calls.rs` 854 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
+- `okkama-compiler/src/lowering/body/calls.rs` 858 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
 - `okkama-compiler/src/lowering/body/collections.rs` 1633 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
 - `okkama-compiler/src/lowering/body/matching.rs` 803 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
 - `okkama-compiler/src/lowering/body/mod.rs` 3097 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.

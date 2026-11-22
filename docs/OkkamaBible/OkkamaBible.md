@@ -15512,9 +15512,9 @@ signature, and nothing converts it to a role or to a wider function type.
   compiler's check for recursion that cannot end.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
-  variadic anonymous parameters, no defaults. A default is not rejected yet,
-  only ignored: `(n is int = 1) is int { n; }` compiles and `f()` still fails
-  for want of an argument (issue #958).
+  variadic anonymous parameters, no defaults: `(n is int = 1) is int { n; }`
+  is the syntax error "Anonymous action parameters cannot declare default
+  values" (issue #958).
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
@@ -25365,7 +25365,7 @@ ESCAPE    = "\n" | "\r" | "\t" | "\\" | '\"' (string) | "\'" (char)
 BOOL      = "true" | "false" ;
 ```
 
-There are no octal literals (`0o17` is read as `0` followed by the name `o17`, #968) and no `\0` escape. Writing `1.` leaves the dot for
+There are no octal literals (`0o17` is the lexical error "octal literals are not supported", #968) and no `\0` escape. Writing `1.` leaves the dot for
 member access, which is why `1..3` is a range.
 
 **Operators and punctuation.** Operators are matched by longest match.
@@ -25674,8 +25674,8 @@ array_cast    = "@" ( "int" | "float" | "byte" | "string" ) call ;
 
 - A `(` starts an anonymous action when it is followed by `)` or by
   `name is` / `a, b is`; otherwise it is a grouping.
-- Anonymous actions cannot be `async`, variadic or successors. A default on
-  one of their parameters parses and is ignored (#958).
+- Anonymous actions cannot be `async`, variadic or successors, and their
+  parameters take no defaults (a syntax error, #958).
 - A range inside an array literal is spread: `[0, 1..=3, 9]` holds five
   numbers.
 - Casts such as `int(x)`, `float(n)` and `byte(n)` are ordinary calls;

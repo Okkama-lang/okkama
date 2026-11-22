@@ -15,6 +15,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   future or another value it does not format, alone or inside an array or a map, failed with a bare "Native
   invocation … failed". It now fails with a `core.debug`/`unsupported_type` native failure that names the
   kind and the type and points to `debug/dumper`'s `Dumper`. Supported values print as before.
+- **`[].ordering()` is `[]` (#971)** instead of a run that stopped with "invalid array ordering signature".
+- **Clearer diagnostics.** A `match` over a non-enum value used as a value without `else` names the missing
+  `else` (#955), and `for` over a map says to walk `keys()` or `values()`; a default on an anonymous action
+  parameter is a syntax error instead of being ignored (#958); no-match and ambiguity messages list a spread
+  argument as `@T...` (#959); the variadic-native message no longer names an internal phase (#964); `0o17` is
+  one lexical error, "octal literals are not supported", instead of `0` followed by a name (#968).
 
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,

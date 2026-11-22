@@ -98,7 +98,7 @@ ESCAPE    = "\n" | "\r" | "\t" | "\\" | '\"' (string) | "\'" (char)
 BOOL      = "true" | "false" ;
 ```
 
-There are no octal literals (`0o17` is read as `0` followed by the name `o17`, #968) and no `\0` escape. Writing `1.` leaves the dot for
+There are no octal literals (`0o17` is the lexical error "octal literals are not supported", #968) and no `\0` escape. Writing `1.` leaves the dot for
 member access, which is why `1..3` is a range.
 
 **Operators and punctuation.** Operators are matched by longest match.
@@ -407,8 +407,8 @@ array_cast    = "@" ( "int" | "float" | "byte" | "string" ) call ;
 
 - A `(` starts an anonymous action when it is followed by `)` or by
   `name is` / `a, b is`; otherwise it is a grouping.
-- Anonymous actions cannot be `async`, variadic or successors. A default on
-  one of their parameters parses and is ignored (#958).
+- Anonymous actions cannot be `async`, variadic or successors, and their
+  parameters take no defaults (a syntax error, #958).
 - A range inside an array literal is spread: `[0, 1..=3, 9]` holds five
   numbers.
 - Casts such as `int(x)`, `float(n)` and `byte(n)` are ordinary calls;
