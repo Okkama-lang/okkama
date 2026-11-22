@@ -116,7 +116,6 @@ const PURE: &[&str] = &[
     "runtime/secret", "runtime/single_byte", "runtime/statistics", "runtime/template", "runtime/testing",
     "runtime/time_format", "runtime/time_zone", "runtime/unicode_character",
     "runtime/unicode_normalization", "runtime/utf", "runtime/uuid", "runtime/x509",
-    "runtime/xml",
 ];
 
 /// Modules whose operations reach the host.
@@ -262,7 +261,7 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 219), ((AbiKind::Sync, Transport::Handle), 321),
+        let expected = [((AbiKind::Sync, Transport::Data), 219), ((AbiKind::Sync, Transport::Handle), 310),
             ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
@@ -275,10 +274,10 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
-        let roles_expected = [(HandleRole::None, 224), (HandleRole::Uses, 250), (HandleRole::Publishes, 95),
+        let roles_expected = [(HandleRole::None, 224), (HandleRole::Uses, 240), (HandleRole::Publishes, 94),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 280), (Effect::Stdio, 3), (Effect::Host, 309)];
+        let effects_expected = [(Effect::Pure, 269), (Effect::Stdio, 3), (Effect::Host, 309)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 

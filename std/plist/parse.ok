@@ -23,8 +23,7 @@ import "encoding/utf" take Utf8Decoded, Utf8Encoded, Utf16Decoded, Utf32Decoded,
 import "encoding/binary" take IntegerBytes, Binary, Signedness, FloatWidth;
 import "encoding/base64" take Base64Decoded, InvalidBase64;
 import "time/rfc3339" take Rfc3339;
-import "runtime/xml" take XmlEventsState, xml_events, xml_events_error, xml_events_offset,
-    xml_event_count, xml_event_kind, xml_event_name, xml_event_text, xml_event_offset;
+import "xml/internal/events" take XmlTokens, XmlEvents;
 import "time/clock" take Instant;
 import "time/duration" take Duration, DurationUnit;
 
@@ -570,7 +569,7 @@ object PlistXmlToken {
 hidden object PlistXmlEvents {
     has source is string;
     has base is int;
-    has state is XmlEventsState;
+    has state is XmlEvents;
     has count, maximum_nodes, maximum_depth is int;
 
     PlistXmlEvents(source is string, base is int, maximum_nodes is int, maximum_depth is int) {
@@ -578,13 +577,17 @@ hidden object PlistXmlEvents {
         self.base = base;
         self.maximum_nodes = maximum_nodes;
         self.maximum_depth = maximum_depth;
-        let events = xml_events(source, maximum_depth + 2, (maximum_nodes + 2) * 8 + 16);
+        let events = XmlTokens(
+            origin: source,
+            maximum_depth: maximum_depth + 2,
+            maximum_events: (maximum_nodes + 2) * 8 + 16
+        ).events();
         state = events;
-        count = xml_event_count(events);
+        count = events.count();
     }
 
     root() is PlistValue {
-        let error = xml_events_error(state);
+        let error = state.error();
         // The tokenizer's bounds are the plist's node and depth budgets.
         let reason = if error.starts_with("elements nested deeper")
             || error.starts_with("more than") {
@@ -593,15 +596,15 @@ hidden object PlistXmlEvents {
             else {
                 error;
             };
-        confirm error == "" else throw self.located(xml_events_offset(state), reason);
+        confirm error == "" else throw self.located(state.offset(), reason);
         let wrapper = self.significant(0);
         confirm wrapper < count
-            && xml_event_kind(state, wrapper) == 0
-            && xml_event_name(state, wrapper) == "plist"
+            && state.kind(wrapper) == 0
+            && state.name(wrapper) == "plist"
             else throw self.failure(wrapper, "expected plist wrapper");
         let value = self.element(wrapper + 1, 1, maximum_nodes);
         let close = self.significant(value.end());
-        confirm close < count && xml_event_kind(state, close) == 1
+        confirm close < count && state.kind(close) == 1
             else throw self.failure(close, "expected plist closing tag");
         value.plist();
     }
@@ -610,23 +613,23 @@ hidden object PlistXmlEvents {
         let token = self.significant(at);
         confirm depth <= maximum_depth && remaining > 0
             else throw self.failure(token, "node or depth budget exceeded");
-        confirm token < count && xml_event_kind(state, token) == 0
+        confirm token < count && state.kind(token) == 0
             else throw self.failure(token, "expected plist value");
-        let name = xml_event_name(state, token);
+        let name = state.name(token);
         if name == "array" || name == "dict" {
             let cursor = PlistParsePosition(token + 1);
             let values is PlistParsedItems<PlistValue> = PlistParsedItems();
             let members is PlistParsedItems<PlistMember> = PlistParsedItems();
             loop {
                 let item = self.significant(cursor.at());
-                if item < count && xml_event_kind(state, item) == 1 {
+                if item < count && state.kind(item) == 1 {
                     cursor = cursor.following(item + 1, 0);
                     last;
                 }
                 if name == "dict" {
                     confirm item < count
-                        && xml_event_kind(state, item) == 0
-                        && xml_event_name(state, item) == "key"
+                        && state.kind(item) == 0
+                        && state.name(item) == "key"
                         else throw self.failure(item, "expected dictionary key");
                     confirm remaining - cursor.used() > 1 && depth < maximum_depth
                         else throw self.failure(item, "key budget exceeded");
@@ -739,7 +742,7 @@ hidden object PlistXmlEvents {
         loop {
             let at = cursor.at();
             confirm at < count else throw self.failure(at, "unterminated scalar");
-            let kind = xml_event_kind(state, at);
+            let kind = state.kind(at);
             if kind == 1 {
                 let reversed is @string = pieces.reversed();
                 let ordered is @string = (0..reversed.size()).map() -> index {
@@ -749,7 +752,7 @@ hidden object PlistXmlEvents {
             }
             confirm kind != 0 else throw self.failure(at, "invalid scalar content");
             if kind == 2 {
-                pieces = pieces.following(xml_event_text(state, at));
+                pieces = pieces.following(state.text(at));
             }
             cursor = cursor.following(at + 1, 0);
         }
@@ -759,10 +762,10 @@ hidden object PlistXmlEvents {
     // or whitespace; count when there is none.
     hidden significant(index is int) is int {
         for (index..count) -> at {
-            let kind = xml_event_kind(state, at);
+            let kind = state.kind(at);
             let ignorable = kind == 3
                 || kind == 4
-                || (kind == 2 && PlistXmlText(xml_event_text(state, at)).stripped() == "");
+                || (kind == 2 && PlistXmlText(state.text(at)).stripped() == "");
             if !ignorable {
                 confirm kind != 2 else throw self.failure(at, "unexpected text");
                 return at;
@@ -774,7 +777,7 @@ hidden object PlistXmlEvents {
     failure(index is int, reason is string) is InvalidPlist {
         self.located(
             if index < count {
-                xml_event_offset(state, index);
+                state.event_offset(index);
             }
             else {
                 source.length();

@@ -579,17 +579,6 @@ natives! {
     JsonJsonSplitItem = 655, "runtime/json@1::json_split_item/1", "(JsonSplitState) -> @byte";
     JsonJsonSplitError = 656, "runtime/json@1::json_split_error/1", "(JsonSplitState) -> string";
     JsonJsonSplitOffset = 657, "runtime/json@1::json_split_offset/1", "(JsonSplitState) -> int";
-    XmlXmlEvents = 658, "runtime/xml@1::xml_events/3", "(string, int, int) -> XmlEventsState";
-    XmlXmlEventsError = 659, "runtime/xml@1::xml_events_error/1", "(XmlEventsState) -> string";
-    XmlXmlEventsOffset = 660, "runtime/xml@1::xml_events_offset/1", "(XmlEventsState) -> int";
-    XmlXmlEventCount = 661, "runtime/xml@1::xml_event_count/1", "(XmlEventsState) -> int";
-    XmlXmlEventKind = 662, "runtime/xml@1::xml_event_kind/2", "(XmlEventsState, int) -> int";
-    XmlXmlEventName = 663, "runtime/xml@1::xml_event_name/2", "(XmlEventsState, int) -> string";
-    XmlXmlEventText = 664, "runtime/xml@1::xml_event_text/2", "(XmlEventsState, int) -> string";
-    XmlXmlAttributeCount = 665, "runtime/xml@1::xml_attribute_count/2", "(XmlEventsState, int) -> int";
-    XmlXmlAttributeName = 666, "runtime/xml@1::xml_attribute_name/3", "(XmlEventsState, int, int) -> string";
-    XmlXmlAttributeValue = 667, "runtime/xml@1::xml_attribute_value/3", "(XmlEventsState, int, int) -> string";
-    XmlXmlEventOffset = 668, "runtime/xml@1::xml_event_offset/2", "(XmlEventsState, int) -> int";
     ProcessProcessStateOutputReadAsync = 669, "runtime/process@1::process_state_output_read_async/2", "async (ProcessState, int) -> @byte";
     ProcessProcessStateErrorsReadAsync = 670, "runtime/process@1::process_state_errors_read_async/2", "async (ProcessState, int) -> @byte";
     ProcessProcessStateInputWriteAsync = 671, "runtime/process@1::process_state_input_write_async/2", "async (ProcessState, @byte) -> int";
@@ -603,4 +592,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668

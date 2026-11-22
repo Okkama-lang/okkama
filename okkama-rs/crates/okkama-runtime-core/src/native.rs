@@ -40,7 +40,6 @@ pub mod tls;
 pub mod unicode;
 pub mod value;
 pub mod x509;
-pub mod xml;
 
 pub mod inspect;
 pub mod support;
@@ -92,7 +91,6 @@ pub fn execute(
         Provider::Json => json::execute(native, args, arrays),
         Provider::Db => db::execute(native, args),
         Provider::Markup => markup::execute(native, args),
-        Provider::Xml => xml::execute(native, args),
         Provider::Math => math::execute(native, args, context),
         Provider::Host => host::execute(native, args),
         Provider::Value => value::execute(native, args),
@@ -142,7 +140,6 @@ enum Provider {
     Json,
     Db,
     Markup,
-    Xml,
     Math,
     Host,
     Value,
@@ -204,7 +201,6 @@ fn route(native: Native) -> Provider {
         "runtime/json" => return Provider::Json,
         "runtime/db" => return Provider::Db,
         "runtime/html" => return Provider::Markup,
-        "runtime/xml" => return Provider::Xml,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => {
             return Provider::Math;
         }

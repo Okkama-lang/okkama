@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 35579 lines
+## other — 86 files, 35129 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -222,9 +222,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/pmap.rs` 772 — A persistent ordered map (#252–#254): a B+ tree whose nodes versions share.
 - `okkama-persistent/src/slots.rs` 132 — A vector of at most `N` items stored inline, so that a map node is one
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
-- `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
+- `okkama-runtime-abi/src/catalogue.rs` 265 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 603
+- `okkama-runtime-abi/src/table.rs` 592
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -235,7 +235,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/host.rs` 313 — Состояние хоста для providers: текущий каталог
 - `okkama-runtime-core/src/integer.rs` 225 — Exact integer arithmetic shared by Sparrow, natives and compiler constants.
 - `okkama-runtime-core/src/lib.rs` 130 — Shared runtime values; no source syntax, IR, or execution-engine dependency.
-- `okkama-runtime-core/src/native.rs` 529 — Shared providers. Native identifiers and signatures live in runtime-abi.
+- `okkama-runtime-core/src/native.rs` 525 — Shared providers. Native identifiers and signatures live in runtime-abi.
 - `okkama-runtime-core/src/ops.rs` 510 — Операции над значениями для констант компилятора и native-провайдеров:
 - `okkama-runtime-core/src/range.rs` 29 — Immutable range bounds; iteration counters and inclusive ends are exact.
 - `okkama-runtime-core/src/rat.rs` 243 — Точное рациональное `rat` (OIR-1 §16.2): несократимая дробь с
@@ -284,7 +284,6 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/unicode.rs` 158 — `runtime/unicode_character`: свойства символов по таблицам Unicode::UCD
 - `okkama-runtime-core/src/native/value.rs` 57 — `runtime/uuid` и `runtime/unicode_normalization` — перенос части
 - `okkama-runtime-core/src/native/x509.rs` 2044 — `runtime/x509`: строгий DER-конверт и снимок
-- `okkama-runtime-core/src/native/xml.rs` 434 — `runtime/xml` (#144): a bounded, non-validating tokenizer of a whole XML
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `sparrow-cli/src/main.rs` 253 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
