@@ -43,14 +43,21 @@ fn count(bytes: isize) {
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counted<A> {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count(layout.size() as isize);
-        unsafe { self.0.alloc(layout) }
+        let pointer = unsafe { self.0.alloc(layout) };
+        // Only memory actually handed out counts (#986).
+        if !pointer.is_null() {
+            count(layout.size() as isize);
+        }
+        pointer
     }
 
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        count(layout.size() as isize);
-        unsafe { self.0.alloc_zeroed(layout) }
+        let pointer = unsafe { self.0.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            count(layout.size() as isize);
+        }
+        pointer
     }
 
     #[inline]
@@ -61,8 +68,12 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counted<A> {
 
     #[inline]
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        count(size as isize - layout.size() as isize);
-        unsafe { self.0.realloc(pointer, layout, size) }
+        let moved = unsafe { self.0.realloc(pointer, layout, size) };
+        // A failed realloc leaves the old block in place: nothing changed.
+        if !moved.is_null() {
+            count(size as isize - layout.size() as isize);
+        }
+        moved
     }
 }
 

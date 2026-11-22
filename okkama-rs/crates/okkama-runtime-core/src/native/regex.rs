@@ -1117,6 +1117,8 @@ fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, Error
             Ok(spans)
         }
         Err("Invalid regex pattern\n") => Err(invalid_input(native, "Invalid regex pattern")),
+        // An argument error of the caller, not a provider failure (#986).
+        Err("Invalid regex search range\n") => Err(invalid_input(native, "Invalid regex search range")),
         Err("Regex pattern resource limit exceeded\n" | "Regex input resource limit exceeded\n") => {
             Err(failure(DOMAIN, "resource_exhausted", native, "Regex resource limit exceeded"))
         }
@@ -1662,6 +1664,29 @@ mod tests {
         assert_eq!(
             regex_spans(&program, "ς", 0, 2, 0),
             Err("Invalid regex search range\n")
+        );
+    }
+
+    /// #986: a search range outside the input is the caller's argument error,
+    /// not a provider failure.
+    #[test]
+    fn a_bad_search_range_is_an_argument_error() {
+        let query = Query {
+            pattern: std::rc::Rc::new(State {
+                expression: "a".into(),
+                flags: [false; 5],
+                prepared: RefCell::new(None),
+            }),
+            origin: "a".into(),
+            start: IntValue::from_u128(0),
+            end: IntValue::from_u128(2),
+            mode: 0,
+            spans: RefCell::new(None),
+        };
+        let native = Native::RegexRegexQueryFound;
+        assert_eq!(
+            prepare_query(native, &query),
+            Err(invalid_input(native, "Invalid regex search range"))
         );
     }
 

@@ -336,6 +336,10 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "binary_float_bytes" => {
             let width = float_width(native, int(&args[1])?)?;
             let mut big = float_bytes(float(&args[0])?, width);
+            // A value that does not fit the width is refused, not written as infinity (#986).
+            if !float_finite(&big, width) {
+                return Err(failed(native));
+            }
             match string(&args[2])? {
                 "big" => {}
                 "little" => big.reverse(),
@@ -400,7 +404,8 @@ fn float_parse(text: &str) -> Option<f64> {
     if !digits(whole) || !digits(fraction) {
         return None;
     }
-    text.parse::<f64>().ok()
+    // Language floats are finite (#986): a literal past f64::MAX is not a float, not infinity.
+    text.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
 /// Целое в записи `strings/parse::Number.int`: необязательный `-`, при
@@ -461,6 +466,27 @@ mod number_text_tests {
 
     fn parsed(text: &str, radix: i64) -> Option<String> {
         int_parse(text, &IntValue::from_i64(radix)).map(|value| value.to_string())
+    }
+
+    /// #986: a float literal past f64::MAX is not a float; a large finite one still is.
+    #[test]
+    fn float_literals_parse_only_to_finite_values() {
+        assert_eq!(float_parse(&format!("{}.0", "9".repeat(400))), None);
+        assert_eq!(float_parse(&format!("-{}.0", "9".repeat(400))), None);
+        assert_eq!(float_parse("1.5"), Some(1.5));
+        assert!(float_parse(&format!("{}.0", "9".repeat(300))).is_some_and(f64::is_finite));
+    }
+
+    /// #986: binary32 refuses a value it cannot hold instead of writing infinity.
+    #[test]
+    fn binary_float_bytes_refuse_values_past_the_width() {
+        let native = Native::BinaryBinaryFloatBytes;
+        let call = |value: f64, width: i64| {
+            execute(native, &[Value::Float(value), Value::Int(IntValue::from_i64(width)), Value::Str("big".into())])
+        };
+        assert_eq!(call(f64::MAX, 32).err(), Some(failed(native)));
+        assert!(call(f64::MAX, 64).is_ok());
+        assert!(call(1.5, 32).is_ok());
     }
 
     #[test]

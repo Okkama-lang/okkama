@@ -444,6 +444,12 @@ fn prefix(text: &str, maximum: u32) -> i64 {
         .count() as i64
 }
 
+/// The single bytes of `text` when every character is at most `maximum`; a character the
+/// encoding cannot represent is refused, not truncated to its low byte (#986).
+fn single_byte_checked(text: &str, maximum: u32) -> Option<Vec<u8>> {
+    (prefix(text, maximum) as usize == text.chars().count()).then(|| single_byte_encoded(text))
+}
+
 /// Байты по кодовым точкам (младший байт).
 fn single_byte_encoded(text: &str) -> Vec<u8> {
     text.chars().map(|ch| u32::from(ch) as u8).collect()
@@ -576,7 +582,10 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
         AsciiRepresentablePrefix => int(prefix(args[0].as_string()?, 0x7f)),
         Latin1RepresentablePrefix => int(prefix(args[0].as_string()?, 0xff)),
         AsciiEncode | Latin1Encode => {
-            let encoded = single_byte_encoded(args[0].as_string()?);
+            let maximum = if matches!(native, AsciiEncode) { 0x7f } else { 0xff };
+            let Some(encoded) = single_byte_checked(args[0].as_string()?, maximum) else {
+                return Err(failed(native));
+            };
             byte_array(encoded, arrays)
         }
         AsciiValidPrefix => int(bytes(&args[0], arrays)?
@@ -591,6 +600,16 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #986: ASCII and Latin-1 encode only what they represent.
+    #[test]
+    fn single_byte_encodings_refuse_unrepresentable_characters() {
+        assert_eq!(single_byte_checked("Ae", 0x7f), Some(b"Ae".to_vec()));
+        assert_eq!(single_byte_checked("Āé", 0x7f), None);
+        assert_eq!(single_byte_checked("é", 0x7f), None);
+        assert_eq!(single_byte_checked("é", 0xff), Some(vec![0xe9]));
+        assert_eq!(single_byte_checked("Ā", 0xff), None);
+    }
 
     fn base85_result(
         source: &str,
