@@ -92,7 +92,7 @@ const PURE: &[&str] = &[
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution",
     "runtime/regex", "runtime/secret", "runtime/single_byte", "runtime/statistics",
     "runtime/template", "runtime/testing", "runtime/time_format", "runtime/time_zone",
-    "runtime/toml", "runtime/unicode_character", "runtime/unicode_normalization",
+    "runtime/unicode_character", "runtime/unicode_normalization",
     "runtime/utf", "runtime/uuid", "runtime/xml", "runtime/stdio", "runtime/base32",
     "runtime/base64", "runtime/base85", "runtime/x509",
 ];

@@ -437,22 +437,6 @@ natives! {
     TlsTransportVersion = 481, "runtime/tls_transport@1::version/1", "(TlsState) -> string";
     TlsTransportCipher = 482, "runtime/tls_transport@1::cipher/1", "(TlsState) -> string";
     TlsTransportProtocol = 483, "runtime/tls_transport@1::protocol/1", "(TlsState) -> string";
-    TomlTomlParseState = 484, "runtime/toml@1::toml_parse_state/4", "(string, int, int, int) -> TomlParseState";
-    TomlTomlParseValid = 485, "runtime/toml@1::toml_parse_valid/1", "(TomlParseState) -> bool";
-    TomlTomlParseOffset = 486, "runtime/toml@1::toml_parse_offset/1", "(TomlParseState) -> int";
-    TomlTomlParseLine = 487, "runtime/toml@1::toml_parse_line/1", "(TomlParseState) -> int";
-    TomlTomlParseColumn = 488, "runtime/toml@1::toml_parse_column/1", "(TomlParseState) -> int";
-    TomlTomlParseMessage = 489, "runtime/toml@1::toml_parse_message/1", "(TomlParseState) -> string";
-    TomlTomlParseRoot = 490, "runtime/toml@1::toml_parse_root/1", "(TomlParseState) -> TomlNodeState";
-    TomlTomlNodeKind = 491, "runtime/toml@1::toml_node_kind/1", "(TomlNodeState) -> int";
-    TomlTomlNodeSize = 492, "runtime/toml@1::toml_node_size/1", "(TomlNodeState) -> int";
-    TomlTomlNodeInteger = 493, "runtime/toml@1::toml_node_integer/1", "(TomlNodeState) -> int";
-    TomlTomlNodeReal = 494, "runtime/toml@1::toml_node_real/1", "(TomlNodeState) -> float";
-    TomlTomlNodeBoolean = 495, "runtime/toml@1::toml_node_boolean/1", "(TomlNodeState) -> bool";
-    TomlTomlNodeText = 496, "runtime/toml@1::toml_node_text/1", "(TomlNodeState) -> string";
-    TomlTomlNodeCoordinates = 497, "runtime/toml@1::toml_node_coordinates/1", "(TomlNodeState) -> @int";
-    TomlTomlNodeItem = 498, "runtime/toml@1::toml_node_item/2", "(TomlNodeState, int) -> TomlNodeState";
-    TomlTomlMemberName = 499, "runtime/toml@1::toml_member_name/2", "(TomlNodeState, int) -> string";
     UnicodeCharacterCharacterName = 500, "runtime/unicode_character@1::character_name/1", "(char) -> string";
     UnicodeCharacterCategoryCode = 501, "runtime/unicode_character@1::category_code/1", "(char) -> string";
     UnicodeCharacterCharacterCombiningClass = 502, "runtime/unicode_character@1::character_combining_class/1", "(char) -> int";
@@ -617,4 +601,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546
