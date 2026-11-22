@@ -408,7 +408,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             self.bind_tracked(&fail.tracked, &fail.types, &fail.params);
             let previous = &cleanup.fails[k - 1];
             if self.lower_defer(cleanup.defers[k - 1])? {
-                let mut args = self.tracked_args(&previous.tracked);
+                // The defer may have taken a tracked `^C`: the next block's
+                // parameter still is `^C`, as on an unwind edge (#997).
+                let mut args = self.tracked_args_to(&previous.tracked, previous.block);
                 args.push(failure);
                 self.b.terminate(
                     TermKind::Br(Target {
@@ -433,7 +435,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     span,
                 )
                 .value;
-            let mut args = self.tracked_args(&previous.tracked);
+            let mut args = self.tracked_args_to(&previous.tracked, previous.block);
             args.push(joined);
             self.b.terminate(
                 TermKind::Br(Target {

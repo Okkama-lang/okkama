@@ -1722,28 +1722,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     /// Цель unwind для блоков, начинающихся с текущими значениями переменных.
     fn sync_unwind(&mut self) {
         let unwind = self.tries.last().map(|ctx| {
-            let params = self.b.block_params(ctx.target);
-            let mut args: Vec<ValueId> = ctx
-                .tracked
-                .iter()
-                .enumerate()
-                .map(|(index, var)| {
-                    let value = self.vars[*var]
-                        .value
-                        .as_ref()
-                        .expect("tracked variables hold values")
-                        .value;
-                    // Параметр цели создан до `succ.take`: передаём `^C`.
-                    match (params.get(index), self.taken_from.get(&value)) {
-                        (Some(param), Some(original))
-                            if self.b.value_type(*param) != self.b.value_type(value) =>
-                        {
-                            *original
-                        }
-                        _ => value,
-                    }
-                })
-                .collect();
+            let mut args = self.tracked_args_to(&ctx.tracked, ctx.target);
             args.extend(ctx.handled);
             Target {
                 block: ctx.target,
@@ -1751,6 +1730,31 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
         });
         self.b.unwind = unwind;
+    }
+
+    /// Current values of `tracked` for the parameters of `target`.
+    pub(super) fn tracked_args_to(&self, tracked: &[usize], target: BlockId) -> Vec<ValueId> {
+        let params = self.b.block_params(target);
+        tracked
+            .iter()
+            .enumerate()
+            .map(|(index, var)| {
+                let value = self.vars[*var]
+                    .value
+                    .as_ref()
+                    .expect("tracked variables hold values")
+                    .value;
+                // Параметр цели создан до `succ.take`: передаём `^C`.
+                match (params.get(index), self.taken_from.get(&value)) {
+                    (Some(param), Some(original))
+                        if self.b.value_type(*param) != self.b.value_type(value) =>
+                    {
+                        *original
+                    }
+                    _ => value,
+                }
+            })
+            .collect()
     }
 
     /// Ловушка вызова `action` у объекта, создание которого не завершено

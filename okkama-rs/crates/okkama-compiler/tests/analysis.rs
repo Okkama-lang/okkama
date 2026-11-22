@@ -397,6 +397,37 @@ fn successor_obligations_are_checked_before_lowering() {
     }
 }
 
+/// A `defer` counts on every exit of its scope, as it runs on every exit:
+/// `return`, `next` and `last` run the defers of the scopes they leave,
+/// innermost first, before the scopes are checked (#997).
+#[test]
+fn defers_count_on_every_exit_that_runs_them() {
+    let decls = format!("{COUNTER} enum Stop is Error = (stop);");
+    for body in [
+        "let d = C().inc(); defer d.value(); return 1 if 1 > 0; 0;",
+        "let d = C().inc(); defer d.value(); { let e = C().inc(); defer e.value(); return 1 if 1 > 0; } 0;",
+        "for 1..=3 -> i { let d = C().inc(); defer d.value(); next if i == 1; last if i == 2; } 0;",
+        "let v = loop { let d = C().inc(); defer d.value(); last 5; }; v;",
+        "let d = C().inc(); defer d.value(); throw Stop.stop if 1 > 0; 0;",
+    ] {
+        let found = messages(&format!("{decls} main() is int {{ {body} }}"));
+        assert!(found.is_empty(), "{body}: {found:?}");
+    }
+    let leaked = "Successor action result must be used; binding \"d\" can leave scope without consumption";
+    for (body, expected) in [
+        // A defer registered after the exit does not run on it.
+        ("let d = C().inc(); return 1 if 1 > 0; defer d.value(); 0;", vec![leaked]),
+        ("for 1..=3 -> i { let d = C().inc(); next if i == 1; defer d.value(); } 0;", vec![leaked]),
+        // A defer that drops a successor itself is reported once, however many exits run it.
+        (
+            "let c = C(); defer c.inc(); return 1 if 1 > 0; return 2 if 2 > 1; 0;",
+            vec!["Successor action result must be used"],
+        ),
+    ] {
+        assert_eq!(messages(&format!("{decls} main() is int {{ {body} }}")), expected, "{body}");
+    }
+}
+
 const ASYNC_COUNTER: &str =
     "object C { has n is int = 0; C(); async inc() is ^C { ^n = n + 1; } value() is int { n; } }";
 

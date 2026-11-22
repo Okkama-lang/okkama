@@ -202,6 +202,24 @@ fn find_coerces_the_found_item_to_the_expected_element() {
     }
 }
 
+/// #997: a defer that reads a successor binding takes it; the failure chain
+/// of the scope still passes the `^C` its next block expects, on the normal
+/// exit and on an early one, and the IR verifies.
+#[test]
+fn defers_that_take_a_successor_lower_to_valid_ir() {
+    let decls = "object C { has n is int = 0; C(); inc() is ^C { ^n = n + 1; } value() is int { n; } }";
+    for body in [
+        "let d = C().inc(); defer d.value(); 0;",
+        "let d = C().inc(); defer d.value(); return 1 if 1 > 0; 0;",
+        "let d = C().inc(); defer d.value(); let e = C().inc(); defer e.value(); 0;",
+        "for 1..=3 -> i { let d = C().inc(); defer d.value(); next if i == 1; last if i == 2; } 0;",
+    ] {
+        let module = lower(&format!("module app v1.0.0; {decls} main() is int {{ {body} }}"))
+            .unwrap_or_else(|error| panic!("{body}: {error}"));
+        ir::verify(&module).unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    }
+}
+
 #[test]
 fn confirm_and_panic_become_terminators() {
     let text = main_listing("confirm 1 == 1; confirm true else panic \"boom\"; 0;");

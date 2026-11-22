@@ -132,6 +132,10 @@ struct Flow<'r, 'a> {
     /// нормальных выходах (`return` и конец тела) собираются в `exits`.
     silent: bool,
     exits: Vec<Obligations>,
+    /// While a `defer` runs: every exit runs it again (#997), so its own
+    /// errors are reported once.
+    deferring: bool,
+    defer_errors: Vec<(Span, String)>,
 }
 
 /// Проверки потока одного тела; ошибки — в `reg`.
@@ -148,6 +152,8 @@ pub(super) fn check(reg: &mut Registry<'_>, body: &Body) {
         ctor_object,
         silent: false,
         exits: Vec::new(),
+        deferring: false,
+        defer_errors: Vec::new(),
     };
     let mut state = State {
         pending: Obligations::new(),
@@ -227,6 +233,14 @@ impl<'r> Flow<'r, '_> {
         if self.silent {
             return;
         }
+        let message = message.into();
+        if self.deferring {
+            let key = (span, message.clone());
+            if self.defer_errors.contains(&key) {
+                return;
+            }
+            self.defer_errors.push(key);
+        }
         self.reg.set_module(self.module);
         self.reg.error(span, message);
     }
@@ -272,6 +286,8 @@ impl<'r> Flow<'r, '_> {
             ctor_object: None,
             silent: true,
             exits: Vec::new(),
+            deferring: false,
+            defer_errors: Vec::new(),
         };
         let mut start = State {
             pending: Obligations::new(),
@@ -468,12 +484,25 @@ impl<'r> Flow<'r, '_> {
 
     /// `defer` области засчитываются при её выходе (§11.1).
     fn run_defers(&mut self, state: &mut State) {
-        let defers: Vec<&Expr> = self.defers.last().cloned().unwrap_or_default();
-        for defer in defers.into_iter().rev() {
+        let depth = self.defers.len().saturating_sub(1);
+        self.run_defers_from(depth, state);
+    }
+
+    /// `defer` областей `depth..`, внутренние раньше: так их исполняет выход
+    /// `return`, `next` и `last` из этих областей (#997).
+    fn run_defers_from(&mut self, depth: usize, state: &mut State) {
+        let defers: Vec<&'r Expr> = self.defers[depth.min(self.defers.len())..]
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter().rev().copied())
+            .collect();
+        let deferring = std::mem::replace(&mut self.deferring, true);
+        for defer in defers {
             if let Some(value) = self.expr(defer, false, state) {
                 self.discard(state, &value, defer.span);
             }
         }
+        self.deferring = deferring;
     }
 
     /// Оператор; `None` — управление ушло.
@@ -517,9 +546,12 @@ impl<'r> Flow<'r, '_> {
                     Some(value) => self.expr(value, true, state)?,
                     None => Obligations::new(),
                 };
-                self.check_return(state, &returned, stmt.span);
+                // The `defer`s of every scope the return leaves run first (#997).
+                let mut leaving = state.clone();
+                self.run_defers_from(0, &mut leaving);
+                self.check_return(&leaving, &returned, stmt.span);
                 if self.silent {
-                    self.exits.push(state.pending.difference(&returned).copied().collect());
+                    self.exits.push(leaving.pending.difference(&returned).copied().collect());
                 }
                 None
             }
@@ -604,6 +636,8 @@ impl<'r> Flow<'r, '_> {
         };
         let mut jumped = state.clone();
         let kept = last.clone().unwrap_or_default();
+        // The `defer`s of the scopes the jump leaves run first (#997).
+        self.run_defers_from(depth, &mut jumped);
         self.check_scopes(&mut jumped, depth, &kept, span);
         let frame = self.loops.last_mut().expect("checked above");
         if last.is_some() {
