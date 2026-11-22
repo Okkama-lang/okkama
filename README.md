@@ -8,7 +8,7 @@ is enforced by the runtime — not by code review.**
 [![CI](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml)
 [![Packages](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml)
 [![Release](https://img.shields.io/github/v/release/Okkama-lang/okkama?include_prereleases&label=release)](https://github.com/Okkama-lang/okkama/releases)
-[![Conformance](https://img.shields.io/badge/conformance-1035%2F1035%20×%203%20engines-brightgreen)](conformance/)
+[![Conformance](https://img.shields.io/badge/conformance-1051%2F1051-brightgreen)](conformance/)
 [![License](https://img.shields.io/github/license/Okkama-lang/okkama)](LICENSE)
 
 [Website](https://okkama-lang.github.io/) ·
@@ -516,7 +516,7 @@ okkama build hello.ok -o hello.spb && sparrow hello.spb
 | Peak memory, application | 13 MB |
 
 Median of ten cold runs on an Apple M2 Max (0.5.6, release build, start-up
-included). Sparrow (its current version is called Tomato) compiles every function to
+included). Sparrow (its current version, since 0.6.0, is called Tweed) compiles every function to
 machine code (Cranelift) before it runs; calls are direct, async frames are
 stackless and the collector is precise.
 
@@ -544,7 +544,7 @@ Sparrow runs them in 8–25 MB, Go in 4–13 MB, Java in 44–209 MB and Kotlin 
 | 🐦 [Книга Sparrow (RU)](docs/SparrowBook/SparrowBook-RU.md) | The Sparrow book in Russian |
 | 🛡️ [Trust model](docs/security-model.md) | Which input is safe to compile, verify and run today, per boundary, with the open issues |
 | 🤖 [Guide for LLM agents](docs/LLM-GUIDE.md) | Working on this repository: layout, build, tests, benchmarks, architecture |
-| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1021 cases with expected observations |
+| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1051 cases with expected observations |
 
 Where documents disagree, the source of truth is the conformance suite
 (`conformance/`) and the specification — in that order.
@@ -553,9 +553,8 @@ Where documents disagree, the source of truth is the conformance suite
 
 Okkama is **experimental**: the language and the standard library still
 evolve, and nothing is stable yet. The implementation runs the whole language
-and standard library: the conformance suite passes 1021/1021 cases on each
-engine, and every deterministic program in `std/` (in test mode)
-behaves identically on all three. See
+and standard library: the conformance suite passes 1051/1051 cases on
+Sparrow (0.6.2). See
 [Appendix B of the Book](docs/OkkamaBook.md#appendix-b-implementation-status)
 for the feature table.
 
@@ -572,14 +571,14 @@ cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-
 for `locale/collation`; without it those natives report `unsupported`.
 
 GitHub Actions run the tests on Linux and macOS and the conformance suite on
-every engine for each push and pull request ([CI](.github/workflows/ci.yml)).
+Sparrow for each push and pull request ([CI](.github/workflows/ci.yml)).
 [Packages](.github/workflows/packages.yml) are built for every platform on
 each push to `develop` (the `nightly` pre-release) and published as a release
 for each `vX.Y.Z` tag, which must match the version in `okkama-rs/Cargo.toml`.
 
 ```text
 okkama/
-├── okkama-rs/        Rust implementation: compiler, Sparrow (Tomato),
+├── okkama-rs/        Rust implementation: compiler, Sparrow (Tweed),
 │                     Sparrow runtime and natives, LSP, fmt, lint, blade
 ├── std/              standard library
 ├── docs/             the Book (EN/RU) and the guide for LLM agents
@@ -602,7 +601,7 @@ TextMate-compatible editor can use
 - 💡 Design questions are welcome — Okkama says "no" a lot, and every "no" has a
   written rationale in the [Book](docs/OkkamaBook.md).
 - 🤝 Pull requests: small and focused, with a test (a Rust test or a
-  conformance case). CI must stay green on every engine.
+  conformance case). CI must stay green.
 - 🤖 Using an AI assistant? Give it the
   [guide for LLM agents](docs/LLM-GUIDE.md) first.
 
