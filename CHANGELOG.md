@@ -169,6 +169,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   writer joined them. The reader and the idle timer now wait until every loop is registered, the writer last, so
   a queued GOAWAY is also delivered.
 
+- **`Host().name()` asks the system instead of running `hostname` (#950).** It took about 1.4 ms per call and
+  failed where no `hostname` tool was installed; it now calls `gethostname` (2 000 calls: 2.8 s → under 0.01 s).
+
 ### Changed
 
 - **An `async destroy` guard costs what a deferred close costs (#329).** A guard with its own async destroy,

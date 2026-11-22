@@ -105,15 +105,22 @@ fn architecture() -> &'static str {
     }
 }
 
+/// gethostname(2): the host's name as the system knows it (#950; it ran `hostname` before).
+#[allow(unsafe_code)]
+fn system_host_name() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is writable for its whole length; gethostname writes at most that many bytes.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    Some(String::from_utf8_lossy(&buffer[..end]).trim().to_string())
+}
+
 fn host_name(native: Native) -> Result<String, Error> {
-    let from_command = std::process::Command::new("hostname")
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|name| !name.is_empty());
-    from_command.ok_or_else(|| failure("core.system", "unexpected", native, "Host name is unavailable"))
+    system_host_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| failure("core.system", "unexpected", native, "Host name is unavailable"))
 }
 
 /// statvfs(3) of `path`.
@@ -364,6 +371,18 @@ mod tests {
                 (key, text.parse().expect("number"))
             })
             .collect()
+    }
+
+    /// #950: the host name comes from gethostname and agrees with the `hostname` tool where it exists.
+    #[test]
+    fn host_name_reads_gethostname_like_the_hostname_tool() {
+        let Ok(name) = host_name(Native::SystemSystemHostName) else { panic!("a host name") };
+        assert!(!name.is_empty());
+        if let Ok(output) = std::process::Command::new("hostname").output()
+            && output.status.success()
+        {
+            assert_eq!(name, String::from_utf8_lossy(&output.stdout).trim());
+        }
     }
 
     /// #944: usage comes from statvfs, consistent with itself and with `df -Pk`
