@@ -558,3 +558,14 @@ fn worker_bound_receiver_transfers_declared_fields_not_once_slots() {
     }
     panic!("missing worker binding: {printed}");
 }
+
+/// #1003: the printer promises `<invalid>` for a damaged reference; a global
+/// whose initializer index is out of range prints so instead of panicking.
+#[test]
+fn the_printer_marks_a_damaged_global_initializer_invalid() {
+    let mut module = lower("module app v1.0.0;\nconst NAMES = [\"a\", \"b\"];\nmain() is int { NAMES.size(); }\n").expect("lowers");
+    assert!(!module.globals.is_empty(), "the const is a global");
+    module.globals[0].init = ir::FuncId(module.functions.len() + 7);
+    let text = module.to_string();
+    assert!(text.contains("= @<invalid>()"), "{text}");
+}

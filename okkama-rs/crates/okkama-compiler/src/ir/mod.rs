@@ -80,8 +80,8 @@ pub enum Type {
     Cap(CapId),
 }
 
-/// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std
-/// `async/*`, чьё состояние держит рантайм.
+/// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std,
+/// чьё состояние держит рантайм (`async/*`, параллельные `map` и другие).
 pub const INTRINSICS: [&str; 92] = [
     "okkama.map.ParallelMapWorkers.bound",
     "okkama.map.ParallelMapWorkers.close",
@@ -439,7 +439,6 @@ impl Module {
         self.caps.get(id.0)
     }
 
-    /// Делает ли объект роль (по объявлению `does`).
     pub fn variant(&self, id: VariantId) -> Option<&Variant> {
         self.variants.get(id.0)
     }
@@ -452,6 +451,7 @@ impl Module {
         })
     }
 
+    /// Делает ли объект роль (по объявлению `does`).
     pub fn does(&self, object: ObjectId, role: RoleId) -> bool {
         self.object(object)
             .is_some_and(|object| object.does.iter().any(|witness| witness.role == role))
@@ -639,7 +639,6 @@ impl Function {
         })
     }
 
-    /// Символ рантайма, если функция — `native`.
     /// Имя intrinsic и объекты, которые рантайм создаёт.
     pub fn intrinsic(&self) -> Option<(&str, &[ObjectId])> {
         self.attrs.iter().find_map(|attr| match attr {
@@ -659,6 +658,7 @@ impl Function {
             .unwrap_or(&[])
     }
 
+    /// Символ рантайма, если функция — `native`.
     pub fn extern_symbol(&self) -> Option<&str> {
         self.attrs.iter().find_map(|attr| match attr {
             Attr::Extern(symbol) => Some(symbol.as_str()),

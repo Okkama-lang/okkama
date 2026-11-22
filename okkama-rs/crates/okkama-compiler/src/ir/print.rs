@@ -135,7 +135,6 @@ impl Display for Module {
             }
             writeln!(f)?;
         }
-        // rust-version 1.85 не поддерживает let-chains.
         if let Some(function) = self.entry.and_then(|entry| self.functions.get(entry.0)) {
             writeln!(f, "entry @{}", function.symbol)?;
         }
@@ -168,7 +167,9 @@ impl Display for Module {
         }
         for (index, global) in self.globals.iter().enumerate() {
             writeln!(f)?;
-            writeln!(f, "global g{index}: {} = @{}()", global.ty, self.functions[global.init.0].symbol)?;
+            write!(f, "global g{index}: {} = ", global.ty)?;
+            write_symbol(f, self, global.init.0)?;
+            writeln!(f, "()")?;
         }
         for cap in &self.caps {
             writeln!(f)?;
@@ -796,7 +797,8 @@ fn write_function(f: &mut Formatter<'_>, module: &Module, function: &Function) -
                         write_object(f, Some(module), object.0)?;
                     }
                     for helper in helpers {
-                        write!(f, " @{}", module.functions[helper.0].symbol)?;
+                        f.write_char(' ')?;
+                        write_symbol(f, module, helper.0)?;
                     }
                 }
                 Attr::Lambda { captures, owner } => {
@@ -906,7 +908,7 @@ fn write_list(f: &mut Formatter<'_>, values: &[ValueId]) -> fmt::Result {
     Ok(())
 }
 
-/// Строковый литерал OIR: `\\`, `\"`, `\n`, `\r`, `\t`, прочие управляющие — `\u{HEX}`.
+/// Символьный литерал OIR: `\\`, `\'`, `\n`, `\r`, `\t`, прочие управляющие — `\u{HEX}`.
 fn write_char_literal(f: &mut Formatter<'_>, ch: char) -> fmt::Result {
     f.write_char('\'')?;
     match ch {

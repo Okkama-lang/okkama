@@ -769,7 +769,8 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 Type::Byte,
                 span,
             ),
-            _ => return Err(unsupported(span, "`rat` values")),
+            // The analysis admits no other pair; reaching here is a gap of lowering.
+            (target, ty) => return Err(unsupported(span, &format!("conversion of {ty} to {target:?}"))),
         })
     }
 }
