@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the Okkama Bible from its chapters.
 
-    python3 docs/OkkamaBible/build.py [--check] [--stats] [--figures] [--std-index]
+    python3 docs/OkkamaBible/build.py [--check] [--stats] [--figures] [--std-index] [--pdf]
 
 chapters/en/*.md and chapters/ru/*.md (same file names, ordered by name) are
 joined into OkkamaBible.md and OkkamaBible-RU.md with a generated table of
@@ -243,6 +243,94 @@ def issues():
         print(f"#{number:<5} {title[:90]:<92} {', '.join(sorted(cited[number]))}")
 
 
+KEYWORD_LIKE = re.compile(r"^[a-z_]+$")
+
+
+def highlight_okkama(source, cache):
+    """HTML for one Okkama listing, coloured by the compiler's own lexer."""
+    if source in cache:
+        return cache[source]
+    import html
+    raw = source.encode()
+    # The lexer accepts only ASCII outside literals; a listing may hold "…" or
+    # Cyrillic in a comment. Same-length ASCII stand-ins keep the byte offsets.
+    probe = "".join(c if ord(c) < 128 else "_" * len(c.encode()) for c in source)
+    p = subprocess.run([OKKAMA, "tokens", "-", "--format", "json"], input=probe, capture_output=True,
+                       text=True, timeout=60)
+    if p.returncode != 0:
+        cache[source] = html.escape(source)
+        return cache[source]
+    out, pos = [], 0
+
+    def gap(text):
+        for part in re.split(r"(//[^\n]*|/\*.*?\*/)", text, flags=re.S):
+            if part.startswith("//") or part.startswith("/*"):
+                out.append(f'<span class="c">{html.escape(part)}</span>')
+            elif part:
+                out.append(html.escape(part))
+
+    for token in json.loads(p.stdout):
+        start, end = token["span"]["start"], token["span"]["end"]
+        if start < pos or end > len(raw):
+            continue
+        gap(raw[pos:start].decode())
+        text = raw[start:end].decode()
+        kind = token["kind"]
+        if kind in ("STRING", "RAW_STRING", "CHAR"):
+            css = "s"
+        elif kind in ("INT", "FLOAT", "TRUE", "FALSE"):
+            css = "n"
+        elif kind == "IDENTIFIER":
+            css = "t" if text[:1].isupper() else None
+        elif KEYWORD_LIKE.match(text):
+            css = "k"
+        else:
+            css = None
+        out.append(f'<span class="{css}">{html.escape(text)}</span>' if css else html.escape(text))
+        pos = end
+    gap(raw[pos:].decode())
+    cache[source] = "".join(out)
+    return cache[source]
+
+
+PDF_TITLES = {
+    "en": ("The language, rule by rule, with what each rule costs", "Okkama {version} · 2026"),
+    "ru": ("Язык, правило за правилом, и цена каждого правила", "Okkama {version} · 2026"),
+}
+
+
+def pdf():
+    """OkkamaBible.pdf and OkkamaBible-RU.pdf: pandoc and WeasyPrint in the okkama-bible-pdf image."""
+    work = os.path.join(HERE, "pdf", "work")
+    os.makedirs(work, exist_ok=True)
+    cache = {}
+    for language, (target, title, *_rest) in LANGUAGES.items():
+        text = open(os.path.join(HERE, target)).read()
+        text = re.sub(r"^<!--.*?-->\n", "", text)
+        version = subprocess.run([OKKAMA, "--version"], capture_output=True, text=True).stdout.split()[-1]
+        subtitle, edition = PDF_TITLES[language]
+        text = text.replace(f"# {title}\n", f'<div class="title-page"><p class="book-title">{title}</p>'
+                            f'<p class="book-subtitle">{subtitle}</p>'
+                            f'<p class="book-edition">{edition.format(version=version)}</p></div>\n', 1)
+        # A figure's caption is the emphasised line right after its image.
+        text = re.sub(r"(!\[[^\]]*\]\(figures/[^)]+\))\n\n\*([^*\n]+)\*",
+                      r'\1\n\n<p class="caption">\2</p>', text)
+
+        def listing(match):
+            body = highlight_okkama(match.group(2), cache)
+            return f'{match.group(1)}<pre class="okkama"><code>{body}</code></pre>'
+
+        text = re.sub(r"^( *)```okkama\n(.*?)\n *```$", listing, text, flags=re.S | re.M)
+        open(os.path.join(work, f"{language}.md"), "w").write(text)
+        pdf_name = target.replace(".md", ".pdf")
+        script = (f"pandoc pdf/work/{language}.md -f gfm -t html5 -s --css pdf/book.css "
+                  f"--metadata pagetitle='{title}' --metadata lang={language} -o pdf/work/{language}.html && "
+                  f"weasyprint -q --base-url /book/ pdf/work/{language}.html {pdf_name}")
+        subprocess.run(["docker", "run", "--rm", "-v", f"{HERE}:/book", "okkama-bible-pdf", "sh", "-c", script],
+                       check=True)
+        print(f"{pdf_name}: {os.path.getsize(os.path.join(HERE, pdf_name)) // 1024} KiB")
+
+
 if __name__ == "__main__":
     if "--figures" in sys.argv:
         for script in sorted(os.listdir(os.path.join(HERE, "figures", "src"))):
@@ -257,5 +345,7 @@ if __name__ == "__main__":
         stats()
     if "--issues" in sys.argv:
         issues()
+    if "--pdf" in sys.argv:
+        pdf()
     if "--check" in sys.argv:
         sys.exit(1 if check() else 0)
