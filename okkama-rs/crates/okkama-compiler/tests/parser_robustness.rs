@@ -31,6 +31,8 @@ fn nested(shape: &str, depth: usize) -> String {
         "ifs" => ("if a { ", "1;", " }"),
         "unary" => ("-", "1", ""),
         "await" => ("await ", "x", ""),
+        "try?" => ("try? ", "1", ""),
+        "try!" => ("try! ", "1", ""),
         "calls" => ("f(", "1", ")"),
         "lambdas" => ("() is int { ", "1", "; }"),
         "types" => ("@", "int", ""),
@@ -47,10 +49,35 @@ fn nested(shape: &str, depth: usize) -> String {
     }
 }
 
-const SHAPES: [&str; 10] = [
-    "parens", "brackets", "blocks", "ifs", "unary", "await", "calls", "lambdas", "types",
-    "generics",
+const SHAPES: [&str; 12] = [
+    "parens", "brackets", "blocks", "ifs", "unary", "await", "try?", "try!", "calls", "lambdas",
+    "types", "generics",
 ];
+
+/// `try?` and `try!` are prefixes: each mark is one nesting level, so a long
+/// chain is a diagnostic, not a stack overflow, and a short one parses (#977).
+#[test]
+fn try_mark_chains_count_against_the_nesting_limit() {
+    on_small_stack(|| {
+        for shape in ["try?", "try!"] {
+            let message = parse_in(&nested(shape, 3000), ParseMode::Full)
+                .expect_err(shape)
+                .0;
+            assert_eq!(
+                message,
+                format!(
+                    "Nesting is too deep (the limit is {} levels).",
+                    ParseOptions::DEFAULT_MAX_NESTING
+                ),
+                "{shape}"
+            );
+            assert!(
+                parse_in(&nested(shape, 10), ParseMode::Full).is_ok(),
+                "{shape} × 10"
+            );
+        }
+    });
+}
 
 #[test]
 fn deep_nesting_is_reported_not_overflowed() {

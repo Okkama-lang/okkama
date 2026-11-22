@@ -823,7 +823,9 @@ impl Parser<'_> {
             self.advance();
             let force = self.advance().kind == TokenKind::Bang;
             // The mark covers the whole operand to its right, up to `else`.
-            let value = self.logic_or()?;
+            // Like every prefix, it parses its operand one nesting level
+            // deeper, so a `try? try? …` chain meets the limit (#977).
+            let value = self.nested(Self::logic_or)?;
             return Ok(Expr {
                 span: start.to(value.span),
                 kind: ExprKind::TryMark {
