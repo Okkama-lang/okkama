@@ -87,7 +87,7 @@ const PURE: &[&str] = &[
     "runtime/bigint", "runtime/binary", "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation", "runtime/compression",
     "runtime/collections", "runtime/crypto", "runtime/db", "runtime/debug",
     "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex", "runtime/host_crypto",
-    "runtime/hpack", "runtime/html", "runtime/idna", "runtime/io_decorators", "runtime/json",
+    "runtime/hpack", "runtime/idna", "runtime/io_decorators", "runtime/json",
     "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution",
     "runtime/regex", "runtime/secret", "runtime/single_byte", "runtime/statistics",

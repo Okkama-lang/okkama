@@ -209,18 +209,6 @@ natives! {
     FsRootRootedEntryClosed = 225, "runtime/fs_root@1::rooted_entry_closed/1", "(RootedEntryState) -> bool";
     FsRootRootedEntryClose = 226, "runtime/fs_root@1::rooted_entry_close/1", "(RootedEntryState) -> bool";
     HpackHuffmanDecode = 227, "runtime/hpack@1::huffman_decode/2", "(@byte, int) -> @byte";
-    HtmlHtmlEvents = 228, "runtime/html@1::html_events/1", "(string) -> HtmlEventsState";
-    HtmlHtmlEventCount = 229, "runtime/html@1::html_event_count/1", "(HtmlEventsState) -> int";
-    HtmlHtmlEventKind = 230, "runtime/html@1::html_event_kind/2", "(HtmlEventsState, int) -> int";
-    HtmlHtmlEventName = 231, "runtime/html@1::html_event_name/2", "(HtmlEventsState, int) -> string";
-    HtmlHtmlEventValue = 232, "runtime/html@1::html_event_value/2", "(HtmlEventsState, int) -> string";
-    HtmlHtmlEventTarget = 233, "runtime/html@1::html_event_target/2", "(HtmlEventsState, int) -> string";
-    HtmlHtmlEventData = 234, "runtime/html@1::html_event_data/2", "(HtmlEventsState, int) -> string";
-    HtmlHtmlEventSelfClosing = 235, "runtime/html@1::html_event_self_closing/2", "(HtmlEventsState, int) -> bool";
-    HtmlHtmlAttributeCount = 236, "runtime/html@1::html_attribute_count/2", "(HtmlEventsState, int) -> int";
-    HtmlHtmlAttributeName = 237, "runtime/html@1::html_attribute_name/3", "(HtmlEventsState, int, int) -> string";
-    HtmlHtmlAttributeValued = 238, "runtime/html@1::html_attribute_valued/3", "(HtmlEventsState, int, int) -> bool";
-    HtmlHtmlAttributeValue = 239, "runtime/html@1::html_attribute_value/3", "(HtmlEventsState, int, int) -> string";
     IdnaHostnameAscii = 240, "runtime/idna@1::hostname_ascii/1", "(string) -> string";
     IdnaHostnameUnicode = 241, "runtime/idna@1::hostname_unicode/1", "(string) -> string";
     InputStateInputStateCreate = 259, "runtime/input_state@1::input_state_create/0", "() -> Utf8InputState";
@@ -592,4 +580,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668

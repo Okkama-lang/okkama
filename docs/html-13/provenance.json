@@ -1,0 +1,13 @@
+{
+  "head": "b6b10bdb7fc1ad299dcf71b349ed3ed2ced292f3",
+  "branch": "feature/13-html",
+  "binary": "/private/tmp/claude-501/-Volumes-SamsungSSD-stuff-okkama-new/36c16e3b-d3ea-4a70-8bd4-a8c12a2ab588/scratchpad/bin/okkama-13b",
+  "binary_sha256": "ba56d191bfa6d86baefe9009bb80ac108a0c61f6ba6d60a4bcbf1414e3af5096",
+  "version": "okkama 0.6.1",
+  "stdlib": "/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "source_sha256": {
+    "std/html/events.ok": "658b3412397092dd8efab5a515c303d3605ae4522433321a29729663c5f647da",
+    "std/html/entities.ok": "b17cb26e3b19fa0ca344558d7acabda701d661f68b0b3bc8b46a8f268255396c"
+  }
+}

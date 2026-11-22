@@ -1,0 +1,67 @@
+module html13/differential v1.0.0;
+
+import "html/events" take HtmlEvents, HandlingHtmlEvent, StartingHtmlTag, EndingHtmlTag,
+    ContainingHtmlText, ContainingHtmlComment, DeclaringHtml, ProcessingHtmlInstruction;
+import "html/entities" take UnescapedHtml;
+import "async/atomic" take Atomic;
+import "json" take Json, ParsedJson;
+import "fs/file" take File;
+import "fs/path" take Path;
+import "cli/arguments" take ProcessArguments;
+import "io/stdout" take Stdout;
+
+object Log does HandlingHtmlEvent {
+    has seen is Atomic<@Json>;
+
+    Log() {
+        let empty is @Json = [];
+        seen = Atomic(empty);
+    }
+
+    handle(e is StartingHtmlTag) is void {
+        let attrs is @Json = e.attributes().map() -> a {
+            Json(items: [Json(a.name()), Json(a.valued()), Json(a.value())]);
+        };
+        seen.replace(
+            seen.value() + [
+                Json(items: [Json(0), Json(e.name()), Json(e.self_closing()), Json(items: attrs)])
+            ]
+        );
+    }
+
+    handle(e is EndingHtmlTag) is void {
+        seen.replace(seen.value() + [Json(items: [Json(1), Json(e.name())])]);
+    }
+
+    handle(e is ContainingHtmlText) is void {
+        seen.replace(seen.value() + [Json(items: [Json(2), Json(e.text())])]);
+    }
+
+    handle(e is ContainingHtmlComment) is void {
+        seen.replace(seen.value() + [Json(items: [Json(3), Json(e.text())])]);
+    }
+
+    handle(e is DeclaringHtml) is void {
+        seen.replace(seen.value() + [Json(items: [Json(4), Json(e.text())])]);
+    }
+
+    handle(e is ProcessingHtmlInstruction) is void {
+        seen.replace(seen.value() + [Json(items: [Json(5), Json(e.target()), Json(e.data())])]);
+    }
+
+    json() is Json {
+        Json(items: seen.value());
+    }
+}
+
+main() is int {
+    let cases = ParsedJson(File(path: Path(ProcessArguments().strings()[0])).text().content()).root();
+    for cases.items() -> c {
+        let log = Log();
+        for HtmlEvents(c.text()) -> e {
+            e.dispatch(log);
+        }
+        Stdout().writeln(Json(items: [log.json(), Json(UnescapedHtml(c.text()).string())]).string());
+    }
+    0;
+}

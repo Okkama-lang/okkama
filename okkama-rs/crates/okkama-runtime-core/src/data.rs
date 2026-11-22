@@ -42,14 +42,6 @@ table!(unicode, "unicode.dat");
 table!(idna, "idna.dat");
 table!(public_suffixes, "psl.dat");
 
-/// Именованные ссылки HTML (WHATWG): текстовый файл `имя<TAB>hex…`.
-pub fn html_entities() -> &'static str {
-    std::str::from_utf8(include_bytes!(
-        "../data/html_entities.dat"
-    ))
-    .expect("UTF-8 table")
-}
-
 /// Архив tzdb (zip), встроенный в рантайм.
 pub fn time_zone_archive() -> &'static [u8] {
     include_bytes!("../data/tzdb.dat")
