@@ -29,10 +29,10 @@ Inspecting the pipeline: `okkama ir FILE` prints the OIR after all passes,
 after the passes up to `PASS`; `OKKAMA_IR_PASSES` selects passes for every
 command; `OKKAMA_DUMP_INVALID_IR=FILE` writes a module lowering rejected.
 
-[#16]: https://github.com/shootnix/okkama/issues/16
-[#20]: https://github.com/shootnix/okkama/issues/20
-[#24]: https://github.com/shootnix/okkama/issues/24
-[#29]: https://github.com/shootnix/okkama/issues/29
-[#30]: https://github.com/shootnix/okkama/issues/30
-[#32]: https://github.com/shootnix/okkama/issues/32
-[#33]: https://github.com/shootnix/okkama/issues/33
+[#16]: https://github.com/Okkama-lang/okkama/issues/16
+[#20]: https://github.com/Okkama-lang/okkama/issues/20
+[#24]: https://github.com/Okkama-lang/okkama/issues/24
+[#29]: https://github.com/Okkama-lang/okkama/issues/29
+[#30]: https://github.com/Okkama-lang/okkama/issues/30
+[#32]: https://github.com/Okkama-lang/okkama/issues/32
+[#33]: https://github.com/Okkama-lang/okkama/issues/33

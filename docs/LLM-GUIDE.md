@@ -513,7 +513,7 @@ table (`typing.rs`); `sparrow-core/src/contracts.rs` checks intrinsics. A new
 instruction needs a rule in `typing.rs`, a new intrinsic a contract in
 `contracts.rs`, otherwise a crafted file can break memory safety. Generic
 intrinsic payloads are held to one representation, not one type
-([#69](https://github.com/shootnix/okkama/issues/69)). Memory is bounded too:
+([#69](https://github.com/Okkama-lang/okkama/issues/69)). Memory is bounded too:
 the decoder charges every count at its element size against
 `MAX_DECODED_BYTES` (512 MiB) before allocating, and the initialization
 analysis keeps one register set per block leader within `MAX_ANALYSIS_BYTES`

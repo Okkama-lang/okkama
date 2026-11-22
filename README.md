@@ -5,11 +5,11 @@
 **A statically typed object language where the Elegant Objects discipline
 is enforced by the runtime — not by code review.**
 
-[![CI](https://github.com/shootnix/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/ci.yml)
-[![Packages](https://github.com/shootnix/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/packages.yml)
-[![Release](https://img.shields.io/github/v/release/shootnix/okkama?include_prereleases&label=release)](https://github.com/shootnix/okkama/releases)
+[![CI](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/ci.yml)
+[![Packages](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/Okkama-lang/okkama/actions/workflows/packages.yml)
+[![Release](https://img.shields.io/github/v/release/Okkama-lang/okkama?include_prereleases&label=release)](https://github.com/Okkama-lang/okkama/releases)
 [![Conformance](https://img.shields.io/badge/conformance-1035%2F1035%20×%203%20engines-brightgreen)](conformance/)
-[![License](https://img.shields.io/github/license/shootnix/okkama)](LICENSE)
+[![License](https://img.shields.io/github/license/Okkama-lang/okkama)](LICENSE)
 
 [Install](#install) ·
 [Quick start](#quick-start) ·
@@ -78,7 +78,7 @@ main() is int {
 ## Install
 
 Prebuilt packages for **macOS (Apple Silicon and Intel)** and **Linux x86_64**
-are on the [Releases](https://github.com/shootnix/okkama/releases) page:
+are on the [Releases](https://github.com/Okkama-lang/okkama/releases) page:
 tagged versions and a rolling `nightly` built from `develop`. Each package
 contains `okkama`, `sparrow`, `blade`, the standard library and the host
 crypto library.
@@ -108,7 +108,7 @@ browser run `xattr -dr com.apple.quarantine okkama-*` once.
 **From source** (Rust 1.97+):
 
 ```sh
-git clone https://github.com/shootnix/okkama.git && cd okkama
+git clone https://github.com/Okkama-lang/okkama.git && cd okkama
 make install                      # into ~/.local; PREFIX=/opt/okkama make install
 ```
 

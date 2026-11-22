@@ -11,8 +11,8 @@ No host benchmarks, CLI programs, Docker, full suites, formatting or commits wer
   `feature/536-closure-bridge`; initially clean worktree.
 - #522's reused-cell accounting fix `9c482994` is an ancestor of this baseline.
   The older report's binary is not a valid comparison baseline.
-- Tracker [#534](https://github.com/shootnix/okkama/issues/534),
-  [#433](https://github.com/shootnix/okkama/issues/433), current
+- Tracker [#534](https://github.com/Okkama-lang/okkama/issues/534),
+  [#433](https://github.com/Okkama-lang/okkama/issues/433), current
   `docs/LLM-GUIDE.md` and external `benchmarks/micro/README.md` were consulted.
 - External `general-hardening.md` SHA-256 matches the tracker:
   `2f18263103fc26281316acb826210486b2788f59d6674082640d1c1e9d0f1139`.

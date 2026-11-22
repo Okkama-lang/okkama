@@ -6359,7 +6359,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   cold 0.201 s, first repetition 0.121 s, steady 0.075 s. The ladder
   programs changed (sha256 of inputs), so a release report needs a new
   baseline. Docs: `okkama-docs/benchmarks/README.md`, LLM guide §6
-  ([#236](https://github.com/shootnix/okkama/issues/236)).
+  ([#236](https://github.com/Okkama-lang/okkama/issues/236)).
 
 - Language: operator roles (#215). The std module `operators` declares
   `Adding<T, R>` (`plus`), `Subtracting<T, R>` (`minus`), `Multiplying<T, R>`
@@ -6379,7 +6379,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   OCS contract `OBJ.OPERATOR-ROLES` with `L04.operators.*` and
   `L09.time.operators`, std contract `STD.OPERATORS`; Book §22.3, spec §12.2,
   LLM context, BigInt guide (EN/RU)
-  ([#215](https://github.com/shootnix/okkama/issues/215)).
+  ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Language: `async destroy { … }` (#154). The block may await; it is awaited
   where its owner's scope ends — normal end, `return`, `last`, a failure or a
@@ -6396,7 +6396,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   sparrow-origin reports it unsupported. OCS contract `LIFE.ASYNC-DESTROY`
   with five `L07.destroy.async-*` cases; Book §20.1.1, spec §11.5.1, grammar,
   async guide §7.2, LLM context, Sparrow book (EN/RU)
-  ([#154](https://github.com/shootnix/okkama/issues/154)).
+  ([#154](https://github.com/Okkama-lang/okkama/issues/154)).
 
 - Language: module constants (#153). `const NAME = value;` (optionally
   `is Type`) at module scope names a value the compiler computes from
@@ -6412,7 +6412,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   of the JVM main class set in `<clinit>`; sparrow-origin reports it
   unsupported (#14). OCS `L06.const.*` and contract `MOD.CONST`; Book §26.3.2,
   spec §5.1.2, grammar, LLM context, Sparrow book (also `str.fn`), VS Code
-  highlighting (EN/RU) ([#153](https://github.com/shootnix/okkama/issues/153)).
+  highlighting (EN/RU) ([#153](https://github.com/Okkama-lang/okkama/issues/153)).
 
 - Language: generic map keys are checked (#242). A type parameter used as a
   map key — `%T:V` in a field, a signature or a body, or a literal `[item: 1]`
@@ -6427,7 +6427,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   membership and counting, traversal in key order. OCS contract
   `GEN.KEY-PARAMS` with `L05.generic.key-param-values` and three rejected
   forms; Book §8.2, spec §6.5, LLM context (EN/RU)
-  ([#242](https://github.com/shootnix/okkama/issues/242)).
+  ([#242](https://github.com/Okkama-lang/okkama/issues/242)).
 
 - Language: string builtins (#210) — `contains`, `starts_with`, `ends_with`,
   `find` and `find_last` (a `Maybe<int>` code point index; an empty part is
@@ -6447,9 +6447,9 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `L02.char.code-round-trip`, `L05.array.search-and-shape` and their invalid
   forms; `L02.char.string-cast` now expects the text. Book chapters 6 and 10,
   spec §6.6/§6.6.1, LSP completion (EN/RU)
-  ([#210](https://github.com/shootnix/okkama/issues/210),
-  [#211](https://github.com/shootnix/okkama/issues/211),
-  [#231](https://github.com/shootnix/okkama/issues/231)).
+  ([#210](https://github.com/Okkama-lang/okkama/issues/210),
+  [#211](https://github.com/Okkama-lang/okkama/issues/211),
+  [#231](https://github.com/Okkama-lang/okkama/issues/231)).
 
 - Language: `else if` chains in an `if` expression (#257): `let size = if n
   > 5 { "large" } else if n > 2 { "medium" } else { "small" };`, as an
@@ -6457,7 +6457,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   one type; a chain was a syntax error outside statement position. OCS
   `L03.if.expression-else-if` now expects the value (it expected the
   rejection); Book §11.6, spec §8.11, grammar `if_expr` (EN/RU)
-  ([#257](https://github.com/shootnix/okkama/issues/257)).
+  ([#257](https://github.com/Okkama-lang/okkama/issues/257)).
 
 - Language: a postfix condition on `return` and `throw` (#258): `return x if
   found;`, `return if done;` in a void action, `throw Empty.list if
@@ -6466,13 +6466,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the bare form, while `return if a { 1; } else { 2; };` still returns an
   `if` expression. OCS `L03.return.postfix-if`; Book §12.7, spec, grammar
   (EN/RU); `okkama fmt` keeps the form
-  ([#258](https://github.com/shootnix/okkama/issues/258)).
+  ([#258](https://github.com/Okkama-lang/okkama/issues/258)).
 
 - Diagnostics (#256): `while` and `do … while`, compound assignments (`+=`,
   `-=`, `<<=`, …), `++`/`--`, `break` and `continue` name what Okkama writes
   instead (`loop` with `last if`, a new name, `reduce` or a successor, `last`,
   `next`) instead of "Expect expression" or "Undefined variable"
-  ([#256](https://github.com/shootnix/okkama/issues/256)).
+  ([#256](https://github.com/Okkama-lang/okkama/issues/256)).
 
 - Language: default values for trailing parameters of object actions and
   constructors (#149): `greet(name is string, mark is string = "!", times is
@@ -6483,14 +6483,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   defaulted one needs a default; variadic actions, role signatures, natives
   and enum payloads cannot have any. Overload selection treats a left-out
   parameter as neutral. OCS `L03.args.default-values`; Book §11.4 (EN/RU);
-  `okkama fmt` prints the defaults ([#149](https://github.com/shootnix/okkama/issues/149)).
+  `okkama fmt` prints the defaults ([#149](https://github.com/Okkama-lang/okkama/issues/149)).
 
 - Language: an anonymous action's declared result (`(job is Job) is int {
   … }`) fixes its type and supplies generic arguments, so
   `SortedBy(origin: jobs, key: (job is Job) is int { job.priority(); })` needs
   no `SortedBy<Job,int>` at the binding (#214). The checker already did this;
   a test now pins it, and `collections/ordering`'s documentation no longer
-  asks for the annotation ([#214](https://github.com/shootnix/okkama/issues/214)).
+  asks for the annotation ([#214](https://github.com/Okkama-lang/okkama/issues/214)).
 
 - Language: `any`, `all` and `find` with early exit (#150), in the block
   syntax of `map`/`filter`/`reduce`: `orders.any() -> order { order.overdue();
@@ -6500,7 +6500,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   work on maps with `key, value`. Lowering reuses the value-mode loop of `for`
   with a `last`-like exit, so every engine runs it unchanged. OCS
   `L05.functional.early-exit`; Book (EN/RU); LSP completion
-  ([#150](https://github.com/shootnix/okkama/issues/150)).
+  ([#150](https://github.com/Okkama-lang/okkama/issues/150)).
 
 - Language: `test.throws(Type) { … }` (#216) asserts that a block throws a
   `Type` and yields the caught error: `let refused = test.throws(Refused) {
@@ -6510,7 +6510,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   keeps the written form. 64 std assertions of the form
   `test.ok(try { …; false; } catch e is T { true; })` in 28 modules now read
   `test.throws(T) { …; };`; the ones that match an enum case keep their `try`.
-  Book §14 (EN/RU) ([#216](https://github.com/shootnix/okkama/issues/216)).
+  Book §14 (EN/RU) ([#216](https://github.com/Okkama-lang/okkama/issues/216)).
 
 - std `cell`: `Cell<T>`, the mutable value of synchronous code (#152) —
   `Cell(value)`, `value()`, `replace(value)`, no `close()`. The compiler keeps
@@ -6521,7 +6521,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   tasks. Thirteen local accumulators in std (`diff`, `db/postgres`,
   `db/postgres/wire`) moved from `Atomic` with `defer close()` to `Cell`; the
   four that live in async actions stay `Atomic`, as the new check requires.
-  Book §19.1 (EN/RU) ([#152](https://github.com/shootnix/okkama/issues/152)).
+  Book §19.1 (EN/RU) ([#152](https://github.com/Okkama-lang/okkama/issues/152)).
 
 - JVM: `--max-steps` and `--max-memory` (#237), so every budget now works on
   every engine with the same reports. Steps are counted alike on the IR
@@ -6538,7 +6538,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `okkama build --target jvm --budgeted` writes classes that count steps; the
   limit comes from `java -Dokkama.steps=N` (no property, no limit), and
   `-Xmx` with `-Dokkama.memory=N` gives any JAR the memory report
-  ([#237](https://github.com/shootnix/okkama/issues/237)).
+  ([#237](https://github.com/Okkama-lang/okkama/issues/237)).
 
 - Language: exponent literals are floats (#57): `1e5`, `1.5e-3`, `2E+10`,
   `1_000e1_0` — `e` or `E`, an optional sign, digits that `_` may separate,
@@ -6551,7 +6551,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `okkama fmt` keeps the spelling. OCS: `L01.lex.float.exponent` runs the forms
   on every engine and `L01.lex.float.exponent-out-of-range` (was
   `exponent-rejected`) rejects `1e400`
-  ([#57](https://github.com/shootnix/okkama/issues/57)).
+  ([#57](https://github.com/Okkama-lang/okkama/issues/57)).
 
 - Language: value objects are map keys (#212). An object whose fields are all
   scalars (`byte` and `rat` included), enums or such objects, with no `destroy`
@@ -6568,7 +6568,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `L05.map.resource-key-rejected` rejects a `destroy` object. Book (EN/RU),
   spec §6.3/§8.8 and the LLM context follow. A map keyed by a type parameter
   is still checked only at run time (#242)
-  ([#212](https://github.com/shootnix/okkama/issues/212)).
+  ([#212](https://github.com/Okkama-lang/okkama/issues/212)).
 
 - Language: names before one type share it in every parameter list, as they
   already do in field declarations — `full(separator, suffix is string)`,
@@ -6577,7 +6577,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `(a, b is int) is int { … }`. A group cannot be variadic ("give the
   variadic parameter its own type"). `okkama fmt` keeps the grouping the
   author wrote. Two OCS cases run the forms on every engine and reject a
-  variadic group ([#232](https://github.com/shootnix/okkama/issues/232)).
+  variadic group ([#232](https://github.com/Okkama-lang/okkama/issues/232)).
 
 - LSP: every syntax error at once (H-24). The editor's check parses in a
   recovering mode (`syntax::parse_recovering`): after an error in a statement
@@ -6591,7 +6591,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the strict parse that stops at the first error. Tests cover two
   independent errors, statement errors in one body, a missing and a stray
   `}`, the cap, and 500 damaged copies of the all-syntax file
-  ([#47](https://github.com/shootnix/okkama/issues/47)).
+  ([#47](https://github.com/Okkama-lang/okkama/issues/47)).
 
 - Benchmarks, method (H-31): the runner (`okkama-docs/benchmarks/run.py`)
   builds every program first, warms each configuration up once and then runs
@@ -6606,7 +6606,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   configuration is reported. Reference interpreters older than the current
   stable line (here Python 3.9, Ruby 2.6) are listed and the report says so.
   The report shows each time's spread and the start-up line; steady-state
-  timing is #236 ([#54](https://github.com/shootnix/okkama/issues/54)).
+  timing is #236 ([#54](https://github.com/Okkama-lang/okkama/issues/54)).
 
 - Sparrow core, profiling (H-32, O01): `--stats` attributes allocations —
   each inline allocation site in machine code counts its allocations and
@@ -6619,7 +6619,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   median and interquartile range, peak memory and the `--stats`
   differences, with a verdict (faster beyond the spread, memory within 5 %)
   and a JSON record of commit, hashes, seed and settings
-  ([#55](https://github.com/shootnix/okkama/issues/55)).
+  ([#55](https://github.com/Okkama-lang/okkama/issues/55)).
 
 - Execution budgets on the IR engine and the JVM: `okkama run --engine ir`
   takes `--max-steps`, `--max-memory`, `--max-output` and `--timeout` with
@@ -6632,7 +6632,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   and which is killed with the same report; steps and memory there wait for
   #237. A test runs every budget on ir and sparrow, and output and timeout on
   the JVM, expecting identical reports
-  ([#71](https://github.com/shootnix/okkama/issues/71)).
+  ([#71](https://github.com/Okkama-lang/okkama/issues/71)).
 
 - Compiler, OIR pass `fold` (H-36): `int.add`, `int.sub`, `int.mul`,
   `int.mod` by a nonzero constant, `int.neg` and integer comparisons of
@@ -6642,7 +6642,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   time), nor word-level bitwise operations, and a result longer than 1024
   digits stays a computation. It runs after `tail-calls`, before `hoist`;
   the gate's run with the passes off checks it like every pass
-  ([#56](https://github.com/shootnix/okkama/issues/56)).
+  ([#56](https://github.com/Okkama-lang/okkama/issues/56)).
 
 - Language: `+` and `-` on arrays and maps. `a + b + c` concatenates arrays
   (or merges maps, the rightmost value winning a repeated key); `a - b`
@@ -6656,7 +6656,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `arr.diff`, `map.merge`, `map.diff` (96–99) with verifier rules; the IR
   engine, the JVM backend (`Rt.concat/difference/merge/without`), the
   Sparrow core and the previous VM implement them; seven OCS cases
-  ([#145](https://github.com/shootnix/okkama/issues/145)).
+  ([#145](https://github.com/Okkama-lang/okkama/issues/145)).
 
 - Sparrow core, debugging (H-21): a wrong result can be narrowed to one
   compiled function without rebuilding. `SPARROW_CORE_UNOPTIMIZED=symbols`
@@ -6666,13 +6666,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   function, and `SPARROW_CORE_DUMP=symbols` prints its CLIF before the passes
   (with the helpers and functions it calls by name) and its machine code.
   `--stats` adds the compile time and machine-code size of each function and
-  their totals ([#44](https://github.com/shootnix/okkama/issues/44)).
+  their totals ([#44](https://github.com/Okkama-lang/okkama/issues/44)).
 
 - Docs: the trust model is back in the repository (`docs/security-model.md`,
   H-01): for source, bytecode on the Sparrow core, programs, packages and
   embedding it says what is guaranteed, what is not (each with its open
   issue) and how to run untrusted input today
-  ([#37](https://github.com/shootnix/okkama/issues/37)).
+  ([#37](https://github.com/Okkama-lang/okkama/issues/37)).
 
 - Tools: `tools/gen/okgen.py` generates well-defined programs from a seed
   (BigInt promotion, strings, arrays, objects, a role, closures, try/catch,
@@ -6683,7 +6683,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   copy and checks that the generator finds and minimizes it: with 30 seeds
   the IR defect is found by 2 programs, the core's by 6 and the JVM's by 8,
   each minimized to one statement
-  ([#35](https://github.com/shootnix/okkama/issues/35)).
+  ([#35](https://github.com/Okkama-lang/okkama/issues/35)).
 
 - Docs: the Sparrow Book (`docs/SparrowBook/SparrowBook.md`, Russian
   `SparrowBook-RU.md`) — a textbook of Sparrow assembly: the file layout,
@@ -6703,7 +6703,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   stops the run with "internal error in native …", and the runtime refuses
   further runs; a fresh one works. `run_worker` is marked as the CLIs'
   worker entry, not an embedding API. No cost without restrictions
-  ([#31](https://github.com/shootnix/okkama/issues/31)).
+  ([#31](https://github.com/Okkama-lang/okkama/issues/31)).
 
 - Compiler: an independent check of Sparrow register allocation (H-10). The
   core trusts the allocation for its stack maps, and the SPB verifier checks
@@ -6714,7 +6714,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   It passes on every function of the repository's 1509 programs and catches a
   live value overwritten, a value an unwind handler needs overwritten, and
   block parameters written in the wrong order
-  ([#30](https://github.com/shootnix/okkama/issues/30)).
+  ([#30](https://github.com/Okkama-lang/okkama/issues/30)).
 
 - Compiler: phase contracts (`docs/phases.md`) — what the lexer, parser,
   analysis, lowering, IR passes, both code generators and SPB loading take,
@@ -6723,7 +6723,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   public consumer of OIR (both code generators, `execute`, `run_tests`)
   rejects a corrupted module, and that failures in short-circuit operands,
   `throw`, closures and region cleanup point at their source operation with
-  every pass selection ([#36](https://github.com/shootnix/okkama/issues/36)).
+  every pass selection ([#36](https://github.com/Okkama-lang/okkama/issues/36)).
 
 - Compiler: `OKKAMA_IR_PASSES=none|all|tail-calls,hoist,regions,jumps,undef`
   selects the IR passes. Every engine runs the passed OIR, so engine
@@ -6732,7 +6732,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   that programs (i64 edges, BigInt promotion, division by zero, failures with
   cleanup order, deep tail recursion) print the same under every selection
   and that a deliberately wrong pass (`sabotage-int-add`) is caught
-  ([#29](https://github.com/shootnix/okkama/issues/29)).
+  ([#29](https://github.com/Okkama-lang/okkama/issues/29)).
 
 - Sparrow core: runtime helpers called from machine code are described once
   (H-06): each entry names the helper's Rust signature, which is checked at
@@ -6743,7 +6743,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   test runs programs that reach all 28. A panic in a helper aborts with its
   message at the `extern "C"` boundary; turning it into a failure status
   would cost every helper call. No cost: ±0.2% instructions
-  ([#23](https://github.com/shootnix/okkama/issues/23)).
+  ([#23](https://github.com/Okkama-lang/okkama/issues/23)).
 
 - Sparrow core: collector stress mode, `SPARROW_CORE_GC_STRESS=1` — every
   safepoint collects and reclaimed cells are poisoned, so a value kept alive
@@ -6753,7 +6753,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   register value, and a source program with handlers, cleanup regions and
   nested failing calls prints what the IR engine prints. The core needed no
   fix; with stack-map roots disabled the stressed tests fail
-  ([#22](https://github.com/shootnix/okkama/issues/22)).
+  ([#22](https://github.com/Okkama-lang/okkama/issues/22)).
 
 - Sparrow core: execution budgets for untrusted programs and services.
   `okkama exec`, `okkama run --engine sparrow` and `sparrow run` take
@@ -6766,10 +6766,10 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `Execution interrupted`; `catch` does not see it and a later run in the same
   process starts from the base memory. Machine code polls only when a budget
   is set: unbudgeted runs are unchanged (±0.1% instructions); with a step
-  budget, +7–15%. IR/JVM: [#71](https://github.com/shootnix/okkama/issues/71);
+  budget, +7–15%. IR/JVM: [#71](https://github.com/Okkama-lang/okkama/issues/71);
   native operations and per-runtime memory:
-  [#72](https://github.com/shootnix/okkama/issues/72)
-  ([#21](https://github.com/shootnix/okkama/issues/21)).
+  [#72](https://github.com/Okkama-lang/okkama/issues/72)
+  ([#21](https://github.com/Okkama-lang/okkama/issues/21)).
 
 - Blade: `blade build` and `blade run`. Every setting is in `blade.toml`:
   `[build] entry/target/output` (sparrow or jvm; default
@@ -6778,7 +6778,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `blade.toml` or `blade.lock` are newer than the output and returns the
   program's exit status; both refuse a project whose dependencies are not
   installed. `blade new` writes the sections with their defaults
-  ([#68](https://github.com/shootnix/okkama/issues/68)).
+  ([#68](https://github.com/Okkama-lang/okkama/issues/68)).
 
 ### Changed
 
@@ -6798,7 +6798,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Rendering is slower than the native writer: 37 ms instead of 4 on the core,
   203 instead of 9 on the IR engine, 36 instead of 8 on the JVM. Benchmark:
   `okkama-docs/benchmarks/ini/bench.ok`; guide: `docs/std/ini-guide.md`
-  ([#13](https://github.com/shootnix/okkama/issues/13)).
+  ([#13](https://github.com/Okkama-lang/okkama/issues/13)).
 
 - Language: overloads may differ in their results (#215). Two actions with
   the same name and arity are compatible when their parameter types differ;
@@ -6809,7 +6809,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Subtracting<Instant, Duration>`); the same instance twice is an error. OCS
   `L03.overloads.results-differ-by-parameter-types` replaces
   `overloads.incompatible-returns`; Book §11 rule 8, spec §11.8 (EN/RU)
-  ([#215](https://github.com/shootnix/okkama/issues/215)).
+  ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Std: `BigInt` arithmetic is operators (#215). The expression objects
   `BigSum`, `BigDifference`, `BigProduct`, `BigQuotient`, `BigRemainder`,
@@ -6819,14 +6819,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `a.power(exponent, maximum_bits)`. The errors (`BigDivisionByZero`,
   `InvalidBigExponent`, `InvalidBigPowerLimit`, `BigPowerLimitExceeded`) are
   unchanged and are thrown by the call. Std modules and OCS cases that used
-  the objects are rewritten ([#215](https://github.com/shootnix/okkama/issues/215)).
+  the objects are rewritten ([#215](https://github.com/Okkama-lang/okkama/issues/215)).
 
 - Language: the builtin comparisons `more` and `more_or_equal` are renamed
   `greater` and `greater_or_equal` (#284), the pair to `less` that `Order`
   already uses (`less, equal, greater`): `3.greater(1)`,
   `2.greater_or_equal(2)`. The old names are gone, with no alias. LSP
   completion, OCS `VAL.NUMERIC-METHODS`, Book §10 (EN/RU), spec, LLM context
-  and OASM follow ([#284](https://github.com/shootnix/okkama/issues/284)).
+  and OASM follow ([#284](https://github.com/Okkama-lang/okkama/issues/284)).
 
 - Async: await is structured (#147). Cancelling a task cancels the future it
   awaits — a lazy future its `await` started, a spawned task, a runtime
@@ -6840,14 +6840,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `ASYNC.STRUCTURED-AWAIT` with `L08.cancel.awaited-cleanup-settles`,
   `.awaited-spawned` and `.shared-awaited-survives`; scheduler tests; Book
   §31.5, spec §18, async guide §4.6, LLM context (EN/RU)
-  ([#147](https://github.com/shootnix/okkama/issues/147)).
+  ([#147](https://github.com/Okkama-lang/okkama/issues/147)).
 
 - Language: `bool.string()` (and `string(flag)`, `@string(..., flag)`) is
   `"true"` or `"false"`, no longer the `"1"`/`"0"` inherited from the Perl
   implementation; map keys in error messages read the same way, on every
   engine. No std module printed a boolean; OCS cases that did now
   expect the words. Book §5.1.1 and chapter 10, spec §6.6/§6.6.1, LLM context,
-  LSP completion (EN/RU) ([#262](https://github.com/shootnix/okkama/issues/262)).
+  LSP completion (EN/RU) ([#262](https://github.com/Okkama-lang/okkama/issues/262)).
 
 - JVM: the runtime (`okkama.rt`) is built for Java 22 as one source tree
   (the FFM natives in `src22` joined the rest), so the JVM engine needs JDK
@@ -6867,7 +6867,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   exponent gives a rat" became `rat.pow`. Lowering raises by squaring with
   the exact `int`/`rat` products every engine already has. OCS
   `L02.int.pow-exact`; Book chapter 10 (EN/RU)
-  ([#228](https://github.com/shootnix/okkama/issues/228)).
+  ([#228](https://github.com/Okkama-lang/okkama/issues/228)).
 
 - `db/postgres`: a query is one round trip. Bind, Execute without a row limit
   and Sync go out together and the server streams the whole answer; the row
@@ -6884,7 +6884,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   page boundaries, early close, failures mid-stream and in parsing, COPY
   refusal, transactions with a reader closed early, rollback and the implicit
   commit failure, on the core and the IR engine
-  ([#11](https://github.com/shootnix/okkama/issues/11)).
+  ([#11](https://github.com/Okkama-lang/okkama/issues/11)).
 
 - Compiler: building an array or map with `reduce` is linear (#243). When the
   block uses its accumulator only as its value — alone, or as the left end of
@@ -6898,7 +6898,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   core, 44 s → 0.25 s on the IR engine, 2.9 s → 0.28 s on the JVM; n = 10^6
   now takes 0.18 / 0.67 / 0.35 s. OCS `L05.reduce.accumulator-in-place`
   checks both paths on every engine; the Book (EN/RU) describes the rule
-  ([#243](https://github.com/shootnix/okkama/issues/243)).
+  ([#243](https://github.com/Okkama-lang/okkama/issues/243)).
 
 ### Security
 
@@ -6918,7 +6918,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   239 → 75 µs, OAEP decryption 5.5 → 3.5 ms, PKCS#1 v1.5 signing 4.6 → 3.3 ms,
   PSS signing 4.2 → 3.8 ms. OpenSSL vectors cover SHA-384/512 signatures,
   OAEP-SHA384 and the X.509 legacy forms
-  ([#70](https://github.com/shootnix/okkama/issues/70)).
+  ([#70](https://github.com/Okkama-lang/okkama/issues/70)).
 
 ### Fixed
 
@@ -6960,7 +6960,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   with `os/environment` now runs as fast as without it on every engine.
   Tests in `lowering_ownership.rs`, including a closure that captures a
   resource and stays tracked; LLM guide and phases.md updated
-  ([#292](https://github.com/shootnix/okkama/issues/292)).
+  ([#292](https://github.com/Okkama-lang/okkama/issues/292)).
 
 - IR engine and JVM: a TLS read abandoned by a timeout or a cancellation
   could lose the record it received (#12 follow-up). The abandoned read's
@@ -6984,7 +6984,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   hoist, jumps, undef`, and the tail-position check follows empty
   trampoline blocks the result reaches `ret` through. A call before an owned
   object's destroy is still not a tail call. LLM guide and phases.md updated
-  ([#285](https://github.com/shootnix/okkama/issues/285)).
+  ([#285](https://github.com/Okkama-lang/okkama/issues/285)).
 
 - Sort: a stopped or failing `ordering()` no longer crashes the engine
   (#283). Since #238 a budget that fired in the middle of a sort made the
@@ -6996,7 +6996,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   leaves the sort by unwinding with a private marker, caught inside the
   intrinsic, and the sort stays Rust's stable sort. Unit tests stop it at
   several fixed comparisons. OCS `L09.compare.failing-order-stops-the-sort`
-  ([#283](https://github.com/shootnix/okkama/issues/283)).
+  ([#283](https://github.com/Okkama-lang/okkama/issues/283)).
 
 - JVM: `==` on objects that refer to each other no longer overflows the
   stack (#278). A constructor that hands its `self` to a collaborator makes a
@@ -7007,7 +7007,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   being compared further up the stack equal, as the other engines do, and
   hash through `Obj.cyclicHash`; other classes are unchanged. OCS
   `L04.equality.cyclic-graphs`
-  ([#278](https://github.com/shootnix/okkama/issues/278)).
+  ([#278](https://github.com/Okkama-lang/okkama/issues/278)).
 
 - Objects: an action called on an object whose constructor has not returned
   is rejected on every engine (#271, spec §11.4). A constructor may hand its
@@ -7025,7 +7025,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   code 5, SPB format 12); other objects are unchanged. In std this concerns
   `Http2ServerStream` and `MultipartFormPart`. OCS: five
   `L04.invariant.escaped-self-*` cases. Book §18.2 (EN/RU), OIR-1 §16.1,
-  Sparrow book ([#271](https://github.com/shootnix/okkama/issues/271)).
+  Sparrow book ([#271](https://github.com/Okkama-lang/okkama/issues/271)).
 
 - Tests: a successor passed to `test.is` or `test.isnt` is an ordinary
   argument (#275). Passed directly it crashed the compiler (`lowering
@@ -7034,14 +7034,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   consumes the argument as every call argument does. The Book's own example
   `test.is(bottle.open().close(), bottle)` works. OCS
   `L07.test-runner.successor-assertions`
-  ([#275](https://github.com/shootnix/okkama/issues/275)).
+  ([#275](https://github.com/Okkama-lang/okkama/issues/275)).
 
 - Docs: map keys follow decision D-007 everywhere (#274). The spec (§6.3),
   the LLM context and the Book (§5.3, §8.2, §31.1, EN/RU) no longer say that
   `byte` values are map keys; `%byte:V` stays a compile error, as the OCS
   case `L05.map.byte-keys-rejected` requires. Book §31.1 also no longer says
   that objects are not keys: value objects are keys since #212
-  ([#274](https://github.com/shootnix/okkama/issues/274)).
+  ([#274](https://github.com/Okkama-lang/okkama/issues/274)).
 
 - db/postgres: closing a reader early no longer costs the rest of a long
   answer (#240). Since #11 a query streams its whole answer, so a reader
@@ -7060,7 +7060,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   closed after the first one settle in 18 ms on the core, where reading 10⁶
   through takes 182 ms. The IR engine's drain itself is slow (#280).
   std guide `db-postgres.md`
-  ([#240](https://github.com/shootnix/okkama/issues/240)).
+  ([#240](https://github.com/Okkama-lang/okkama/issues/240)).
 
 - Terminal: input typed after a read was interrupted reaches the next read
   (#12). A terminal read that a timeout or a cancelled task gave up still
@@ -7076,7 +7076,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   (now said in `terminal/screen`). OCS `L11.tls.cancelled-read-keeps-data`
   with the `tls-late-echo` fixture shows that a TLS read interrupted the
   same two ways loses nothing
-  ([#12](https://github.com/shootnix/okkama/issues/12)).
+  ([#12](https://github.com/Okkama-lang/okkama/issues/12)).
 
 - Runtime: cleanup regions no longer walk a large structure again for every
   value that points into it (#9). A region learns which resources to destroy
@@ -7096,7 +7096,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   New benchmark `11-ownership` (100 000 records in an array and a map, 300
   rounds); OCS `L07.ownership.shared-structure-returned` and
   `.shared-structure-loop`
-  ([#9](https://github.com/shootnix/okkama/issues/9)).
+  ([#9](https://github.com/Okkama-lang/okkama/issues/9)).
 
 - IR engine: calls are as fast as before #153 again (#265). The `const`
   globals were built lazily from inside the instruction loop, which called
@@ -7112,7 +7112,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   build against wave 10: calls +0.6%, roles +2.2%, arithmetic −0.6%,
   objects −1.1%, closures +5.6% (PGO compiles that path differently;
   without PGO both versions run the same instructions)
-  ([#265](https://github.com/shootnix/okkama/issues/265)).
+  ([#265](https://github.com/Okkama-lang/okkama/issues/265)).
 
 - Compiler: a `reduce` into an array or a map (#243) whose elements reach a
   `destroy` compiles (#266). It was an internal error (`region.track …:
@@ -7123,7 +7123,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   and a builder is never tracked, adopted or kept. What the block gathers —
   made there or bound with `let` — lives as long as the result, as with
   `map`. Lowering test and OCS `L07.ownership.reduce-builder`
-  ([#266](https://github.com/shootnix/okkama/issues/266)).
+  ([#266](https://github.com/Okkama-lang/okkama/issues/266)).
 
 - Budgets: a long host operation no longer outlives `--timeout` (#238). On
   the Sparrow core a PBKDF2 derivation of 10⁹ rounds ran on after the time
@@ -7136,7 +7136,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   IR engine's run did; SQLite queries already stopped (they run on the
   connection's thread while the scheduler waits). CLI test
   `long_host_operations_stop_for_the_timeout`; Book, toolchain commands (EN/RU)
-  ([#238](https://github.com/shootnix/okkama/issues/238)).
+  ([#238](https://github.com/Okkama-lang/okkama/issues/238)).
 
 - Compiler: one function of many sequential loops compiles in linear time
   (#239). Three phases were quadratic on it. Lowering copied the value of
@@ -7151,7 +7151,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `reduce` blocks (10⁵ instructions): codegen 4.1 s at 2 500 blocks before,
   0.15 s at 25 000 now; the whole pipeline is about 0.5 s and grows linearly.
   `tests/large_functions.rs` gains the `loops` shape
-  ([#239](https://github.com/shootnix/okkama/issues/239)).
+  ([#239](https://github.com/Okkama-lang/okkama/issues/239)).
 
 - Docs and LSP: chapter 10 of the Book listed `less`/`more` for `char`, which
   has only `order`; LSP completion offered `int.pow` as a `float` (it is the
@@ -7173,12 +7173,12 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   both); the program's `catch` does not see the stop and its cleanup does not
   run, as for every budget. A sort through `Comparing` was already
   interruptible: each comparison is a call. Unlimited runs are unchanged
-  ([#238](https://github.com/shootnix/okkama/issues/238)).
+  ([#238](https://github.com/Okkama-lang/okkama/issues/238)).
 
 - `db/postgres`: `COPY … FROM STDIN` no longer hangs the connection. The
   server ignores a Sync that arrives in copy-in mode, so after the driver's
   CopyFail it waited for another Sync that never came; the refusal now sends
-  one ([#11](https://github.com/shootnix/okkama/issues/11)).
+  one ([#11](https://github.com/Okkama-lang/okkama/issues/11)).
 
 - Deep recursion no longer looks like a hang (#241). A failure thousands or
   millions of frames deep rendered one trace line per frame, each with a
@@ -7189,7 +7189,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   12.6 s on the core. On the core, a stack overflow under `--max-memory`
   (which caps the machine stack) is now `Execution budget exhausted: memory`,
   as on the IR engine and the JVM, instead of `RuntimeError: Stack overflow`
-  ([#241](https://github.com/shootnix/okkama/issues/241)).
+  ([#241](https://github.com/Okkama-lang/okkama/issues/241)).
 
 - Book: chapter 10 (EN/RU) lists every builtin action the compiler has —
   string `empty`, `trim`, `chomp`; array `item`, `first`, `last`, `cursor`,
@@ -7197,18 +7197,18 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `numerator`, `denominator`; Future `cancel`, `done`, `cancelled` — and a
   test reads the compiler's table from `analysis/check/builtin.rs`, so a new
   builtin fails until the Book names it
-  ([#224](https://github.com/shootnix/okkama/issues/224)).
+  ([#224](https://github.com/Okkama-lang/okkama/issues/224)).
 
 - Diagnostics say what the rule is and what to write instead: assigning a
   field after construction ("objects are immutable; return a successor",
-  [#226](https://github.com/shootnix/okkama/issues/226)); `class`,
+  [#226](https://github.com/Okkama-lang/okkama/issues/226)); `class`,
   `interface`, `extends`, `implements` and `static` from other languages
   name the Okkama construct — `object`, `role`, fields and `does`
-  ([#227](https://github.com/shootnix/okkama/issues/227)); a `match` used as a
+  ([#227](https://github.com/Okkama-lang/okkama/issues/227)); a `match` used as a
   value that leaves enum cases out names them instead of "Expression does
-  not produce a value" ([#229](https://github.com/shootnix/okkama/issues/229));
+  not produce a value" ([#229](https://github.com/Okkama-lang/okkama/issues/229));
   `ordering()` without the `Comparing` role loaded says which import is
-  missing ([#233](https://github.com/shootnix/okkama/issues/233)). The words
+  missing ([#233](https://github.com/Okkama-lang/okkama/issues/233)). The words
   stay ordinary identifiers: only code that failed to parse before gets the
   new messages.
 
@@ -7219,7 +7219,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   the bindings of functional blocks (`list.map() -> m { m. }`, `reduce`'s
   accumulator from its initial value) and locals declared since the last
   successful check (`let c = sum.cents();` then `c.`, or `let d is Money`)
-  ([#225](https://github.com/shootnix/okkama/issues/225)).
+  ([#225](https://github.com/Okkama-lang/okkama/issues/225)).
 
 - Compiler, imports (O06): a module imported from many modules is read and
   parsed once. Loaders now name a module's identity (`ModuleLoader::resolve`,
@@ -7231,7 +7231,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   with one linear pass over the strongly connected components instead of a
   search per block, so functions of any size get it (the 4096-block cap is
   gone); the pass shares that routine with the recursion analysis
-  ([#51](https://github.com/shootnix/okkama/issues/51)).
+  ([#51](https://github.com/Okkama-lang/okkama/issues/51)).
 
 - Runtimes, strings (O07): slicing a non-ASCII string one code point at a
   time, and `length()` in a loop, are linear on every engine instead of
@@ -7245,7 +7245,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   letters take 0.49 s, 0.13 s and 0.20 s (a debug build against the 0.4.0
   release). The core's cache is cleared at each collection, the only time a
   string's memory is freed; the IR engine and the JVM hold weak references
-  ([#52](https://github.com/shootnix/okkama/issues/52)).
+  ([#52](https://github.com/Okkama-lang/okkama/issues/52)).
 
 - Compiler, anonymous actions (H-33): an anonymous action written in an
   action captures `self` only when its body reads the receiver — `self`, a
@@ -7259,7 +7259,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   statement form, so a new form must decide whether it reads the receiver.
   An OCS case shows the receiver destroyed at once when its action does not
   read it, and kept while it does
-  ([#53](https://github.com/shootnix/okkama/issues/53)).
+  ([#53](https://github.com/Okkama-lang/okkama/issues/53)).
 
 - Sparrow core, load-time contracts of generic intrinsics: payloads are
   checked by type, not only by representation. The object types a channel's
@@ -7271,7 +7271,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   timed results and `AllFutures` results must be the type of the futures
   they wait for; `fake.storage` reads compare stored and requested types
   structurally. Tests pair crafted copies of these intrinsics with compiler
-  output ([#69](https://github.com/shootnix/okkama/issues/69)).
+  output ([#69](https://github.com/Okkama-lang/okkama/issues/69)).
 
 - Compiler, types (H-26): a local's type may be at most 64 levels deep. A
   chain of `let`s can deepen a generic type one level per step
@@ -7280,7 +7280,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   16 GB. Now the first local past the limit is one error. Interning types
   was measured and is not worth it: checking `std/web/app.ok` with its
   imports spends about 3 % of its working time on types, against lexing,
-  parsing and allocation ([#49](https://github.com/shootnix/okkama/issues/49)).
+  parsing and allocation ([#49](https://github.com/Okkama-lang/okkama/issues/49)).
 
 - Compiler, very large functions (H-28, H-39): three phases were quadratic
   in the size of one function and are linear now. The ownership flow of the
@@ -7295,7 +7295,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   growth; a release test requires the whole pipeline to grow linearly. The
   lowering of very many branches over very many locals is still
   superlinear (0.6 s at 10⁵ instructions): #239
-  ([#50](https://github.com/shootnix/okkama/issues/50)).
+  ([#50](https://github.com/Okkama-lang/okkama/issues/50)).
 
 - Sparrow core, budgets: one operation whose result can be much larger than
   its operands is measured against the memory budget before it is built —
@@ -7306,7 +7306,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   stops with "Execution budget exhausted: memory" before allocating. Long
   natives that cannot be interrupted (sorting, provider calls) and
   per-runtime memory accounting remain open in #238
-  ([#72](https://github.com/shootnix/okkama/issues/72)).
+  ([#72](https://github.com/Okkama-lang/okkama/issues/72)).
 
 - Runtimes: host state belongs to one run, not to a thread (Q03). Every
   engine entry (IR program and test runs, the previous Sparrow VM, each
@@ -7320,7 +7320,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `env.set`, a spawned worker starts in the program's directory rather than
   the process's, and a core worker no longer changes its process's
   directory. A later `default_environment` for the same name replaces the
-  earlier one ([#40](https://github.com/shootnix/okkama/issues/40)).
+  earlier one ([#40](https://github.com/Okkama-lang/okkama/issues/40)).
 
 - Build: the declared MSRV is true again — `rust-version` is 1.97 (Cranelift
   0.137 needs it; it said 1.85), and a CI job *MSRV* checks every target on
@@ -7329,7 +7329,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   toolchain pinned in
   `tools/release-toolchain.txt` (1.97.1), each package records its compiler
   in `lib/okkama/TOOLCHAIN`, and `gate.json` records `rustc -V`
-  ([#41](https://github.com/shootnix/okkama/issues/41)).
+  ([#41](https://github.com/Okkama-lang/okkama/issues/41)).
 
 - Build: debug tests and clippy are green and part of the release gate (Q05).
   The gate runs the whole workspace's tests unoptimized too (stack depth and
@@ -7340,7 +7340,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   are by design, each with its reason: `transmute` of `dlsym` addresses to
   their function-table types, the legacy VM's large public error, recursive
   regex and pattern helpers with many arguments
-  ([#42](https://github.com/shootnix/okkama/issues/42)).
+  ([#42](https://github.com/Okkama-lang/okkama/issues/42)).
 
 - IR runtime, cycle collector (H-13): `OKKAMA_GC=stress` collects at every
   new candidate, and the gate runs the IR conformance suite that way, so an
@@ -7353,7 +7353,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   collect it after its last holder goes, keep it while held, and check that
   the count of live objects returns to its base after repeated cycles, with
   and without stress. A CI job runs the heap and collector tests under Miri
-  ([#43](https://github.com/shootnix/okkama/issues/43)).
+  ([#43](https://github.com/Okkama-lang/okkama/issues/43)).
 
 - Compiler, lexer (H-22): malformed number literals are one error over the
   whole literal instead of a number followed by a stray identifier that
@@ -7362,14 +7362,14 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   none). A token table pins numbers next to `.`, `..`, `..=`, `...`, `_` and
   the 64-bit bounds with exact spans; two OCS cases reject `1__0` and `1e5`.
   The `INT64_MAX` limit of `0x…`/`0b…` literals stays as documented; whether
-  to lift it is #235 ([#45](https://github.com/shootnix/okkama/issues/45)).
+  to lift it is #235 ([#45](https://github.com/Okkama-lang/okkama/issues/45)).
 
 - Compiler, parser (H-23): binary operators live in one table — token, AST
   operation, precedence level and chaining (`LEVELS` in `parser/expr.rs`) —
   instead of a precedence enum, its successor function and a token match
   written separately; the range level's "at most one operator" is a property
   of its row. A test parses every pair of adjacent levels both ways and every
-  level chained with itself ([#46](https://github.com/shootnix/okkama/issues/46)).
+  level chained with itself ([#46](https://github.com/Okkama-lang/okkama/issues/46)).
 
 - LSP and diagnostics, positions (H-25): the language server negotiates the
   position encoding — UTF-8 when the client offers it (byte offsets, no
@@ -7381,13 +7381,13 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   takes two cells, a combining mark none. Tests round-trip every character
   boundary of Cyrillic, emoji, combining marks, tabs, LF/CRLF and the end of
   the file through all three encodings
-  ([#48](https://github.com/shootnix/okkama/issues/48)).
+  ([#48](https://github.com/Okkama-lang/okkama/issues/48)).
 
 - Book: numeric operands never mix (owner decision, #230). The Book said that
   `rat` mixes with `int`/`byte` and that ordering promotes; the compiler has
   always rejected both (`1 + 1 / 2`, `1 / 2 < 1`, `byte(2) + 3`). §5 and the
   operator table now state the rule: same category on both sides, explicit
-  conversion otherwise ([#230](https://github.com/shootnix/okkama/issues/230)).
+  conversion otherwise ([#230](https://github.com/Okkama-lang/okkama/issues/230)).
 
 - Sparrow core: compiling a function with k values live across k fallible
   instructions took about 0.3 KiB × k² before it ran (476 MiB at k = 1000,
@@ -7405,7 +7405,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   blocks) compile as before. Straight-line instructions now share one
   Cranelift block; only jump, handler and resume targets start one. Benchmarks
   on the core: instructions −2.4…+0.6% (most −1%), time within noise
-  ([#73](https://github.com/shootnix/okkama/issues/73)).
+  ([#73](https://github.com/Okkama-lang/okkama/issues/73)).
 
 - Fuzzing: `tools/fuzz/run.sh` reported a target as a finding when its build
   was killed for memory (an ASan build of cranelift-codegen with one codegen
@@ -7413,7 +7413,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   one job, and a failed build exits with status 2 and `logs/build.log`
   instead of a finding. A 20-second smoke run of all six targets in a 6 GB
   container has no findings
-  ([#34](https://github.com/shootnix/okkama/issues/34)).
+  ([#34](https://github.com/Okkama-lang/okkama/issues/34)).
 
 - Sparrow core: an uncaught failure printed only its report; the IR engine and
   the previous VM also print the place in the source and the call stack. The
@@ -7425,7 +7425,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   case that fails at run time, and every failing case of the cleanup and
   async levels, prints the same place and stack on the core and on the IR
   engine. Only the failure path
-  changed ([#10](https://github.com/shootnix/okkama/issues/10)).
+  changed ([#10](https://github.com/Okkama-lang/okkama/issues/10)).
 
 - IR runtime: dropping a value graph with repeated edges recursed through
   destructors — the release queue took only references whose count was
@@ -7435,7 +7435,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   joins the queue, and `any` is never boxed twice, so boxes do not nest.
   Chains and DAGs of 200 000 levels through objects, arrays, maps, `any`,
   builders and closures drop on a 2 MiB stack in debug and release
-  ([#28](https://github.com/shootnix/okkama/issues/28)).
+  ([#28](https://github.com/Okkama-lang/okkama/issues/28)).
 
 - Compiler: a name conflict now names both sources — two `take` of one name
   (`Object "Thing" is already declared by module "lib/a"; this import takes
@@ -7445,7 +7445,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   name order, so `okkama check a.ok b.ok` and `okkama check b.ok a.ok` print
   the same bytes; every conformance case and std module checks identically
   run to run and with its files reversed
-  ([#33](https://github.com/shootnix/okkama/issues/33)).
+  ([#33](https://github.com/Okkama-lang/okkama/issues/33)).
 
 - Sparrow core on x86_64: the macOS x86_64 package now has a smoke test (run
   under Rosetta 2 on the arm64 runner: a program, the core under a stressed
@@ -7453,7 +7453,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   engine and the core on x86_64 Linux next to conformance. Checked locally
   under Rosetta: the handler-liveness programs under collector stress, budget
   polls and interruption, and all benchmarks print what arm64 prints
-  ([#27](https://github.com/shootnix/okkama/issues/27)).
+  ([#27](https://github.com/Okkama-lang/okkama/issues/27)).
 
 - Releases: packages were published without the release gate, which ran only
   by hand, judged steps by the last line of their logs and carried on after a
@@ -7462,7 +7462,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   Every step's status comes from its exit code (`ocs` exits 0 only when all
   mandatory cases pass); a failed build stops the gate; `gate.json` lists the
   commit, the steps with their status and time, and the known std failures,
-  shown in the run summary ([#26](https://github.com/shootnix/okkama/issues/26)).
+  shown in the run summary ([#26](https://github.com/Okkama-lang/okkama/issues/26)).
 
 - Compiler: generic code that asks for ever deeper specializations —
   `Grow<T>` constructing `Grow<Box<T>>`, or a method returning `Node<Box<T>>`
@@ -7471,7 +7471,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   specializations, is now a diagnostic naming the newest requests of the chain
   (`Grow<Box<…>>.deep <- Grow<Box<…>>.deep <- …`). The repository's programs
   stay at depth 20 and 2 416 specializations
-  ([#32](https://github.com/shootnix/okkama/issues/32)).
+  ([#32](https://github.com/Okkama-lang/okkama/issues/32)).
 
 - Sparrow core: a function's machine frame grew with the number of its helper
   calls — every call with arguments took its own stack slot — so a long
@@ -7482,8 +7482,8 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   (`destroy`, closures) is tested to end as `Stack overflow` with the process
   usable afterwards. `--stats` reports the largest machine frame. Compile
   memory for functions with thousands of live values:
-  [#73](https://github.com/shootnix/okkama/issues/73)
-  ([#25](https://github.com/shootnix/okkama/issues/25)).
+  [#73](https://github.com/Okkama-lang/okkama/issues/73)
+  ([#25](https://github.com/Okkama-lang/okkama/issues/25)).
 
 - SPB: decoding and verification are bounded in memory. The verifier kept a
   register set per instruction, so a 234 KiB file of 32 000 registers needed
@@ -7495,7 +7495,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   against a callee whose signature was not yet verified); every signature is
   now checked before any body. Tests truncate a program at every byte and
   corrupt every byte with every value; all 2035 SPB of the repository
-  round-trip byte for byte ([#24](https://github.com/shootnix/okkama/issues/24)).
+  round-trip byte for byte ([#24](https://github.com/Okkama-lang/okkama/issues/24)).
 
 - Compiler: loading imports recursed once per nested import, so a chain of
   16 000 small modules overflowed the stack (SIGABRT). The import graph is now
@@ -7503,7 +7503,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   keep their diagnostic. A program's import graph is bounded — 1024 nested
   imports, 16384 modules, 256 MiB of module sources — and the import that
   crosses a bound is a compile-time error
-  ([#20](https://github.com/shootnix/okkama/issues/20)).
+  ([#20](https://github.com/Okkama-lang/okkama/issues/20)).
 
 - Dependencies: `crypto-bigint` 0.7.5 → 0.7.10 (RUSTSEC-2026-0387) and
   `ctutils` 0.4.2 → 0.4.8 (RUSTSEC-2026-0385) — their constant-time
@@ -7511,8 +7511,8 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   change and weekly and fails on any new advisory. The one exception is
   RUSTSEC-2023-0071 (Marvin, `rsa`): no version of the crate fixes it; private
   RSA operations on the Rust engines are not constant-time until a provider is
-  chosen ([#70](https://github.com/shootnix/okkama/issues/70))
-  ([#19](https://github.com/shootnix/okkama/issues/19)). The conformance
+  chosen ([#70](https://github.com/Okkama-lang/okkama/issues/70))
+  ([#19](https://github.com/Okkama-lang/okkama/issues/19)). The conformance
   adapter no longer caches a failed build: a gate run without a new crate in
   its offline registry kept reporting every case unsupported.
 
@@ -7524,7 +7524,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `InterruptHandle` does for the IR runtime and the core. Tests: a handle
   loaded before close, interrupts racing close and worker exit, and a
   conformance case cancelling running queries around `close`
-  ([#18](https://github.com/shootnix/okkama/issues/18)).
+  ([#18](https://github.com/Okkama-lang/okkama/issues/18)).
 
 - X.509: building a certificate path had no work bound — ambiguous issuers
   (same name and key identifier) made the search exponential, 10 supplied
@@ -7536,7 +7536,7 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   `resource_exhausted` (`CertificateLimitExceeded`). The JVM runtime runs the
   same search instead of JDK `CertPathBuilder`, so every engine finds the
   same path and stops at the same point
-  ([#17](https://github.com/shootnix/okkama/issues/17)).
+  ([#17](https://github.com/Okkama-lang/okkama/issues/17)).
 
 - Sparrow: a crafted `.spb` could make the core read an integer as a pointer —
   the core takes each register's machine representation from the declared
@@ -7550,21 +7550,21 @@ calls and closures no longer pay for a `destroy` elsewhere in the program
   helpers; `sparrow check` runs them), recognizes Atomic and Event cells by
   their constructor intrinsics instead of by name, and keeps every channel's
   messages to one representation. Generic payloads checked by type:
-  [#69](https://github.com/shootnix/okkama/issues/69)
-  ([#16](https://github.com/shootnix/okkama/issues/16)).
+  [#69](https://github.com/Okkama-lang/okkama/issues/69)
+  ([#16](https://github.com/Okkama-lang/okkama/issues/16)).
 
 - Blade: a package name is checked as a module path (identifiers separated by `/`)
   before it becomes a directory of `pkg/`; `../../victim` as a name of a package
   without `.ok` files replaced files outside the project. Names differing only in
   letter case are refused, and a nested package cannot land on its parent's files
-  ([#15](https://github.com/shootnix/okkama/issues/15)).
+  ([#15](https://github.com/Okkama-lang/okkama/issues/15)).
 
 - Blade: `pkg/` and `blade.lock` change together. Both are prepared next to
   the old ones and a marker is written before the renames; a blade
   interrupted at any step is finished (marker present) or rolled back by the
   next `blade install`, and `blade build`/`run` refuse a half-committed
   project. `blade install SOURCE` holds the project for the manifest edit as
-  well as the install ([#39](https://github.com/shootnix/okkama/issues/39)).
+  well as the install ([#39](https://github.com/Okkama-lang/okkama/issues/39)).
 
 ## [0.4.0] — 2026-11-07
 
@@ -7689,7 +7689,7 @@ moved out.
   the new `std/db` and `encoding/bytes` use (byte ranges, SQLite and PostgreSQL result
   pages): SQLite and PostgreSQL programs and byte parsing failed with "native provider
   is not implemented" there. IR and JVM now implement them; the previous VM does not
-  (it is removed in 0.5, [#14](https://github.com/shootnix/okkama/issues/14)).
+  (it is removed in 0.5, [#14](https://github.com/Okkama-lang/okkama/issues/14)).
 - JVM: errors the runtime raises for async intrinsics (`ChannelClosed`,
   `InvalidChannelCapacity`, …) are built as error enums; since they became enums the
   task constructing them died and the program waited forever.
@@ -7707,7 +7707,7 @@ moved out.
 - Calling an action through a cap (`customer.wtf()` on a `Customer::Public` value)
   reported "Can only call actions on objects"; the error now names the cap, says that
   an owner's action is not available through it and lists the cap's computed fields
-  (`::name`) ([#8](https://github.com/shootnix/okkama/issues/8)).
+  (`::name`) ([#8](https://github.com/Okkama-lang/okkama/issues/8)).
 - **An object successor declared `is ^Role` is rejected with a clear error** instead of
   passing the checker and crashing in IR verification with an internal compiler error;
   the checker also accepted a role the object does not do. An object successor returns
@@ -7798,9 +7798,9 @@ moved out.
   `sparrow-core`; process workers of the core run `okkama --worker FILE.spb` or
   `sparrow --worker FILE.spb`. The previous VM stays for one release as
   `sparrow-origin` and `--engine sparrow-origin` (removed in 0.5,
-  [#14](https://github.com/shootnix/okkama/issues/14)). Known limitation: an uncaught
+  [#14](https://github.com/Okkama-lang/okkama/issues/14)). Known limitation: an uncaught
   failure on the core prints its report without the source line and call stack
-  ([#10](https://github.com/shootnix/okkama/issues/10)). `make gate` runs the release
+  ([#10](https://github.com/Okkama-lang/okkama/issues/10)). `make gate` runs the release
   gate in a container (`tools/gate/docker.sh`, `tools/docker/Dockerfile`; `make
   gate-local` without it): conformance on ir, jvm, sparrow and sparrow-origin, std
   tests on ir and sparrow.
@@ -7918,7 +7918,7 @@ moved out.
   the rest of the list. The core now knows a role value is one of the objects doing
   that role and a native handle holds no objects, so such data gets no identity:
   20000 rows take 46 ms. The general cost of region tracking over large data is
-  [#9](https://github.com/shootnix/okkama/issues/9).
+  [#9](https://github.com/Okkama-lang/okkama/issues/9).
 - **TLS and the terminal on the new core**, the last natives it lacked (all 621 ABI
   natives now run there). `runtime/tls_transport` is a rustls client over the core's
   TCP sockets, driven by its own reactor like the sockets (no I/O threads), with the
@@ -8378,23 +8378,23 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.2...HEAD
-[0.6.2]: https://github.com/shootnix/okkama/compare/v0.6.1...v0.6.2
-[0.6.1]: https://github.com/shootnix/okkama/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/shootnix/okkama/compare/v0.5.8...v0.6.0
-[0.5.8]: https://github.com/shootnix/okkama/compare/v0.5.7...v0.5.8
-[0.5.7]: https://github.com/shootnix/okkama/compare/v0.5.6...v0.5.7
-[0.5.6]: https://github.com/shootnix/okkama/compare/v0.5.5...v0.5.6
-[0.5.5]: https://github.com/shootnix/okkama/compare/v0.5.4...v0.5.5
-[0.5.4]: https://github.com/shootnix/okkama/compare/v0.5.3...v0.5.4
-[0.5.3]: https://github.com/shootnix/okkama/compare/v0.5.1...v0.5.3
-[0.5.1]: https://github.com/shootnix/okkama/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/shootnix/okkama/compare/v0.4.3...v0.5.0
-[0.4.3]: https://github.com/shootnix/okkama/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/shootnix/okkama/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/shootnix/okkama/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/shootnix/okkama/compare/v0.3.2...v0.4.0
-[0.3.2]: https://github.com/shootnix/okkama/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/shootnix/okkama/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/shootnix/okkama/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/shootnix/okkama/releases/tag/v0.2.0
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/Okkama-lang/okkama/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/Okkama-lang/okkama/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Okkama-lang/okkama/compare/v0.5.8...v0.6.0
+[0.5.8]: https://github.com/Okkama-lang/okkama/compare/v0.5.7...v0.5.8
+[0.5.7]: https://github.com/Okkama-lang/okkama/compare/v0.5.6...v0.5.7
+[0.5.6]: https://github.com/Okkama-lang/okkama/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/Okkama-lang/okkama/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/Okkama-lang/okkama/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/Okkama-lang/okkama/compare/v0.5.1...v0.5.3
+[0.5.1]: https://github.com/Okkama-lang/okkama/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Okkama-lang/okkama/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/Okkama-lang/okkama/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/Okkama-lang/okkama/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/Okkama-lang/okkama/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Okkama-lang/okkama/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/Okkama-lang/okkama/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Okkama-lang/okkama/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Okkama-lang/okkama/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Okkama-lang/okkama/releases/tag/v0.2.0

@@ -187,7 +187,7 @@ Section: devel
 Priority: optional
 Depends: libc6 (>= 2.17)
 Suggests: libsqlite3-0 (>= 3.41)
-Homepage: https://github.com/shootnix/okkama
+Homepage: https://github.com/Okkama-lang/okkama
 Description: Okkama programming language
  Compiler and runner for Okkama (Sparrow VM with JIT), the standard library, the language server, the formatter
  and the blade project tool.
@@ -216,7 +216,7 @@ Version: $RPM_VERSION
 Release: 1
 Summary: Okkama programming language
 License: GPL-3.0-only
-URL: https://github.com/shootnix/okkama
+URL: https://github.com/Okkama-lang/okkama
 BuildArch: $RPM_ARCH
 Requires: glibc >= 2.17
 Recommends: sqlite-libs
