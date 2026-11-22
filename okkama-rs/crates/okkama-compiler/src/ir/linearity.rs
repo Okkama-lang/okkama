@@ -54,6 +54,7 @@ pub(crate) fn can_fail(kind: &InstKind) -> bool {
             | InstKind::RegionUnwind { .. }
             | InstKind::RegionSettleUnwind { .. }
             | InstKind::ResourceUnwind { .. }
+            | InstKind::ResourceSettleUnwind { .. }
             | InstKind::FailSecondary { .. }
             | InstKind::FailCaused { .. }
             | InstKind::EnumCase { .. }
@@ -66,7 +67,7 @@ pub(crate) fn can_fail(kind: &InstKind) -> bool {
 fn closes(kind: &InstKind) -> Option<ValueId> {
     match kind {
         InstKind::RegionLeave { region, .. } | InstKind::RegionSettle { region, .. } => Some(*region),
-        InstKind::ResourceLeave { value } => Some(*value),
+        InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => Some(*value),
         _ => None,
     }
 }
@@ -168,7 +169,8 @@ fn check_function(function: &Function) -> Result<(), String> {
                 // then. It must not meet one that was never opened.
                 InstKind::RegionUnwind { region: value, .. }
                 | InstKind::RegionSettleUnwind { region: value, .. }
-                | InstKind::ResourceUnwind { value, .. } => {
+                | InstKind::ResourceUnwind { value, .. }
+                | InstKind::ResourceSettleUnwind { value, .. } => {
                     let checked = match state.get(value) {
                         Some(bits) if bits & UNOPENED != 0 => {
                             Err(format!("an unwind of {value} at {} while it is {}", at(), describe(*bits)))
@@ -186,7 +188,7 @@ fn check_function(function: &Function) -> Result<(), String> {
                     state.insert(*value, OPEN);
                     checked
                 }
-                InstKind::ResourceLeave { value } => {
+                InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
                     let checked = open(&state, value, "a close");
                     state.insert(*value, CLOSED);
                     checked

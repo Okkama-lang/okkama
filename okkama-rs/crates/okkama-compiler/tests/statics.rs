@@ -111,3 +111,40 @@ fn the_linearity_check_refuses_a_missing_or_doubled_close() {
     let error = ir::linearity::check(&doubled).expect_err("a close is doubled");
     assert!(error.contains("already closed"), "{error}");
 }
+
+const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \
+    async destroy { confirm n > 0; } }";
+
+/// #329: an async-destroy guard alone in its scope of an async body settles directly: `resource.settle` at the
+/// exit, `resource.settle_unwind` on the failure path, no region.
+#[test]
+fn an_async_destroy_guard_alone_in_its_scope_settles_without_a_region() {
+    let text = function_text(&format!("{GUARD} enum Stop is Error = (now); object Work {{ Work(); \
+        async run(stop is bool) is int {{ let g = Guard(n: 1); confirm !stop else throw Stop.now; g.read(); }} }} \
+        async main() is int {{ await Work().run(false); }}"), "Work.run");
+    assert!(text.contains("resource.pin"), "{text}");
+    assert!(text.contains("resource.settle "), "{text}");
+    assert!(text.contains("resource.settle_unwind"), "{text}");
+    assert!(!text.contains("region."), "{text}");
+    assert!(!text.contains("resource.leave"), "{text}");
+}
+
+/// #329: two async-destroy guards share their scope's region: both stay dynamic (the region settles them in
+/// reverse creation order).
+#[test]
+fn async_destroy_guards_sharing_a_region_stay_dynamic() {
+    let text = function_text(&format!("{GUARD} object Work {{ Work(); \
+        async run() is int {{ let a = Guard(n: 1); let b = Guard(n: 2); a.read() + b.read(); }} }} \
+        async main() is int {{ await Work().run(); }}"), "Work.run");
+    assert!(!text.contains("resource."), "{text}");
+    assert!(text.contains("region.settle"), "{text}");
+}
+
+/// #329: a guard handed out of its scope keeps its region.
+#[test]
+fn a_returned_async_destroy_guard_stays_with_its_region() {
+    let text = function_text(&format!("{GUARD} object Work {{ Work(); async make() is Guard {{ Guard(n: 1); }} }} \
+        async main() is int {{ let g = await Work().make(); g.read(); }}"), "Work.make");
+    assert!(!text.contains("resource."), "{text}");
+}
+

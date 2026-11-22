@@ -1757,6 +1757,24 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_type(*failure, &Type::Failure)?;
                 Type::Failure
             }
+            InstKind::ResourceSettle { value } => {
+                self.static_resource(*value)?;
+                if !self.function.is_async() {
+                    return Err("`resource.settle` outside an async function".to_string());
+                }
+                return match result {
+                    None => Ok(()),
+                    Some(_) => Err("`resource.settle` defines no value".to_string()),
+                };
+            }
+            InstKind::ResourceSettleUnwind { value, failure } => {
+                self.static_resource(*value)?;
+                if !self.function.is_async() {
+                    return Err("`resource.settle_unwind` outside an async function".to_string());
+                }
+                self.expect_type(*failure, &Type::Failure)?;
+                Type::Failure
+            }
             InstKind::EnumCase { ty, case } => {
                 let decl = self
                     .module

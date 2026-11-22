@@ -48,12 +48,12 @@ object Work {
 }
 
 async main() is int {
-    let mode = ProcessArguments().strings()[0];
+    let destroying = ProcessArguments().strings()[0] == "destroy";
     let n = 2000000;
     let count = Atomic(0);
     let work = Work(count);
     for 0..n -> i {
-        if mode == "destroy" {
+        if destroying {
             await work.destroyed();
         }
         else {

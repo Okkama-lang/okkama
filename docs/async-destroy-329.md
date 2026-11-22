@@ -192,3 +192,26 @@ implementation are not acceptable ways to satisfy the gate.
 The gate remains open on the existing ticket. The owner's conditional stop after
 step 3 applies; std conversion, per-guard lifecycle tests and conversion-load
 comparisons have not been started.
+
+## Step 4 (2026-11-22): static async-destroy guards — parity
+
+The owner chose option (a): the compiler may change how it emits regions for a frame-owned guard. Instead of
+merging `region.track`/`region.adopt`, the existing static-resource pass (#909 2b) now also takes a guard with
+an own async destroy that is alone in its scope's region of an async body: `resource.pin` after the creation,
+`resource.settle` at the exits and `resource.settle_unwind` on the failure paths. `rt_resource_settle` closes
+the identity once and awaits the destroy shielded and observed, exactly as `rt_region_settle` does for a
+region, so cancellation, failure linking and suspension behave as before (conformance L07/L08 async-destroy
+cases, t/lang/awaited, Bible 11 and 20, all with `OKKAMA_VERIFY_OWNERSHIP=1`).
+
+`bench/ownership/guard-329.ok` compared its mode string inside the loop, which costs the destroy mode a full
+string comparison per call (the close mode fails on the length). With the mode hoisted (the benchmark is
+updated), release build, 14 interleaved runs, median:
+
+| Build | destroy | close | ratio |
+|---|---:|---:|---:|
+| release/062 before | 0.333 s | 0.198 s | 1.68 |
+| step 4 | 0.186 s | 0.181 s | 1.03 |
+
+The remaining 2.5 ns per call is the guard's identity (an object with a destroy is registered once). The
+precondition of the ticket holds; the guard conversions follow.
+

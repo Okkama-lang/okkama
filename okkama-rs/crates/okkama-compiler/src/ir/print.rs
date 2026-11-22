@@ -705,6 +705,8 @@ fn write_inst(
         InstKind::ResourcePin { value } => write!(f, "resource.pin {value}"),
         InstKind::ResourceLeave { value } => write!(f, "resource.leave {value}"),
         InstKind::ResourceUnwind { value, failure } => write!(f, "resource.unwind {value}, {failure}"),
+        InstKind::ResourceSettle { value } => write!(f, "resource.settle {value}"),
+        InstKind::ResourceSettleUnwind { value, failure } => write!(f, "resource.settle_unwind {value}, {failure}"),
         InstKind::EnumCompare { op, left, right } => {
             write!(f, "enum.{} {left}, {right}", op.suffix())
         }

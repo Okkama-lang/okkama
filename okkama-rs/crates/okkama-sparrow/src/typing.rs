@@ -972,11 +972,16 @@ impl<'a> Typing<'a> {
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "region.settle_unwind")
             }
-            I::ResourcePin { value } | I::ResourceLeave { value } => self.ownable(*value),
+            I::ResourcePin { value } | I::ResourceLeave { value } | I::ResourceSettle { value } => self.ownable(*value),
             I::ResourceUnwind { dst, value, failure } => {
                 self.ownable(*value)?;
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "resource.unwind")
+            }
+            I::ResourceSettleUnwind { dst, value, failure } => {
+                self.ownable(*value)?;
+                self.expect(*failure, &Type::Failure)?;
+                self.define(dst.0, &Type::Failure, "resource.settle_unwind")
             }
             I::FailSecondary { dst, primary, cleanup } => {
                 self.expect(*primary, &Type::Failure)?;

@@ -583,7 +583,8 @@ impl Flow {
                     | InstKind::RegionLeave { .. } | InstKind::RegionSettle { .. }
                     | InstKind::RegionUnwind { .. } | InstKind::RegionSettleUnwind { .. }
                     | InstKind::ResourcePin { .. } | InstKind::ResourceLeave { .. }
-                    | InstKind::ResourceUnwind { .. } => {}
+                    | InstKind::ResourceUnwind { .. } | InstKind::ResourceSettle { .. }
+                    | InstKind::ResourceSettleUnwind { .. } => {}
                     // These operations only observe their operands and produce plain values.
                     InstKind::ValCompare { .. } | InstKind::ArrayLen(_) | InstKind::MapLen(_)
                     | InstKind::MapHas { .. } | InstKind::VariantTag(_) | InstKind::ObjPending { .. }
@@ -612,7 +613,8 @@ impl Flow {
                     | InstKind::RegionTransfer { .. } | InstKind::RegionLeave { .. }
                     | InstKind::RegionSettle { .. } | InstKind::RegionUnwind { .. }
                     | InstKind::RegionSettleUnwind { .. } | InstKind::ResourcePin { .. }
-                    | InstKind::ResourceLeave { .. } | InstKind::ResourceUnwind { .. })
+                    | InstKind::ResourceLeave { .. } | InstKind::ResourceUnwind { .. }
+                    | InstKind::ResourceSettle { .. } | InstKind::ResourceSettleUnwind { .. })
                 {
                     for &operand in &operands {
                         if matches!(function.values[operand.0], Type::Future(_)) {

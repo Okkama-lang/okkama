@@ -891,6 +891,67 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
     AWAIT_READY
 }
 
+/// #329 `resource.settle` / `resource.settle_unwind`: a static resource with an async destroy leaves its scope
+/// in the async frame `this`. The destroy runs shielded and observed, as in [`rt_region_settle`]; the frame
+/// suspends while it runs and re-enters this call when it settles. On the failure path (`failure` bound) the
+/// result failure is left in `scratch`; on the normal path a destroy failure fails the instruction.
+#[inline(never)]
+pub extern "C" fn rt_resource_settle(ctx_ptr: *mut Ctx, this: Word, object: Word, failure: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_resource_settle");
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    let unwind = failure != UNBOUND;
+    let link = |runtime: &mut Runtime, primary: Option<Word>, cleanup: Word| match primary {
+        Some(primary) => runtime.failure_link(primary, cleanup, true),
+        None => cleanup,
+    };
+    let primary = match runtime.static_settling_take(this) {
+        // Re-entered: the destroy this frame awaited has settled (or a wake came early).
+        Some((future, primary)) => match get(future, STATE) {
+            DONE => primary,
+            FAILURE_STATE => Some(link(runtime, primary, get(future, FAILURE))),
+            _ => {
+                runtime.static_settling_put(this, future, primary);
+                runtime.add_waiter(future, this);
+                return AWAIT_PENDING;
+            }
+        },
+        None => match runtime.resource_settle_start(ctx_ptr, object, unwind.then_some(failure)) {
+            Err(primary) => primary,
+            Ok((destroy, primary)) => {
+                let depth = runtime.roots.len();
+                let rooted = [Some(this), Some(object), primary, unwind.then_some(failure)];
+                runtime.roots.extend(rooted.iter().flatten().map(|&word| (word, Repr::Ref)));
+                let future = runtime.future_new(destroy, &[object]);
+                set(future, FLAGS, get(future, FLAGS) | SHIELDED | OBSERVED);
+                set(future, STATE, RUNNING);
+                runtime.roots.push((future, Repr::Ref));
+                runtime.run_body(ctx_ptr, future);
+                runtime.roots.truncate(depth);
+                if unsafe { (*ctx_ptr).status } != OK {
+                    return AWAIT_READY;
+                }
+                match get(future, STATE) {
+                    DONE => primary,
+                    FAILURE_STATE => Some(link(runtime, primary, get(future, FAILURE))),
+                    _ => {
+                        runtime.static_settling_put(this, future, primary);
+                        runtime.add_waiter(future, this);
+                        return AWAIT_PENDING;
+                    }
+                }
+            }
+        },
+    };
+    let ctx = unsafe { &mut *ctx_ptr };
+    if unwind {
+        ctx.scratch = primary.unwrap_or(failure);
+    } else if let Some(primary) = primary {
+        ctx.failure = primary;
+        ctx.status = FAILED;
+    }
+    AWAIT_READY
+}
+
 /// `return value` of an async body: its outcome is reserved; `run_body` settles the Future after the inputs
 /// it does not retain are released (#587).
 #[inline(never)]

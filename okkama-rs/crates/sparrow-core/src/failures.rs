@@ -99,6 +99,9 @@ pub struct Resources {
     pinned_by: HashMap<Word, Vec<Word>>,
     /// Pins a taking await or a returning scope left for the next region that takes this exact value.
     pending_pins: Option<(Word, Vec<Word>)>,
+    /// #329: a static resource's async destroy still running, per awaiting frame (a frame suspends at one
+    /// `resource.settle` at a time), with the failure so far. GC roots.
+    static_settling: HashMap<Word, (Word, Option<Word>)>,
     /// Containers whose walk found no free identity (#9), with `serial` at
     /// that moment: every identity they reach is at most that old. Freeing
     /// an identity no newer than `summarized` drops them all.
@@ -890,7 +893,26 @@ impl Runtime {
             roots.push(*value);
             roots.extend(identities);
         }
+        for (&frame, &(future, primary)) in &self.resources.static_settling {
+            roots.push(frame);
+            roots.push(future);
+            roots.extend(primary);
+        }
         roots
+    }
+
+    /// #329: the async destroy `frame` awaits in a `resource.settle`, and the failure so far.
+    pub(crate) fn static_settling_take(&mut self, frame: Word) -> Option<(Word, Option<Word>)> {
+        // Nearly always empty: an async destroy usually completes inline; skip the hash then.
+        if self.resources.static_settling.is_empty() {
+            return None;
+        }
+        self.resources.static_settling.remove(&frame)
+    }
+
+    /// #329: `frame` suspends on `future`, a static resource's async destroy.
+    pub(crate) fn static_settling_put(&mut self, frame: Word, future: Word, primary: Option<Word>) {
+        self.resources.static_settling.insert(frame, (future, primary));
     }
 
     /// A capability of a channel dies: the packet, when it was the last one, to close with it.
@@ -1748,6 +1770,38 @@ impl Runtime {
         };
         self.roots.pop();
         primary
+    }
+
+    /// #329: a static resource with an async destroy reaches its scope's exit in an async body. Like
+    /// [`Self::resource_close`] it closes the identity once (a pin holder may take it instead); `Some` is the
+    /// async destroy still to be awaited, with the failure so far, `None` that nothing is left to await.
+    pub(crate) fn resource_settle_start(&mut self, ctx: *mut Ctx, object: Word, primary: Option<Word>)
+        -> Result<(usize, Option<Word>), Option<Word>> {
+        if self.owner_of(object) != Some(Owner::Static) || self.hand_to_pin_holder(object).is_some() {
+            return Err(primary);
+        }
+        self.set_owner(object, Owner::Dead);
+        self.dev_destroyed(object, 0);
+        let descriptor = heap::payload(self.heap.header_of(object)) as usize;
+        match self.loaded.program.objects[descriptor].destroy {
+            // The async destroy to await, as `destroy_one` would hand it to a settling close (no allocation).
+            Some(destroy) if self.loaded.program.functions[destroy.0 as usize].is_async && self.resources.trace.is_none() => {
+                Ok((destroy.0 as usize, primary))
+            }
+            _ => {
+                let serial = self.serial_of(object);
+                self.roots.push((object, Repr::Ref));
+                let step = self.destroy_one(ctx, object, serial, primary, true);
+                self.roots.pop();
+                match step {
+                    DestroyStep::Async(primary) => {
+                        let destroy = self.loaded.program.objects[descriptor].destroy.expect("an async destroy");
+                        Ok((destroy.0 as usize, primary))
+                    }
+                    DestroyStep::Next(primary) | DestroyStep::Stop(primary) => Err(primary),
+                }
+            }
+        }
     }
 
     /// Close `region`, keeping `keep` (and its graph) alive, running destroys.

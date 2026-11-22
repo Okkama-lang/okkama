@@ -359,6 +359,10 @@ impl FunctionGen<'_> {
             K::ResourcePin { value } => I::ResourcePin { value: reg(*value) },
             K::ResourceLeave { value } => I::ResourceLeave { value: reg(*value) },
             K::ResourceUnwind { value, failure } => I::ResourceUnwind { dst: dst()?, value: reg(*value), failure: reg(*failure) },
+            K::ResourceSettle { value } => I::ResourceSettle { value: reg(*value) },
+            K::ResourceSettleUnwind { value, failure } => {
+                I::ResourceSettleUnwind { dst: dst()?, value: reg(*value), failure: reg(*failure) }
+            }
             K::EnumCase { ty, case } => I::EnumCase { dst: dst()?, ty: EnumRef(ty.0 as u32), case: *case as u32 },
             K::EnumCompare { op, left, right } => I::EnumCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::Float { op, args } => {
