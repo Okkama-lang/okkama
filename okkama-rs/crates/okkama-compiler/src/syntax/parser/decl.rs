@@ -182,7 +182,7 @@ impl Parser<'_> {
         if let Some(variadic) = params.iter().find(|param| param.variadic) {
             return Err(self.error_at_span(
                 variadic.name.span,
-                "Variadic native declarations are not supported in Phase 01.",
+                "Native parameters cannot be variadic.",
             ));
         }
         self.consume(
