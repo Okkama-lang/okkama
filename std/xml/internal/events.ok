@@ -1,0 +1,923 @@
+module xml/internal/events v1.0.0;
+
+// The events of a whole XML document (#144, #13): a bounded, non-validating
+// tokenizer that checks the document is well formed and hands xml/parse and
+// plist/parse its events. There is no DTD: a DOCTYPE with an internal subset
+// is refused and an external one is never fetched, so the only entities are
+// the five predefined ones and character references. Depth and the number of
+// events are bounded. Line ends become LF (XML 1.0 2.11) and attribute values
+// turn tabs and line ends into spaces. Offsets count characters.
+//
+// Internal to the xml and plist modules; programs do not import it.
+//
+//     let events = XmlTokens(origin: text, maximum_depth: 256, maximum_events: 1048576).events();
+//     events.error();                       // "" when well formed
+//     for events.items() -> event { … }
+
+import "async/atomic" take Atomic;
+import "collections/list" take List, EmptyList;
+
+// One event: a start tag with its attributes in order, an end tag, text
+// (adjacent text and CDATA joined), a comment or a processing instruction
+// inside the root element. Each knows the character offset where it starts.
+enum XmlEvent = (
+    start(name is string, names is @string, values is @string, offset is int),
+    end(name is string, offset is int),
+    text(value is string, offset is int),
+    comment(value is string, offset is int),
+    instruction(target is string, data is string, offset is int)
+);
+
+// The events of a document, or why and where it is not well formed (then
+// there are none).
+object XmlEvents {
+    has events is @XmlEvent;
+    has reason is string;
+    has place is int;
+
+    XmlEvents(events is @XmlEvent, reason is string, place is int) {
+        self.events = events;
+        self.reason = reason;
+        self.place = place;
+    }
+
+    // The events in document order.
+    items() is @XmlEvent {
+        events;
+    }
+
+    // Why the document is refused, or "".
+    error() is string {
+        reason;
+    }
+
+    // The character offset of the refusal.
+    offset() is int {
+        place;
+    }
+
+    count() is int {
+        events.size();
+    }
+
+    // 0 start, 1 end, 2 text, 3 comment, 4 processing instruction.
+    kind(index is int) is int {
+        match events[index] {
+            case XmlEvent.start(name, names, values, offset) {
+                0;
+            }
+            case XmlEvent.end(name, offset) {
+                1;
+            }
+            case XmlEvent.text(value, offset) {
+                2;
+            }
+            case XmlEvent.comment(value, offset) {
+                3;
+            }
+            case XmlEvent.instruction(target, data, offset) {
+                4;
+            }
+        }
+    }
+
+    // The tag name or instruction target; "" for text and comments.
+    name(index is int) is string {
+        match events[index] {
+            case XmlEvent.start(name, names, values, offset) {
+                name;
+            }
+            case XmlEvent.end(name, offset) {
+                name;
+            }
+            case XmlEvent.instruction(target, data, offset) {
+                target;
+            }
+            else {
+                "";
+            }
+        }
+    }
+
+    // The text, comment or instruction data; "" for tags.
+    text(index is int) is string {
+        match events[index] {
+            case XmlEvent.text(value, offset) {
+                value;
+            }
+            case XmlEvent.comment(value, offset) {
+                value;
+            }
+            case XmlEvent.instruction(target, data, offset) {
+                data;
+            }
+            else {
+                "";
+            }
+        }
+    }
+
+    // Where the event starts, in characters.
+    event_offset(index is int) is int {
+        match events[index] {
+            case XmlEvent.start(name, names, values, offset) {
+                offset;
+            }
+            case XmlEvent.end(name, offset) {
+                offset;
+            }
+            case XmlEvent.text(value, offset) {
+                offset;
+            }
+            case XmlEvent.comment(value, offset) {
+                offset;
+            }
+            case XmlEvent.instruction(target, data, offset) {
+                offset;
+            }
+        }
+    }
+}
+
+// A refusal inside the tokenizer.
+hidden enum XmlStop is Error = (at(offset is int, message is string));
+
+// The tokenizer of one document: a hand scanner over its code points.
+// Messages, offsets and the order of the checks are those of the native
+// tokenizer this replaced (#13).
+object XmlTokens {
+    has origin is string;
+    has maximum_depth, maximum_events is int;
+
+    XmlTokens(origin is string, maximum_depth is int, maximum_events is int) {
+        self.origin = origin;
+        self.maximum_depth = maximum_depth;
+        self.maximum_events = maximum_events;
+    }
+
+    events() is XmlEvents {
+        let codes is @int = origin.characters().map() -> character {
+            character.code();
+        };
+        let reader = XmlReader(origin, codes, maximum_depth, maximum_events);
+        try {
+            XmlEvents(reader.events(), "", 0);
+        }
+        catch XmlStop.at(offset, message) {
+            let nothing is @XmlEvent = [];
+            XmlEvents(nothing, message, offset);
+        }
+    }
+}
+
+hidden object XmlReader {
+    has origin is string;
+    has codes is @int;
+    has size, maximum_depth, maximum_events is int;
+    has position, begin, counted, depth is Atomic<int>;
+    has found is Atomic<List<XmlEvent>>;
+    has open is Atomic<List<string>>;
+    has root_seen, root_closed is Atomic<bool>;
+
+    XmlReader(origin is string, codes is @int, maximum_depth is int, maximum_events is int) {
+        self.origin = origin;
+        self.codes = codes;
+        size = codes.size();
+        self.maximum_depth = maximum_depth;
+        self.maximum_events = maximum_events;
+        position = Atomic(0);
+        begin = Atomic(0);
+        counted = Atomic(0);
+        depth = Atomic(0);
+        let blank is List<XmlEvent> = EmptyList();
+        found = Atomic(blank);
+        let closed is List<string> = EmptyList();
+        open = Atomic(closed);
+        root_seen = Atomic(false);
+        root_closed = Atomic(false);
+    }
+
+    events() is @XmlEvent {
+        if self.code(0) == 65279 {
+            position.replace(1);
+        }
+        let start = position.value();
+        loop {
+            last if position.value() >= size;
+            let at = position.value();
+            begin.replace(at);
+            if self.code(at) != 60 {
+                self.text(at);
+            }
+            else {
+                let second = self.code(at + 1);
+                if second == 63 {
+                    self.instruction(at, start);
+                }
+                else if second == 33 && self.word(at + 2, "--") {
+                    self.comment(at);
+                }
+                else if second == 33 && self.word(at + 2, "[CDATA[") {
+                    self.cdata(at);
+                }
+                else if second == 33 && self.word(at + 2, "DOCTYPE") {
+                    self.doctype(at);
+                }
+                else if second == 47 {
+                    self.end_tag(at);
+                }
+                else {
+                    self.start_tag(at);
+                }
+            }
+        }
+        confirm depth.value() == 0
+            else throw XmlStop.at(size, "<" + open.value().first() + "> is not closed");
+        confirm root_seen.value() else throw XmlStop.at(size, "no root element");
+        // The list holds the last event first.
+        let cursor = Atomic(found.value().cursor());
+        let backwards is @XmlEvent = (0..counted.value()).map() -> index {
+            let here = cursor.value();
+            cursor.replace(here.successor());
+            here.item();
+        };
+        backwards.reversed();
+    }
+
+    // ---- characters ----
+
+    hidden code(at is int) is int {
+        if at < size {
+            codes[at];
+        }
+        else {
+            -1;
+        }
+    }
+
+    // Whether the characters at `at` spell word.
+    hidden word(at is int, word is string) is bool {
+        let letters = word.characters();
+        if at + letters.size() > size {
+            return false;
+        }
+        for 0..letters.size() -> index {
+            if codes[at + index] != letters[index].code() {
+                return false;
+            }
+        }
+        true;
+    }
+
+    // Where the two or three characters a, b(, c) next occur in
+    // codes[from, to), or -1.
+    hidden find(from is int, to is int, a is int, b is int, c is int) is int {
+        let length = if c < 0 {
+            2;
+        }
+        else {
+            3;
+        };
+        if to - length + 1 <= from {
+            return -1;
+        }
+        for from..(to - length + 1) -> at {
+            if codes[at] == a && codes[at + 1] == b && (c < 0 || codes[at + 2] == c) {
+                return at;
+            }
+        }
+        -1;
+    }
+
+    // Where code next occurs in codes[from, to), or -1.
+    hidden until(from is int, to is int, code is int) is int {
+        for from..to -> at {
+            if codes[at] == code {
+                return at;
+            }
+        }
+        -1;
+    }
+
+    hidden space(code is int) is bool {
+        code == 32 || code == 9 || code == 10 || code == 13;
+    }
+
+    hidden skip_space() is void {
+        for position.value()..size -> at {
+            if !self.space(codes[at]) {
+                position.replace(at);
+                return;
+            }
+        }
+        position.replace(size);
+    }
+
+    hidden name_start(code is int) is bool {
+        (code >= 97 && code <= 122)
+            || (code >= 65 && code <= 90)
+            || code == 95
+            || code == 58
+            || code > 127;
+    }
+
+    hidden name_char(code is int) is bool {
+        self.name_start(code) || (code >= 48 && code <= 57) || code == 45 || code == 46;
+    }
+
+    hidden name() is string {
+        let start = position.value();
+        confirm start < size && self.name_start(codes[start])
+            else throw XmlStop.at(start, "expected a name");
+        let finish = self.name_end(start + 1);
+        position.replace(finish);
+        origin.slice(start, finish);
+    }
+
+    hidden name_end(from is int) is int {
+        for from..size -> at {
+            if !self.name_char(codes[at]) {
+                return at;
+            }
+        }
+        size;
+    }
+
+    // A character XML 1.0 allows.
+    hidden allowed(code is int) is bool {
+        code == 9
+            || code == 10
+            || code == 13
+            || (code >= 32 && code <= 55295)
+            || (code >= 57344 && code <= 65533)
+            || (code >= 65536 && code <= 1114111);
+    }
+
+    hidden refused(code is int) is string {
+        let digits = "0123456789ABCDEF";
+        let text = (0..6).reduce("") -> written, place {
+            let shift = (5 - place) * 4;
+            let digit = (code >> shift) & 15;
+            if written == "" && digit == 0 && shift >= 16 {
+                written;
+            }
+            else {
+                written + digits.slice(digit, digit + 1);
+            }
+        };
+        "a character U+" + text + " XML does not allow";
+    }
+
+    // ---- events ----
+
+    hidden push(event is XmlEvent) is void {
+        confirm counted.value() < maximum_events
+            else throw XmlStop.at(
+                position.value(),
+                "more than " + maximum_events.string() + " XML events"
+            );
+        counted.replace(counted.value() + 1);
+        found.replace(found.value().prefix(event));
+    }
+
+    // Text joins the text just before it.
+    hidden push_text(value is string) is void {
+        let list = found.value();
+        if counted.value() > 0 {
+            match list.first() {
+                case XmlEvent.text(previous, offset) {
+                    found.replace(list.tail().prefix(XmlEvent.text(previous + value, offset)));
+                    return;
+                }
+                else {}
+            }
+        }
+        self.push(XmlEvent.text(value, begin.value()));
+    }
+
+    hidden inside() is bool {
+        depth.value() > 0;
+    }
+
+    // ---- markup ----
+
+    hidden instruction(at is int, start is int) is void {
+        let end = self.find(at + 2, size, 63, 62, -1);
+        confirm end >= 0 else throw XmlStop.at(at, "an unterminated processing instruction");
+        position.replace(at + 2);
+        let target = self.name();
+        let after = position.value();
+        if target.lower() == "xml" {
+            confirm at == start
+                else throw XmlStop.at(after, "an XML declaration that is not at the start");
+        }
+        else if self.inside() {
+            let from = self.content_start(after, end);
+            self.push(XmlEvent.instruction(target, origin.slice(from, end), at));
+        }
+        position.replace(end + 2);
+    }
+
+    hidden content_start(from is int, to is int) is int {
+        for from..to -> at {
+            if !self.space(codes[at]) {
+                return at;
+            }
+        }
+        to;
+    }
+
+    hidden comment(at is int) is void {
+        let end = self.find(at + 4, size, 45, 45, 62);
+        confirm end >= 0 else throw XmlStop.at(at, "an unterminated comment");
+        let doubled = self.find(at + 4, end + 1, 45, 45, -1);
+        confirm doubled < 0 || doubled + 1 >= end else throw XmlStop.at(at, "-- inside a comment");
+        if self.inside() {
+            self.push(XmlEvent.comment(origin.slice(at + 4, end), at));
+        }
+        position.replace(end + 3);
+    }
+
+    hidden cdata(at is int) is void {
+        confirm self.inside() else throw XmlStop.at(at, "a CDATA section outside the root element");
+        let end = self.find(at + 9, size, 93, 93, 62);
+        confirm end >= 0 else throw XmlStop.at(at, "an unterminated CDATA section");
+        let line_ends = Atomic(false);
+        for (at + 9)..end -> index {
+            let code = codes[index];
+            confirm self.allowed(code) else throw XmlStop.at(at, self.refused(code));
+            if code == 13 {
+                line_ends.replace(true);
+            }
+        }
+        let raw = origin.slice(at + 9, end);
+        self.push_text(if line_ends.value() {
+            raw.replace("\r\n", "\n").replace("\r", "\n");
+        }
+        else {
+            raw;
+        });
+        position.replace(end + 3);
+    }
+
+    hidden doctype(at is int) is void {
+        confirm !root_seen.value() else throw XmlStop.at(at, "a DOCTYPE after the root element");
+        let quote = Atomic(-1);
+        for at..size -> index {
+            let code = codes[index];
+            if quote.value() >= 0 {
+                if code == quote.value() {
+                    quote.replace(-1);
+                }
+            }
+            else if code == 34 || code == 39 {
+                quote.replace(code);
+            }
+            else if code == 91 {
+                throw XmlStop.at(index, "a DTD internal subset is not supported");
+            }
+            else if code == 62 {
+                position.replace(index + 1);
+                return;
+            }
+        }
+        throw XmlStop.at(at, "an unterminated DOCTYPE");
+    }
+
+    hidden end_tag(at is int) is void {
+        position.replace(at + 2);
+        let named_at = position.value();
+        let name = self.name();
+        self.skip_space();
+        confirm self.code(position.value()) == 62
+            else throw XmlStop.at(position.value(), "expected > to close the end tag");
+        position.replace(position.value() + 1);
+        let stack = open.value();
+        confirm depth.value() > 0 else throw XmlStop.at(named_at, "</" + name + "> closes nothing");
+        confirm stack.first() == name
+            else throw XmlStop.at(named_at, "</" + name + "> closes <" + stack.first() + ">");
+        open.replace(stack.tail());
+        depth.replace(depth.value() - 1);
+        self.push(XmlEvent.end(name, at));
+        if !self.inside() {
+            root_closed.replace(true);
+        }
+    }
+
+    hidden start_tag(at is int) is void {
+        confirm !root_closed.value() else throw XmlStop.at(at, "a second root element");
+        position.replace(at + 1);
+        let name = self.name();
+        let names = Atomic(@string());
+        let values = Atomic(@string());
+        loop {
+            let before = position.value();
+            self.skip_space();
+            let here = position.value();
+            let code = self.code(here);
+            last if code == 62 || (code == 47 && self.code(here + 1) == 62);
+            confirm here != before
+                else throw XmlStop.at(here, "expected a space before an attribute");
+            let named_at = here;
+            let attribute = self.name();
+            self.skip_space();
+            confirm self.code(position.value()) == 61
+                else throw XmlStop.at(position.value(), "expected = after " + attribute);
+            position.replace(position.value() + 1);
+            self.skip_space();
+            let quote = self.code(position.value());
+            confirm quote == 34 || quote == 39
+                else throw XmlStop.at(position.value(), "expected a quoted attribute value");
+            let from = position.value() + 1;
+            position.replace(from);
+            let end = self.until(from, size, quote);
+            confirm end >= 0 else throw XmlStop.at(from, "an unterminated attribute value");
+            let value = self.decoded(from, end, true);
+            confirm !names.value().contains(attribute)
+                else throw XmlStop.at(named_at, "the attribute " + attribute + " given twice");
+            names.replace(names.value() + [attribute]);
+            values.replace(values.value() + [value]);
+            position.replace(end + 1);
+        }
+        let closed = self.code(position.value()) == 47;
+        position.replace(position.value() + if closed {
+            2;
+        }
+        else {
+            1;
+        });
+        confirm depth.value() < maximum_depth
+            else throw XmlStop.at(
+                position.value(),
+                "elements nested deeper than " + maximum_depth.string()
+            );
+        root_seen.replace(true);
+        self.push(XmlEvent.start(name, names.value(), values.value(), at));
+        if closed {
+            self.push(XmlEvent.end(name, at));
+            if !self.inside() {
+                root_closed.replace(true);
+            }
+        }
+        else {
+            open.replace(open.value().prefix(name));
+            depth.replace(depth.value() + 1);
+        }
+    }
+
+    hidden text(at is int) is void {
+        let found_end = self.until(at, size, 60);
+        let end = if found_end < 0 {
+            size;
+        }
+        else {
+            found_end;
+        };
+        if !self.inside() {
+            for at..end -> index {
+                if !self.space(codes[index]) {
+                    throw XmlStop.at(index, "text outside the root element");
+                }
+            }
+        }
+        else {
+            confirm self.find(at, end, 93, 93, 62) < 0 else throw XmlStop.at(at, "]]> in text");
+            self.push_text(self.decoded(at, end, false));
+        }
+        position.replace(end);
+    }
+
+    // codes[from, to) with references decoded and line ends normalized; an
+    // attribute value also turns tabs and line ends into spaces.
+    hidden decoded(from is int, to is int, attribute is bool) is string {
+        // Most values are plain: one slice.
+        if self.plain(from, to, attribute) {
+            return origin.slice(from, to);
+        }
+        let pieces = Atomic(@string());
+        let run = Atomic(from);
+        let at = Atomic(from);
+        loop {
+            last if at.value() >= to;
+            let index = at.value();
+            let code = codes[index];
+            confirm self.allowed(code) else throw XmlStop.at(index, self.refused(code));
+            if code == 38 {
+                let semicolon = self.until(index, to, 59);
+                confirm semicolon >= 0 else throw XmlStop.at(index, "an unterminated reference");
+                let reference = origin.slice(index + 1, semicolon);
+                pieces.replace(
+                    pieces.value() + [
+                        origin.slice(run.value(), index),
+                        self.entity(reference, index)
+                    ]
+                );
+                at.replace(semicolon + 1);
+                run.replace(semicolon + 1);
+            }
+            else if attribute && code == 60 {
+                throw XmlStop.at(index, "< inside an attribute value");
+            }
+            else if code == 13 {
+                pieces.replace(pieces.value() + [origin.slice(run.value(), index)]);
+                if index + 1 < to && codes[index + 1] == 10 {
+                    at.replace(index + 1);
+                    run.replace(index + 1);
+                }
+                else {
+                    pieces.replace(pieces.value() + [if attribute {
+                        " ";
+                    }
+                    else {
+                        "\n";
+                    }]);
+                    at.replace(index + 1);
+                    run.replace(index + 1);
+                }
+            }
+            else if attribute && (code == 9 || code == 10) {
+                pieces.replace(pieces.value() + [origin.slice(run.value(), index), " "]);
+                at.replace(index + 1);
+                run.replace(index + 1);
+            }
+            else {
+                at.replace(index + 1);
+            }
+        }
+        (pieces.value() + [origin.slice(run.value(), to)]).join("");
+    }
+
+    // Whether codes[from, to) need no decoding: no reference, CR, '<', or a
+    // character XML does not allow, and in an attribute no tab or LF.
+    hidden plain(from is int, to is int, attribute is bool) is bool {
+        for from..to -> at {
+            let code = codes[at];
+            if code < 32 {
+                if code == 13 || attribute || (code != 9 && code != 10) {
+                    return false;
+                }
+            }
+            else if code == 38
+                || code == 60
+                || (code > 55295 && code < 57344)
+                || code == 65534
+                || code == 65535
+                || code > 1114111 {
+                    return false;
+                }
+        }
+        true;
+    }
+
+    // What a reference stands for.
+    hidden entity(reference is string, at is int) is string {
+        if reference == "lt" {
+            return "<";
+        }
+        if reference == "gt" {
+            return ">";
+        }
+        if reference == "amp" {
+            return "&";
+        }
+        if reference == "quot" {
+            return "\"";
+        }
+        if reference == "apos" {
+            return "'";
+        }
+        let bad = "a bad character reference &" + reference + ";";
+        confirm reference.starts_with("#")
+            else throw XmlStop.at(at, "an unknown entity &" + reference + ";");
+        let hex = reference.starts_with("#x");
+        let digits = reference.slice(
+            if hex {
+                2;
+            }
+            else {
+                1;
+            },
+            reference.length()
+        );
+        // As Rust's u32 parsing: one optional '+', then digits of the base.
+        let body = if digits.starts_with("+") {
+            digits.slice(1, digits.length());
+        }
+        else {
+            digits;
+        };
+        confirm body.length() > 0 else throw XmlStop.at(at, bad);
+        let base = if hex {
+            16;
+        }
+        else {
+            10;
+        };
+        let value = body.characters().reduce(0) -> total, character {
+            let code = character.code();
+            let digit = if code >= 48 && code <= 57 {
+                code - 48;
+            }
+            else if hex && code >= 97 && code <= 102 {
+                code - 87;
+            }
+            else if hex && code >= 65 && code <= 70 {
+                code - 55;
+            }
+            else {
+                -1;
+            };
+            if total < 0 || digit < 0 || total * base + digit > 4294967295 {
+                -1;
+            }
+            else {
+                total * base + digit;
+            }
+        };
+        // allowed() leaves out the surrogates; the u32 bound above only keeps
+        // the arithmetic small, as no larger value is allowed anyway.
+        confirm value >= 0 && self.allowed(value) else throw XmlStop.at(at, bad);
+        value.char().string();
+    }
+}
+
+// Test-only: the events of a document in a compact form, or "offset: reason".
+hidden object XmlTestShape {
+    has origin is string;
+    has maximum_depth, maximum_events is int;
+
+    XmlTestShape(origin is string) {
+        self.origin = origin;
+        maximum_depth = 64;
+        maximum_events = 10000;
+    }
+
+    XmlTestShape(origin is string, maximum_depth is int, maximum_events is int) {
+        self.origin = origin;
+        self.maximum_depth = maximum_depth;
+        self.maximum_events = maximum_events;
+    }
+
+    text() is string {
+        let events = XmlTokens(
+            origin: origin,
+            maximum_depth: maximum_depth,
+            maximum_events: maximum_events
+        ).events();
+        if events.error() != "" {
+            return events.offset().string() + ": " + events.error();
+        }
+        let parts is @string = events.items().map() -> event {
+            match event {
+                case XmlEvent.start(name, names, values, offset) {
+                    let pairs is @string = (0..names.size()).map() -> at {
+                        " " + names[at] + "=" + values[at];
+                    };
+                    "<" + name + pairs.join("") + ">";
+                }
+                case XmlEvent.end(name, offset) {
+                    "</" + name + ">";
+                }
+                case XmlEvent.text(value, offset) {
+                    "[" + value + "]";
+                }
+                case XmlEvent.comment(value, offset) {
+                    "!" + value;
+                }
+                case XmlEvent.instruction(target, data, offset) {
+                    "?" + target + " " + data;
+                }
+            }
+        };
+        parts.join("");
+    }
+
+    offsets() is @int {
+        let events = XmlTokens(
+            origin: origin,
+            maximum_depth: maximum_depth,
+            maximum_events: maximum_events
+        ).events();
+        (0..events.count()).map() -> index {
+            events.event_offset(index);
+        };
+    }
+}
+
+test "documents become events" {
+    test.is(
+        XmlTestShape(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple\" \"x.dtd\">\n<rss version='2.0'>" +
+                "<item a=\"1 &amp; 2\">x&lt;y<![CDATA[<raw>]]>&#x41;&#66;</item><e/><!--c--><?p d?></rss>\n"
+        ).text(),
+        "<rss version=2.0><item a=1 & 2>[x<y<raw>AB]</item><e></e>!c?p d</rss>"
+    );
+    test.is(XmlTestShape("<a\tb=\"x\ny\"/>").text(), "<a b=x y></a>");
+    test.is(XmlTestShape("<a>чай 😀</a>").text(), "<a>[чай 😀]</a>");
+    test.is(
+        XmlTestShape("<a b=\"x\r\ny\tz\rw\">1\r\n2\r3&#13;<![CDATA[4\r\n5\r]]></a>").text(),
+        "<a b=x y z w>[1\n2\n3\r4\n5\n]</a>"
+    );
+    test.is(
+        XmlTestShape("<a b='&#9;&#10;'>&#x+41;&#+66;&#x1F600;</a>").text(),
+        "<a b=\t\n>[AB😀]</a>"
+    );
+    test.is(
+        XmlTestShape("<a><!-- a ---><!----><?x   data ?><?y?></a>").text(),
+        "<a>! a -!?x data ?y </a>"
+    );
+    test.is(XmlTestShape("<!--top--><?pi outside?><a/><!--end-->").text(), "<a></a>");
+    test.is(XmlTestShape("<a>x<!--c-->y<![CDATA[z]]>w</a>").text(), "<a>[x]!c[yzw]</a>");
+    test.is(XmlTestShape("<a\n>t</a\n>").text(), "<a>[t]</a>");
+    test.is(XmlTestShape("<!DOCTYPE a SYSTEM 'x[y].dtd'><a/>").text(), "<a></a>");
+    test.is(XmlTestShape("<a:b-c.d_é/>").text(), "<a:b-c.d_é></a:b-c.d_é>");
+    test.is(XmlTestShape("\u{FEFF}<?xml version='1.0'?><a>x</a>").offsets(), [22, 25, 26]);
+}
+
+test "broken documents are refused at their offset" {
+    let refused = [
+        "<a><b></a>",
+        "8: </a> closes <b>",
+        "<a></a><b/>",
+        "7: a second root element",
+        "<a x='1' x='2'/>",
+        "9: the attribute x given twice",
+        "<a>&bogus;</a>",
+        "3: an unknown entity &bogus;",
+        "<!DOCTYPE a [<!ENTITY e 'x'>]><a/>",
+        "12: a DTD internal subset is not supported",
+        "<a/><!DOCTYPE a>",
+        "4: a DOCTYPE after the root element",
+        "<!DOCTYPE a",
+        "0: an unterminated DOCTYPE",
+        "x<a/>",
+        "0: text outside the root element",
+        "<a/> y",
+        "5: text outside the root element",
+        "<a>",
+        "3: <a> is not closed",
+        "",
+        "0: no root element",
+        "</a>",
+        "2: </a> closes nothing",
+        "<a>&#0;</a>",
+        "3: a bad character reference &#0;",
+        "<a>&#xD800;</a>",
+        "3: a bad character reference &#xD800;",
+        "<a>&#4294967296;</a>",
+        "3: a bad character reference &#4294967296;",
+        "<a>&#X41;</a>",
+        "3: a bad character reference &#X41;",
+        "<a>&amp</a>",
+        "3: an unterminated reference",
+        "<a>x]]>y</a>",
+        "3: ]]> in text",
+        "<a>\u{1}</a>",
+        "3: a character U+0001 XML does not allow",
+        "<a>\u{FFFE}</a>",
+        "3: a character U+FFFE XML does not allow",
+        "<a><![CDATA[\u{B}]]></a>",
+        "3: a character U+000B XML does not allow",
+        "<![CDATA[x]]><a/>",
+        "0: a CDATA section outside the root element",
+        "<a><![CDATA[x</a>",
+        "3: an unterminated CDATA section",
+        "<a><!-- a -- b --></a>",
+        "3: -- inside a comment",
+        "<a><!-- x</a>",
+        "3: an unterminated comment",
+        "<a><?pi</a>",
+        "3: an unterminated processing instruction",
+        " <?xml version='1.0'?><a/>",
+        "6: an XML declaration that is not at the start",
+        "<a><? x?></a>",
+        "5: expected a name",
+        "<a b='1'c='2'/>",
+        "8: expected a space before an attribute",
+        "<a b/>",
+        "4: expected = after b",
+        "<a b=1/>",
+        "5: expected a quoted attribute value",
+        "<a b='1/>",
+        "6: an unterminated attribute value",
+        "<a b='<'/>",
+        "6: < inside an attribute value",
+        "<a></a x>",
+        "7: expected > to close the end tag",
+        "<1/>",
+        "1: expected a name"
+    ];
+    for 0..refused.size() -> index {
+        if index % 2 == 0 {
+            test.is(XmlTestShape(refused[index]).text(), refused[index + 1]);
+        }
+    }
+    test.is(
+        XmlTestShape("<a><a><a></a></a></a>", 2, 100).text(),
+        "9: elements nested deeper than 2"
+    );
+    test.is(XmlTestShape("<a><a></a></a>", 2, 100).text(), "<a><a></a></a>");
+    test.is(XmlTestShape("<a><b/><b/><b/></a>", 64, 4).text(), "11: more than 4 XML events");
+    test.is(XmlTestShape("<a>x<!---->y</a>", 64, 5).text(), "<a>[x]![y]</a>");
+    test.is(XmlTestShape("<a>x<![CDATA[y]]>z</a>", 64, 3).text(), "<a>[xyz]</a>");
+}

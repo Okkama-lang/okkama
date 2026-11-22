@@ -1,0 +1,22 @@
+CAUGHT entity lt: --- FAIL: documents become events
+CAUGHT plus sign of a reference: --- FAIL: documents become events
+MISSED u32 bound: PASS
+CAUGHT lone CR in text: --- FAIL: documents become events
+CAUGHT tab in attribute: --- FAIL: documents become events
+CAUGHT CR in CDATA: --- FAIL: documents become events
+CAUGHT -- in a comment: --- FAIL: documents become events
+CAUGHT XML declaration at start: --- FAIL: broken documents are refused at their offset
+CAUGHT instructions outside the root: --- FAIL: documents become events
+CAUGHT text joins text: --- FAIL: documents become events
+CAUGHT depth limit: --- FAIL: broken documents are refused at their offset
+CAUGHT event limit: --- FAIL: broken documents are refused at their offset
+CAUGHT DOCTYPE quotes: --- FAIL: documents become events
+CAUGHT byte order mark: --- FAIL: documents become events
+CAUGHT name characters: --- FAIL: documents become events
+CAUGHT end tag match: --- FAIL: broken documents are refused at their offset
+CAUGHT second root: --- FAIL: broken documents are refused at their offset
+CAUGHT four hex digits: --- FAIL: broken documents are refused at their offset
+CAUGHT text outside the root: --- FAIL: broken documents are refused at their offset
+CAUGHT ]]> in text: --- FAIL: broken documents are refused at their offset
+CAUGHT duplicate attributes: --- FAIL: broken documents are refused at their offset
+20 of 21
