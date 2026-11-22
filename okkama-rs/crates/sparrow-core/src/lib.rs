@@ -342,11 +342,22 @@ pub fn run_test_report(
     plan: test_report::TestPlan,
     progress: Option<Box<dyn std::io::Write + Send>>,
 ) -> Result<test_report::TestReport, Error> {
+    run_test_report_with(bytes, plan, progress, Vec::new())
+}
+
+/// [`run_test_report`] for tests that start process workers: `worker_command`
+/// is how a child runs this bytecode (empty: workers are refused).
+pub fn run_test_report_with(
+    bytes: Vec<u8>,
+    plan: test_report::TestPlan,
+    progress: Option<Box<dyn std::io::Write + Send>>,
+    worker_command: Vec<std::ffi::OsString>,
+) -> Result<test_report::TestReport, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         match progress {
-            Some(out) => test_profile(program, plan, Some(out), Vec::new()),
-            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, Vec::new())),
+            Some(out) => test_profile(program, plan, Some(out), worker_command),
+            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, worker_command)),
         }
     })
 }

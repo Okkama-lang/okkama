@@ -110,3 +110,31 @@ fn inline_map_contracts_leave_no_workers_after_success_cancel_or_dispatch_failur
     no_workers(&program);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn tests_run_by_okkama_run_t_can_start_process_workers() {
+    // `okkama run -t` gives its tests the worker command, as `run` gives a
+    // program: a test of a module that maps through process workers passes,
+    // in the test runner and in its per-test workers (#938).
+    let dir = scratch("run-t");
+    let source = dir.join("mapped.ok");
+    std::fs::write(
+        &source,
+        r#"module test/mapped v1.0.0;
+import "parallel/map" take ParallelMapped;
+object Tripling {
+    Tripling();
+    run(value is int) is int { value * 3; }
+}
+async test "a parallel map inside a test" {
+    let mapped is ParallelMapped<int, int> = ParallelMapped(origins: [1, 2, 3], action: Tripling().run, workers: 2);
+    let values = await mapped.results();
+    test.is(values.item(0) + values.item(1) + values.item(2), 18);
+}
+"#,
+    )
+    .unwrap();
+    let out = succeeded(cli(&["run", "-t", source.to_str().unwrap()]));
+    assert!(out.contains("PASS: a parallel map inside a test"), "{out}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

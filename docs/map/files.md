@@ -115,7 +115,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2335 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 33672 lines
+## sparrow — 64 files, 33680 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -125,7 +125,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/intrinsics.rs` 1083 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2950 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 546 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 554 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
 - `sparrow-core/src/ops.rs` 1765 — Exact semantics of value instructions without an inline fast path.
@@ -186,13 +186,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 314 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5059 lines
+## cli — 10 files, 5073 lines
 
 - `okkama-cli/src/core.rs` 58 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 927 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1692 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1706 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 411 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 409 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.

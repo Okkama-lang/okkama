@@ -328,13 +328,19 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
 /// A test-profile program on the core: the report goes to stdout.
 /// The tests of `bytes`, run as `plan` says, reported as `format` (#339): 0 when
 /// none failed, 1 when one did, 4 when the run reached no verdict.
-fn core_tests(bytes: Vec<u8>, plan: test_report::TestPlan, format: test_report::ReportFormat, suite: &str) -> Outcome {
+fn core_tests(
+    bytes: Vec<u8>,
+    workers: Vec<std::ffi::OsString>,
+    plan: test_report::TestPlan,
+    format: test_report::ReportFormat,
+    suite: &str,
+) -> Outcome {
     use test_report::ReportFormat;
     let progress: Option<Box<dyn Write + Send>> = match format {
         ReportFormat::Human => Some(Box::new(okkama_runtime_core::stdout::Buffered)),
         ReportFormat::Json | ReportFormat::Junit => None,
     };
-    match sparrow_core::run_test_report(bytes, plan, progress) {
+    match sparrow_core::run_test_report_with(bytes, plan, progress, workers) {
         Ok(report) => Outcome {
             stdout: match format {
                 ReportFormat::Human => String::new(),
@@ -1734,10 +1740,20 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(bytes) => bytes,
         Err(error) => return unrun(Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS)),
     };
+    // Tests may start process workers (`parallel/map`, `spawn`): they need
+    // the command that runs this bytecode, kept on disk while they run.
+    let (workers, _worker_file) = if tests {
+        match core::workers_for(&program, &bytes) {
+            Ok(workers) => workers,
+            Err(message) => return unrun(Outcome::failure(format!("okkama: {message}\n"), EXIT_IO)),
+        }
+    } else {
+        (Vec::new(), None)
+    };
     if let (true, Some(result)) = (tests, &worker_result) {
         // The worker side (#938): the test's output stays on this process's
         // stdout and stderr, the report goes to the parent's file.
-        return match sparrow_core::run_test_report(bytes, plan, Some(Box::new(io::sink()))) {
+        return match sparrow_core::run_test_report_with(bytes, plan, Some(Box::new(io::sink())), workers) {
             Ok(report) => match std::fs::write(result, workers::record(&report)) {
                 Ok(()) => Outcome::success(String::new()),
                 Err(error) => Outcome::failure(format!("okkama: worker report: {error}\n"), EXIT_IO),
@@ -1747,7 +1763,7 @@ fn run_command(args: &[String]) -> Outcome {
     }
     if tests {
         let format = format.unwrap_or(test_report::ReportFormat::Human);
-        let mut outcome = core_tests(bytes, plan, format, input);
+        let mut outcome = core_tests(bytes, workers, plan, format, input);
         // Doctest results (#514) follow the human stream; a json or junit
         // stdout stays the report alone (#339), so they go to stderr.
         if format == test_report::ReportFormat::Human {
