@@ -2043,6 +2043,8 @@
       "L05.map.float-key-fallback",
       "L05.map.int-key-order",
       "L05.map.key-types",
+      "L05.map.literal-duplicate-dynamic-keys",
+      "L05.map.literal-signed-zero-keys",
       "L05.map.rat-keys"
      ],
      "mandatory_cases": [
@@ -2050,6 +2052,8 @@
       "L05.map.float-key-fallback",
       "L05.map.int-key-order",
       "L05.map.key-types",
+      "L05.map.literal-duplicate-dynamic-keys",
+      "L05.map.literal-signed-zero-keys",
       "L05.map.rat-keys"
      ],
      "requirement": "required"
@@ -2058,12 +2062,14 @@
      "cases": [
       "L05.collections.map-merge",
       "L05.map.fallback-lazy",
+      "L05.map.literal-equivalent-object-keys",
       "L05.map.object-key",
       "L05.map.rat-keys"
      ],
      "mandatory_cases": [
       "L05.collections.map-merge",
       "L05.map.fallback-lazy",
+      "L05.map.literal-equivalent-object-keys",
       "L05.map.object-key",
       "L05.map.rat-keys"
      ],
@@ -2072,6 +2078,12 @@
     "invalid": {
      "cases": [
       "L05.collections.operator-array-map-rejected",
+      "L05.map.literal-duplicate-dynamic-keys",
+      "L05.map.literal-duplicate-int-keys",
+      "L05.map.literal-duplicate-string-keys",
+      "L05.map.literal-equivalent-constant-keys",
+      "L05.map.literal-equivalent-object-keys",
+      "L05.map.literal-equivalent-rat-keys",
       "L05.map.missing-key",
       "L05.map.mixed-key-types-rejected",
       "L05.map.resource-key-rejected",
@@ -2079,6 +2091,12 @@
      ],
      "mandatory_cases": [
       "L05.collections.operator-array-map-rejected",
+      "L05.map.literal-duplicate-dynamic-keys",
+      "L05.map.literal-duplicate-int-keys",
+      "L05.map.literal-duplicate-string-keys",
+      "L05.map.literal-equivalent-constant-keys",
+      "L05.map.literal-equivalent-object-keys",
+      "L05.map.literal-equivalent-rat-keys",
       "L05.map.missing-key",
       "L05.map.mixed-key-types-rejected",
       "L05.map.resource-key-rejected",
@@ -2092,6 +2110,7 @@
       "L05.collections.map-merge",
       "L05.map.access",
       "L05.map.float-key-fallback",
+      "L05.map.literal-distinct-keys",
       "L05.map.object-key",
       "L05.map.rat-keys"
      ],
@@ -2100,6 +2119,7 @@
       "L05.collections.map-merge",
       "L05.map.access",
       "L05.map.float-key-fallback",
+      "L05.map.literal-distinct-keys",
       "L05.map.object-key",
       "L05.map.rat-keys"
      ],
@@ -31304,5 +31324,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "e98792c17920fd11995c194a828c5fd996729f7ef029997cf886291ca984bce0"
+ "suite_tree_sha256": "d7da766469f36d0fa1e729e7755af7d6dfdbb5be1c5a357baa70aefc6cae44b7"
 }
