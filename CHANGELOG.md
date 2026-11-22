@@ -131,6 +131,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
+- **`LookedUpLocale` follows RFC 4647 Lookup (#941).** A truncated range now has to equal an available tag;
+  before, any tag extending it matched and won even over an exact one (`en` chose `en-US` where only the
+  fallback is right, `de` chose `de-DE` although `de` was available). `FilteredLocales` still matches by prefix.
+
 ### Changed
 
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
