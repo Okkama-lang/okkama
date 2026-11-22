@@ -186,6 +186,8 @@ Fields never change (Chapter 12). A state change is therefore a new
 object, and the language has a construct for making it: an action whose
 result type is `^Type`.
 
+{{figure:successor|Figure 13.1. A successor is a new object. The original stays as it was, and both can be used.}}
+
 ```okkama
 ordered(price is int) is ^Tab {
     confirm open else throw TabError.closed;

@@ -27,6 +27,8 @@ role Package {
 }
 ```
 
+{{figure:roles|Figure 14.1. Roles are nominal: an object performs a role only when it says does.}}
+
 A role is a list of action signatures: names, parameters and results. It
 has no fields, no constructors and no bodies. (The one exception is a
 `fake` block for tests, the subject of Chapter 15.) A role may declare

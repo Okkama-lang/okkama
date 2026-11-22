@@ -61,7 +61,10 @@ result type, and a caller cannot use the value without first deciding what to
 do when it is not there. Okkama offers four ways to decide, in increasing
 order of ceremony; the program below uses all four.
 
+
 {{example:07-maybe}}
+
+{{figure:maybe-exits|Figure 7.1. The four ways out of a Maybe. Each names what happens when the value is absent.}}
 
 1. **`else` gives a fallback.** `users.find(3) else "nobody"` is the value if
    present, the fallback otherwise. The fallback is evaluated only when
@@ -187,6 +190,8 @@ cannot represent it either.
 exactly this purpose.
 
 {{example:07-presence}}
+
+{{figure:presence|Figure 7.2. Three states of a partial update: set, clear, leave alone.}}
 
 The patch object's `applied` action maps "set" to the new value, "clear" to
 the empty string and "leave alone" to the current value. The compact choice

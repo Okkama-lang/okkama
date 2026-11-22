@@ -3960,6 +3960,7 @@ result type, and a caller cannot use the value without first deciding what to
 do when it is not there. Okkama offers four ways to decide, in increasing
 order of ceremony; the program below uses all four.
 
+
 ```okkama
 module bible/maybe v1.0.0;
 
@@ -4018,6 +4019,10 @@ hello, Ada
 Grace is registered
 require(4) gave none
 ```
+
+![Figure 7.1. The four ways out of a Maybe. Each names what happens when the value is absent.](figures/maybe-exits.svg)
+
+*Figure 7.1. The four ways out of a Maybe. Each names what happens when the value is absent.*
 
 1. **`else` gives a fallback.** `users.find(3) else "nobody"` is the value if
    present, the fallback otherwise. The fallback is evaluated only when
@@ -4238,6 +4243,10 @@ Output:
 []
 [old]
 ```
+
+![Figure 7.2. Three states of a partial update: set, clear, leave alone.](figures/presence.svg)
+
+*Figure 7.2. Three states of a partial update: set, clear, leave alone.*
 
 The patch object's `applied` action maps "set" to the new value, "clear" to
 the empty string and "leave alone" to the current value. The compact choice
@@ -4766,6 +4775,10 @@ range is more often a bug than an intention.
 
 Immutability raises the practical question: how do you build a collection
 element by element, or change one entry of a map?
+
+![Figure 8.1. A persistent list: a new version shares every node of the old one and adds one.](figures/persistent.svg)
+
+*Figure 8.1. A persistent list: a new version shares every node of the old one and adds one.*
 
 The language's answer today has three parts.
 
@@ -6078,6 +6091,10 @@ Output:
 isqrt(10^40) = 100000000000000000000
 ```
 
+![Figure 9.1. One loop with its exits where the decision is made: the binary search of Section 9.9.](figures/loop-exit.svg)
+
+*Figure 9.1. One loop with its exits where the decision is made: the binary search of Section 9.9.*
+
 - **The loop exits in the middle.** `find` is one `loop` with two exits:
   `last Maybe.none if window.empty()` when nothing is left to search, and
   `last Maybe.some(middle) if …` when the probe hits. The loop's value is
@@ -6302,6 +6319,10 @@ Cleanup — `defer` and `destroy` — runs on these failure paths; Chapter 11 de
 
 Before choosing a mechanism, it helps to sort failures by who can act on
 them.
+
+![Figure 10.1. Two channels. An expected failure is a value a caller catches; a bug ends the run after cleanup; a budget stop ends it at once.](figures/failure-channels.svg)
+
+*Figure 10.1. Two channels. An expected failure is a value a caller catches; a bug ends the run after cleanup; a budget stop ends it at once.*
 
 | Kind | Example | Who can act | Okkama |
 |---|---|---|---|
@@ -6815,6 +6836,10 @@ Output:
 store holds 2
 OrderError.storage(StoreError.full(2))
 ```
+
+![Figure 10.2. A cause as a payload the program reads, and as a link the report prints.](figures/causes.svg)
+
+*Figure 10.2. A cause as a payload the program reads, and as a link the report prints.*
 
 **As a runtime link.** Every new error raised while a `catch` body is
 handling another one keeps the handled error as its *cause*, with its value,
@@ -7429,6 +7454,10 @@ object identity at run time, not a static borrow checker (§11.5).
 defer log.line("defer 1, sees " + a.label());
 ```
 
+![Figure 11.1. What runs when a block ends: defers first, then the objects the block owns, newest first.](figures/scope-exit.svg)
+
+*Figure 11.1. What runs when a block ends: defers first, then the objects the block owns, newest first.*
+
 A reached `defer` registers its expression and runs it exactly once when
 the block that contains it ends.
 
@@ -7497,6 +7526,10 @@ exit.
 
 "The scope that owns the object" needs a definition, and Okkama's is about
 identities, not names.
+
+![Figure 11.2. Who owns what: a binding owns, an alias and a parameter borrow, a fresh argument is adopted, a result moves to the caller.](figures/ownership.svg)
+
+*Figure 11.2. Who owns what: a binding owns, an alias and a parameter borrow, a fresh argument is adopted, a result moves to the caller.*
 
 - **A binding owns a fresh object.** `let a = Handle(...)` makes the block
   of the `let` the owner of the new handle.
@@ -9041,6 +9074,10 @@ Ada Lovelace (AL)
 charged 10 to 1234
 ```
 
+![Figure 12.1. A cap grants a named, read-only view; nothing else of the object is reachable through it.](figures/cap.svg)
+
+*Figure 12.1. A cap grants a named, read-only view; nothing else of the object is reachable through it.*
+
 - `cap BusinessCard { full_name is string { … } }` declares the computed
   fields. Their bodies read the owner's fields by name, but have no `self`
   and cannot call the owner's actions.
@@ -10342,6 +10379,10 @@ Fields never change (Chapter 12). A state change is therefore a new
 object, and the language has a construct for making it: an action whose
 result type is `^Type`.
 
+![Figure 13.1. A successor is a new object. The original stays as it was, and both can be used.](figures/successor.svg)
+
+*Figure 13.1. A successor is a new object. The original stays as it was, and both can be used.*
+
 ```okkama
 ordered(price is int) is ^Tab {
     confirm open else throw TabError.closed;
@@ -11054,6 +11095,10 @@ role Package {
     opened() is ^Package;
 }
 ```
+
+![Figure 14.1. Roles are nominal: an object performs a role only when it says does.](figures/roles.svg)
+
+*Figure 14.1. Roles are nominal: an object performs a role only when it says does.*
 
 A role is a list of action signatures: names, parameters and results. It
 has no fields, no constructors and no bodies. (The one exception is a
@@ -13273,6 +13318,10 @@ let state = match stage {
 };
 ```
 
+![Figure 16.1. A match used as a value covers every case of its enum, or ends with else.](figures/match-cover.svg)
+
+*Figure 16.1. A match used as a value covers every case of its enum, or ends with else.*
+
 The subject is evaluated once. Each `case` lists one or more patterns, and the
 first case with a matching pattern runs. There is no fall-through and no
 `break`; a branch is a block, and its last value is the value of the `match`.
@@ -14660,6 +14709,10 @@ Output:
 12
 ```
 
+![Figure 18.1. A capture is a snapshot: rebinding the name later changes nothing inside the closure.](figures/capture.svg)
+
+*Figure 18.1. A capture is a snapshot: rebinding the name later changes nothing inside the closure.*
+
 The example shows the three rules.
 
 - **A capture is a snapshot.** `early` is created while `counter` holds a
@@ -15783,6 +15836,7 @@ An import path is a source path, not a module name: `"money"` is `money.ok`,
 `"foo/bar"` is `foo/bar.ok`, and an explicit `.ok` is accepted as written.
 The file is looked up in four places, in order:
 
+
 1. the directory of the importing file;
 2. the root of the importing file's package, the nearest directory above it
    that holds a `blade.toml` (19.7), when there is one;
@@ -15956,6 +16010,10 @@ The standard library is layered the same way at its bottom.
   library's modules import it.
 - `collections/iteration` declares `Cursor` and `Iterating`, also imports
   nothing, and 41 modules import it.
+
+![Figure 19.1. The layers of the standard library: two contract modules at the bottom import nothing.](figures/std-layers.svg)
+
+*Figure 19.1. The layers of the standard library: two contract modules at the bottom import nothing.*
 
 A contract module is cheap: a few roles, no state, no imports. It turns a
 tangle into layers.
@@ -16916,6 +16974,10 @@ delivered at the task's suspension point, unwinds the task like a failure
 built-in `Cancelled`. A future that never started is simply marked cancelled;
 its body never runs.
 
+![Figure 20.1. Structured await: cancelling a task cancels the future it awaits, and the task resumes only after that future has settled.](figures/structured-await.svg)
+
+*Figure 20.1. Structured await: cancelling a task cancels the future it awaits, and the task resumes only after that future has settled.*
+
 What happens to the future a cancelled task was waiting for? Okkama's answer
 is that `await` is *structured* (issue #147). Cancelling a task cancels the
 future it awaits, if that future is its own: one its `await` started, a task
@@ -17071,6 +17133,10 @@ or a repository that several tasks update is not written to by all of them.
 They send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
 of values of one type, and two capabilities over it: `Sending<T>`, which can
 only send, and `Receiving<T>`, which can only receive.
+
+![Figure 20.2. The state owner: tasks send commands through a channel to the one task that holds the state.](figures/state-owner.svg)
+
+*Figure 20.2. The state owner: tasks send commands through a channel to the one task that holds the state.*
 
 A component with state is one task that owns the state as a local binding and
 changes it by rebinding that binding to a successor. Everybody else talks to
@@ -19001,6 +19067,7 @@ library could act on an ambient, process-wide notion — the current
 directory, the environment, the standard streams — it asks instead for an
 object that names what it may use:
 
+
 ```okkama
 module bible/directory v1.0.0;
 
@@ -19036,6 +19103,10 @@ Output:
 /srv/app/reports/sales.txt
 /tmp/run-42/sales.txt
 ```
+
+![Figure 21.1. Authority is a value: the program reaches the host only through the objects it was given, and the embedder decides which native groups exist.](figures/authority.svg)
+
+*Figure 21.1. Authority is a value: the program reaches the host only through the objects it was given, and the embedder decides which native groups exist.*
 
 `Reports` is given a `DirectoryLocating`, a role with one action, `path()`,
 and builds its file names inside that directory. It has no way to name
@@ -23286,6 +23357,10 @@ Output:
 p-17 captured 250
 p-17 refunded
 ```
+
+![Figure 25.1. Typestate: each state is a role, and a step the state does not offer does not compile.](figures/typestate.svg)
+
+*Figure 25.1. Typestate: each state is a role, and a step the state does not offer does not compile.*
 
 Each object does exactly one role, and a variable typed by the role sees only
 the steps of that state. The guarantee holds even when the object itself

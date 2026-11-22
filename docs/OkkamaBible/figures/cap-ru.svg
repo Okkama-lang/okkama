@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 210" width="760" height="210" role="img">
+<rect width="760" height="210" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6b5fb0"/></marker></defs>
+<rect x="24" y="24" width="260" height="160" rx="12" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="40" y="48" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Customer</text>
+<text x="40" y="68" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">has name, surname</text>
+<text x="40" y="86" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">has card_number</text>
+<text x="40" y="104" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">charge(sum) is ^Customer</text>
+<rect x="380" y="24" width="200" height="86" rx="12" fill="#efedf8" stroke="#6b5fb0" stroke-width="1.6"/>
+<text x="396" y="48" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Customer::BusinessCard</text>
+<text x="396" y="68" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">full_name</text>
+<text x="396" y="86" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">initials</text>
+<rect x="380" y="128" width="200" height="56" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="396" y="152" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Printer.print(card)</text>
+<text x="396" y="172" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">читает card::full_name</text>
+<path d="M284,66 L378,66" fill="none" stroke="#6b5fb0" stroke-width="1.8" marker-end="url(#m0)"/>
+<text x="331" y="56" fill="#6b5fb0" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" text-anchor="middle">customer::BusinessCard</text>
+<path d="M480,110 L480,126" fill="none" stroke="#6b5fb0" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="612" y="24" width="124" height="160" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="628" y="48" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">недоступно</text>
+<text x="628" y="68" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">charge()</text>
+<text x="628" y="86" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">card_number</text>
+<text x="628" y="104" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">сам Customer</text>
+</svg>

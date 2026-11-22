@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 230" width="760" height="230" role="img">
+<rect width="760" height="230" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<rect x="24" y="24" width="330" height="84" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="40" y="48" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">OrderError.storage(cause)</text>
+<text x="40" y="68" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">payload: the program can match it</text>
+<text x="40" y="86" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">cause is StoreError.closed</text>
+<rect x="406" y="24" width="330" height="84" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="422" y="48" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">OrderError.failed(7)</text>
+<text x="422" y="68" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">thrown while handling StoreError</text>
+<text x="422" y="86" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">the link: for the report only</text>
+<rect x="406" y="136" width="330" height="74" rx="12" fill="#eef1f5" stroke="#dde2e8" stroke-width="1.6"/>
+<text x="422" y="160" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Caused by:</text>
+<text x="422" y="180" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">  StoreError: StoreError.closed</text>
+<text x="422" y="198" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">  --&gt; uncaught.ok:10:56</text>
+<path d="M571,108 L571,134" fill="none" stroke="#5d6b7a" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#m0)"/>
+<text x="189" y="150" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" text-anchor="middle">Choose the payload when the caller</text>
+<text x="189" y="170" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" text-anchor="middle">needs the cause to decide.</text>
+</svg>

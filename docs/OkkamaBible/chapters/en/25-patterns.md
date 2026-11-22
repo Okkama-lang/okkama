@@ -197,6 +197,8 @@ ordinary actions.
 
 {{example:25-typestate}}
 
+{{figure:typestate|Figure 25.1. Typestate: each state is a role, and a step the state does not offer does not compile.}}
+
 Each object does exactly one role, and a variable typed by the role sees only
 the steps of that state. The guarantee holds even when the object itself
 has more actions than its role exposes. In the next program `NewPayment`

@@ -223,6 +223,8 @@ delivered at the task's suspension point, unwinds the task like a failure
 built-in `Cancelled`. A future that never started is simply marked cancelled;
 its body never runs.
 
+{{figure:structured-await|Figure 20.1. Structured await: cancelling a task cancels the future it awaits, and the task resumes only after that future has settled.}}
+
 What happens to the future a cancelled task was waiting for? Okkama's answer
 is that `await` is *structured* (issue #147). Cancelling a task cancels the
 future it awaits, if that future is its own: one its `await` started, a task
@@ -322,6 +324,8 @@ or a repository that several tasks update is not written to by all of them.
 They send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
 of values of one type, and two capabilities over it: `Sending<T>`, which can
 only send, and `Receiving<T>`, which can only receive.
+
+{{figure:state-owner|Figure 20.2. The state owner: tasks send commands through a channel to the one task that holds the state.}}
 
 A component with state is one task that owns the state as a local binding and
 changes it by rebinding that binding to a successor. Everybody else talks to

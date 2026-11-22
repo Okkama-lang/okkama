@@ -300,36 +300,50 @@ PDF_TITLES = {
 
 
 def pdf():
-    """OkkamaBible.pdf and OkkamaBible-RU.pdf: pandoc and WeasyPrint in the okkama-bible-pdf image."""
+    """The print edition (PDF) and the web edition (one HTML file) in both languages.
+
+    pandoc turns the generated Markdown into an HTML fragment and WeasyPrint
+    lays out pages, both in the okkama-bible-pdf image (pdf/Dockerfile); the
+    layout between them is pdf/render.py, on the host."""
+    sys.path.insert(0, os.path.join(HERE, "pdf"))
+    import render
     work = os.path.join(HERE, "pdf", "work")
     os.makedirs(work, exist_ok=True)
     cache = {}
+    version = subprocess.run([OKKAMA, "--version"], capture_output=True, text=True).stdout.split()[-1]
+
+    def docker(script):
+        subprocess.run(["docker", "run", "--rm", "-v", f"{HERE}:/book", "okkama-bible-pdf", "sh", "-c", script],
+                       check=True)
+
     for language, (target, title, *_rest) in LANGUAGES.items():
         text = open(os.path.join(HERE, target)).read()
         text = re.sub(r"^<!--.*?-->\n", "", text)
-        version = subprocess.run([OKKAMA, "--version"], capture_output=True, text=True).stdout.split()[-1]
-        subtitle, edition = PDF_TITLES[language]
-        text = text.replace(f"# {title}\n", f'<div class="title-page"><p class="book-title">{title}</p>'
-                            f'<p class="book-subtitle">{subtitle}</p>'
-                            f'<p class="book-edition">{edition.format(version=version)}</p></div>\n', 1)
-        # A figure's caption is the emphasised line right after its image.
-        text = re.sub(r"(!\[[^\]]*\]\(figures/[^)]+\))\n\n\*([^*\n]+)\*",
-                      r'\1\n\n<p class="caption">\2</p>', text)
 
         def listing(match):
             body = highlight_okkama(match.group(2), cache)
             return f'{match.group(1)}<pre class="okkama"><code>{body}</code></pre>'
 
         text = re.sub(r"^( *)```okkama\n(.*?)\n *```$", listing, text, flags=re.S | re.M)
+        # A figure's caption is the emphasised line right after its image.
+        text = re.sub(r"(!\[[^\]]*\]\(figures/[^)]+\))\n\n\*([^*\n]+)\*",
+                      r'\1\n\n<p class="caption">\2</p>', text)
         open(os.path.join(work, f"{language}.md"), "w").write(text)
+        docker(f"pandoc pdf/work/{language}.md -f gfm -t html5 -o pdf/work/{language}.fragment.html")
+        fragment = open(os.path.join(work, f"{language}.fragment.html")).read()
+        fragment, heads = render.structure(fragment, language)
+        subtitle, edition = PDF_TITLES[language]
+        edition = edition.format(version=version)
+        open(os.path.join(work, f"{language}.print.html"), "w").write(
+            render.print_edition(fragment, heads, language, title, subtitle, edition))
+        web = render.web_edition(fragment, heads, language, title, subtitle, edition)
+        web_name = target.replace(".md", ".html")
+        open(os.path.join(HERE, web_name), "w").write(web)
         pdf_name = target.replace(".md", ".pdf")
-        script = (f"pandoc pdf/work/{language}.md -f gfm -t html5 -s --css pdf/book.css "
-                  f"--metadata pagetitle='{title}' --metadata lang={language} -o pdf/work/{language}.html && "
-                  f"weasyprint -q --base-url /book/ pdf/work/{language}.html {pdf_name}")
-        subprocess.run(["docker", "run", "--rm", "-v", f"{HERE}:/book", "okkama-bible-pdf", "sh", "-c", script],
-                       check=True)
-        print(f"{pdf_name}: {os.path.getsize(os.path.join(HERE, pdf_name)) // 1024} KiB")
-
+        docker(f"cp pdf/work/{language}.print.html ./.print-{language}.html && "
+               f"weasyprint -q .print-{language}.html {pdf_name}; status=$?; rm -f .print-{language}.html; exit $status")
+        print(f"{pdf_name}: {os.path.getsize(os.path.join(HERE, pdf_name)) // 1024} KiB, "
+              f"{web_name}: {len(web) // 1024} KiB")
 
 if __name__ == "__main__":
     if "--figures" in sys.argv:

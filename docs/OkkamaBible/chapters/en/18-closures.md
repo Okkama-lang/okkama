@@ -74,6 +74,8 @@ receiver. It does not capture the scope itself.
 
 {{example:18-capture}}
 
+{{figure:capture|Figure 18.1. A capture is a snapshot: rebinding the name later changes nothing inside the closure.}}
+
 The example shows the three rules.
 
 - **A capture is a snapshot.** `early` is created while `counter` holds a

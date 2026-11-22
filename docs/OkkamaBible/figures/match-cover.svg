@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img">
+<rect width="760" height="200" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a46"/></marker><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b3261e"/></marker></defs>
+<rect x="24" y="60" width="200" height="64" rx="12" fill="#efedf8" stroke="#6b5fb0" stroke-width="1.6"/>
+<text x="40" y="84" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">enum Reading</text>
+<text x="40" y="104" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">single(v), pair(a, b), none</text>
+<rect x="290" y="24" width="270" height="26" rx="13" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="425.0" y="41.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">case Reading.single(v): …</text>
+<path d="M224,92 L288,37" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="290" y="76" width="270" height="26" rx="13" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="425.0" y="93.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">case Reading.pair(a, b): …</text>
+<path d="M224,92 L288,89" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="290" y="128" width="270" height="26" rx="13" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="425.0" y="145.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">case Reading.none — ?</text>
+<path d="M224,92 L288,141" fill="none" stroke="#b3261e" stroke-width="1.8" marker-end="url(#m1)"/>
+<rect x="590" y="110" width="146" height="64" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="606" y="134" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">compile error</text>
+<text x="606" y="154" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">as a value: does not</text>
+<text x="606" y="172" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">cover none</text>
+<text x="380" y="188" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="middle">A match used as a value must cover every case, or end with else.</text>
+</svg>

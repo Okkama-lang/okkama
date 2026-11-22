@@ -44,6 +44,8 @@ Cleanup — `defer` and `destroy` — runs on these failure paths; Chapter 11 de
 Before choosing a mechanism, it helps to sort failures by who can act on
 them.
 
+{{figure:failure-channels|Figure 10.1. Two channels. An expected failure is a value a caller catches; a bug ends the run after cleanup; a budget stop ends it at once.}}
+
 | Kind | Example | Who can act | Okkama |
 |---|---|---|---|
 | Expected failure | file not found, bad input, refused connection | the caller | error enum, `throw`, typed `catch` |
@@ -396,6 +398,8 @@ then an ordinary value. The caller can match on it, `text()` prints it, and
 it means the same.
 
 {{example:10-cause}}
+
+{{figure:causes|Figure 10.2. A cause as a payload the program reads, and as a link the report prints.}}
 
 **As a runtime link.** Every new error raised while a `catch` body is
 handling another one keeps the handled error as its *cause*, with its value,

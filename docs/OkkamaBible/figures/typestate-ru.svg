@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img">
+<rect width="760" height="200" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<rect x="24" y="40" width="160" height="70" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Created</text>
+<text x="40" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">authorize()</text>
+<path d="M184,75 L204,75" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="206" y="40" width="160" height="70" rx="12" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="222" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Authorized</text>
+<text x="222" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">capture()</text>
+<path d="M366,75 L386,75" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="388" y="40" width="160" height="70" rx="12" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="404" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Captured</text>
+<text x="404" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">refund()</text>
+<path d="M548,75 L568,75" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="570" y="40" width="160" height="70" rx="12" fill="#eef1f5" stroke="#dde2e8" stroke-width="1.6"/>
+<text x="586" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Refunded</text>
+<text x="586" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">действий нет</text>
+<rect x="24" y="136" width="712" height="44" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="40" y="163" fill="#b3261e" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" text-anchor="start">created.refund() не компилируется: у роли Created нет refund.</text>
+</svg>

@@ -350,6 +350,8 @@ that went unnoticed for years [@bloch2006]. Here it is in Okkama, twice.
 
 {{example:09-search}}
 
+{{figure:loop-exit|Figure 9.1. One loop with its exits where the decision is made: the binary search of Section 9.9.}}
+
 - **The loop exits in the middle.** `find` is one `loop` with two exits:
   `last Maybe.none if window.empty()` when nothing is left to search, and
   `last Maybe.some(middle) if …` when the probe hits. The loop's value is

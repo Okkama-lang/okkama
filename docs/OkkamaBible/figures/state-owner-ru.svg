@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 240" width="760" height="240" role="img">
+<rect width="760" height="240" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<rect x="24" y="18" width="170" height="56" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="42" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">задача: request 1</text>
+<text x="40" y="62" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">await send(…)</text>
+<path d="M194,46 L276,118" fill="none" stroke="#2f6fb3" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="24" y="90" width="170" height="56" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="114" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">задача: request 2</text>
+<text x="40" y="134" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">await send(…)</text>
+<path d="M194,118 L276,118" fill="none" stroke="#2f6fb3" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="24" y="162" width="170" height="56" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="186" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">задача: request 3</text>
+<text x="40" y="206" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">await send(…)</text>
+<path d="M194,190 L276,118" fill="none" stroke="#2f6fb3" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="278" y="82" width="190" height="72" rx="12" fill="#fbf4dc" stroke="#9c7a12" stroke-width="1.6"/>
+<text x="294" y="106" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Channel&lt;Command&gt;</text>
+<text x="294" y="126" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">ограниченная очередь</text>
+<path d="M468,118 L530,118" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m1)"/>
+<text x="499" y="108" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" text-anchor="middle">item()</text>
+<rect x="532" y="62" width="204" height="112" rx="12" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="548" y="86" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">владелец состояния</text>
+<text x="548" y="106" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">одна задача держит</text>
+<text x="548" y="124" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">состояние и применяет</text>
+<text x="548" y="142" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">команды по одной</text>
+<text x="380" y="226" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="middle">Ни одна задача не пишет чужое состояние; задачи посылают значения.</text>
+</svg>

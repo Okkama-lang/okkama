@@ -70,6 +70,8 @@ object identity at run time, not a static borrow checker (§11.5).
 defer log.line("defer 1, sees " + a.label());
 ```
 
+{{figure:scope-exit|Figure 11.1. What runs when a block ends: defers first, then the objects the block owns, newest first.}}
+
 A reached `defer` registers its expression and runs it exactly once when
 the block that contains it ends.
 
@@ -138,6 +140,8 @@ exit.
 
 "The scope that owns the object" needs a definition, and Okkama's is about
 identities, not names.
+
+{{figure:ownership|Figure 11.2. Who owns what: a binding owns, an alias and a parameter borrow, a fresh argument is adopted, a result moves to the caller.}}
 
 - **A binding owns a fresh object.** `let a = Handle(...)` makes the block
   of the `let` the owner of the new handle.

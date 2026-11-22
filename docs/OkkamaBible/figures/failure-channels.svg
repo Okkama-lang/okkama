@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" width="760" height="300" role="img">
+<rect width="760" height="300" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b3261e"/></marker><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a46"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<text x="24" y="30" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Expected failure: a value</text>
+<rect x="24" y="44" width="160" height="56" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="40" y="68" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">throw</text>
+<text x="40" y="88" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">an error enum case</text>
+<rect x="240" y="44" width="210" height="56" rx="12" fill="#ffffff" stroke="#dde2e8" stroke-width="1.6"/>
+<text x="256" y="68" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">scopes unwind</text>
+<text x="256" y="88" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">defer, destroy</text>
+<rect x="506" y="44" width="230" height="56" rx="12" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="522" y="68" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">catch e is LineError</text>
+<text x="522" y="88" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">the caller decides</text>
+<path d="M184,72 L238,72" fill="none" stroke="#b3261e" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M450,72 L504,72" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m1)"/>
+<text x="24" y="150" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">A bug: not a value</text>
+<rect x="24" y="164" width="160" height="74" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="40" y="188" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">panic</text>
+<text x="40" y="208" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">bare confirm,</text>
+<text x="40" y="226" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">runtime error</text>
+<rect x="240" y="164" width="210" height="74" rx="12" fill="#ffffff" stroke="#dde2e8" stroke-width="1.6"/>
+<text x="256" y="188" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">every scope unwinds</text>
+<text x="256" y="208" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">defer, destroy,</text>
+<text x="256" y="226" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">newest first</text>
+<rect x="506" y="164" width="230" height="74" rx="12" fill="#eef1f5" stroke="#dde2e8" stroke-width="1.6"/>
+<text x="522" y="188" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">report, exit 1</text>
+<text x="522" y="208" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">no catch can see it</text>
+<path d="M184,201 L238,201" fill="none" stroke="#b3261e" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M450,201 L504,201" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m2)"/>
+<rect x="24" y="252" width="712" height="36" rx="12" fill="#fbf4dc" stroke="#9c7a12" stroke-width="1.6"/>
+<text x="40" y="275" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" text-anchor="start">Budget stop (--max-steps, --timeout): the run ends at once; no catch, no destroy.</text>
+</svg>

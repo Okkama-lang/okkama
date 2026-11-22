@@ -216,6 +216,7 @@ An import path is a source path, not a module name: `"money"` is `money.ok`,
 `"foo/bar"` is `foo/bar.ok`, and an explicit `.ok` is accepted as written.
 The file is looked up in four places, in order:
 
+
 1. the directory of the importing file;
 2. the root of the importing file's package, the nearest directory above it
    that holds a `blade.toml` (19.7), when there is one;
@@ -296,6 +297,8 @@ The standard library is layered the same way at its bottom.
   library's modules import it.
 - `collections/iteration` declares `Cursor` and `Iterating`, also imports
   nothing, and 41 modules import it.
+
+{{figure:std-layers|Figure 19.1. The layers of the standard library: two contract modules at the bottom import nothing.}}
 
 A contract module is cheap: a few roles, no state, no imports. It turns a
 tangle into layers.

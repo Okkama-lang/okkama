@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 260" width="760" height="260" role="img">
+<rect width="760" height="260" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b3261e"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a46"/></marker></defs>
+<rect x="24" y="30" width="210" height="70" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="54" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">задача A</text>
+<text x="40" y="74" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">await fetch()</text>
+<rect x="300" y="30" width="210" height="70" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="316" y="54" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">future B</text>
+<text x="316" y="74" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">запущен этим await</text>
+<rect x="560" y="30" width="176" height="70" rx="12" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="576" y="54" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">его ресурсы</text>
+<text x="576" y="74" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">async destroy</text>
+<path d="M234,65 L298,65" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<text x="266" y="56" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" text-anchor="middle">await</text>
+<path d="M510,65 L558,65" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="24" y="150" width="210" height="70" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="40" y="174" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">A.cancel()</text>
+<text x="40" y="194" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">A отменена</text>
+<rect x="300" y="150" width="210" height="70" rx="12" fill="#f9e9e8" stroke="#b3261e" stroke-width="1.6"/>
+<text x="316" y="174" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">B отменён</text>
+<text x="316" y="194" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">если её не ждёт другая задача</text>
+<rect x="560" y="150" width="176" height="70" rx="12" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="576" y="174" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">B завершается</text>
+<text x="576" y="194" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">уборка выполнена</text>
+<path d="M234,185 L298,185" fill="none" stroke="#b3261e" stroke-width="1.8" marker-end="url(#m1)"/>
+<path d="M510,185 L558,185" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m2)"/>
+<path d="M648,222 L648,246 L129,246 L129,222" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m2)"/>
+<text x="390" y="240" fill="#1f7a46" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" text-anchor="middle">только тогда: A продолжает с Cancelled</text>
+</svg>

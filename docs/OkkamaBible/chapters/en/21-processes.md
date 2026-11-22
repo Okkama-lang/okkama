@@ -109,7 +109,10 @@ library could act on an ambient, process-wide notion — the current
 directory, the environment, the standard streams — it asks instead for an
 object that names what it may use:
 
+
 {{example:21-directory}}
+
+{{figure:authority|Figure 21.1. Authority is a value: the program reaches the host only through the objects it was given, and the embedder decides which native groups exist.}}
 
 `Reports` is given a `DirectoryLocating`, a role with one action, `path()`,
 and builds its file names inside that directory. It has no way to name

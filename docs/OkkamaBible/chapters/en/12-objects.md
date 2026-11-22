@@ -248,6 +248,8 @@ explicitly:
 
 {{example:12-cap}}
 
+{{figure:cap|Figure 12.1. A cap grants a named, read-only view; nothing else of the object is reachable through it.}}
+
 - `cap BusinessCard { full_name is string { … } }` declares the computed
   fields. Their bodies read the owner's fields by name, but have no `self`
   and cannot call the owner's actions.

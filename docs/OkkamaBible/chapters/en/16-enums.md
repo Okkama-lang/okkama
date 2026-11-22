@@ -151,6 +151,8 @@ let state = match stage {
 };
 ```
 
+{{figure:match-cover|Figure 16.1. A match used as a value covers every case of its enum, or ends with else.}}
+
 The subject is evaluated once. Each `case` lists one or more patterns, and the
 first case with a matching pattern runs. There is no fall-through and no
 `break`; a branch is a block, and its last value is the value of the `match`.

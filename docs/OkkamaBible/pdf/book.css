@@ -1,66 +1,67 @@
-/* The Okkama Bible as a printed book: WeasyPrint reads this with the HTML
-   that pandoc makes from OkkamaBible.md / OkkamaBible-RU.md. */
+/* The Okkama Bible, shared by the print and the web editions.
+   The modern layer follows the Okkama documents (Golos Text, JetBrains Mono,
+   teal accent, rounded cards); the manuscript layer adds what a Gothic Bible
+   had: red and blue rubrics, gilded initials, vine borders, drolleries. */
 
-@page {
-  size: 170mm 240mm;
-  margin: 20mm 17mm 22mm 19mm;
-  @bottom-center {
-    content: counter(page);
-    font: 8.5pt "Noto Sans", sans-serif;
-    color: #6b6f76;
-  }
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #16202b; --muted: #5d6b7a; --line: #dde2e8; --soft: #eef1f5;
+  --accent: #0f7f86; --res: #c2571a; --view: #6b5fb0; --plain: #2f6fb3; --good: #1f7a46; --bad: #b3261e;
+  --code-bg: #f1f4f7;
+  --k: #8a3fa8; --s: #1f7a46; --c: #7a8794; --n: #b0571a; --t: #2f6fb3;
+  /* the scriptorium */
+  --rubric: #b3261e; --lapis: #2a4d9b; --gold: #c9a227; --gold-deep: #9c7a12; --vellum: #fbf7ec; --verdigris: #3f8f6b;
+  --display: "Golos Text", "Segoe UI", system-ui, sans-serif;
+  --body: "Golos Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --capital: "EB Garamond", "Noto Serif", Georgia, serif;
 }
 
-html { font: 10pt/1.45 "Noto Serif", "DejaVu Serif", serif; color: #1d1f23; hyphens: auto; }
-body { margin: 0; }
-p { margin: 0 0 0.55em; text-align: justify; orphans: 2; widows: 2; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); }
+p { margin: 0 0 0.75em; }
+a { color: var(--accent); text-decoration: none; }
+strong { font-weight: 600; }
 
-h1, h2, h3, h4 { font-family: "Noto Sans", "DejaVu Sans", sans-serif; color: #15171a; line-height: 1.2;
-  page-break-after: avoid; hyphens: manual; text-align: left; }
-h1 { font-size: 20pt; font-weight: 700; margin: 0 0 14mm; padding-top: 18mm; page-break-before: right; }
-h2 { font-size: 13pt; margin: 1.4em 0 0.5em; }
-h3 { font-size: 11pt; margin: 1.2em 0 0.4em; }
-h4 { font-size: 10pt; margin: 1em 0 0.3em; }
+/* Headings: a small mono eyebrow over the title, numbers in the rubric colours. */
+h1, h2, h3, h4 { font-family: var(--display); color: var(--ink); text-wrap: balance; }
+h1 small { display: block; font: 600 0.4em/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--rubric); margin-bottom: 0.35em; }
+h1.part small { color: var(--lapis); }
+h2 .num { font-family: var(--mono); font-weight: 600; font-size: 0.82em; color: var(--rubric); margin-right: 0.25em; }
+h2:nth-of-type(even) .num { color: var(--lapis); }
+h3 { color: var(--ink); }
 
-a { color: inherit; text-decoration: none; }
-code { font-family: "JetBrains Mono", "Noto Sans Mono", "DejaVu Sans Mono", monospace; font-size: 0.86em; }
-p code, li code, td code { background: #f2f0ea; padding: 0 0.15em; border-radius: 2px; }
+.eyebrow { font: 600 0.75rem/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
 
-pre { font-family: "JetBrains Mono", "Noto Sans Mono", monospace; font-size: 7.6pt; line-height: 1.38;
-  background: #f7f5ef; border-left: 2.2pt solid #c9a227; padding: 2.6mm 3mm; margin: 0.7em 0 0.9em;
-  white-space: pre-wrap; word-wrap: break-word; page-break-inside: auto; hyphens: none; text-align: left; }
-pre code { font-size: 1em; background: none; padding: 0; }
-/* Okkama listings, coloured from the compiler's tokens. */
-pre.okkama .k { color: #7a3e9d; font-weight: 600; }
-pre.okkama .t { color: #1f5f8b; }
-pre.okkama .s { color: #2f7d32; }
-pre.okkama .n { color: #a3501c; }
-pre.okkama .c { color: #7c8087; font-style: italic; }
+code { font-family: var(--mono); font-weight: 500; font-size: 0.86em; background: var(--soft); padding: 0.08em 0.3em; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; font-family: var(--mono); }
+pre code { background: none; padding: 0; font-size: 1em; font-weight: 400; }
+pre.okkama .k { color: var(--k); font-weight: 600; } pre.okkama .s { color: var(--s); }
+pre.okkama .c { color: var(--c); font-style: italic; } pre.okkama .n { color: var(--n); } pre.okkama .t { color: var(--t); }
 
-blockquote { margin: 0.6em 0 0.6em 0.4em; padding-left: 3mm; border-left: 1pt solid #c8c8c8; color: #44474d; }
-ul, ol { margin: 0 0 0.6em; padding-left: 5mm; }
-li { margin: 0.15em 0; }
-li > p { margin: 0; }
+.table-wrap { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+th { font-family: var(--mono); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--soft); }
+tr:last-child td { border-bottom: 0; }
 
-table { border-collapse: collapse; width: 100%; margin: 0.6em 0 0.9em; font-size: 8.4pt; line-height: 1.3;
-  page-break-inside: auto; }
-th, td { border-bottom: 0.5pt solid #d6d3cc; padding: 1.2mm 1.6mm; vertical-align: top; text-align: left; hyphens: auto; }
-th { font-family: "Noto Sans", sans-serif; font-weight: 600; border-bottom: 0.9pt solid #9a968d; }
-tr { page-break-inside: avoid; }
+blockquote { border-left: 3px solid var(--gold); color: var(--muted); margin-left: 0; }
 
+/* "Why." and "Cost." paragraphs are notes, as in the documents. */
+p.note { border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 10px 10px 0; }
+p.note.cost { border-left-color: var(--res); }
+p.note strong:first-child { font-family: var(--mono); font-size: 0.82em; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--accent); }
+p.note.cost strong:first-child { color: var(--res); }
+
+/* The illuminated initial: a gilded square, lapis ground, the letter in gold-on-red. */
+p.opening .initial { float: left; font-family: var(--capital); font-weight: 600; color: var(--vellum);
+  background: var(--lapis); border: 2px solid var(--gold); border-radius: 3px; text-align: center;
+  box-shadow: inset 0 0 0 2px var(--rubric); }
+
+/* Pictures. */
+.plate svg, .figure svg { display: block; width: 100%; height: auto; }
+p.caption { color: var(--muted); font-style: italic; text-align: center; }
 img { max-width: 100%; }
-p.caption { text-align: center; font-size: 8.5pt; font-style: italic; color: #55595f; margin-top: -0.2em; }
 
-.title-page { page: title; padding-top: 62mm; page-break-after: always; }
-@page title { @bottom-center { content: none; } }
-.book-title { font: 700 34pt/1.1 "Noto Sans", sans-serif; text-align: left; margin: 0 0 6mm; }
-.book-subtitle { font: 400 13pt/1.35 "Noto Serif", serif; color: #44474d; text-align: left; margin: 0 0 40mm; }
-.book-edition { font: 400 10pt "Noto Sans", sans-serif; color: #6b6f76; text-align: left; }
-
-/* Contents: the list right after the "Contents" heading, with page numbers. */
-#contents, #содержание { page-break-before: right; }
-#contents + ul, #содержание + ul { list-style: none; padding: 0; font-family: "Noto Sans", sans-serif; font-size: 9pt; }
-#contents + ul ul, #содержание + ul ul { list-style: none; padding-left: 5mm; font-size: 8.4pt; }
-#contents + ul > li, #содержание + ul > li { margin-top: 0.5em; font-weight: 600; }
-#contents + ul ul li, #содержание + ul ul li { font-weight: 400; margin: 0.05em 0; }
-#contents + ul a::after, #содержание + ul a::after { content: leader(".") target-counter(attr(href), page); }
+/* Appendix C and D read better in two columns, as a Gothic Bible did. */
+.two-columns { column-count: 2; column-gap: 7mm; }

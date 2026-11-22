@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 250" width="760" height="250" role="img">
+<rect width="760" height="250" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a46"/></marker><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fb3"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c2571a"/></marker><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<rect x="24" y="92" width="170" height="64" rx="12" fill="#efedf8" stroke="#6b5fb0" stroke-width="1.6"/>
+<text x="40" y="116" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Maybe&lt;T&gt;</text>
+<text x="40" y="136" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start">some(value) или none</text>
+<rect x="300" y="14" width="436" height="50" rx="12" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="316" y="35" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13" font-weight="700" text-anchor="start">else</text>
+<text x="316" y="53" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start">запасное, лениво</text>
+<text x="722" y="44" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11" font-weight="400" text-anchor="end">names else &quot;nobody&quot;</text>
+<path d="M194,124 L250,124 L250,39 L298,39" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m0)"/>
+<rect x="300" y="72" width="436" height="50" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="316" y="93" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13" font-weight="700" text-anchor="start">match</text>
+<text x="316" y="111" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start">ветка на каждый</text>
+<text x="722" y="102" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11" font-weight="400" text-anchor="end">case Maybe.some(n): …</text>
+<path d="M194,124 L250,124 L250,97 L298,97" fill="none" stroke="#2f6fb3" stroke-width="1.8" marker-end="url(#m1)"/>
+<rect x="300" y="130" width="436" height="50" rx="12" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="316" y="151" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13" font-weight="700" text-anchor="start">else throw / panic</text>
+<text x="316" y="169" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start">отсутствие — отказ</text>
+<text x="722" y="160" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11" font-weight="400" text-anchor="end">else throw Missing.user(id)</text>
+<path d="M194,124 L250,124 L250,155 L298,155" fill="none" stroke="#c2571a" stroke-width="1.8" marker-end="url(#m2)"/>
+<rect x="300" y="188" width="436" height="50" rx="12" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="316" y="209" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13" font-weight="700" text-anchor="start">try?</text>
+<text x="316" y="227" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" text-anchor="start">ошибка становится none</text>
+<text x="722" y="218" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11" font-weight="400" text-anchor="end">try? users.require(4)</text>
+<path d="M194,124 L250,124 L250,213 L298,213" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m3)"/>
+</svg>

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 250" width="760" height="250" role="img">
+<rect width="760" height="250" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5d6b7a"/></marker></defs>
+<text x="24" y="30" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">Inside the block, in order</text>
+<rect x="24" y="44" width="168" height="26" rx="13" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="108.0" y="61.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">let a = Handle(&quot;a&quot;)</text>
+<rect x="206" y="44" width="168" height="26" rx="13" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="290.0" y="61.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">let b = Handle(&quot;b&quot;)</text>
+<rect x="388" y="44" width="168" height="26" rx="13" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="472.0" y="61.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">defer log(&quot;one&quot;)</text>
+<rect x="570" y="44" width="168" height="26" rx="13" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="654.0" y="61.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">defer log(&quot;two&quot;)</text>
+<path d="M192,57 L204,57" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M374,57 L386,57" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M556,57 L568,57" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<text x="24" y="124" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">When the block ends, on every exit: defers first, then owned objects, newest first</text>
+<rect x="24" y="140" width="168" height="26" rx="13" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="108.0" y="157.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">two</text>
+<rect x="206" y="140" width="168" height="26" rx="13" fill="#e5f3f3" stroke="#0f7f86" stroke-width="1.6"/>
+<text x="290.0" y="157.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">one</text>
+<rect x="388" y="140" width="168" height="26" rx="13" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="472.0" y="157.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">close b</text>
+<rect x="570" y="140" width="168" height="26" rx="13" fill="#fbeee6" stroke="#c2571a" stroke-width="1.6"/>
+<text x="654.0" y="157.5" fill="#16202b" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="600" text-anchor="middle">close a</text>
+<path d="M192,153 L204,153" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M374,153 L386,153" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<path d="M556,153 L568,153" fill="none" stroke="#5d6b7a" stroke-width="1.8" marker-end="url(#m0)"/>
+<text x="24" y="204" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">Normal end, return, last, next, a thrown error, a panic, a cancelled task: the same order.</text>
+<text x="24" y="226" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">A budget stop is the only exit that runs nothing (Section 10.13).</text>
+</svg>

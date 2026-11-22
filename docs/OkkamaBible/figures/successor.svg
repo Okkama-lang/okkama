@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img">
+<rect width="760" height="200" rx="14" fill="#ffffff" stroke="#dde2e8"/>
+<defs><marker id="m0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a46"/></marker></defs>
+<rect x="24" y="40" width="220" height="110" rx="12" fill="#eaf1f9" stroke="#2f6fb3" stroke-width="1.6"/>
+<text x="40" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">bottle</text>
+<text x="40" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">Bottle</text>
+<text x="40" y="102" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">is_open() → false</text>
+<rect x="516" y="40" width="220" height="110" rx="12" fill="#e8f3ec" stroke="#1f7a46" stroke-width="1.6"/>
+<text x="532" y="64" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="start">opened</text>
+<text x="532" y="84" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">^Bottle</text>
+<text x="532" y="102" fill="#5d6b7a" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="12" font-weight="400" text-anchor="start">is_open() → true</text>
+<path d="M246,95 L514,95" fill="none" stroke="#1f7a46" stroke-width="1.8" marker-end="url(#m0)"/>
+<text x="380" y="84" fill="#1f7a46" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" text-anchor="middle">bottle.open()</text>
+<text x="380" y="124" fill="#5d6b7a" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle">a new object; the old one is unchanged</text>
+<text x="380" y="184" fill="#16202b" font-family="Golos Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" text-anchor="middle">Both stay usable. Dropping the successor is a compile-time error.</text>
+</svg>

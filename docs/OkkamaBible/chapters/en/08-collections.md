@@ -153,6 +153,8 @@ range is more often a bug than an intention.
 Immutability raises the practical question: how do you build a collection
 element by element, or change one entry of a map?
 
+{{figure:persistent|Figure 8.1. A persistent list: a new version shares every node of the old one and adds one.}}
+
 The language's answer today has three parts.
 
 1. **Build in one step when possible.** `map`, `filter` and range expansion
