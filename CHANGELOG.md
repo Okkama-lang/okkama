@@ -7,6 +7,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **`order()` and `cursor()` name the import they need (#952).** Without `Order` (or an array's `Cursor`)
+  loaded, the compiler said the action did not exist; it now says which module to import.
+
+### Fixed
 - **Three compiler crashes are diagnostics now.** An enum with no cases is rejected at its name (#966);
   `[].join(",")` joins an untyped empty array as an empty `@string` instead of producing invalid IR (#969); a
   `...any` (or other) spread into a `...string` constructor is rejected at the spread (#970). All three used

@@ -25759,7 +25759,7 @@ a map's key and value types. Two actions need a standard role in scope,
 because their result is that role's type: `order(other)` returns the `Order`
 of the module `compare` (import `Order`), and an array's `cursor()` returns
 the `Cursor<T>` of `collections/iteration` (import `Cursor`). Without the
-import the compiler reports the action as missing (issue #952).
+import the compiler names the import to add (issue #952).
 
 ## B.1 Numbers
 
