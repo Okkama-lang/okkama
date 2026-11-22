@@ -2,39 +2,39 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21377 lines
+## front — 35 files, 21414 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 115 — `once let` (#491): a kept value must not depend on effects. A value that
-- `okkama-compiler/src/analysis/registry.rs` 3035 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
+- `okkama-compiler/src/analysis/registry.rs` 3033 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 240 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 607 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
 - `okkama-compiler/src/analysis/check/call.rs` 1986 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
-- `okkama-compiler/src/analysis/check/collections.rs` 664 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
+- `okkama-compiler/src/analysis/check/collections.rs` 655 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 317 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
 - `okkama-compiler/src/analysis/check/expr.rs` 1924 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/generics.rs` 387 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
-- `okkama-compiler/src/analysis/check/mod.rs` 831 — Проверка тел: имена, типы, вызовы, управление потоком.
+- `okkama-compiler/src/analysis/check/mod.rs` 907 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 667 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
 - `okkama-compiler/src/analysis/check/variants.rs` 579 — Nominal variant construction, pattern bindings, and optional fallback.
-- `okkama-compiler/src/syntax/format.rs` 1376 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
+- `okkama-compiler/src/syntax/format.rs` 1371 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
 - `okkama-compiler/src/syntax/limits.rs` 297 — Бюджет синтаксического дерева (H-03): глубина и число узлов.
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.
 - `okkama-compiler/src/syntax/prune.rs` 238 — Production pruning: removing test-only declarations from a parsed tree.
 - `okkama-compiler/src/syntax/token.rs` 434 — Tokens produced by the lexer.
 - `okkama-compiler/src/syntax/ast/expr.rs` 329 — Expressions.
 - `okkama-compiler/src/syntax/ast/mod.rs` 286 — The typed abstract syntax tree.
-- `okkama-compiler/src/syntax/ast/stmt.rs` 115 — Statements and blocks.
+- `okkama-compiler/src/syntax/ast/stmt.rs` 108 — Statements and blocks.
 - `okkama-compiler/src/syntax/ast/types.rs` 45 — Type expressions and action result specifications.
 - `okkama-compiler/src/syntax/lexer/mod.rs` 599 — The Okkama lexer.
 - `okkama-compiler/src/syntax/parser/decl.rs` 877 — Module items and object/role members.
 - `okkama-compiler/src/syntax/parser/expr.rs` 1011 — Expressions.
 - `okkama-compiler/src/syntax/parser/mod.rs` 524 — The Okkama parser.
-- `okkama-compiler/src/syntax/parser/stmt.rs` 545 — Blocks and statements.
+- `okkama-compiler/src/syntax/parser/stmt.rs` 536 — Blocks and statements.
 - `okkama-compiler/src/syntax/parser/types.rs` 195 — Type expressions, result specifications and generic parameter lists.
-- `okkama-compiler/src/syntax/print/build.rs` 579 — Conversion of the typed AST into the printer [`Node`] description.
+- `okkama-compiler/src/syntax/print/build.rs` 572 — Conversion of the typed AST into the printer [`Node`] description.
 - `okkama-compiler/src/syntax/print/json.rs` 189 — The `json` format: deterministic, pretty-printed JSON.
 - `okkama-compiler/src/syntax/print/mod.rs` 92 — AST and token printers.
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
@@ -115,7 +115,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2335 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 32941 lines
+## sparrow — 64 files, 32992 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -166,7 +166,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_origin.rs` 194 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
 - `sparrow-core/src/host/native_process.rs` 635 — Process ABI is a thin typed owner around Tokio children and OS pipes.
-- `sparrow-core/src/host/native_regex.rs` 1714 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
+- `sparrow-core/src/host/native_regex.rs` 1765 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
 - `sparrow-core/src/host/native_root.rs` 440 — Descriptor-relative rooted access. No child operation reconstructs an ambient
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2634 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each

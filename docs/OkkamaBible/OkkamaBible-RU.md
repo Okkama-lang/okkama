@@ -8934,7 +8934,19 @@ object Cash {
 has digit is int;                 // обязательное: конструктор должен связать
 has cents is int = 0;             // необязательное: значение по умолчанию
 has given, family is string;      // несколько имён, один тип
+has currency = "USD";             // тип даёт инициализатор: string
 ```
+
+**Тип поля может дать его инициализатор.** `has currency = "USD";` объявляет
+поле типа `string` ровно так же, как `has currency is string = "USD";`. Это
+вывод типа во время компиляции, а не динамическая типизация: компилятор один
+раз берёт статический тип инициализатора, у каждого объекта поле остаётся
+этого типа, а конструкторы и преемники проверяются по нему, как по
+написанному типу. Тип даёт только инициализатор, а не присваивание в
+конструкторе, поэтому `has digit;` — ошибка, которая просит написать тип.
+Инициализатор, который типа не задаёт, например пустой `[]` или `[:]`,
+требует явного типа (`has items is @string = [];`), и ничто не расширяется до
+`any`.
 
 Два правила отличают поля от полей в большинстве языков.
 
@@ -25650,7 +25662,7 @@ object_decl   = "object" TYPE_NAME [ generic_params ] [ "does" type { "," type }
 object_body   = "{" { object_member } "}" ;
 object_member = has_decl | constructor | action_decl | "hidden" action_decl
               | cap_decl | destroy_decl | test_decl ;
-has_decl      = "has" LOWER_NAME { "," LOWER_NAME } [ "is" type ] [ "=" expression ] ";" ;
+has_decl      = "has" LOWER_NAME { "," LOWER_NAME } ( "is" type [ "=" expression ] | "=" expression ) ";" ;
 destroy_decl  = [ "async" ] "destroy" block ;
 ```
 
@@ -25659,8 +25671,10 @@ destroy_decl  = [ "async" ] "destroy" block ;
 - `hidden` допустим только перед действием; перед конструктором, полем, cap,
   `destroy` или тестом это синтаксическая ошибка. `hidden(` — действие с
   именем `hidden`, `has(` — действие с именем `has`.
-- `has x;` и `has x = 1;` разбираются (позже отвергаются: «Fields without an
-  explicit type are not supported by the analysis yet», #967).
+- Поле без типа получает его от инициализатора во время компиляции:
+  `has x = 1;` — это `has x is int = 1;`. Без типа и без инициализатора
+  (`has x;`) проверка требует тип, а инициализатор, который тип не задаёт
+  (`[]`, `[:]`), требует написать его явно.
 
 ```text
 constructor = TYPE_NAME parameter_list block                      (* full *)
@@ -25806,7 +25820,7 @@ pattern    = expression ;     (* a value, Enum.case, or Enum.case(binding | "_",
 
 ```text
 for_stmt    = "for" [ "await" ] source "->" for_binding { "," for_binding } block ;
-for_binding = BINDING [ "[" INT "]" ] ;            (* batch size *)
+for_binding = BINDING ;                            (* one name *)
 loop_stmt   = "loop" block ;
 next_stmt   = "next" [ "if" expression ] ";" ;     (* never a value *)
 last_stmt   = "last" [ expression ] [ "if" expression ] ";" ;
@@ -25815,8 +25829,9 @@ last_stmt   = "last" [ expression ] [ "if" expression ] ";" ;
 - Стрелка на верхнем уровне источника `for` принадлежит самому `for`, поэтому
   функциональный вызов в роли источника берётся в скобки.
 - `for` без источника — ошибка: пишите `loop`.
-- Пакетные привязки `x[64]` разбираются (позже отвергаются: «Analysis of
-  batched `for` bindings is not implemented yet», #967).
+- Привязка — одно имя. `x[64]` — синтаксическая ошибка: пакеты — дело
+  источника (источник, который `does Batching<T>`, привязывает по одному `@T`
+  за шаг).
 
 ```text
 return_stmt  = "return" [ expression ] [ "if" expression ] ";" ;

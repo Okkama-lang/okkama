@@ -6,6 +6,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Changed
+- **A field's type can come from its initializer (#967, owner decision).** `has value = 1;` is an `int` field:
+  the type is inferred at compile time from the initializer, checked like a written one, and must be a type an
+  annotation could write (an untyped `[]` or `[:]`, or a range, needs its type written). A field with neither
+  type nor initializer is an error at its name.
+- **Batched `for` bindings are not part of Okkama (#967).** `for xs -> b[2]` is a syntax error that points to
+  sources that do `Batching<T>`; it used to parse and then fail as "not implemented yet".
+
+### Security
+- **Regex input preparation is bounded (#961).** Sparrow counted a regex input against its scalar limit only
+  after copying it whole; it now stops at the limit and stores an admitted input at its exact size.
+
 ### Fixed
 - **Three compiler crashes are diagnostics now.** An enum with no cases is rejected at its name (#966);
   `[].join(",")` joins an untyped empty array as an empty `@string` instead of producing invalid IR (#969); a
