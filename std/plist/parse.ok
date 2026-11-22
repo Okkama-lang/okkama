@@ -203,23 +203,11 @@ object PlistXmlSource {
 
     // Where delimiter next occurs from start.
     until(start is int, delimiter is string) is int {
-        let symbols = self.symbols();
-        let wanted = delimiter.characters();
-        for (start..symbols.size()) -> index {
-            if self.matching(symbols, wanted, index) {
-                return index;
-            }
-        }
-        throw self.failure(start, "unterminated XML token");
-    }
-
-    hidden matching(symbols is @char, wanted is @char, index is int) is bool {
-        if index + wanted.size() > symbols.size() {
-            return false;
-        }
-        (0..wanted.size()).reduce(true) -> same, offset {
-            same && symbols[index + offset].code() == wanted[offset].code();
-        };
+        // One substring search instead of a code comparison per position (#948).
+        confirm start <= origin.length() else throw self.failure(start, "unterminated XML token");
+        let found = origin.slice(start, origin.length()).find(delimiter) else -1;
+        confirm found >= 0 else throw self.failure(start, "unterminated XML token");
+        start + found;
     }
 
     // Where character data ends.
@@ -1399,6 +1387,24 @@ test "XML plist text decodes references and line breaks and scans for delimiters
     test.is(source.decoded("plain чай", 0), "plain чай");
     test.is(source.until(0, "</"), 6);
     test.is(source.until(10, "-->"), 17);
+    // #948: positions in code points at the start, in the middle and at the end; an empty delimiter is found
+    // where the search starts; a missing one is refused at the start of the search.
+    test.is(source.until(0, "<a>"), 0);
+    test.is(source.until(4, "</a>"), 6);
+    test.is(source.until(17, "-->"), 17);
+    test.is(source.until(5, ""), 5);
+    let starts = [0, 18, 20];
+    let markers = ["<b>", "-->", ">"];
+    for (0..starts.size()) -> index {
+        let refused = try {
+            source.until(starts[index], markers[index]);
+            false;
+        }
+        catch e is InvalidPlist {
+            true;
+        };
+        test.ok(refused);
+    }
     test.is(source.text_end(3), 6);
     test.is(source.checked("ok чай", 0), "ok чай");
     test.ok(

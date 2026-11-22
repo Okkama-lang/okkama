@@ -160,6 +160,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **A TOML date-time with both `Z` and a numeric offset is refused (#947).** `1979-05-27T07:32:00Z12:30` was read as
   +12:30; RFC 3339 allows one or the other, so it is now `InvalidToml` ("invalid fixed offset").
 
+- **Reading an XML plist no longer scans character by character for its delimiters (#948).**
+  `PlistXmlSource.until` compared codes at every position after building the text's character array; one
+  substring search replaces it (20 000 searches in 600 characters: 0.24 s → 0.03 s).
+
 ### Changed
 
 - **An `async destroy` guard costs what a deferred close costs (#329).** A guard with its own async destroy,
