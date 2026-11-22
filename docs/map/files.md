@@ -2,9 +2,9 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 21926 lines
+## front — 36 files, 21953 lines
 
-- `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
+- `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 119 — `once let` (#491): a kept value must not depend on effects. A value that
 - `okkama-compiler/src/analysis/registry.rs` 3048 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
@@ -41,7 +41,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11758 lines
+## lower — 14 files, 11763 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1588 — Контекст lowering из THIR: специализации, функции, объявления OIR.
@@ -53,9 +53,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
 - `okkama-compiler/src/lowering/body/builtins.rs` 199 — Builtins built from existing instructions (#210, #211, #231): searches and
 - `okkama-compiler/src/lowering/body/calls.rs` 858 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
-- `okkama-compiler/src/lowering/body/collections.rs` 1633 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
+- `okkama-compiler/src/lowering/body/collections.rs` 1636 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
 - `okkama-compiler/src/lowering/body/matching.rs` 803 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
-- `okkama-compiler/src/lowering/body/mod.rs` 3110 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
+- `okkama-compiler/src/lowering/body/mod.rs` 3112 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
 ## ir — 12 files, 7568 lines
@@ -200,7 +200,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 34669 lines
+## other — 85 files, 34832 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -228,7 +228,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-abi/src/table.rs` 575
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
-- `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
+- `okkama-runtime-core/src/budget.rs` 58 — Allocation accounting and memory scope shared with Sparrow.
 - `okkama-runtime-core/src/data.rs` 88 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
 - `okkama-runtime-core/src/failure.rs` 238 — Engine-independent failure records carried on exceptional control-flow edges. A record's kind and
 - `okkama-runtime-core/src/float.rs` 394 — `float` (OIR-1 §16.2): конечное binary64. Неконечный результат и делитель 0 —
@@ -251,9 +251,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/bytes.rs` 85 — `runtime/bytes`: views of a byte range (`encoding/bytes`), the same
 - `okkama-runtime-core/src/native/cldr.rs` 132 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 - `okkama-runtime-core/src/native/collation.rs` 286 — `runtime/collation` и `runtime/locale` — перенос `CollationNatives` и
-- `okkama-runtime-core/src/native/compression.rs` 753 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
+- `okkama-runtime-core/src/native/compression.rs` 777 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
 - `okkama-runtime-core/src/native/db.rs` 300 — Immutable database cells. External DbValue protocols are checked by stdlib
-- `okkama-runtime-core/src/native/encoding.rs` 958 — `runtime/hex`, `runtime/base32`, `runtime/base64`, `runtime/base85`,
+- `okkama-runtime-core/src/native/encoding.rs` 972 — `runtime/hex`, `runtime/base32`, `runtime/base64`, `runtime/base85`,
 - `okkama-runtime-core/src/native/formats.rs` 421 — Natives форматов данных: `runtime/io_decorators`,
 - `okkama-runtime-core/src/native/fs.rs` 1995 — `runtime/fs`: лексические пути (File::Spec Unix/Win32), файлы, каталоги,
 - `okkama-runtime-core/src/native/host.rs` 361 — Natives часов, ожидания, случайности и сведений хоста — перенос
@@ -262,23 +262,23 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/idna.rs` 597 — `runtime/idna` и `runtime/public_suffix`:
 - `okkama-runtime-core/src/native/input.rs` 99 — `runtime/input_state` (буфер UTF-8 ввода) и `runtime/process::process_arguments`
 - `okkama-runtime-core/src/native/inspect.rs` 185 — `runtime/debug`: описание одного значения для `debug/dumper` — вид, тип,
-- `okkama-runtime-core/src/native/jre.rs` 232 — Совместимая с Java семантика, которую используют natives Sparrow: регулярные
-- `okkama-runtime-core/src/native/json.rs` 798 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
+- `okkama-runtime-core/src/native/jre.rs` 245 — Совместимая с Java семантика, которую используют natives Sparrow: регулярные
+- `okkama-runtime-core/src/native/json.rs` 824 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
 - `okkama-runtime-core/src/native/json_split.rs` 256 — JSON items cut from a stream (#136): the elements of one top-level array,
-- `okkama-runtime-core/src/native/math.rs` 786 — Числовые natives: `runtime/format::sprintf_values`
-- `okkama-runtime-core/src/native/misc.rs` 555 — Небольшие natives std: `runtime/crypto`,
+- `okkama-runtime-core/src/native/math.rs` 846 — Числовые natives: `runtime/format::sprintf_values`
+- `okkama-runtime-core/src/native/misc.rs` 531 — Небольшие natives std: `runtime/crypto`,
 - `okkama-runtime-core/src/native/net.rs` 193 — `runtime/net` (числовые IP-адреса): текст
 - `okkama-runtime-core/src/native/network.rs` 1677 — `runtime/network`: TCP-слушатели и потоки, UDP, multicast, Unix-сокеты и
 - `okkama-runtime-core/src/native/numbers.rs` 216 — `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части
 - `okkama-runtime-core/src/native/postgres.rs` 129 — `runtime/postgres`: the DataRow messages of one result portion become one
 - `okkama-runtime-core/src/native/process.rs` 868 — `runtime/process`: потомки
-- `okkama-runtime-core/src/native/regex.rs` 1594 — `runtime/regex`: собственный движок регулярных выражений Okkama — перенос
+- `okkama-runtime-core/src/native/regex.rs` 1615 — `runtime/regex`: собственный движок регулярных выражений Okkama — перенос
 - `okkama-runtime-core/src/native/signal.rs` 388 — `runtime/signal`: ожидание сигналов процесса (TERM, INT, HUP), #80.
 - `okkama-runtime-core/src/native/sqlite.rs` 1815 — `runtime/database` (provider `optional.sqlite`) — перенос `SqliteNatives`
 - `okkama-runtime-core/src/native/stdio.rs` 350 — Raw byte streams. Text encoding and line normalization belong to std.
 - `okkama-runtime-core/src/native/support.rs` 116 — Общие преобразования значений для providers: аргументы, результаты,
 - `okkama-runtime-core/src/native/system.rs` 569 — `runtime/fs_root` (доступ под корнем без следования ссылкам),
-- `okkama-runtime-core/src/native/text.rs` 451 — Natives байтовых и текстовых преобразований — перенос части `TextNatives`
+- `okkama-runtime-core/src/native/text.rs` 471 — Natives байтовых и текстовых преобразований — перенос части `TextNatives`
 - `okkama-runtime-core/src/native/time.rs` 453 — `runtime/time_zone` (встроенный tzdb 2026c, `tzdb.dat`), включая
 - `okkama-runtime-core/src/native/tls.rs` 797 — `runtime/tls_transport`: TLS-клиент и (#209)
 - `okkama-runtime-core/src/native/unicode.rs` 158 — `runtime/unicode_character`: свойства символов по таблицам Unicode::UCD
