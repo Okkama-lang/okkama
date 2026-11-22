@@ -1,0 +1,32 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/tag" take Locale, LocaleExtensions, CompleteLanguageTag;
+
+// Five tags with and without u, t and private-use extensions: extensions read, tags split into base and suffix.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let tags is @string = ["de-DE-u-attr-ca-buddhist-nu-latn-t-en-h0-hybrid-x-priv", "sr-Latn-RS-u-nu-latn", "en-US-u-co-phonebk-x-a-b", "zh-Hant-TW-t-ja", "fr-CA"];
+        let text = tags[i % 5];
+        let ext = LocaleExtensions(Locale(text));
+        let unicode = ext.unicode();
+        let tag = CompleteLanguageTag(text).tag();
+        let total = ext.attributes().size() + 10 * unicode.size() + (if unicode.size() > 0 { unicode.item(0).string().length(); } else { 0; })
+            + 100 * ext.transformations().size() + tag.base_tag().length() + tag.suffix().length() + tag.string().length();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

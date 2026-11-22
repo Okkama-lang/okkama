@@ -5,12 +5,19 @@ import "../support/harness" take Measurement;
 import "regex/pattern" take Regex;
 import "regex/search" take FirstRegexMatch;
 
-
+// The first match of a pattern anywhere: groups, an int, an optional group, its range.
 object Bench {
     Bench();
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        self.run(i + 1, n, acc + (FirstRegexMatch("one " + i.string() + " three", Regex("\\d+")).text().length()) % 7);
+        let v = i % 9 + 1;
+        let x = v.string();
+        let text = "=" + x + " k" + x + "=" + x + x + " name=n" + x;
+        let pair = Regex("(?<key>[a-z]+)(?<id>\\d)?=(?<num>\\d+)");
+        let firsts = FirstRegexMatch(origin: text, regex: pair);
+        let total = firsts.captures().size() + firsts.group("num").range()::Bounds::end + firsts.int("num")
+            + (firsts.maybe("id").int() else 0) + firsts.range()::Bounds::end;
+        self.run(i + 1, n, acc + total % 7);
     }
 }
 

@@ -1,0 +1,55 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "locale/date_time" take GregorianLocaleData, DateStyle, TimeStyle, DateTimeStyle;
+import "locale/tag" take Locale;
+import "time/date" take Date, Weekday;
+import "time/day" take TimeOfDay;
+import "locale/date_time" take LocalizedTime, LocalizedLocalDateTime, LocalizedInstant, LocalizedZoneObservation, LocalizedZoneName;
+import "time/local_datetime" take LocalDateTime;
+import "time/zone" take Zone, FixedZone;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+
+// The sum of the code points of a text.
+hidden object Codes {
+    Codes();
+    of(text is string) is int {
+        text.characters().reduce(0) -> sum, c { sum + c.code(); };
+    }
+}
+
+// Short times and date-times of en, de and fr, local and at an instant in a fixed zone; an instant observed in Europe/Berlin and its wide zone name.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let locale = Locale(["en", "de", "fr"][i % 3]);
+        let data = GregorianLocaleData(locale);
+        let short = DateTimeStyle(date: DateStyle.short, time: TimeStyle.short);
+        let time = TimeOfDay(hour: i % 24, minute: i * 7 % 60, second: 0, nanosecond: 0);
+        let local = LocalDateTime(date: Date(year: 2026, month: i % 12 + 1, day: i % 28 + 1), time: time);
+        let instant = Instant(origin: Duration(seconds: 1767600000 + i * 1234567));
+        let observed = LocalizedZoneObservation(zone: Zone("Europe/Berlin"), instant: instant);
+        let c = Codes();
+        let total = c.of(LocalizedTime(origin: time, locale: locale, style: TimeStyle.short).string())
+            + c.of(LocalizedLocalDateTime(origin: local, locale: locale, style: short).string())
+            + c.of(LocalizedInstant(origin: instant, zone: FixedZone("X", Duration(hours: 3)), locale: locale, style: short).string())
+            + c.of(LocalizedLocalDateTime(origin: observed.local(), locale: locale, style: short).string())
+            + c.of(LocalizedZoneName(origin: observed, data: data, wide: true).string())
+            + c.of(data.combination(DateStyle.short));
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

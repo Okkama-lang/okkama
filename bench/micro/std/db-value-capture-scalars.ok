@@ -1,0 +1,37 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/value" take DbValueCapture, DbValueKind;
+
+// The print protocol of the db layer fed a boolean, a large integer and a float, then read back.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let b = DbValueCapture(DbValueKind.boolean);
+        b.boolean(v % 2 == 0);
+        b.finish();
+        let num = DbValueCapture(DbValueKind.integer);
+        num.integer(v * 1000003);
+        num.finish();
+        let f = DbValueCapture(DbValueKind.floating);
+        f.floating(if v % 2 == 0 { 2.5; } else { 7.25; });
+        f.finish();
+        let total = (if b.boolean_value() { 1; } else { 0; }) + num.integer_value() % 1000 + f.floating_value().int();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -128,6 +128,8 @@ def contribution(name, i):
         return WORK244_ORACLES[name](i, v, str(v))
     if name in HTTP244_PROGRAMS:
         return http244_contribution(name, i)
+    if name in WORK244_PROGRAMS:
+        return work244_contribution(name, i)
     if name in {'baseline','constructor-generic','destroy','defer','async-await','spawn','channel','cancel','cancel-async-cleanup','event-wake','map-bigint-key','map-long-key','map-replace','map-empty','rat-add','rat-int-round-trip','json-parse','map-plus','array-plus','map-literal','map-literal-8','map-literal-12'}: return i % 7
     if name=='baseline-async':return i%7
     if name in {'defer-observed','destroy-observed'}:return i%7+1
@@ -1037,3 +1039,1780 @@ WORK244_ORACLES = {
     'http2-conversation-exchange': lambda i, v, x: 200+v,
     'http2-server-lifecycle': lambda i, v, x: v,
 }
+
+# BEGIN #244 WORK (independent, hand-written formulas)
+
+
+def sha512_256_hex(message):
+    """FIPS 180-4 SHA-512/256: SHA-512 with its own initial values, truncated to 256 bits."""
+    mask = (1 << 64) - 1
+    primes = []
+    c = 2
+    while len(primes) < 80:
+        if all(c % p for p in primes if p * p <= c):
+            primes.append(c)
+        c += 1
+    def root(p, e):
+        # The first 64 fractional bits of p ** (1/e), exactly.
+        lo, hi = 0, 1 << 80
+        n = p << (64 * e)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if mid ** e <= n: lo = mid
+            else: hi = mid - 1
+        return lo & mask
+    k = [root(p, 3) for p in primes]
+    h = [0x22312194FC2BF72C, 0x9F555FA3C84C64C2, 0x2393B86B6F53B151, 0x963877195940EABD,
+         0x96283EE2A88EFFE3, 0xBE5E1E2553863992, 0x2B0199FC2C85B8AA, 0x0EB72DDC81C52CA2]
+    rot = lambda x, n: ((x >> n) | (x << (64 - n))) & mask
+    data = message + b"\x80" + b"\x00" * ((111 - len(message)) % 128) + (8 * len(message)).to_bytes(16, "big")
+    for start in range(0, len(data), 128):
+        w = [int.from_bytes(data[start + 8 * t:start + 8 * t + 8], "big") for t in range(16)]
+        for t in range(16, 80):
+            s0 = rot(w[t - 15], 1) ^ rot(w[t - 15], 8) ^ (w[t - 15] >> 7)
+            s1 = rot(w[t - 2], 19) ^ rot(w[t - 2], 61) ^ (w[t - 2] >> 6)
+            w.append((w[t - 16] + s0 + w[t - 7] + s1) & mask)
+        a, b, c, d, e, f, g, hh = h
+        for t in range(80):
+            t1 = (hh + (rot(e, 14) ^ rot(e, 18) ^ rot(e, 41)) + ((e & f) ^ (~e & g)) + k[t] + w[t]) & mask
+            t2 = ((rot(a, 28) ^ rot(a, 34) ^ rot(a, 39)) + ((a & b) ^ (a & c) ^ (b & c))) & mask
+            hh, g, f, e, d, c, b, a = g, f, e, (d + t1) & mask, c, b, a, (t1 + t2) & mask
+        h = [(x + y) & mask for x, y in zip(h, [a, b, c, d, e, f, g, hh])]
+    return b"".join(x.to_bytes(8, "big") for x in h)[:32].hex()
+
+
+def pem_der(text):
+    """The DER bytes of a PEM block (RFC 7468): base64 between the boundary lines."""
+    lines = [l for l in text.split("\n") if l and not l.startswith("-----")]
+    return base64.b64decode("".join(lines))
+
+
+ED_P = 2 ** 255 - 19
+ED_L = 2 ** 252 + 27742317777372353535851937790883648493
+ED_D = -121665 * pow(121666, ED_P - 2, ED_P) % ED_P
+
+
+def _ed_add(a, b):
+    p = ED_P
+    x1, y1, z1, t1 = a
+    x2, y2, z2, t2 = b
+    e1 = (y1 - x1) * (y2 - x2) % p
+    e2 = (y1 + x1) * (y2 + x2) % p
+    c = t1 * 2 * ED_D * t2 % p
+    d = z1 * 2 * z2 % p
+    e, f, g, h = e2 - e1, d - c, d + c, e2 + e1
+    return (e * f % p, g * h % p, f * g % p, e * h % p)
+
+
+def _ed_mul(s, point):
+    q = (0, 1, 1, 0)
+    while s > 0:
+        if s & 1:
+            q = _ed_add(q, point)
+        point = _ed_add(point, point)
+        s >>= 1
+    return q
+
+
+def _ed_encode(point):
+    zi = pow(point[2], ED_P - 2, ED_P)
+    x, y = point[0] * zi % ED_P, point[1] * zi % ED_P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+def _ed_base():
+    p = ED_P
+    y = 4 * pow(5, p - 2, p) % p
+    x2 = (y * y - 1) * pow(ED_D * y * y + 1, p - 2, p) % p
+    x = pow(x2, (p + 3) // 8, p)
+    if (x * x - x2) % p:
+        x = x * pow(2, (p - 1) // 4, p) % p
+    if x & 1:
+        x = p - x
+    return (x, y, 1, x * y % p)
+
+
+@lru_cache(maxsize=64)
+def ed25519_public(seed):
+    """RFC 8032 section 5.1.5."""
+    h = hashlib.sha512(seed).digest()
+    a = (int.from_bytes(h[:32], "little") & ((1 << 254) - 8)) | (1 << 254)
+    return _ed_encode(_ed_mul(a, _ed_base()))
+
+
+@lru_cache(maxsize=64)
+def ed25519_sign(seed, message):
+    """RFC 8032 section 5.1.6."""
+    h = hashlib.sha512(seed).digest()
+    a = (int.from_bytes(h[:32], "little") & ((1 << 254) - 8)) | (1 << 254)
+    public = _ed_encode(_ed_mul(a, _ed_base()))
+    r = int.from_bytes(hashlib.sha512(h[32:] + message).digest(), "little") % ED_L
+    big_r = _ed_encode(_ed_mul(r, _ed_base()))
+    k = int.from_bytes(hashlib.sha512(big_r + public + message).digest(), "little") % ED_L
+    return big_r + ((r + k * a) % ED_L).to_bytes(32, "little")
+
+
+@lru_cache(maxsize=64)
+def x25519(scalar, u):
+    """RFC 7748 section 5: the Montgomery ladder for any u."""
+    p = 2 ** 255 - 19
+    k = bytearray(scalar)
+    k[0] &= 248; k[31] &= 127; k[31] |= 64
+    k = int.from_bytes(k, "little")
+    x1 = int.from_bytes(u, "little") & ((1 << 255) - 1)
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+    for t in reversed(range(255)):
+        bit = (k >> t) & 1
+        swap ^= bit
+        if swap:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+        a, b = (x2 + z2) % p, (x2 - z2) % p
+        aa, bb = a * a % p, b * b % p
+        e = (aa - bb) % p
+        c, d = (x3 + z3) % p, (x3 - z3) % p
+        da, cb = d * a % p, c * b % p
+        x3, z3 = (da + cb) ** 2 % p, x1 * (da - cb) ** 2 % p
+        x2, z2 = aa * bb % p, e * (aa + 121665 * e) % p
+    if swap:
+        x2, x3, z2, z3 = x3, x2, z3, z2
+    return (x2 * pow(z2, p - 2, p) % p).to_bytes(32, "little")
+
+
+def _w244_collections_views_bounds(i):
+    """collections-views-bounds"""
+    import itertools
+    v = i % 5 + 3
+    xs = list(range(1, v + 1))
+    return (sum(xs[2:]) + sum(itertools.dropwhile(lambda x: x < 3, xs)) + sum(xs[1:v:2]) + sum(xs[:2])
+            + sum(itertools.takewhile(lambda x: x < 3, xs)))
+
+
+def _w244_collections_views_transform(i):
+    """collections-views-transform"""
+    import itertools
+    v = i % 5 + 3
+    xs = list(range(1, v + 1))
+    return (sum(itertools.accumulate(xs, initial=0)) + sum(x for x in xs if x % 2 == 0) + sum(xs) + 10
+            + sum(x * x for x in xs) + (v - 1) + (1 + sum(xs)))
+
+
+def _w244_collections_views_reversed(i):
+    """collections-views-reversed"""
+    v = i % 5 + 3
+    xs = list(range(1, v + 1))
+    r = xs[::-1]
+    return sum(r) + r[0] + r[-1] + r[1] + 2 * sum(xs) + v
+
+
+def _w244_collections_combinatorics(i):
+    """collections-combinatorics"""
+    import itertools
+    v = i % 5 + 3
+    xs = list(range(1, v + 1))
+    return (len(list(itertools.product([1, 2], xs))) + len(list(itertools.combinations_with_replacement(xs, 2)))
+            + len(list(itertools.permutations([1, 2, 3, 4][:i % 2 + 3]))))
+
+
+def _w244_collections_set_union(i):
+    """collections-set-union"""
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    ys = [2, v, 9]
+    left = set(xs); right = set(ys)
+    b = lambda c: 1 if c else 0
+
+    return (sum(left) + len(left) + b(4 in left) + sum(left | right) + b(9 in (left | right))
+            + sum(left & right) + len(left & right) + b(2 in (left & right)))
+
+
+def _w244_collections_set_difference(i):
+    """collections-set-difference"""
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    ys = [2, v, 9]
+    left = set(xs); right = set(ys)
+    b = lambda c: 1 if c else 0
+
+    return (sum(left - right) + len(left - right) + b(2 in (left - right))
+            + sum(left ^ right) + len(left ^ right) + b(9 in (left ^ right)))
+
+
+def _w244_collections_set_edits(i):
+    """collections-set-edits"""
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    ys = [2, v, 9]
+    left = set(xs); right = set(ys)
+    b = lambda c: 1 if c else 0
+
+    return sum(left | {7}) + len(left | {7}) + sum(left - {1}) + len(left - {1}) + sum(left) + len(left)
+
+
+def _w244_collections_sorted(i):
+    """collections-sorted"""
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    up = sorted(xs); down = sorted(xs, key=lambda x: -x)
+    return sum(xs) + up[1] + up[-1] + len(xs) + sum(xs) + down[0] + down[1] + down[-1]
+
+
+def _w244_collections_ordering_search(i):
+    """collections-ordering-search"""
+    import bisect
+    v = i % 5 + 3
+    s = [1, 2, 4, 4, 8]
+    return 3 + (1 if v < 4 else 2) + [1, 2, 4, v + 10].index(4) + bisect.bisect_left(s, v) + bisect.bisect_right(s, v)
+
+
+def _w244_collections_heap_deque(i):
+    """collections-heap-deque"""
+    import heapq
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    h = xs + [0]
+    heapq.heapify(h)
+    heapq.heappop(h); heapq.heappop(h)
+    return len(h) + h[0] + sum(xs) + xs[2] + len(xs[1:])
+
+
+def _w244_collections_frequencies(i):
+    """collections-frequencies"""
+    from collections import Counter
+    v = i % 5 + 3
+    xs = [v, 1, v, 4, 2, 4]
+    c = Counter(xs)
+    w = sum(k * a for k, a in c.items())
+    return w + w + len(c) + sum(c.values()) + 2
+
+
+def _w244_digest_blake2b(i):
+    """digest-blake2b"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.blake2b(m, digest_size=32).hexdigest()) + first(hashlib.blake2b(m, key=key).hexdigest())
+
+
+def _w244_digest_blake2s(i):
+    """digest-blake2s"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.blake2s(m, digest_size=32).hexdigest()) + first(hashlib.blake2s(m, key=key).hexdigest())
+
+
+def _w244_digest_legacy_blocks(i):
+    """digest-legacy-blocks"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    size = i % 100 + 1
+    # Merkle-Damgard padding: 0x80, zeros, an 8-byte length; blocks of 64 bytes.
+    blocks = ((2 * size + 9 + 63) // 64) % 256
+    return first(hashlib.md5(m).hexdigest()) + first(hashlib.sha1(m).hexdigest()) + blocks
+
+
+def _w244_digest_sha2_small(i):
+    """digest-sha2-small"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.sha224(m).hexdigest()) + first(hashlib.sha256(m).hexdigest()) + first(hashlib.sha224(m[:-1]).hexdigest())
+
+
+def _w244_digest_sha2_wide(i):
+    """digest-sha2-wide"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return (first(hashlib.sha384(m).hexdigest()) + first(hashlib.sha512(m).hexdigest()) + first(sha512_256_hex(m)))
+
+
+def _w244_digest_sha3_small(i):
+    """digest-sha3-small"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.sha3_224(m).hexdigest()) + first(hashlib.sha3_256(m).hexdigest())
+
+
+def _w244_digest_sha3_wide(i):
+    """digest-sha3-wide"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.sha3_384(m).hexdigest()) + first(hashlib.sha3_512(m).hexdigest())
+
+
+def _w244_digest_shake(i):
+    """digest-shake"""
+    x = str(i % 251 + 1).encode()
+    m = b"a" + x + b"b"
+    key = b"key" + x
+    first = lambda h: int(h[0], 16)
+
+    return first(hashlib.shake_128(m).hexdigest(16)) + first(hashlib.shake_256(m).hexdigest(16))
+
+
+def _w244_digest_read(i):
+    """digest-read"""
+    data = bytes(k % 256 for k in range(i % 100 + 1))
+    return hashlib.sha256(b"p" + data).digest()[0] + hashlib.sha256(data).digest()[0] + hashlib.sha256(b"q" + data).digest()[0]
+
+
+def _w244_regex_pattern_queries(i):
+    """regex-pattern-queries"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    return 1 + len(found) + pair.groups + len(pair.groupindex) + (len(found) + 1) + len(pair.sub("#", text))
+
+
+def _w244_regex_observation(i):
+    """regex-observation"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    p = pair.match(text)
+    return 1 + len(m.group(0)) + 1 + p.end() + int(m.group("id"))
+
+
+def _w244_regex_match_groups(i):
+    """regex-match-groups"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    return (len(m.group(0)) + len(m.group("num")) + int(m.group("num")) + m.end() + pair.groups + m.start("key") + m.end(1)
+            + int(m.group("id")))
+
+
+def _w244_regex_first_match(i):
+    """regex-first-match"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "=" + x + " k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    return pair.groups + m.end("num") + int(m.group("num")) + int(m.group("id")) + m.end()
+
+
+def _w244_regex_prefix_match(i):
+    """regex-prefix-match"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    p = pair.match(text)
+    return (p.start(3) + pair.groups + p.end("key") + int(p.group("num")) + int(p.group("id")) + p.end() + len(p.group(0))
+            + len(p.group("num")))
+
+
+def _w244_regex_entire_match(i):
+    """regex-entire-match"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+    whole = re.fullmatch(r"(?P<key>k)(?P<id>\d)=(?P<num>\d+) name=(?P<rest>\w+)", text)
+
+    return (whole.start(4) + 4 + whole.end("rest") + int(whole.group("num")) + int(whole.group("id")) + whole.end()
+            + len(whole.group(0)) + len(whole.group("rest")))
+
+
+def _w244_regex_replace_forms(i):
+    """regex-replace-forms"""
+    v = i % 9 + 1
+    x = str(v)
+    text = "k" + x + "=" + x + x + " name=n" + x
+    pair = re.compile(r"(?P<key>[a-z]+)(?P<id>\d)?=(?P<num>\d+)")
+    found = list(pair.finditer(text))
+    m = found[0]
+
+    return len(m.expand(r"\g<num>-\1")) + len(found) + 1 + len(re.findall(r"\d", text))
+
+
+def _w244_toml_table_scalars(i):
+    """toml-table-scalars"""
+    v = i % 9 + 1
+    x = str(v)
+    # port = v, ratio = v.5 (truncated), on, two tags, ports [1, v], host "h<v>", the same value twice.
+    return v + int(float(x + ".5")) + 1 + 2 + v + len("h" + x) + 1
+
+
+def _w244_toml_table_lists(i):
+    """toml-table-lists"""
+    v = i % 9 + 1
+    return 2 + 3 + v + 2 + 2 + 2 + 1
+
+
+def _w244_toml_temporal(i):
+    """toml-temporal"""
+    v = i % 9 + 1
+    when = datetime.datetime(2026, v, 1, 7, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+    day = datetime.date(2026, 1, v)
+    at = datetime.time(7, 30 + v)
+    local = datetime.datetime(2026, 1, 1, 0, 0, v)
+    return len(when.isoformat()) + len(day.isoformat()) + len(at.isoformat()) + len(local.isoformat())
+
+
+def _w244_toml_maybe_scalars(i):
+    """toml-maybe-scalars"""
+    v = i % 9 + 1
+    return v + 0 + 1 + v + 1 + 2 + len("svc" + str(v)) + 1 + len("+05:30")
+
+
+def _w244_toml_values_built(i):
+    """toml-values-built"""
+    v = i % 9 + 1
+    return 2 + v + len(datetime.date(2000 + v, v, v).isoformat()) + len("-inf" if v % 2 == 0 else "inf")
+
+
+def _w244_json_node_reads(i):
+    """json-node-reads"""
+    v = i % 9 + 1
+    doc = {'id': v, 'name': 'n%d' % v, 'ok': True, 'price': float('%d.5' % v), 'none': None, 'tags': ['a', 'b'], 'inner': {'k': v}}
+    price = len(repr(doc['price']))
+
+    return v + len(doc['name']) + 1 + price + 2 + v + len(doc) + len(doc)
+
+
+def _w244_json_node_shape(i):
+    """json-node-shape"""
+    v = i % 9 + 1
+    doc = {'id': v, 'name': 'n%d' % v, 'ok': True, 'price': float('%d.5' % v), 'none': None, 'tags': ['a', 'b'], 'inner': {'k': v}}
+    price = len(repr(doc['price']))
+
+    return len(doc) + 2 + 1 + len('array') + len({**doc, 'id': 0, 'extra': 1}) + len(json.dumps(doc, indent=2))
+
+
+def _w244_json_maybe_reader(i):
+    """json-maybe-reader"""
+    v = i % 9 + 1
+    doc = {'id': v, 'name': 'n%d' % v, 'ok': True, 'price': float('%d.5' % v), 'none': None, 'tags': ['a', 'b'], 'inner': {'k': v}}
+    price = len(repr(doc['price']))
+
+    return v + v + 1 + 2 + v + 1 + price + 2 * v
+
+
+def _w244_json_maybe_presence(i):
+    """json-maybe-presence"""
+    v = i % 9 + 1
+    doc = {'id': v, 'name': 'n%d' % v, 'ok': True, 'price': float('%d.5' % v), 'none': None, 'tags': ['a', 'b'], 'inner': {'k': v}}
+    price = len(repr(doc['price']))
+
+    return 1 + 0 + len(doc['name']) + 1 + 2 + 3 + 1
+
+
+def _w244_json_presence_reader(i):
+    """json-presence-reader"""
+    v = i % 9 + 1
+    doc = {'id': v, 'name': 'n%d' % v, 'ok': True, 'price': float('%d.5' % v), 'none': None, 'tags': ['a', 'b'], 'inner': {'k': v}}
+    price = len(repr(doc['price']))
+
+    # RFC 6901: "~" is written "~0" and "/" is written "~1" inside a token.
+    return 2 + 1 + 1 + len(doc['name']) + len('/a/%d' % v) + len(('a/b~%d' % v).replace('~', '~0').replace('/', '~1'))
+
+
+def _w244_json_streaming(i):
+    """json-streaming"""
+    v = i % 9 + 1
+    return v + 2 + len(json.dumps({'k': v, 't': [True]}, separators=(',', ':')) + '\n')
+
+
+def _w244_plist_xml_source(i):
+    """plist-xml-source"""
+    v = i % 9 + 1
+    x = str(v)
+    text = ('<?xml version="1.0"?>\n<plist version="1.0"><dict>'
+            '<key>name</key><string>App &amp; ' + x + '</string><key>on</key><true/><key>ratio</key><real>' + x + '.5</real>'
+            '<key>blob</key><data>AQID</data><key>when</key><date>2026-01-0' + x + 'T00:00:00Z</date>'
+            '<key>tags</key><array><string>a</string><string>b' + x + '</string></array>'
+            '<key>ports</key><array><integer>1</integer><integer>' + x + '</integer></array>'
+            '<key>items</key><array><dict><key>id</key><integer>' + x + '</integer></dict></array>'
+            '<key>inner</key><dict><key>k</key><string>v' + x + '</string></dict></dict></plist>')
+    name_text = html.unescape('App &amp; ' + x)
+
+    plist_open = text.index('<plist')
+    return (text.index('<dict>') + text.index('<', 56) + (text.index('>', plist_open) + 1) + plist_open
+            + len('ab' + x) + len(html.unescape('a&amp;b' + x)) + 3 + len('bad'))
+
+
+def _w244_plist_xml_text(i):
+    """plist-xml-text"""
+    v = i % 9 + 1
+    x = str(v)
+    return len(' '.join((' a \n b' + x + ' ').split())) + len((' a' + x + ' ').strip()) + 1 + 1 + 2 + v
+
+
+def _w244_plist_dictionary_reads(i):
+    """plist-dictionary-reads"""
+    v = i % 9 + 1
+    x = str(v)
+    text = ('<?xml version="1.0"?>\n<plist version="1.0"><dict>'
+            '<key>name</key><string>App &amp; ' + x + '</string><key>on</key><true/><key>ratio</key><real>' + x + '.5</real>'
+            '<key>blob</key><data>AQID</data><key>when</key><date>2026-01-0' + x + 'T00:00:00Z</date>'
+            '<key>tags</key><array><string>a</string><string>b' + x + '</string></array>'
+            '<key>ports</key><array><integer>1</integer><integer>' + x + '</integer></array>'
+            '<key>items</key><array><dict><key>id</key><integer>' + x + '</integer></dict></array>'
+            '<key>inner</key><dict><key>k</key><string>v' + x + '</string></dict></dict></plist>')
+    name_text = html.unescape('App &amp; ' + x)
+
+    return len(name_text) + 1 + v + len(base64.b64decode('AQID')) + 1 + v + v + len('v' + x)
+
+
+def _w244_plist_dictionary_maybe(i):
+    """plist-dictionary-maybe"""
+    v = i % 9 + 1
+    x = str(v)
+    text = ('<?xml version="1.0"?>\n<plist version="1.0"><dict>'
+            '<key>name</key><string>App &amp; ' + x + '</string><key>on</key><true/><key>ratio</key><real>' + x + '.5</real>'
+            '<key>blob</key><data>AQID</data><key>when</key><date>2026-01-0' + x + 'T00:00:00Z</date>'
+            '<key>tags</key><array><string>a</string><string>b' + x + '</string></array>'
+            '<key>ports</key><array><integer>1</integer><integer>' + x + '</integer></array>'
+            '<key>items</key><array><dict><key>id</key><integer>' + x + '</integer></dict></array>'
+            '<key>inner</key><dict><key>k</key><string>v' + x + '</string></dict></dict></plist>')
+    name_text = html.unescape('App &amp; ' + x)
+
+    return 2 + 1 + 1 + len(base64.b64decode('AQID')) + 1 + v
+
+
+def _w244_plist_maybe_more(i):
+    """plist-maybe-more"""
+    v = i % 9 + 1
+    x = str(v)
+    text = ('<?xml version="1.0"?>\n<plist version="1.0"><dict>'
+            '<key>name</key><string>App &amp; ' + x + '</string><key>on</key><true/><key>ratio</key><real>' + x + '.5</real>'
+            '<key>blob</key><data>AQID</data><key>when</key><date>2026-01-0' + x + 'T00:00:00Z</date>'
+            '<key>tags</key><array><string>a</string><string>b' + x + '</string></array>'
+            '<key>ports</key><array><integer>1</integer><integer>' + x + '</integer></array>'
+            '<key>items</key><array><dict><key>id</key><integer>' + x + '</integer></dict></array>'
+            '<key>inner</key><dict><key>k</key><string>v' + x + '</string></dict></dict></plist>')
+    name_text = html.unescape('App &amp; ' + x)
+
+    return 1 + v + len(name_text) + 2
+
+
+def _w244_xml_events(i):
+    """xml-events"""
+    v = i % 9 + 1
+    x = str(v)
+    doc = ('<?xml version="1.0" encoding="UTF-8"?><root xmlns=""><item xmlns="" id="' + x + '&lt;&amp;">t' + x
+           + '<!--c' + x + '--></item><?pi d' + x + '?>tail</root>')
+    # Events: root, item, text, comment, end item, pi, text, end root; kind 0 is a start tag.
+    return 8 + 0 + len('root') + len('t' + x) + doc.index('<item') + (1 if i % 2 == 0 else 0) + (0 if i % 3 == 0 else 2)
+
+
+def _w244_xml_node_build(i):
+    """xml-node-build"""
+    v = i % 9 + 1
+    x = str(v)
+    return (len('k="' + html.escape('"' + x) + '"') + len(html.escape('a<b' + x, quote=False)) + len('<?go ' + x + '?>')
+            + len('<!--' + x + '-->'))
+
+
+def _w244_xml_element(i):
+    """xml-element"""
+    v = i % 9 + 1
+    x = str(v)
+    item = '<item xmlns="" id="' + x + '&lt;&amp;">t' + x + '<!--c' + x + '--></item>'
+    root = '<root xmlns="">' + item + '<?pi d' + x + '?>tail</root>'
+    doc = '<?xml version="1.0" encoding="UTF-8"?>' + root
+    return len(doc) + len(root) + len(item) + 2 + 3 + 1 + len('t' + x) + len('t' + x)
+
+
+def _w244_uuid_named(i):
+    """uuid-named"""
+    v = i % 9 + 1
+    x = str(v)
+    dns = uuid.NAMESPACE_DNS
+    rank = lambda a, b: 1 if a.bytes < b.bytes else 2 if a.bytes == b.bytes else 3
+    u8 = uuid.UUID(int=(v << 80) | (8 << 76) | (v << 64) | (2 << 62) | v)
+
+    u3 = uuid.uuid3(dns, "n" + x); u5 = uuid.uuid5(dns, "n" + x)
+    return u3.bytes[0] + 1 + int(str(u5)[0], 16) + rank(u3, u5) + rank(u5, u3)
+
+
+def _w244_uuid_custom(i):
+    """uuid-custom"""
+    v = i % 9 + 1
+    x = str(v)
+    dns = uuid.NAMESPACE_DNS
+    rank = lambda a, b: 1 if a.bytes < b.bytes else 2 if a.bytes == b.bytes else 3
+    u8 = uuid.UUID(int=(v << 80) | (8 << 76) | (v << 64) | (2 << 62) | v)
+
+    return u8.bytes[15] + 36 + 2 + rank(u8, dns) + 1 + int(str(u8)[7], 16)
+
+
+def _w244_uuid_text(i):
+    """uuid-text"""
+    v = i % 9 + 1
+    x = str(v)
+    dns = uuid.NAMESPACE_DNS
+    rank = lambda a, b: 1 if a.bytes < b.bytes else 2 if a.bytes == b.bytes else 3
+    u8 = uuid.UUID(int=(v << 80) | (8 << 76) | (v << 64) | (2 << 62) | v)
+
+    text = uuid.UUID("6ba7b81" + x + "-9dad-11d1-80b4-00c04fd430c8")
+    return u8.version + (1 if u8.variant == uuid.RFC_4122 else 0) + rank(dns, u8) + 1 + rank(text, dns)
+
+
+def _w244_url_parts_read(i):
+    """url-parts-read"""
+    v = i % 9 + 1
+    x = str(v)
+    origin = "https://user@example.org:8443"
+    # RFC 3986 section 6.2.2: lower-case host, remove dot segments.
+    return (len("user@example.org:8443") + len("example.org") + len(str(ipaddress.ip_address("10.0.0." + x))) + 1
+            + len(origin + posixpath.normpath("/a/b/../c") + "?q=" + x + "#top"))
+
+
+def _w244_url_parts_edit(i):
+    """url-parts-edit"""
+    from urllib.parse import urljoin
+    v = i % 9 + 1
+    x = str(v)
+    origin = "https://user@example.org:8443"
+    raw = "https://user@example.org:8443/a/b/../c?q=" + x + "#top"
+    q = "k=" + x + "&on=true&k=2"
+    return (len(origin + "/a/b/../c/d/e" + x + "?q=" + x + "#top") + len(origin + "/a/b/../c?q=" + x + "&" + q + "#top")
+            + len(origin + "/a/b/../c?" + q + "#top") + len(urljoin(raw, "../z" + x)) + len("a%20b/" + x))
+
+
+def _w244_url_query(i):
+    """url-query"""
+    from urllib.parse import urlencode
+    v = i % 9 + 1
+    x = str(v)
+    pairs = [("k", x), ("on", "true"), ("k", "2")]
+    return 1 + 2 + v + 1 + 0 + len(urlencode(pairs))
+
+
+def _w244_url_form(i):
+    """url-form"""
+    from urllib.parse import urlencode, unquote_to_bytes
+    v = i % 9 + 1
+    x = str(v)
+    form = urlencode([("k", x + " &"), ("on", "true")])
+    return 2 + len(form) + len(form.encode()) + len(unquote_to_bytes("a%20b%2" + x))
+
+
+def _w244_db_value_capture_scalars(i):
+    """db-value-capture-scalars"""
+    v = i % 9 + 1
+    return (1 if v % 2 == 0 else 0) + (v * 1000003) % 1000 + (2 if v % 2 == 0 else 7)
+
+
+def _w244_db_value_capture_text(i):
+    """db-value-capture-text"""
+    v = i % 9 + 1
+    x = str(v)
+    # Widths are the payload sizes in bytes: UTF-8 for text, none for NULL.
+    return len(x + ".25") + len("\u00e9" + x) + 10 * len(("\u00e9" + x).encode()) + 2 * v + 100 * 3 + 1000 * 0
+
+
+def _w244_db_value_capture_protocol(i):
+    """db-value-capture-protocol"""
+    v = i % 9 + 1
+    return 0 + 8 + 2 + 16 + 4 + 2 + v
+
+
+def _w244_db_value_print(i):
+    """db-value-print"""
+    v = i % 9 + 1
+    x = str(v)
+    return (1 if v % 2 == 1 else 0) + 7 * v + (4 if v % 3 == 0 else 1) + len(x + ".5") + len("t" + x) + v + v + 2 * len(x)
+
+
+def _w244_db_value_kinds(i):
+    """db-value-kinds"""
+    v = i % 9 + 1
+    none = i % 3 == 0
+    return (0 if none else 1) + 2 + 1 + (0 if none else 3) + (0 if none else 4) + 4 + 3 + 5 + v
+
+
+def _w244_db_value_readers(i):
+    """db-value-readers"""
+    v = i % 9 + 1
+    x = str(v)
+    return ((1 if v % 2 == 0 else 0) + v + 6 + len(x + ".75") + (9 if v > 5 else 3) + 11 * v + (100 if i % 4 == 0 else v)
+            + len("s" + x))
+
+
+def _w244_db_value_native(i):
+    """db-value-native"""
+    v = i % 9 + 1
+    code = i % 10
+    return (code if code < 7 else 50) + 5 + v
+
+
+def _w244_db_column_reader_typed(i):
+    """db-column-reader-typed"""
+    v = i % 9 + 1
+    x = str(v)
+    # flag of 1 is true; 2 and 3 are refused.
+    flag = 20 if i % 3 == 0 else 30
+    return (1 if v % 2 == 0 else 0) + v + 5 + 3 * v + len("ab" + x) + len(x + ".5") + 2 + flag
+
+
+def _w244_db_page_reader(i):
+    """db-page-reader"""
+    v = i % 9 + 1
+    return v + len("t" + str(v)) + (7 + v) + 0 + 2
+
+
+def _w244_db_maybe_reader(i):
+    """db-maybe-reader"""
+    v = i % 9 + 1
+    x = str(v)
+    b = 1 if v % 2 == 0 else 0
+    f = i % 2
+    g = 6 if v > 4 else 2
+
+    return b + v + 5 + len(x + ".5") + f + g + 13 * v + 13 * v + 100 + 1 + 3
+
+
+def _w244_db_maybe_presence(i):
+    """db-maybe-presence"""
+    v = i % 9 + 1
+    x = str(v)
+    b = 1 if v % 2 == 0 else 0
+    f = i % 2
+    g = 6 if v > 4 else 2
+
+    return len("t" + x) + 2 + 1 + 2 + 3 + 5 + 2 + len(x + ".5") + 1
+
+
+def _w244_db_presence_reader(i):
+    """db-presence-reader"""
+    v = i % 9 + 1
+    x = str(v)
+    b = 1 if v % 2 == 0 else 0
+    f = i % 2
+    g = 6 if v > 4 else 2
+
+    return g + 13 * v + 1000 + len("t" + x) + b + v + len(x + ".5") + f
+
+
+def _w244_db_statement_values(i):
+    """db-statement-values"""
+    v = i % 9 + 1
+    x = str(v)
+    b = 1 if v % 2 == 0 else 0
+    f = i % 2
+    g = 6 if v > 4 else 2
+
+    snap = 10 if i % 4 == 0 else 2
+    return g + 0 + 8 + snap + len("SELECT ?" + x) + 0 + 2 + v
+
+
+def _w244_sqlite_session_execute(i):
+    """sqlite-session-execute"""
+    v = i % 9 + 1
+    return 2 + 10 * len([x for x in (v, 2) if x > i % 3]) + v
+
+
+def _w244_sqlite_session_rows(i):
+    """sqlite-session-rows"""
+    v = i % 9 + 1
+    xs = [k for k in range(1, 11 + v) if k > v % 3][::-1]
+    return len(xs) + xs[0] + len('n%d' % xs[-1]) + len([k for k in range(1, 11 + v) if k <= v])
+
+
+def _w244_sqlite_session_prepare(i):
+    """sqlite-session-prepare"""
+    v = i % 9 + 1
+    xs = sorted(x for x in (v, v + 5, 20) if x > v)
+    return 1 + len(xs) + xs[0] + 1 + 2
+
+
+def _w244_sqlite_transaction_control(i):
+    """sqlite-transaction-control"""
+    v = i % 9 + 1
+    return v + 1
+
+
+def _w244_sqlite_transaction_work(i):
+    """sqlite-transaction-work"""
+    v = i % 9 + 1
+    return 1 + 2 + sum(x for x in (v, 2, 3, 10) if x > 1)
+
+
+def _w244_sqlite_blob_session(i):
+    """sqlite-blob-session"""
+    v = i % 9 + 1
+    blob = bytearray(v + 4)
+    blob[1:3] = bytes([v, 7])
+    return blob[0] + blob[1] + blob[2] + len(blob)
+
+
+def _w244_sqlite_script(i):
+    """sqlite-script"""
+    v = i % 9 + 1
+    return 3 + 10 * 2 + 100 * len([x for x in (v, 2) if x < 3])
+
+
+def _w244_sqlite_backup(i):
+    """sqlite-backup"""
+    v = i % 9 + 1
+    # Page 1 holds the schema; each empty table takes one root page.
+    pages = 1 + v
+    return v + pages + 10 * pages + v + 1
+
+
+def _w244_sqlite_failures(i):
+    """sqlite-failures"""
+    v = i % 9 + 1
+    return 1 + v + (v + 3) + 1 + 10 * 1 + 4
+
+
+def _w244_sqlite_prepared_transaction(i):
+    """sqlite-prepared-transaction"""
+    v = i % 9 + 1
+    return v + 7 + 100 * (2 if i % 2 == 0 else 0)
+
+
+def _w244_sqlite_acquisition(i):
+    """sqlite-acquisition"""
+    v = i % 9 + 1
+    return v + 20
+
+
+def _w244_db_pool_state_lease(i):
+    """db-pool-state-lease"""
+    v = i % 9 + 1
+    minimum = i % 2 + 1
+    # warm keeps `minimum` physical connections: one is leased, the rest idle; the lease returns to idle.
+    return 1 + 10 * (minimum - 1) + 100 * minimum + 3 + v
+
+
+def _w244_db_pool_state_retire(i):
+    """db-pool-state-retire"""
+    v = i % 9 + 1
+    serial = 2 if i % 2 == 0 else 1
+    return 10 * serial + 1 + 2 + 4 + v
+
+
+def _w244_db_pooled_connection(i):
+    """db-pooled-connection"""
+    v = i % 9 + 1
+    return 2 + min(v, 3) + 1 + 2 + 10 * 2
+
+
+def _w244_db_pooled_transaction(i):
+    """db-pooled-transaction"""
+    v = i % 9 + 1
+    return 1 + v + 5 + 2
+
+
+def _w244_db_pool_prepared(i):
+    """db-pool-prepared"""
+    v = i % 9 + 1
+    return 2 + min(v, 2) + 0 + 1 + 2
+
+
+def _w244_db_physical(i):
+    """db-physical"""
+    v = i % 9 + 1
+    return v + 7 + v
+
+
+def _w244_db_query_forms(i):
+    """db-query-forms"""
+    v = i % 9 + 1
+    return 3 * v + 2 * v + 100 + (v + 2 * v + 3 * v) + 10 * 1 + v + 2
+
+
+def _w244_locale_subtag_shapes(i):
+    """locale-subtag-shapes"""
+    pool = ['en', 'Latn', 'DE', '1996', 'yue', 'abc12', 'x', 'u1', 't0', '419', 'rozaj', 'a1b2c3d4e', 'ca', 'ZH', '9', 'h0']
+    p = len(pool)
+    picks = [pool[i % p], pool[(i + 5) % p], pool[(i * 7 + 3) % p]]
+    al = lambda s: s.isascii() and s.isalpha()
+    dg = lambda s: s.isascii() and s.isdigit()
+    an = lambda s: s.isascii() and s.isalnum()
+
+    def bits(s):
+        # RFC 5646 section 2.1 grammar.
+        b = 1 if 2 <= len(s) <= 8 and al(s) else 0
+        b += 2 if len(s) == 4 and al(s) else 0
+        b += 4 if (len(s) == 2 and al(s)) or (len(s) == 3 and dg(s)) else 0
+        b += 8 if ((5 <= len(s) <= 8) or (len(s) == 4 and s[0].isdigit())) and an(s) else 0
+        b += 16 if len(s) == 3 and al(s) else 0
+        b += 32 if 2 <= len(s) <= 8 and an(s) else 0
+        return b + ord(s.lower()[:1].upper())
+    return sum(bits(s) for s in picks)
+
+
+def _w244_locale_subtag_keys(i):
+    """locale-subtag-keys"""
+    pool = ['en', 'Latn', 'DE', '1996', 'yue', 'abc12', 'x', 'u1', 't0', '419', 'rozaj', 'a1b2c3d4e', 'ca', 'ZH', '9', 'h0']
+    p = len(pool)
+    picks = [pool[i % p], pool[(i + 5) % p], pool[(i * 7 + 3) % p]]
+    al = lambda s: s.isascii() and s.isalpha()
+    dg = lambda s: s.isascii() and s.isdigit()
+    an = lambda s: s.isascii() and s.isalnum()
+
+    x = str(i % 9 + 1)
+    def bits(s):
+        b = 1 if 1 <= len(s) <= 8 and an(s) else 0
+        b += 2 if len(s) == 1 and an(s) else 0
+        b += 4 if len(s) == 2 and an(s[0]) and al(s[1]) else 0
+        b += 8 if len(s) == 2 and al(s[0]) and dg(s[1]) else 0
+        return b
+    return sum(bits(s) for s in picks) + len("ca-islamic-civil" + x) + 2 + 10 + 3
+
+
+def _w244_locale_extensions(i):
+    """locale-extensions"""
+    tags = ['de-DE-u-attr-ca-buddhist-nu-latn-t-en-h0-hybrid-x-priv', 'sr-Latn-RS-u-nu-latn', 'en-US-u-co-phonebk-x-a-b', 'zh-Hant-TW-t-ja', 'fr-CA']
+    text = tags[i % 5]
+    parts = text.split("-")
+    base, rest = [], []
+    for k, s in enumerate(parts):
+        if len(s) == 1:
+            rest = parts[k:]
+            break
+        base.append(s)
+    ext = {}
+    key = None
+    for s in rest:
+        if len(s) == 1:
+            key = s
+            ext[key] = []
+            if s == "x":
+                break
+        else:
+            ext[key].append(s)
+    u = ext.get("u", [])
+    attrs = [s for s in u[:next((k for k, s in enumerate(u) if len(s) == 2), len(u))]]
+    kw = []
+    for s in u[len(attrs):]:
+        if len(s) == 2:
+            kw.append([s])
+        else:
+            kw[-1].append(s)
+    suffix = ("-" + "-".join(rest)) if rest else ""
+    return (len(attrs) + 10 * len(kw) + (len("-".join(kw[0])) if kw else 0) + 100 * len(ext.get("t", []))
+            + len("-".join(base)) + len(suffix) + len(text))
+
+
+def _w244_locale_fields(i):
+    """locale-fields"""
+    def canon(t):
+        out = []
+        after = False
+        for k, s in enumerate(t.split("-")):
+            if after or len(s) == 1:
+                after = True
+                out.append(s.lower())
+            elif k > 0 and len(s) == 4:
+                out.append(s.title())
+            elif k > 0 and len(s) == 2:
+                out.append(s.upper())
+            else:
+                out.append(s.lower())
+        return "-".join(out)
+    tags = ["SR-latn-rs", "en-us", "zh-HANT-tw-x-p", "de", "pt-BR-u-nu-arab"]
+    c = canon(tags[i % 5])
+    o = canon(tags[(i + 1) % 5])
+    parts = c.split("-")
+    base = []
+    for s in parts:
+        if len(s) == 1:
+            break
+        base.append(s)
+    lang = base[0]
+    script = next((s for s in base[1:] if len(s) == 4), "")
+    region = next((s for s in base[1:] if len(s) == 2 or (len(s) == 3 and s.isdigit())), "")
+    return (len(lang) + 10 * len(script) + 100 * len(region) + len("-".join(base)) + (1000 if c < o else 2000)
+            + len(canon(tags[(i + 2) % 5])) + len("YYYY-MM-DD") + 10000 * len(parts))
+
+
+def _w244_locale_filtered(i):
+    """locale-filtered"""
+    available = ["en-US", "en-GB", "de", "de-CH", "fr-CA", "sr-Latn-RS"]
+    ranges = ["en", "de-ch", "fr", "sr-latn", "*", "zh"]
+    req = [ranges[i % 6], ranges[(i + 2) % 6]]
+    out = []
+    for r in req:
+        for a in available:
+            if (r == "*" or a.lower() == r or a.lower().startswith(r + "-")) and a not in out:
+                out.append(a)
+    def lookup(r):
+        parts = r.split("-")
+        while parts:
+            cand = "-".join(parts)
+            for a in available:
+                if a.lower() == cand:
+                    return a
+            parts.pop()
+            if parts and len(parts[-1]) == 1:
+                parts.pop()
+        return "de"
+    looked = lookup(["en-us-x-a", "de-ch-1901", "fr-fr", "zh-hant"][i % 4])
+    return len(out) + 10 * len(out) + (len(out[0]) + 2 * len(out[-1]) if out else 0) + 100 * len(looked)
+
+
+def _w244_locale_number_print(i):
+    """locale-number-print"""
+    # CLDR 46 number symbols: group, decimal, the space before a percent sign.
+    SYMBOLS = {"en": (",", ".", ""), "de": (".", ",", "\u00a0"), "fr": ("\u202f", ",", "\u00a0")}
+    code = lambda text: sum(ord(c) for c in text)
+    def grouped(n, loc):
+        g, d, p = SYMBOLS[loc]
+        text = "{:,}".format(abs(n)).replace(",", g)
+        return ("-" if n < 0 else "") + text
+    def localized_decimal(text, loc):
+        g, d, p = SYMBOLS[loc]
+        whole, _, frac = text.partition(".")
+        return grouped(int(whole), loc) + (d + frac if frac else "")
+
+    v = i % 9 + 1
+    loc = ["en", "de", "fr"][i % 3]
+    g, d, p = SYMBOLS[loc]
+    pct = "1" + str(v)
+    special = ["NaN", "\u221e", "-\u221e"][i % 3]
+    return (code(grouped(1234567 * v, loc)) + code(grouped(-98765432 * v, loc)) + code(localized_decimal("1234.5" if v % 2 == 0 else "0.25", loc))
+            + code(pct + p + "%") + code(special) + (1234567 * v) % 1000 + len("2.75"))
+
+
+def _w244_locale_number_data(i):
+    """locale-number-data"""
+    v = i % 9 + 1
+    code = lambda text: sum(ord(c) for c in text)
+    # CLDR 46: en percent "#,##0%", de "#,##0\u00a0%" (kind 2); patterns keep {minus} and {percent}
+    # tokens that template() replaces with the symbols; ar-EG writes arab digits.
+    suffix = "%" if i % 2 == 0 else "\u00a0%"
+    return code(suffix.replace("%", "{percent}")) + code("{minus}") + 3 + code(suffix) + 1 + code("".join(chr(0x660 + int(d)) for d in "12" + str(v)))
+
+
+def _w244_locale_number_magnitude(i):
+    """locale-number-magnitude"""
+    import decimal
+    D = decimal.Decimal
+    v = i % 9 + 1
+    value = D("12.%d%d5" % (i % 3, v)).scaleb(i % 3 - 1)
+    q = value.quantize(D("0.01"), rounding=decimal.ROUND_HALF_EVEN)
+    whole, _, frac = format(q, "f").partition(".")
+    frac = frac.rstrip("0") or "0"
+    ascii_text = whole + "." + frac
+    raw = len(str(4560 * v)) - 1 - 2
+    return (raw + 10 * (value.adjusted() + 2) + 100 * len(whole) + len(frac) + 1000 * len(ascii_text) + 10000 * (q.adjusted() + 2)
+            + int(whole))
+
+
+def _w244_locale_number_printing(i):
+    """locale-number-printing"""
+    # CLDR 46 number symbols: group, decimal, the space before a percent sign.
+    SYMBOLS = {"en": (",", ".", ""), "de": (".", ",", "\u00a0"), "fr": ("\u202f", ",", "\u00a0")}
+    code = lambda text: sum(ord(c) for c in text)
+    def grouped(n, loc):
+        g, d, p = SYMBOLS[loc]
+        text = "{:,}".format(abs(n)).replace(",", g)
+        return ("-" if n < 0 else "") + text
+    def localized_decimal(text, loc):
+        g, d, p = SYMBOLS[loc]
+        whole, _, frac = text.partition(".")
+        return grouped(int(whole), loc) + (d + frac if frac else "")
+
+    import decimal
+    v = i % 9 + 1
+    loc = ["en", "de"][i % 2]
+    g, d, p = SYMBOLS[loc]
+    value = decimal.Decimal(12345 * v).scaleb(-2)
+    # A percent printing takes the value as already scaled.
+    q = value.quantize(decimal.Decimal("0.1"), rounding=decimal.ROUND_HALF_EVEN)
+    text = format(q, "f").rstrip("0").rstrip(".")
+    printed = localized_decimal(text, loc) + (p + "%" if i % 3 == 0 else "")
+    return code(printed) + 3 + 10 * (i % 3 + 1) + 100 * 2 + 1000 * 4
+
+
+def _w244_locale_number_zeroes(i):
+    """locale-number-zeroes"""
+    count = i % 17
+    return count + (1 if count > 0 else 5)
+
+
+def _w244_locale_case_currency(i):
+    """locale-case-currency"""
+    # CLDR 46 number symbols: group, decimal, the space before a percent sign.
+    SYMBOLS = {"en": (",", ".", ""), "de": (".", ",", "\u00a0"), "fr": ("\u202f", ",", "\u00a0")}
+    code = lambda text: sum(ord(c) for c in text)
+    def grouped(n, loc):
+        g, d, p = SYMBOLS[loc]
+        text = "{:,}".format(abs(n)).replace(",", g)
+        return ("-" if n < 0 else "") + text
+    def localized_decimal(text, loc):
+        g, d, p = SYMBOLS[loc]
+        whole, _, frac = text.partition(".")
+        return grouped(int(whole), loc) + (d + frac if frac else "")
+
+    v = i % 9 + 1
+    x = str(v)
+    def tr_lower(s):
+        return s.replace("I", "\u0131").replace("\u0130", "i").lower()
+    def tr_title(s):
+        return " ".join(("\u0130" if w[0] == "i" else w[0].upper()) + tr_lower(w[1:]) for w in s.split(" "))
+    loc, cur = ["en USD", "de EUR", "fr EUR", "en JPY"][i % 4].split(" ")
+    amount = x + ("234.57" if cur != "JPY" else "235")
+    number = localized_decimal(amount, loc)
+    # CLDR 46: en "\u00a4#,##0.00", de and fr "#,##0.00\u00a0\u00a4"; symbols $, \u20ac, \u00a5.
+    symbol = {"USD": "$", "EUR": "\u20ac", "JPY": "\u00a5"}[cur]
+    text = symbol + number if loc == "en" else number + "\u00a0" + symbol
+    return code(tr_lower("ISTANBUL " + x + "\u0130")) + code(tr_title("istanbul il\u00e7e" + x)) + (1 if cur < "GBP" else 2) + code(text)
+
+
+def _w244_locale_gregorian_names(i):
+    """locale-gregorian-names"""
+    code = lambda text: sum(ord(c) for c in text)
+    loc = ["en", "de", "fr"][i % 3]
+    MONTHS = {"en": "January February March April May June July August September October November December",
+              "de": "Januar Februar M\u00e4rz April Mai Juni Juli August September Oktober November Dezember",
+              "fr": "janvier f\u00e9vrier mars avril mai juin juillet ao\u00fbt septembre octobre novembre d\u00e9cembre"}
+    DAYS = {"en": "Monday Tuesday Wednesday Thursday Friday Saturday Sunday",
+            "de": "Montag Dienstag Mittwoch Donnerstag Freitag Samstag Sonntag",
+            "fr": "lundi mardi mercredi jeudi vendredi samedi dimanche"}
+
+    v = i % 9 + 1
+    era = {"en": "AD", "de": "n. Chr.", "fr": "ap. J.-C."}[loc]
+    return (code(MONTHS[loc].split()[i % 12]) + code(DAYS[loc].split()[i % 7]) + code(era) + code("AM" if i % 24 < 12 else "PM")
+            + code("%02d" % v) + 1 + 1)
+
+
+def _w244_locale_localized_times(i):
+    """locale-localized-times"""
+    code = lambda text: sum(ord(c) for c in text)
+    loc = ["en", "de", "fr"][i % 3]
+    MONTHS = {"en": "January February March April May June July August September October November December",
+              "de": "Januar Februar M\u00e4rz April Mai Juni Juli August September Oktober November Dezember",
+              "fr": "janvier f\u00e9vrier mars avril mai juin juillet ao\u00fbt septembre octobre novembre d\u00e9cembre"}
+    DAYS = {"en": "Monday Tuesday Wednesday Thursday Friday Saturday Sunday",
+            "de": "Montag Dienstag Mittwoch Donnerstag Freitag Samstag Sonntag",
+            "fr": "lundi mardi mercredi jeudi vendredi samedi dimanche"}
+
+    import datetime as dt
+    def short_time(h, m):
+        if loc == "en":
+            return "%d:%02d\u202f%s" % (h % 12 or 12, m, "AM" if h < 12 else "PM")
+        return "%02d:%02d" % (h, m)
+    def short_date(d):
+        return {"en": "%d/%d/%02d" % (d.month, d.day, d.year % 100), "de": "%02d.%02d.%02d" % (d.day, d.month, d.year % 100),
+                "fr": "%02d/%02d/%d" % (d.day, d.month, d.year)}[loc]
+    def short_both(d, h, m):
+        return short_date(d) + (" " if loc == "fr" else ", ") + short_time(h, m)
+    def last_sunday(year, month):
+        d = dt.date(year, month, 31)
+        return d - dt.timedelta(days=(d.weekday() + 1) % 7)
+    def berlin(utc):
+        # EU rule: summer time from the last Sunday of March to the last Sunday of October, 01:00 UTC.
+        start = dt.datetime.combine(last_sunday(utc.year, 3), dt.time(1))
+        end = dt.datetime.combine(last_sunday(utc.year, 10), dt.time(1))
+        summer = start <= utc < end
+        return utc + dt.timedelta(hours=2 if summer else 1), summer
+
+    h, m = i % 24, i * 7 % 60
+    local = dt.date(2026, i % 12 + 1, i % 28 + 1)
+    utc = dt.datetime(1970, 1, 1) + dt.timedelta(seconds=1767600000 + i * 1234567)
+    plus3 = utc + dt.timedelta(hours=3)
+    there, summer = berlin(utc)
+    names = {"en": ("Central European Standard Time", "Central European Summer Time"),
+             "de": ("Mitteleurop\u00e4ische Normalzeit", "Mitteleurop\u00e4ische Sommerzeit"),
+             "fr": ("heure normale d\u2019Europe centrale", "heure d\u2019\u00e9t\u00e9 d\u2019Europe centrale")}[loc]
+    combination = "{1} {0}" if loc == "fr" else "{1}, {0}"
+    return (code(short_time(h, m)) + code(short_both(local, h, m)) + code(short_both(plus3.date(), plus3.hour, plus3.minute))
+            + code(short_both(there.date(), there.hour, there.minute)) + code(names[1 if summer else 0]) + code(combination))
+
+
+def _w244_locale_gmt_offset(i):
+    """locale-gmt-offset"""
+    code = lambda text: sum(ord(c) for c in text)
+    loc = ["en", "de", "fr"][i % 3]
+    MONTHS = {"en": "January February March April May June July August September October November December",
+              "de": "Januar Februar M\u00e4rz April Mai Juni Juli August September Oktober November Dezember",
+              "fr": "janvier f\u00e9vrier mars avril mai juin juillet ao\u00fbt septembre octobre novembre d\u00e9cembre"}
+    DAYS = {"en": "Monday Tuesday Wednesday Thursday Friday Saturday Sunday",
+            "de": "Montag Dienstag Mittwoch Donnerstag Freitag Samstag Sonntag",
+            "fr": "lundi mardi mercredi jeudi vendredi samedi dimanche"}
+
+    seconds = (i % 52 - 24) * 1800
+    gmt = "UTC" if loc == "fr" else "GMT"
+    # CLDR 46 hourFormat: fr writes U+2212 for minus, en and de a hyphen-minus.
+    sign = ("\u2212" if loc == "fr" else "-") if seconds < 0 else "+"
+    h, rest = divmod(abs(seconds), 3600)
+    m = rest // 60
+    if seconds == 0:
+        text = gmt
+    elif i % 2 == 0:
+        text = "%s%s%02d:%02d" % (gmt, sign, h, m)
+    else:
+        text = "%s%s%d" % (gmt, sign, h) + (":%02d" % m if m else "")
+    return code(text)
+
+
+def _w244_locale_cldr_gregorian(i):
+    """locale-cldr-gregorian"""
+    tag = ["en", "de", "fr", "ru", "ja", "zz-Unknown"][i % 6]
+    known = tag != "zz-Unknown"
+    gregorian = (1 + 2 + 4 if known else 100) + 8
+    n = i % 30 + 1
+    # CLDR plural rules: ru cardinal one / few / many for integers; en ordinal one / two / few / other.
+    if n % 10 == 1 and n % 100 != 11:
+        ru = 1
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        ru = 3
+    else:
+        ru = 4
+    en = {1: 1, 2: 2, 3: 3}.get(n % 10, 5) if not 11 <= n % 100 <= 13 else 5
+    # IANA registry: i-klingon -> tlh, zh-min-nan -> nan, art-lojban -> jbo; en-US is no whole tag.
+    preferred = {"i-klingon": "tlh", "zh-min-nan": "nan", "en-US": "", "art-lojban": "jbo"}[["i-klingon", "zh-min-nan", "en-US", "art-lojban"][i % 4]]
+    return gregorian + (16 if known else 0) + 32 * ru + 1000 * en + 10000 * len(preferred)
+
+
+def _w244_locale_cldr_numbers(i):
+    """locale-cldr-numbers"""
+    # IANA: i-klingon and zh-min-nan are grandfathered; yue, cmn and zsm are extlangs of zh, zh and ms.
+    grand = 1 if i % 4 in (0, 2) else 0
+    prefix = {"yue": "zh", "cmn": "zh", "abc": "", "zsm": "ms"}[["yue", "cmn", "abc", "zsm"][i % 4]]
+    known = i % 4 != 3
+    letter = ["A", "$", "AB", "z"][i % 4]
+    return grand + 2 * len(prefix) + (30 if known else 300) + (400 if len(letter) == 1 and letter.isalpha() else 0) + 1000 + 2000
+
+
+def _w244_locale_preferred(i):
+    """locale-preferred"""
+    lists = [["de-DE", "fr", "und"], ["pt-BR"], ["und"], ["und"]]
+    values = lists[i % 4]
+    if i % 5 == 0:
+        values = ["sr-Latn-RS", "en"]
+    # LANGUAGE de_DE:fr:de_DE.UTF-8:C -> de-DE, fr, und (the duplicate dropped); C and POSIX are und.
+    return len(values) + 10 * len(values[0]) + 100 * len(values)
+
+
+def _w244_crypto_aead_text(i):
+    """crypto-aead-text"""
+    v = i % 9 + 1
+    text = "note " + str(v) * 2
+    # An AEAD ciphertext is the plaintext length plus a 16-byte tag; a changed AAD fails authentication.
+    return (1 if i % 2 == 0 else 2) + len(text) + 10 * (len(text) + 16) + len(text) + 100
+
+
+def _w244_crypto_xchacha(i):
+    """crypto-xchacha"""
+    v = i % 9 + 1
+    size = i % 40 + 1
+    return size + 16 + (size - 1) + 10 * len("w" + str(v)) + 1000
+
+
+def _w244_crypto_ed25519_x25519(i):
+    """crypto-ed25519-x25519"""
+    s = i % 16
+    seed = bytes((k * 11 + s) % 256 for k in range(32))
+    other = bytes((k * 13 + s + 1) % 256 for k in range(32))
+    nine = (9).to_bytes(32, "little")
+    shared = x25519(seed, x25519(other, nine))
+    # RFC 8410: SPKI is 12 header bytes and the 32 raw bytes; PKCS#8 carries the seed at offset 16.
+    return 1 + 0 + 4 + 10 * 44 + 1000 * ed25519_public(seed)[31] + 100000 * shared[0]
+
+
+def _w244_crypto_ecdsa_keys(i):
+    """crypto-ecdsa-keys"""
+    # RFC 7518 section 3.4: an ES256 JWS signature is R || S, 64 bytes.
+    return len(pem_der('-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n')) + 1000 * 64 + 1 + 0 + 4
+
+
+def _w244_crypto_jwt_keys(i):
+    """crypto-jwt-keys"""
+    s = i % 16
+    message = ("h.c" + str(s)).encode()
+    digest = [hashlib.sha256, hashlib.sha384, hashlib.sha512][i % 3]
+    tag = hmac.new(b"0123456789abcdef" * 4, message, digest).digest()
+    seed = bytes((k + s) % 256 for k in range(32))
+    return len(tag) + tag[0] + 1000 * ed25519_sign(seed, message)[0] + 1 + 2 + len("HS256") * 100000
+
+
+def _w244_crypto_rsa_keys(i):
+    """crypto-rsa-keys"""
+    return 1 + 0 + 4 + 10 * 2048 + 100000 * len(pem_der('-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDMrGJ6RyrG8131\ninCEJcrj0Z9FsI39S7Voe/05v0u44dwX4RngiHMyoPHfqSoDZ8l9KlOBV1oMNJd3\n1WeLCtgSZyzFWnBAFuK89tOpkHejlYbLXyzYpsZKrNkxdHfa3HtkPY5eb1TsHzzm\nbcDxiiuW+bRHXpvYp6Txz1+47SmVHh+Oa6hwYZ8EWIEqUvx6ffhFgxbgm+x5iYaZ\nTm8odDJZGWIGpGLpRH++6cR5oRRK5KvlZWyXzqGfGTMmjSQI3Jy8ty5j2tEFwzUB\nJhfimcPAExbFLLeEjgWCCw5iOEwAJI2a1Z3BcwcfYIao1yPU+jb9YXXu4tuwDnRW\nBbEsKYqdAgMBAAECggEAE+X4hwHPP1teuaX1bWuNL5vsG6bgDw2iu98+DbSy5G0U\n7D9muCUb6gKqsT9thbo75Q7N4oe/Ceu9BBn7wJFT02ozeJZjzl9LOOrYRiZ08zLw\n0WnV3tRL9+uZDA1SL7V6y5KOelDhlTkuPwrRlMoFld597+hbR3N4/kdWe5CXF9eS\n4BYgGSIXWFXNRjpO51wnwxFuiJDmbbjO6s1UJqg4l+28YNqqfiJ/Ta4MBRoYbxwj\nm8T2RPuiH9YWKkDKUFP7u6EiFV2OaF14o6Ydj14ZEcs8dDMBTptM+ajVHyA/UwNE\n99St2Xa+2VacJIiESUHcCiI6HV//2TSlYkY+H5GiMwKBgQDnNdaDE4Ak+1EP3w0E\n3jXDpKQM/AbUgsTXZ1WveAHpOQ4ZFvin3KWlHKlntiNZxsIcEXSrsNeakYhVduO/\nR2nrnIu1QA6JMNc2MaF7rmTBx3q5sr4ZLlCumdwSvdgjjnaj/7oP5tZWISYrH1jg\nhDocQETIEFxmNLZbOq4EpHSn7wKBgQDiniwmqIKODB3wN9LKACobToRKXC147k0W\nEaNKRFSAxFexYLE9x4iEXM7jmR4pXI5K9wOJHbFK776hNAhvIxxs4JJsUqQXN+hR\nnVMFX3kxoKvhbIj0ndqtRe29v4WRChgld+zRnCZup4DfUXURuT/7ZkEr93jE3fvN\nsbT+XK9KMwKBgHITZx5O7cfRU6KAC71eIarAvcxGQNxzFMmui2FC1baLVwBcDB1O\nSVAYvyCThgeSgE0285iObSIvMdPxD9ddVc5Q88FetI1N0rFDdYg/eCj/0fZzUUW9\nS0OKWEHK9yw76x9pWhTkcNYYDuvx0Hkd5EnyD72iDOTEl0CVyCw0M/ZzAoGBAIzv\nfdnU9szMsFnS/d7u10EARbnRNd59padR9NGdSUiD013XGqOnUjmvVmOpuF5U15G7\nqZE+zCIkk9PBfnVPyr/Tsnx3sOFXvb30L8upor/AguTBETPAcF1Onhph3/lh4755\npOh/Sk+LENTR3hLVuPrqjyF+2Lbmr1Evcba3gbSNAoGBAKmsLbGeaYD9CvvhrXVC\ncq5kbLDwJf/DRxuS1ypr9u+dnQEb8N1jldsCUcra3QxG+FLbXiq5yA609SElAQFa\nWksPKFh1Yc/PV1Ng6Y5JiWAQWBDSKf/K1+7V9Tzwl/KL5P/s9v4mdYE0u+JGqkp3\nmVFsewgdVbka4ezKH1dacziu\n-----END PRIVATE KEY-----\n')) + len("r" + str(i)) * 8
+
+
+def _w244_crypto_rsa_pss_oaep(i):
+    """crypto-rsa-pss-oaep"""
+    # RSA-2048: signatures and OAEP ciphertexts are 256 bytes.
+    return 1 + 2 + 10 * 256 + 4 + 10000 * 256 + 8 + 10000000 * i
+
+
+def _w244_crypto_key_format(i):
+    """crypto-key-format"""
+    which = i % 2
+    privates = ['-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n', '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDMrGJ6RyrG8131\ninCEJcrj0Z9FsI39S7Voe/05v0u44dwX4RngiHMyoPHfqSoDZ8l9KlOBV1oMNJd3\n1WeLCtgSZyzFWnBAFuK89tOpkHejlYbLXyzYpsZKrNkxdHfa3HtkPY5eb1TsHzzm\nbcDxiiuW+bRHXpvYp6Txz1+47SmVHh+Oa6hwYZ8EWIEqUvx6ffhFgxbgm+x5iYaZ\nTm8odDJZGWIGpGLpRH++6cR5oRRK5KvlZWyXzqGfGTMmjSQI3Jy8ty5j2tEFwzUB\nJhfimcPAExbFLLeEjgWCCw5iOEwAJI2a1Z3BcwcfYIao1yPU+jb9YXXu4tuwDnRW\nBbEsKYqdAgMBAAECggEAE+X4hwHPP1teuaX1bWuNL5vsG6bgDw2iu98+DbSy5G0U\n7D9muCUb6gKqsT9thbo75Q7N4oe/Ceu9BBn7wJFT02ozeJZjzl9LOOrYRiZ08zLw\n0WnV3tRL9+uZDA1SL7V6y5KOelDhlTkuPwrRlMoFld597+hbR3N4/kdWe5CXF9eS\n4BYgGSIXWFXNRjpO51wnwxFuiJDmbbjO6s1UJqg4l+28YNqqfiJ/Ta4MBRoYbxwj\nm8T2RPuiH9YWKkDKUFP7u6EiFV2OaF14o6Ydj14ZEcs8dDMBTptM+ajVHyA/UwNE\n99St2Xa+2VacJIiESUHcCiI6HV//2TSlYkY+H5GiMwKBgQDnNdaDE4Ak+1EP3w0E\n3jXDpKQM/AbUgsTXZ1WveAHpOQ4ZFvin3KWlHKlntiNZxsIcEXSrsNeakYhVduO/\nR2nrnIu1QA6JMNc2MaF7rmTBx3q5sr4ZLlCumdwSvdgjjnaj/7oP5tZWISYrH1jg\nhDocQETIEFxmNLZbOq4EpHSn7wKBgQDiniwmqIKODB3wN9LKACobToRKXC147k0W\nEaNKRFSAxFexYLE9x4iEXM7jmR4pXI5K9wOJHbFK776hNAhvIxxs4JJsUqQXN+hR\nnVMFX3kxoKvhbIj0ndqtRe29v4WRChgld+zRnCZup4DfUXURuT/7ZkEr93jE3fvN\nsbT+XK9KMwKBgHITZx5O7cfRU6KAC71eIarAvcxGQNxzFMmui2FC1baLVwBcDB1O\nSVAYvyCThgeSgE0285iObSIvMdPxD9ddVc5Q88FetI1N0rFDdYg/eCj/0fZzUUW9\nS0OKWEHK9yw76x9pWhTkcNYYDuvx0Hkd5EnyD72iDOTEl0CVyCw0M/ZzAoGBAIzv\nfdnU9szMsFnS/d7u10EARbnRNd59padR9NGdSUiD013XGqOnUjmvVmOpuF5U15G7\nqZE+zCIkk9PBfnVPyr/Tsnx3sOFXvb30L8upor/AguTBETPAcF1Onhph3/lh4755\npOh/Sk+LENTR3hLVuPrqjyF+2Lbmr1Evcba3gbSNAoGBAKmsLbGeaYD9CvvhrXVC\ncq5kbLDwJf/DRxuS1ypr9u+dnQEb8N1jldsCUcra3QxG+FLbXiq5yA609SElAQFa\nWksPKFh1Yc/PV1Ng6Y5JiWAQWBDSKf/K1+7V9Tzwl/KL5P/s9v4mdYE0u+JGqkp3\nmVFsewgdVbka4ezKH1dacziu\n-----END PRIVATE KEY-----\n']
+    publics = ['-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGjA1WnY9zY89EAxpCAupsDL7CK3C\nhIDaQaWeKfZWZf1OyGTo2hsJf6EEuu1/2B3+a3H3cb3G+9NNNzbJqHsUyw==\n-----END PUBLIC KEY-----\n', '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzKxiekcqxvNd9YpwhCXK\n49GfRbCN/Uu1aHv9Ob9LuOHcF+EZ4IhzMqDx36kqA2fJfSpTgVdaDDSXd9VniwrY\nEmcsxVpwQBbivPbTqZB3o5WGy18s2KbGSqzZMXR32tx7ZD2OXm9U7B885m3A8Yor\nlvm0R16b2Kek8c9fuO0plR4fjmuocGGfBFiBKlL8en34RYMW4JvseYmGmU5vKHQy\nWRliBqRi6UR/vunEeaEUSuSr5WVsl86hnxkzJo0kCNycvLcuY9rRBcM1ASYX4pnD\nwBMWxSy3hI4FggsOYjhMACSNmtWdwXMHH2CGqNcj1Po2/WF17uLbsA50VgWxLCmK\nnQIDAQAB\n-----END PUBLIC KEY-----\n']
+    def pem(kind, der):
+        # RFC 7468: base64 in lines of 64 characters between the boundaries.
+        body = base64.b64encode(der).decode()
+        lines = [body[k:k + 64] for k in range(0, len(body), 64)]
+        return "-----BEGIN %s-----\n%s\n-----END %s-----\n" % (kind, "\n".join(lines), kind)
+    # A PEM RSA key has no signature scheme, so it signs and verifies nothing.
+    return ((1 if which == 0 else 3) + 2 * (i % 4 + 1) + 10 * len(pem("PRIVATE KEY", pem_der(privates[which])))
+            + 100000 * len(pem("PUBLIC KEY", pem_der(publics[which]))))
+
+
+def _w244_crypto_hmac_secret(i):
+    """crypto-hmac-secret"""
+    v = i % 9 + 1
+    key = ("k" + str(v)).encode()
+    tag = hmac.new(key, ("part" + str(v)).encode() + bytes([i % 256]), hashlib.sha256).hexdigest()
+    params = "m=19456,t=2,p=1" if i % 2 == 0 else "m=%d,t=%d,p=1" % (1024 * v, v)
+    return int(tag[0], 16) + 16 + 0 + 64 + 128 * len(key) + 1000 * 3 + 10000 * len(params)
+
+
+def _w244_crypto_host_nonce(i):
+    """crypto-host-nonce"""
+    s = i % 16
+    seed = bytes((k * 3 + s) % 256 for k in range(32))
+    size = i % 24 + 1
+    return (ed25519_public(seed)[0] + (0 if i % 3 == 0 else 256) + 1000 * size + 100000 * ((i + size - 1) % 256)
+            + (0 if i % 2 == 0 else 512))
+
+
+def _w244_crypto_x509_values(i):
+    """crypto-x509-values"""
+    v = i % 9 + 1
+    return 2 + 10 * 2 + 100 * v + 1000 * (2 if i % 3 == 0 else 1) + 10000 * len("1.3.6.1.5.5.7.3." + str(v)) + (100000 if i % 2 == 0 else 0)
+
+
+def _w244_crypto_x509_extensions(i):
+    """crypto-x509-extensions"""
+    leaf = i % 2 == 0
+    # Leaf: subjectAltName (localhost, 127.0.0.1), basicConstraints CA:FALSE (critical), keyUsage digitalSignature (critical),
+    # extKeyUsage serverAuth, subject and authority key identifiers. CA: basicConstraints CA:TRUE (critical),
+    # keyUsage keyCertSign and cRLSign (critical), subject key identifier. Both keys are P-256 (91-byte SPKI).
+    if leaf:
+        return 6 + 10 * 2 + 100 + 0 + 1000 * 1 + 10000 * 1 + 100000 * 91 + 100000000 * 1
+    return 3 + 10 * 2 + 100 + 200 + 1000 * 2 + 0 + 100000 * 91 + 0
+
+
+def _w244_crypto_x509_chain(i):
+    """crypto-x509-chain"""
+    # localhost is the leaf's DNS name; example.org is not, so the name check fails.
+    path = 2 if i % 2 == 0 else 100
+    return path + 1000 * (i % 4 + 1) + 10 * 2
+
+
+def _w244_fs_path_forms(i):
+    """fs-path-forms"""
+    import posixpath
+    v = i % 9 + 1
+    x = str(v)
+    p = ["/srv/app/./logs/../data/f" + x + ".tar.gz", "rel/a/b" + x + ".txt", "/a/b/c" + x, "../up/x" + x + ".md"][i % 4]
+    # A path drops "." segments when made; ".." stays until normalized.
+    p = p.replace("/./", "/")
+    name = p.rsplit("/", 1)[-1]
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem = name
+    replaced = p[:len(p) - len(name)] + stem + ".bak"
+    return ((1 if p.startswith("/") else 0) + 10 * len(p + "/k" + x) + 100 * len(replaced) + 1000 * len(posixpath.normpath(p))
+            + (10000 if p < "/srv/app" else 20000) + 100000 * len("data/q" + x) + 1000000 * len(stem) + 10000000)
+
+
+def _w244_fs_stat_values(i):
+    """fs-stat-values"""
+    v = i % 9 + 1
+    bits = (i * 37) % 512
+    return (1000 + i) + (2000 + v) + 3000 + (4000 + i % 5) + 10000 * (bits >> 6) + 100000 * ((bits >> 3) & 7) + 1000000 * (bits & 7)
+
+
+def _w244_fs_file_bytes(i):
+    """fs-file-bytes"""
+    data = bytes((k + i) % 256 for k in range(i % 50 + 10))
+    return data[3] + 1000 * 4 + 10000 * data[8] + 10000000 * 8
+
+
+def _w244_fs_file_text(i):
+    """fs-file-text"""
+    x = str(i % 9 + 1)
+    content = "alpha" + x + "\n" + "beta-" + x + x + "\n" + "gamma\n"
+    return len("alpha" + x) + 10 * 2 + 100 * len(content) + 1000 * 3 + 10000 * len("z" + x)
+
+
+def _w244_fs_entries(i):
+    """fs-entries"""
+    x = str(i % 9 + 1)
+    return 0 + 2 + 0 + 8 + 16 * len("data" + x)
+
+
+def _w244_fs_tree_links(i):
+    """fs-tree-links"""
+    x = str(i % 9 + 1)
+    # Descendants of t: u, u/f.txt, h.txt, s.
+    return len("f.txt") + 10 * 4 + 100 * 1 + 1000 * len("abc" + x) + 100000 * 2 + 0
+
+
+def _w244_fs_temp_file(i):
+    """fs-temp-file"""
+    x = str(i % 9 + 1)
+    # Read at the end of what was written: nothing.
+    return len("head" + x) + len("line\n") + 2 + 100 * 0 + 1000
+
+
+def _w244_fs_temp_finish(i):
+    """fs-temp-finish"""
+    x = str(i % 9 + 1)
+    sizes = len("keep" + x) + 10 * len("new!" + x + x) + 100 * 3 + 1000 * len("text " + x)
+    # Replacing consumes (closes) the temporary file.
+    return 1 + 2 + 0 + 8 + 16 * sizes
+
+
+def _w244_fs_root_stat(i):
+    """fs-root-stat"""
+    v = i % 9 + 1
+    return 2 + 10 * ord("0123456789"[i % 5]) + 1000 * 10 + 10000 * v + 100000 * 7
+
+
+def _w244_mime_part_build(i):
+    """mime-part-build"""
+    v = i % 9 + 1
+    return 2 + 10 * v + 100 * 1 + 1000 + 10000 + 100000 * 1
+
+
+def _w244_mime_parse(i):
+    """mime-parse"""
+    x = str(i % 9 + 1)
+    # The root and its two parts; AQID is three bytes.
+    return 3 + 10 * 1 + 100 * 2 + 1000 * 3 + 10000 + 20000 + 100000 * len("inline; filename=p" + x + ".png")
+
+
+def _w244_mime_validate(i):
+    """mime-validate"""
+    x = str(i % 9 + 1)
+    odd = i % 2 == 1
+    decoded = base64.b64decode("aGk=") if odd else ("h\u00e9" + x).encode()
+    # A text body fits text/*, a binary body any non-multipart type, a multipart body only multipart/* with its boundary.
+    return (2 if odd else 1) + (8 if odd else 4) + (32 if odd else 16) + 64 + 1000 * len("t" + x) + 10000 * len(decoded)
+
+
+def _w244_mime_parameters(i):
+    """mime-parameters"""
+    v = i % 9 + 1
+    x = str(v)
+    # RFC 2045: values that are not tokens are quoted; tspecials and space are not token characters.
+    written = 'charset=utf-8; name="a b%s"; q=%s' % (x, x)
+    token = {"a": 1, " ": 0, "(": 0, "~": 1, "/": 0, "Z": 1}[["a", " ", "(", "~", "/", "Z"][i % 6]]
+    limited = 2 if i % 3 == 2 else 9
+    return (1 if i % 2 == 0 else 0) + 10 * len(written) + 1000 * token + 10000 * v + 100000 * limited
+
+
+def _w244_mime_scanning(i):
+    """mime-scanning"""
+    x = str(i % 9 + 1)
+    import email.header
+    decoded = "".join(part.decode(cs) if isinstance(part, bytes) else part for part, cs in
+                      email.header.decode_header("=?utf-8?B?%s?= =?utf-8?Q?_w%s?=" % (["0J/RgNC40LLQtdGC", "aGVsbG8="][i % 2], x)))
+    return (len("text") + 10 * len("html") + 100 * 2 + 1000 * len("attachment") + 10000 * 2 + 100000 * len("tok" + x)
+            + 1000000 * len(decoded) + 10000000 * len("a=b" + x))
+
+
+def _w244_mime_types_map(i):
+    """mime-types-map"""
+    v = i % 9 + 1
+    name = ["a.okk", "b.ok" + str(v), "c.png", "d.pdf"][i % 4]
+    # Own entries first (extensions compared case-insensitively), then the fallback; unknown is application/octet-stream.
+    if name.endswith(".okk") or name.endswith(".ok" + str(v)):
+        t = "text/x-okkama"
+    elif name.endswith(".png"):
+        t = "image/x-own"
+    else:
+        t = "application/pdf" if i % 2 == 0 else "???"
+    # An unknown name is UnknownMediaType (counted as 3).
+    return len(t) + 100 * 2 + 1000 * 2 + 10000 * 3 + 1000000 * v
+
+
+def _w244_mime_system_types(i):
+    """mime-system-types"""
+    x = str(i % 9 + 1)
+    t = ["text/x-a" + x, "text/x-a" + x, "image/x-b", "???"][i % 4]
+    return len(t) + 100 * 2
+
+
+def _w244_logging_writers(i):
+    """logging-writers"""
+    rank = i % 5
+    db = i % 2 == 0
+    # app.db needs error (rank 3), the rest info (rank 1); a broadcast fails when one destination is full.
+    passes = rank >= (3 if db else 1)
+    kept = (1 if passes else 0) + 1
+    return (kept + 10 * (1 if passes else 0) + 100 + 1000 + 10000 * (1 if i % 2 == 0 else 0)
+            + (100000 if rank >= 3 else 0) + 1000000 + 10000000 * 3)
+
+
+def _w244_logging_names_fields(i):
+    """logging-names-fields"""
+    x = str(i % 9 + 1)
+    db = i % 2 == 0
+    rank = i % 5
+    name = "app." + ("db" if db else "web")
+    return ((1 if name < "app.m" else 2) + 10 * len(name + ".q" + x) + 100 * 3 + 1000 * 2
+            + (10000 if (rank >= 0 if db else rank >= 2) else 0) + (100000 if rank >= 3 else 0))
+
+
+def _w244_logging_lines(i):
+    """logging-lines"""
+    import datetime as dt
+    v = i % 9 + 1
+    x = str(v)
+    rank = i % 5
+    names = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    when = dt.datetime(1970, 1, 1) + dt.timedelta(seconds=1700000000 + i, hours=1)
+    name = "app." + ("db" if i % 2 == 0 else "web")
+    fields = json.dumps({"password": "s" + x, "id": v}, separators=(",", ":"))
+    line = '%s+01:00 level=%s name="%s" process=42 message="m%s" fields=%s' % (when.strftime("%Y-%m-%dT%H:%M:%S"), names[rank], name, x, fields)
+    return (len(line) + 1000 + (10000 if rank < 2 else 20000) + 100000 * (1 if rank == 3 else 0) + 1000000 * len("svc.c" + x) + 10000000)
+
+
+def _w244_logging_logger_rotation(i):
+    """logging-logger-rotation"""
+    v = i % 9 + 1
+    debug = 1 if i % 3 == 0 else 0
+    # The suffix is the RFC 3339 time with ":" written "-", then "-" and the index.
+    suffix = "2023-11-14T22-13-20Z-%d" % v
+    return debug + 1 + 1 + 10 * 0 + (100 if i * 600 >= 3600 else 0) + 1000 * len(suffix)
+
+
+def _w244_logging_files(i):
+    """logging-files"""
+    x = str(i % 9 + 1)
+    return len("one " + x + "\n") + len("two\n")
+
+
+def _w244_logging_rotating_file(i):
+    """logging-rotating-file"""
+    x = str(i % 9 + 1)
+    return len("r" + x + "\n") + len("s\n")
+
+
+def _w244_os_environment_read(i):
+    """os-environment-read"""
+    v = i % 9 + 1
+    x = str(v)
+    # Booleans read true or false; "yes" is refused (InvalidEnvironmentValue).
+    flag = {0: 100000000, 1: 0, 2: 300000000, 3: 0}[i % 4]
+    return (len("/home/u" + x) + (100 if i % 2 == 0 else 0) + 1000 * len("n" + x) + (8000 + v) * 10000 + flag
+            + 1000000000 + 10)
+
+
+def _w244_os_search_path(i):
+    """os-search-path"""
+    v = i % 9 + 1
+    count = i % 5 + 1
+    last = len("/opt/p%d/bin%d" % (count - 1, v))
+    return count + 10 * count + 100 * len("/opt/p0/bin%d" % v) + 1000 * last + 10000 * last + 1000000 + 10000000
+
+
+def _w244_os_process_pipe(i):
+    """os-process-pipe"""
+    v = i % 9 + 1
+    return 1 + 2 + 4 + 10 * len("cat %d\n" % v) + 0 + 100
+
+
+def _w244_os_process_readers(i):
+    """os-process-readers"""
+    v = i % 9 + 1
+    return len("ab%d!\nA" % v) + 0 + 1000 + 10000
+
+
+def _w244_os_process_streams(i):
+    """os-process-streams"""
+    v = i % 9 + 1
+    x = str(v)
+    return 1 + 10 * (len("one" + x) + len("two")) + 100 + 1000 * len("xyz" + x) + 10000 * v + 1000000 * len("e" + x + "\n") + 10000000
+
+
+def _w244_os_process_misc(i):
+    """os-process-misc"""
+    v = i % 9 + 1
+    return 0 + 10 * len("r%d\n" % v) + 100
+
+
+WORK244 = {
+    'collections-views-bounds': _w244_collections_views_bounds,
+    'collections-views-transform': _w244_collections_views_transform,
+    'collections-views-reversed': _w244_collections_views_reversed,
+    'collections-combinatorics': _w244_collections_combinatorics,
+    'collections-set-union': _w244_collections_set_union,
+    'collections-set-difference': _w244_collections_set_difference,
+    'collections-set-edits': _w244_collections_set_edits,
+    'collections-sorted': _w244_collections_sorted,
+    'collections-ordering-search': _w244_collections_ordering_search,
+    'collections-heap-deque': _w244_collections_heap_deque,
+    'collections-frequencies': _w244_collections_frequencies,
+    'digest-blake2b': _w244_digest_blake2b,
+    'digest-blake2s': _w244_digest_blake2s,
+    'digest-legacy-blocks': _w244_digest_legacy_blocks,
+    'digest-sha2-small': _w244_digest_sha2_small,
+    'digest-sha2-wide': _w244_digest_sha2_wide,
+    'digest-sha3-small': _w244_digest_sha3_small,
+    'digest-sha3-wide': _w244_digest_sha3_wide,
+    'digest-shake': _w244_digest_shake,
+    'digest-read': _w244_digest_read,
+    'regex-pattern-queries': _w244_regex_pattern_queries,
+    'regex-observation': _w244_regex_observation,
+    'regex-match-groups': _w244_regex_match_groups,
+    'regex-first-match': _w244_regex_first_match,
+    'regex-prefix-match': _w244_regex_prefix_match,
+    'regex-entire-match': _w244_regex_entire_match,
+    'regex-replace-forms': _w244_regex_replace_forms,
+    'toml-table-scalars': _w244_toml_table_scalars,
+    'toml-table-lists': _w244_toml_table_lists,
+    'toml-temporal': _w244_toml_temporal,
+    'toml-maybe-scalars': _w244_toml_maybe_scalars,
+    'toml-values-built': _w244_toml_values_built,
+    'json-node-reads': _w244_json_node_reads,
+    'json-node-shape': _w244_json_node_shape,
+    'json-maybe-reader': _w244_json_maybe_reader,
+    'json-maybe-presence': _w244_json_maybe_presence,
+    'json-presence-reader': _w244_json_presence_reader,
+    'json-streaming': _w244_json_streaming,
+    'plist-xml-source': _w244_plist_xml_source,
+    'plist-xml-text': _w244_plist_xml_text,
+    'plist-dictionary-reads': _w244_plist_dictionary_reads,
+    'plist-dictionary-maybe': _w244_plist_dictionary_maybe,
+    'plist-maybe-more': _w244_plist_maybe_more,
+    'xml-events': _w244_xml_events,
+    'xml-node-build': _w244_xml_node_build,
+    'xml-element': _w244_xml_element,
+    'uuid-named': _w244_uuid_named,
+    'uuid-custom': _w244_uuid_custom,
+    'uuid-text': _w244_uuid_text,
+    'url-parts-read': _w244_url_parts_read,
+    'url-parts-edit': _w244_url_parts_edit,
+    'url-query': _w244_url_query,
+    'url-form': _w244_url_form,
+    'db-value-capture-scalars': _w244_db_value_capture_scalars,
+    'db-value-capture-text': _w244_db_value_capture_text,
+    'db-value-capture-protocol': _w244_db_value_capture_protocol,
+    'db-value-print': _w244_db_value_print,
+    'db-value-kinds': _w244_db_value_kinds,
+    'db-value-readers': _w244_db_value_readers,
+    'db-value-native': _w244_db_value_native,
+    'db-column-reader-typed': _w244_db_column_reader_typed,
+    'db-page-reader': _w244_db_page_reader,
+    'db-maybe-reader': _w244_db_maybe_reader,
+    'db-maybe-presence': _w244_db_maybe_presence,
+    'db-presence-reader': _w244_db_presence_reader,
+    'db-statement-values': _w244_db_statement_values,
+    'sqlite-session-execute': _w244_sqlite_session_execute,
+    'sqlite-session-rows': _w244_sqlite_session_rows,
+    'sqlite-session-prepare': _w244_sqlite_session_prepare,
+    'sqlite-transaction-control': _w244_sqlite_transaction_control,
+    'sqlite-transaction-work': _w244_sqlite_transaction_work,
+    'sqlite-blob-session': _w244_sqlite_blob_session,
+    'sqlite-script': _w244_sqlite_script,
+    'sqlite-backup': _w244_sqlite_backup,
+    'sqlite-failures': _w244_sqlite_failures,
+    'sqlite-prepared-transaction': _w244_sqlite_prepared_transaction,
+    'sqlite-acquisition': _w244_sqlite_acquisition,
+    'db-pool-state-lease': _w244_db_pool_state_lease,
+    'db-pool-state-retire': _w244_db_pool_state_retire,
+    'db-pooled-connection': _w244_db_pooled_connection,
+    'db-pooled-transaction': _w244_db_pooled_transaction,
+    'db-pool-prepared': _w244_db_pool_prepared,
+    'db-physical': _w244_db_physical,
+    'db-query-forms': _w244_db_query_forms,
+    'locale-subtag-shapes': _w244_locale_subtag_shapes,
+    'locale-subtag-keys': _w244_locale_subtag_keys,
+    'locale-extensions': _w244_locale_extensions,
+    'locale-fields': _w244_locale_fields,
+    'locale-filtered': _w244_locale_filtered,
+    'locale-number-print': _w244_locale_number_print,
+    'locale-number-data': _w244_locale_number_data,
+    'locale-number-magnitude': _w244_locale_number_magnitude,
+    'locale-number-printing': _w244_locale_number_printing,
+    'locale-number-zeroes': _w244_locale_number_zeroes,
+    'locale-case-currency': _w244_locale_case_currency,
+    'locale-gregorian-names': _w244_locale_gregorian_names,
+    'locale-localized-times': _w244_locale_localized_times,
+    'locale-gmt-offset': _w244_locale_gmt_offset,
+    'locale-cldr-gregorian': _w244_locale_cldr_gregorian,
+    'locale-cldr-numbers': _w244_locale_cldr_numbers,
+    'locale-preferred': _w244_locale_preferred,
+    'crypto-aead-text': _w244_crypto_aead_text,
+    'crypto-xchacha': _w244_crypto_xchacha,
+    'crypto-ed25519-x25519': _w244_crypto_ed25519_x25519,
+    'crypto-ecdsa-keys': _w244_crypto_ecdsa_keys,
+    'crypto-jwt-keys': _w244_crypto_jwt_keys,
+    'crypto-rsa-keys': _w244_crypto_rsa_keys,
+    'crypto-rsa-pss-oaep': _w244_crypto_rsa_pss_oaep,
+    'crypto-key-format': _w244_crypto_key_format,
+    'crypto-hmac-secret': _w244_crypto_hmac_secret,
+    'crypto-host-nonce': _w244_crypto_host_nonce,
+    'crypto-x509-values': _w244_crypto_x509_values,
+    'crypto-x509-extensions': _w244_crypto_x509_extensions,
+    'crypto-x509-chain': _w244_crypto_x509_chain,
+    'fs-path-forms': _w244_fs_path_forms,
+    'fs-stat-values': _w244_fs_stat_values,
+    'fs-file-bytes': _w244_fs_file_bytes,
+    'fs-file-text': _w244_fs_file_text,
+    'fs-entries': _w244_fs_entries,
+    'fs-tree-links': _w244_fs_tree_links,
+    'fs-temp-file': _w244_fs_temp_file,
+    'fs-temp-finish': _w244_fs_temp_finish,
+    'fs-root-stat': _w244_fs_root_stat,
+    'mime-part-build': _w244_mime_part_build,
+    'mime-parse': _w244_mime_parse,
+    'mime-validate': _w244_mime_validate,
+    'mime-parameters': _w244_mime_parameters,
+    'mime-scanning': _w244_mime_scanning,
+    'mime-types-map': _w244_mime_types_map,
+    'mime-system-types': _w244_mime_system_types,
+    'logging-writers': _w244_logging_writers,
+    'logging-names-fields': _w244_logging_names_fields,
+    'logging-lines': _w244_logging_lines,
+    'logging-logger-rotation': _w244_logging_logger_rotation,
+    'logging-files': _w244_logging_files,
+    'logging-rotating-file': _w244_logging_rotating_file,
+    'os-environment-read': _w244_os_environment_read,
+    'os-search-path': _w244_os_search_path,
+    'os-process-pipe': _w244_os_process_pipe,
+    'os-process-readers': _w244_os_process_readers,
+    'os-process-streams': _w244_os_process_streams,
+    'os-process-misc': _w244_os_process_misc,
+}
+WORK244_PROGRAMS = frozenset(WORK244)
+
+
+def work244_contribution(name, i):
+    return rem(WORK244[name](i), 7)
+# END #244 WORK

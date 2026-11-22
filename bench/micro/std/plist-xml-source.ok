@@ -1,0 +1,38 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "plist/parse" take PlistXmlSource, InvalidPlist;
+
+// The XML scanner of the plist reader over one document: searches, tokens, checks, entities and errors.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let text = "<?xml version=\"1.0\"?>\n<plist version=\"1.0\"><dict>" +
+            "<key>name</key><string>App &amp; " + x + "</string><key>on</key><true/><key>ratio</key><real>" + x + ".5</real>" +
+            "<key>blob</key><data>AQID</data><key>when</key><date>2026-01-0" + x + "T00:00:00Z</date>" +
+            "<key>tags</key><array><string>a</string><string>b" + x + "</string></array>" +
+            "<key>ports</key><array><integer>1</integer><integer>" + x + "</integer></array>" +
+            "<key>items</key><array><dict><key>id</key><integer>" + x + "</integer></dict></array>" +
+            "<key>inner</key><dict><key>k</key><string>v" + x + "</string></dict></dict></plist>";
+        let source = PlistXmlSource(text, 0);
+        let total = source.until(0, "<dict>") + source.text_end(56) + source.token(22).end() + source.significant(21).start()
+            + source.checked("ab" + x, 0).length() + source.decoded("a&amp;b" + x, 0).length()
+            + (match source.failure(3, "bad") { case InvalidPlist.located(at, why) { at + why.length(); } });
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

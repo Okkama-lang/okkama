@@ -1,0 +1,40 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "mime/types" take SystemMediaTypes, EmptyMediaTypes, UnknownMediaType;
+import "fs/path" take Path;
+import "fs/file" take File, FileMode;
+import "fs/temp" take TemporaryDirectory;
+import "os/environment" take Environment;
+
+// A mime.types file written to a temporary directory and read as the system table.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-mt-");
+        let table = scratch.path().child("mime.types");
+        File(path: table, mode: FileMode.writing).text().write("# comment\ntext/x-a" + x + " aa ab\nimage/x-b bb\n");
+        let types = SystemMediaTypes(fallback: EmptyMediaTypes(), files: [table]);
+        let total = (try { types.type(Path(["f.aa", "g.ab", "h.bb", "i.zz"][i % 4])).string().length(); } catch e is UnknownMediaType { 3; }) + 100 * types.extensions(types.type(Path("f.aa"))).size();
+        scratch.close();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

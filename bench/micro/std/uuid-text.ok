@@ -1,0 +1,42 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "compare" take Order;
+import "uuid/value" take UuidText, UuidBytes, UuidVariant;
+import "uuid/generation" take Uuid8;
+
+hidden object Rank {
+    Rank();
+    of(order is Order) is int {
+        if order == Order.less { 1; } else if order == Order.equal { 2; } else { 3; }
+    }
+}
+
+// Version and variant of UUIDs from bytes and text; text compared with bytes.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let x = v.string();
+        let dns = UuidText("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+        let rank = Rank();
+        let raw = UuidBytes(Uuid8(high: v, middle: v, low: v).bytes());
+        let text = UuidText("6ba7b81" + x + "-9dad-11d1-80b4-00c04fd430c8");
+        let total = raw.version() + (if raw.variant() == UuidVariant.rfc { 1; } else { 0; }) + rank.of(dns.order(raw))
+            + (if text.variant() == UuidVariant.rfc { 1; } else { 0; }) + rank.of(text.order(dns));
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

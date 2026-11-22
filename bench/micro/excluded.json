@@ -42,5 +42,14 @@
   "mail/mbox_store:MboxSession.add": "Every usable MboxSession generates a SecureRandom nonce in its constructor; no random-source injection or in-memory session constructor.",
   "mail/mbox_store:MboxSession.messages": "Every usable MboxSession generates a SecureRandom nonce in its constructor; no random-source injection or in-memory session constructor.",
   "mail/mbox_store:MboxSession.records": "Every usable MboxSession generates a SecureRandom nonce in its constructor; no random-source injection or in-memory session constructor.",
-  "mail/mbox_store:MboxSession.remove": "Every usable MboxSession generates a SecureRandom nonce in its constructor; no random-source injection or in-memory session constructor."
+  "mail/mbox_store:MboxSession.remove": "Every usable MboxSession generates a SecureRandom nonce in its constructor; no random-source injection or in-memory session constructor.",
+  "uuid/generation:Uuid4s.sample": "draws from SecureRandom, the system generator, which takes no seed",
+  "db/sqlite:SqliteFrame.columns": "no std path calls it, and a SqliteFrame is made only from a native worker reply inside SqliteSession",
+  "locale/system:SystemLanguagePreferences.new": "reads the operating system's language list (host settings)",
+  "crypto/nonce:SystemEntropy.bytes": "draws from the system generator, which takes no seed",
+  "crypto/x509/trust:SystemTrustStore.certificates": "reads the host's trust store",
+  "logging/stream:JsonTerminalLogs.new": "writes to a TerminalOutput, which only an opened terminal session makes",
+  "logging/stream:JsonTerminalLogs.write": "writes to a TerminalOutput, which only an opened terminal session makes",
+  "logging/stream:TextTerminalLogs.new": "writes to a TerminalOutput, which only an opened terminal session makes",
+  "logging/stream:TextTerminalLogs.write": "writes to a TerminalOutput, which only an opened terminal session makes"
 }

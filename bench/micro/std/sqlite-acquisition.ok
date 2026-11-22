@@ -1,0 +1,46 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteDatabase, SqliteOptions, SqliteAcquiring;
+import "db/value" take DbInteger;
+import "db/transaction" take TransactionOptions;
+import "fs/temp" take TemporaryDirectory;
+import "os/environment" take Environment;
+
+// A file database in a temporary directory acquired with its preparing and transaction faces.
+object Bench {
+    has parent is Environment;
+    Bench() {
+        parent = Environment();
+    }
+    async run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 9 + 1;
+        let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-acq-");
+        let acquired = await SqliteAcquiring(SqliteDatabase(path: scratch.path().child("a.db"), options: SqliteOptions())).acquisition();
+        await acquired.connection().execution("CREATE TABLE t(x INTEGER)");
+        let insert = await acquired.preparing().prepared("INSERT INTO t(x) VALUES (?)");
+        await insert.execution(DbInteger(v));
+        insert.close();
+        let tx = await acquired.transactions().prepared_transaction(TransactionOptions());
+        await tx.execution("INSERT INTO t(x) VALUES (?)", DbInteger(20));
+        await tx.commit();
+        let rows = await acquired.connection().query("SELECT SUM(x) AS s FROM t").all(1);
+        acquired.connection().close();
+        scratch.close();
+        let total = rows[0].int("s");
+        await self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = await bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

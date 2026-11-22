@@ -1,0 +1,44 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/x509/certificate" take Certificate, CertificateChain, CertificatePurpose;
+import "crypto/x509/trust" take VerifiedCertificateChain, TrustedCertificates, DnsCertificateIdentity, CertificateFailureCode, CertificateFailure, CertificateVerificationFailed;
+import "net/endpoint" take HostName;
+import "encoding/pem" take PemBlock;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+
+// A leaf verified up to a trusted CA for localhost (or refused for another host); failure codes named.
+object Bench {
+    has leaf, ca is Certificate;
+    Bench() {
+        leaf = Certificate(PemBlock(origin: "-----BEGIN CERTIFICATE-----\nMIIBwzCCAWigAwIBAgIUG8NUjoqvvLFxqO/t7iv/3Auy2PgwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggq\nhkjOPQMBBwNCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKEgNpBpZ4p9lZl/U7IZOja\nGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTLo4GSMIGPMBoGA1UdEQQTMBGCCWxv\nY2FsaG9zdIcEfwAAATAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNV\nHSUEDDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU/R0ad9cojv2dRtb8rSPoG2ncsPsw\nHwYDVR0jBBgwFoAUe971fZqr+7LVQfdRmjZyyNxrsncwCgYIKoZIzj0EAwIDSQAw\nRgIhANTVp7yf3QQovicpuurIeJL4z3SWS68504anbBieM2edAiEA7ypMFNH5e/jc\nmX+bVt3dCMxTaQwVY8/loOQTp0PWQLg=\n-----END CERTIFICATE-----\n").bytes());
+        ca = Certificate(PemBlock(origin: "-----BEGIN CERTIFICATE-----\nMIIBdjCCARygAwIBAgIUZys025uW0l2NKLRJhlj/e/NZtfIwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAZMRcwFQYDVQQDDA5Pa2thbWEgVGVzdCBDQTBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBFw/aXocscUbo6jObHs1PCN29BcRR+2K50QaEkwFdOx\nkiif5hQH5S72ksR2gL1PtbmPVLJv9kGhSjylkFnWMFujQjBAMA8GA1UdEwEB/wQF\nMAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBR73vV9mqv7stVB91GaNnLI\n3GuydzAKBggqhkjOPQQDAgNIADBFAiAufmQhdmE0TO2RfIcZRNt/ucAEPVLBW03q\nIRbruIX6KgIhAJsOnAIaGBgywbvntzwVyjTtIurUqVEB8oy03JNCKmNx\n-----END CERTIFICATE-----\n").bytes());
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let hosts is @string = ["localhost", "example.org"];
+        let verified = VerifiedCertificateChain(chain: CertificateChain(leaf), trust: TrustedCertificates(ca),
+            host: DnsCertificateIdentity(HostName(hosts[i % 2])), at: Instant(origin: Duration(seconds: 1900000000 + i)),
+            purpose: CertificatePurpose("1.3.6.1.5.5.7.3.1"));
+        let path = try { verified.path().certificates().size(); } catch e is CertificateVerificationFailed { 100; };
+        let codes is @string = ["untrusted", "expired", "invalid_name", "whatever"];
+        let code = CertificateFailureCode(codes[i % 4]).failure();
+        let total = path + (if code == CertificateFailure.untrusted { 1000; } else if code == CertificateFailure.expired { 2000; }
+            else if code == CertificateFailure.invalid_name { 3000; } else if code == CertificateFailure.invalid_chain { 4000; } else { 5000; })
+            + 10 * CertificateChain(leaf, ca).certificates().size();
+        self.run(i + 1, n, acc + total % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
