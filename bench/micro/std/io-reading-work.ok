@@ -1,0 +1,41 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "io/buffer" take ByteBuffer;
+import "io/decorators" take BufferedReading, LimitedReading, ChainedReading;
+import "io/stream" take Reading;
+
+object Bench {
+    Bench();
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let first = ByteBuffer([byte(v), byte(2), byte(3)]);
+        let second = ByteBuffer([byte(v + 1)]);
+        let buffered = BufferedReading(first.reading(), 2);
+        let limited = LimitedReading(buffered, 2);
+        let sources is @Reading = [limited, second.reading()];
+        let chained = ChainedReading(sources);
+        let a = chained.bytes(1);
+        let b = chained.bytes(2);
+        let c = chained.bytes(2);
+        let d = chained.bytes(2);
+        let result = a[0].int() + b[0].int() + c[0].int() + d.size();
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,29 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "regex/pattern" take Regex;
+import "regex/search" take FirstRegexMatch;
+import "strings/parse" take Number;
+
+// The text of the first match anywhere in the input.
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let x = (i % 9 + 1).string();
+        let found = FirstRegexMatch(origin: "k" + x + "=" + x + x, regex: Regex("\\d+")).text();
+        self.run(i + 1, n, acc + (Number(found).int() + found.length()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

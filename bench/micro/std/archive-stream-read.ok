@@ -1,0 +1,63 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "archive/entry" take ArchiveFile, ArchiveEntry;
+import "archive/metadata" take ArchiveMetadata, ArchiveModificationFromEpoch;
+import "archive/path" take ArchivePath;
+import "archive/stream" take ArchiveReading, EndOfArchive;
+import "async/atomic" take Atomic;
+
+object Bench {
+    Bench();
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let x = v.string();
+        let count = Atomic(0);
+        let metadata = ArchiveMetadata(ArchiveModificationFromEpoch(0.rat()).local_date_time(), "");
+        let reader = ArchiveReading(() is ArchiveEntry {
+            if count.value() > 0 {
+                throw EndOfArchive.reached;
+            }
+            count.replace(1);
+            ArchiveFile(path: ArchivePath(x), metadata: metadata, text: x);
+        });
+        let name = reader.entry().path().string();
+        let end = try {
+            reader.entry();
+            0;
+        }
+        catch e is EndOfArchive {
+            1;
+        };
+        let finished = if reader.finished() {
+            1;
+        }
+        else {
+            0;
+        };
+        reader.close();
+        let result = name.length() + end + finished + (if reader.closed() {
+            1;
+        }
+        else {
+            0;
+        });
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

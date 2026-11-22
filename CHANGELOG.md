@@ -8,11 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
-- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 348 programs across 385 of 435 std modules
-  (1137 measured public actions), from hashing, ciphers and compression to dates, locales, URLs, templates, text,
-  numbers, HTTP/1 and HTTP/2 framing, cookies, caching, IMAP/SMTP/POP3 wire forms, logging, archives, async
-  primitives, SQLite, processes and test reports; each has an independent Python oracle. `bench/micro/actions.py` keeps an inventory of every public std
-  action (STD-ACTIONS.md, `--check` for staleness) and writes a protocol-v2 skeleton for a missing one.
+- **Std micro-benchmarks (#244).** Every std action that does real work has a benchmark: `bench/micro/std` grows
+  from 11 to 709 programs, which measure 2 773 of the 3 158 work actions; the other 385 need a server, a socket,
+  a terminal, the test context or a host resource and are listed with their reasons in `bench/micro/excluded.json`.
+  Accessors, one-call wrappers and signatures without a body (3 512 targets) are covered through their callers.
+  Each program measures at most a few actions of one object and has an independent Python oracle.
+  `bench/micro/actions.py` classifies every public action from its AST, keeps STD-ACTIONS.md current (`--check`),
+  lists what is left (`--todo`) and writes a protocol-v2 skeleton for a missing action.
 - **Tests in process workers, with captured output and deadlines (#938).** `okkama run -t --workers N` runs each
   test in its own process, at most N at a time; each test's stdout and stderr are captured up to 64 KiB (cut and
   marked beyond) and reported with it (human, JSON `stdout`/`stderr`/`truncated`, JUnit `system-out`/

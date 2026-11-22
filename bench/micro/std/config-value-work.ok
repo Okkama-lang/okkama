@@ -1,0 +1,42 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "config/source" take Settings, SettingEntry, SettingSource, SettingSourceKind;
+import "config/key" take SettingKey;
+import "config/value" take Setting, ScalarSetting, ScalarSettingOr;
+
+object Bench {
+    Bench();
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let x = v.string();
+        let source = SettingSource(SettingSourceKind.document, "s" + x);
+        let key = SettingKey("n");
+        let settings = Settings(
+            SettingEntry(key, [x], source),
+            SettingEntry(SettingKey("b"), ["true"], source)
+        );
+        let a = Setting(settings, key);
+        let b = ScalarSetting(settings, key);
+        let c = ScalarSettingOr(settings, SettingKey("absent"), x);
+        let d = ScalarSettingOr(settings, key, "fallback");
+        let result = a.values().first().length() + a.source()::Source::name.length() + b.source()::Source::name.length() + c.text().length() + c.source()::Source::name.length() + d.text().length() + d.source()::Source::name.length();
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

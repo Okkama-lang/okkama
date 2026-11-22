@@ -1,0 +1,74 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "async/atomic" take Atomic;
+import "io/buffer" take ByteBuffer;
+import "io/stream" take AsyncReading, AsyncWriting, ByteSource;
+import "io/input" take ByteInput;
+
+object MemoryReading does AsyncReading {
+    has buffer is ByteBuffer;
+
+    MemoryReading(data is @byte) {
+        buffer = ByteBuffer(data);
+    }
+
+    async bytes(limit is int) is @byte {
+        buffer.reading().bytes(limit);
+    }
+}
+
+object MemoryWriting does AsyncWriting {
+    has buffer is ByteBuffer;
+
+    MemoryWriting(:buffer);
+
+    async write(bytes is @byte) is AsyncWriting {
+        buffer.writing().write(bytes);
+        self;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        buffer.writing().write(source);
+        self;
+    }
+
+    async flush() is void {
+        buffer.writing().flush();
+    }
+}
+
+object Bench {
+    Bench();
+
+    async run(n is int) is int {
+        let total = Atomic(0);
+        for 0..n -> i {
+            let v = i % 23 + 1;
+            let input = ByteInput(MemoryReading([byte(v), byte(2), byte(3)]));
+            let ready = await input.ensure(3);
+            let result = (if ready {
+                1;
+            }
+            else {
+                0;
+            }) + input.available() + input.peek(0).int() + input.range(1, 3).bytes().size() + input.take(
+                3
+            ).size();
+            total.replace(total.value() + result);
+        }
+        total.value();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

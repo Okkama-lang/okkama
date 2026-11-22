@@ -1,0 +1,40 @@
+// #244: deterministic small work scenario; independent oracle in oracles.py.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded, Utf16Encoded, Utf16Decoded, Utf32Encoded,
+    Utf32Decoded, ByteOrder;
+
+object Bench {
+    Bench();
+
+    run(i is int, n is int, acc is int) is int {
+        if i == n {
+            return acc;
+        }
+        let v = i % 23 + 1;
+        let x = v.string();
+        let text = "é😀" + x;
+        let data = Utf32Encoded(text, ByteOrder.big).bytes();
+        let a = Utf8Decoded(Utf8Encoded(text).bytes()).string();
+        let b = Utf16Decoded(Utf16Encoded(text, ByteOrder.little).bytes(), ByteOrder.little).string();
+        let c = Utf32Decoded(data, ByteOrder.big).string();
+        let result = a.characters().reduce(0) -> s, c {
+            s + c.code();
+        } + b.length() + c.length() + data.reduce(0) -> s, b {
+            s + b.int();
+        };
+        self.run(i + 1, n, acc + result);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

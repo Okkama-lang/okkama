@@ -123,6 +123,10 @@ GETTEXT_TEST_MO = b'\xde\x12\x04\x95\x00\x00\x00\x00\x03\x00\x00\x00\x1c\x00\x00
 
 
 def contribution(name, i):
+    if name in LAST244_ORACLES:
+        return LAST244_ORACLES[name](i)
+    if name in TAIL244_ORACLES:
+        return TAIL244_ORACLES[name](i, i % 23 + 1, str(i % 23 + 1))
     if name in WORK244_ORACLES:
         v = i % 251 + 1
         return WORK244_ORACLES[name](i, v, str(v))
@@ -2816,3 +2820,126 @@ WORK244_PROGRAMS = frozenset(WORK244)
 def work244_contribution(name, i):
     return rem(WORK244[name](i), 7)
 # END #244 WORK
+
+# BEGIN #244 TAIL WORK — independent Python arithmetic / stdlib oracles.
+# All inputs use v=i%23+1 and x=str(v). No expected value comes from VM output.
+# Encodings/checksums use Python codecs, zlib and binascii.crc_hqx; fractions,
+# calendar/datetime, statistics and difflib supply independent reference models.
+# Random distribution scenarios inject U=1/8. Box-Muller then gives
+# Z=sqrt(-ln(7/8)); Marsaglia-Tsang accepts the first candidate at shapes 2/3.
+# Gamma, beta and von Mises expressions below are the resulting mathematical
+# values; integer sampling uses an explicit finite selection, PCG its published
+# 64/32 sequence (pcg_integer16 above). No operating-system randomness is used.
+# INI serializes quoted names/values; debug-dumper-work counts the literal
+# documented delimiters of Probe/@int/%string:int plus each decimal value.
+# time-zone-work uses Berlin in January 2024 (CET, +3600 seconds, no DST);
+# fixed-clock cases derive all dates from the Unix epoch. No host zone is read.
+# i18n-mo-membership uses a hand-built little-endian GNU MO revision-0 layout:
+# two records, metadata and key; its one-byte translation is ASCII 65+v.
+# Continuous results are reduced to coarse integers away from rounding borders.
+# Pearson correlation of an exactly fitted line is rounded before reduction,
+# because IEEE floating-point evaluation can produce a value just below 1.
+
+TAIL244_ORACLES = {
+    'numbers-bigint-arithmetic': lambda i, v, x: (v*7+1)-6+(v*7+1)*6+(v*7+1)//6+(v*7+1)%6+(v*7+1).bit_length()+1,
+    'numbers-bigint-powers': lambda i, v, x: math.gcd(v,6)+math.lcm(v,6)+v**3+v**2,
+    'numbers-rational-arithmetic': lambda i, v, x: sum(r.numerator+r.denominator+len(str(r.numerator)+"/"+str(r.denominator)) for r in (fractions.Fraction(v,3)+fractions.Fraction(2,5),fractions.Fraction(v,3)-fractions.Fraction(2,5),fractions.Fraction(v,3)*fractions.Fraction(2,5),fractions.Fraction(v,3)/fractions.Fraction(2,5)))+int(fractions.Fraction(v,3)<fractions.Fraction(2,5)),
+    'math-decimal-arithmetic': lambda i, v, x: (4*v-1)+(4*v+1)+(4*v+1)+2*v+1,
+    'math-aggregate-work': lambda i, v, x: 2*(v+7)+12*v+int(math.hypot(v,3,4))+v*v+5,
+    'time-date-work': lambda i, v, x: 2*datetime.date(2024,1,v).toordinal()+v+63,
+    'time-weekday': lambda i, v, x: datetime.date(2024,1,v).isoweekday(),
+    'time-clock-work': lambda i, v, x: (2*v+1)*10**9+22,
+    'time-duration-work': lambda i, v, x: (v-30)*10**9+len(x)+2,
+    'time-local-work': lambda i, v, x: v*3600*10**9+v+41,
+    'time-format-work': lambda i, v, x: 2*v+19,
+    'time-zone-work': lambda i, v, x: 3600*10**9+6+v,
+    'time-fixed-today': lambda i, v, x: (v-1)*86400*10**9+v,
+    'strings-parts-work': lambda i, v, x: 144+2*sum(map(ord,x)),
+    'strings-number-work': lambda i, v, x: 2*v+fractions.Fraction(v,3).numerator+int(v%2==0),
+    'numbers-float-sign': lambda i, v, x: v if v<12 else 0,
+    'checksum-state-work': lambda i, v, x: __import__("binascii").crc_hqx(bytes([v,255,0,v+1]),65535)+zlib.crc32(bytes([v,255,0,v+1]))+zlib.adler32(bytes([v,255,0,v+1])),
+    'encoding-base-decode': lambda i, v, x: 2*(v+383),
+    'encoding-byte-text': lambda i, v, x: v+2*len(x)+233+sum(map(ord,x)),
+    'encoding-utf-work': lambda i, v, x: sum(map(ord,"é😀"+x))+2*len("é😀"+x)+sum(("é😀"+x).encode("utf-32-be")),
+    'encoding-pem-cursor': lambda i, v, x: v+256,
+    'unicode-numeric-value': lambda i, v, x: v+(3 if v%2==0 else 4),
+    'text-layout-new': lambda i, v, x: 16+len(x),
+    'config-settings-scalars': lambda i, v, x: 2*v+len(x)+2,
+    'config-settings-layers': lambda i, v, x: v+4*len(x)+3,
+    'config-key-index': lambda i, v, x: v+1,
+    'config-overlay-work': lambda i, v, x: 2*len(x)+1+v,
+    'config-value-work': lambda i, v, x: 6*len(x)+11,
+    'config-document-work': lambda i, v, x: 2*len(x),
+    'config-ini-write': lambda i, v, x: 4*len(x)+19,
+    'debug-dumper-work': lambda i, v, x: 103+6*len(x),
+    'io-reading-work': lambda i, v, x: 2*v+3,
+    'io-buffer-writing': lambda i, v, x: 3*v+11+2*sum(map(ord,x)),
+    'io-transfer-work': lambda i, v, x: len(x)+1+120+sum(map(ord,x)),
+    'io-input-work': lambda i, v, x: v+9,
+    'io-async-reading': lambda i, v, x: v+4,
+    'io-async-writing': lambda i, v, x: v+4,
+    'io-timed-reading': lambda i, v, x: v,
+    'archive-metadata-work': lambda i, v, x: 2*v+2,
+    'archive-budget-work': lambda i, v, x: 194-2*v+2*len(x),
+    'archive-stream-read': lambda i, v, x: len(x)+3,
+    'archive-stream-write': lambda i, v, x: len(x)+3,
+    'archive-tar-stream': lambda i, v, x: len(x)+3,
+    'archive-zip-compression': lambda i, v, x: v%10+9,
+    'compression-native-write': lambda i, v, x: v+256,
+    'compression-native-read': lambda i, v, x: v+256,
+    'compression-output-work': lambda i, v, x: v+256,
+    'compression-failure-work': lambda i, v, x: v,
+    'net-failure-work': lambda i, v, x: 2*v+2,
+    'net-ip-work': lambda i, v, x: 513+v,
+    'net-interface-work': lambda i, v, x: len("10.0.0."+x+"/24")+(v//4)*4+len("10.0.0."+x+":"+str(8000+v))+1,
+    'net-suffix-work': lambda i, v, x: 5+v,
+    'random-continuous-work': lambda i, v, x: int((v+1)*1000)+int((v+2*math.sqrt(-math.log(0.875)))*1000)+int(-math.log(0.875)/2*1000)+int(math.exp(v/10+0.5*math.sqrt(-math.log(0.875)))*1000),
+    'random-gamma-beta': lambda i, v, x: int(v*(5/3)*(1+math.sqrt(-math.log(0.875))/math.sqrt(15))**3*1000)+int(1000/(1+((8/3)*(1+math.sqrt(-math.log(0.875))/math.sqrt(24))**3)/((5/3)*(1+math.sqrt(-math.log(0.875))/math.sqrt(15))**3))),
+    'random-tail-distributions': lambda i, v, x: int(v/math.sqrt(0.875)*1000)+int(v*math.sqrt(-math.log(0.875))*1000)+int(((v/10-math.acos((1/(0.25+math.sqrt(1.0625))+math.cos(math.pi/8))/(1+math.cos(math.pi/8)/(0.25+math.sqrt(1.0625)))))%(2*math.pi))*1000),
+    'random-choices-work': lambda i, v, x: v+v%3+10*(v+1),
+    'random-samples-work': lambda i, v, x: (v+[2,1,0][v%3])*2+20*(v+[k for k in [2,1,0] if k!=[2,1,0][v%3]][v%2])+100*(v+[k for k in [2,1,0] if k!=[2,1,0][v%3]][1-v%2]),
+    'random-list-removal': lambda i, v, x: 3*v+3,
+    'random-pcg-integer': lambda i, v, x: pcg_integer16(v),
+    'message-header-work': lambda i, v, x: len(x)+4+sum(("X-Count: "+x+"\r\nx-count: next\r\n").encode()),
+    'cli-argument-items': lambda i, v, x: 2*v+1,
+    'cli-invocation-values': lambda i, v, x: len(x)+v+7,
+    'cli-command-help': lambda i, v, x: len("Usage: tool"+x+"\nA tool\n")+len("complete -c 'tool"+x+"' -f\n"),
+    'csv-stream-row': lambda i, v, x: len(x)+3,
+    'template-write-work': lambda i, v, x: sum(("A"+x+"B"+x+"<p>"+x+"</p>").encode()),
+    'template-sections-work': lambda i, v, x: sum((("yes" if v%2==0 else "")+x+"é"+x).encode())+30-len(x),
+    'template-program-parts': lambda i, v, x: 5+2*len(x),
+    'template-library-names': lambda i, v, x: 2*len(x)+2,
+    'i18n-catalog-entries': lambda i, v, x: len(x)+2,
+    'i18n-fallback-plural': lambda i, v, x: (3 if v==1 else 4)+1,
+    'i18n-plural-operands': lambda i, v, x: v+58+int(2<=v%10<=4),
+    'i18n-gettext-charset': lambda i, v, x: 1+len(x)+sum(("é"+x).encode("utf-8" if v%2==0 else "latin1")),
+    'i18n-gettext-metadata': lambda i, v, x: 6+len(x),
+    'i18n-gettext-rule': lambda i, v, x: int(v!=1),
+    'i18n-po-build': lambda i, v, x: len('# '+x+'\nmsgid "key"\nmsgstr "'+x+'"\n'),
+    'i18n-mo-membership': lambda i, v, x: 65+v+int(v%2==0),
+    'statistics-sample-work': lambda i, v, x: 8+int(statistics.mean([v,v+1,v+2,v+4]))+int(statistics.geometric_mean([v,v+1,v+2,v+4]))+int(statistics.harmonic_mean([v,v+1,v+2,v+4]))+2*v+3+sum(map(int,statistics.quantiles([v,v+1,v+2,v+4],n=4))),
+    'statistics-spread-work': lambda i, v, x: int(statistics.variance([v,v+1,v+4])*1000)+int(statistics.stdev([v,v+1,v+4])*1000)+int(statistics.pvariance([v,v+1,v+4])*1000)+int(statistics.pstdev([v,v+1,v+4])*1000),
+    'statistics-pairs-work': lambda i, v, x: v+5,
+    'statistics-modes-work': lambda i, v, x: 4*v+4,
+    'calendar-month-items': lambda i, v, x: v%20+1+calendar.monthrange(2024,v%12+1)[1]+calendar.Calendar().monthdatescalendar(2024,v%12+1)[0][0].day+calendar.Calendar().monthdatescalendar(2024,v%12+1)[-1][-1].day+v+2,
+    'calendar-iso-week': lambda i, v, x: datetime.date.fromisocalendar(2024,v,1).toordinal()+datetime.date.fromisocalendar(2024,v,7).toordinal()+1+int(calendar.isleap(2024+v)),
+    'csv-record-values': lambda i, v, x: len(x)+2*v+2,
+    'csv-record-next': lambda i, v, x: len(x),
+    'csv-field-render': lambda i, v, x: 4*len(x)+24,
+    'csv-dialect-work': lambda i, v, x: 4*len(x)+27,
+    'diff-render-work': lambda i, v, x: len("".join(difflib.unified_diff(["start\n","old"+x+"\n","end\n"],["start\n","new"+x+"\n","end\n"],fromfile="left",tofile="right",n=1)))+len("".join(difflib.context_diff(["start\n","old"+x+"\n","end\n"],["start\n","new"+x+"\n","end\n"],fromfile="left",tofile="right",n=1))),
+}
+# END #244 TAIL WORK
+
+# BEGIN #244 LAST — four actions no batch reached (hand-derived).
+LAST244_ORACLES = {
+    # "k<v>=<v><v>": the first \d+ is the one digit v; Number(v) + length 1.
+    'regex-first-text': lambda i: ((i % 9 + 1) + 1) % 7,
+    # Two sends then two next(): some(i%5), some(i%3).
+    'channel-next': lambda i: (i % 5 + i % 3) % 7,
+    # "data-<digit>" and "hidden": six characters each.
+    'html-attribute': lambda i: (6 + 6) % 7,
+    # The worker bound as given.
+    'parallel-workers': lambda i: (i % 4 + 1) % 7,
+}
+# END #244 LAST
