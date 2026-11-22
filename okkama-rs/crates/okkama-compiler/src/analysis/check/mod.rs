@@ -918,19 +918,17 @@ impl<'r, 'a> Checker<'r, 'a> {
         if let Some(joined) = Ty::unify_all(&types) {
             return (Some(joined), false);
         }
-        let first = types[0].clone();
-        for other in &types[1..] {
-            if first.unify_untagged(other).is_none() {
-                let message = format!(
-                    "Branches produce different types: {} and {}",
-                    self.type_name(&first),
-                    self.type_name(other)
-                );
-                self.error(span, message);
-                return (Some(Ty::Error), false);
-            }
-        }
-        (Some(first), false)
+        // No common type: name the first branch that does not meet the ones
+        // before it, not the first branch alone — `[[]]` fits both `[[1]]` and
+        // `[["x"]]`, which still conflict with each other (#982).
+        let (joined, other) = expr::conflict(&types);
+        let message = format!(
+            "Branches produce different types: {} and {}",
+            self.type_name(&joined),
+            self.type_name(&other)
+        );
+        self.error(span, message);
+        (Some(Ty::Error), false)
     }
 
     // ----- тела и блоки -----

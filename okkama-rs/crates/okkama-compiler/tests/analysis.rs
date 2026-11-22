@@ -1257,6 +1257,39 @@ fn untagged_empty_collections_take_their_siblings_type_at_any_depth() {
 }
 
 #[test]
+fn branches_after_an_untagged_literal_are_checked_against_each_other() {
+    // #982: `[[]]` fits both `[[1]]` and `[["x"]]`, but those two do not meet;
+    // every multi-branch join reports them instead of typing the value @@never.
+    let conflict = "Branches produce different types: @@int and @@string";
+    let decls = "enum Pick = (one, two, three); enum Shape = (dot, circle(r is int), square(side is int));";
+    for body in [
+        "let p = Pick.three; let v = match p { case Pick.one { [[]]; } case Pick.two { [[1]]; } case Pick.three { [[\"x\"]]; } };",
+        "let v = match 1 { case 1 { [[]]; } case 2 { [[1]]; } else { [[\"x\"]]; } };",
+        "let s = Shape.dot; let v = match s { case Shape.dot { [[]]; } case Shape.circle(r) { [[r]]; } case Shape.square(side) { [[\"x\"]]; } };",
+        // `if` has two branches; an `else if` link joins its own pair first.
+        "let a = true; let b = false; let v = if a { [[]]; } else if b { [[1]]; } else { [[\"x\"]]; };",
+    ] {
+        let found = messages(&format!("{decls} main() is int {{ {body} 0; }}"));
+        assert_eq!(found, [conflict], "{body}");
+    }
+    // Array literals already met element by element (#315).
+    assert_eq!(
+        messages("main() is int { let v = [[[]], [[1]], [[\"x\"]]]; 0; }"),
+        ["Array elements have incompatible types @@int and @@string; declare an explicit @any boundary to allow heterogeneous values"]
+    );
+    // Untagged literals still take their siblings' type.
+    for body in [
+        "let v is @@int = [[], [1, 2]];",
+        "let w = [[], [1, 2]]; let n is @@int = w;",
+        "let p = Pick.one; let v = match p { case Pick.one { [[]]; } case Pick.two { [[1]]; } case Pick.three { [[]]; } }; let n is @@int = v;",
+        "let v = match 1 { case 1 { [[]]; } else { [[1]]; } }; let n is @@int = v;",
+    ] {
+        let found = messages(&format!("{decls} main() is int {{ {body} 0; }}"));
+        assert!(found.is_empty(), "{body}: {found:?}");
+    }
+}
+
+#[test]
 fn generic_cases_do_not_impose_an_uninferred_parameter_on_their_payloads() {
     // #304: loop/last, else and reduce need an expected type; an uninferred T is none.
     let decls = "enum Slot<T> = (vacant, full(item is T)); enum Two<T> = (empty, both(a is T, b is T));";

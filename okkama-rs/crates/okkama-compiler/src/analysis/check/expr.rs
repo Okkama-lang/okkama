@@ -2101,11 +2101,11 @@ fn expr_path(expr: &ast::Expr) -> Option<Vec<ast::Name>> {
     }
 }
 
-/// Как сравниваются на равенство два значения типа `ty` (`==`, `contains`).
-/// `any` не распаковывается: коллекция из `any` не сравнима никогда.
 /// Первая пара типов без общего: объединение предыдущих и элемент, который
-/// с ним не сходится (`unify_all` уже вернул `None`, #315).
-fn conflict(types: &[Ty]) -> (Ty, Ty) {
+/// с ним не сходится (`unify_all` уже вернул `None`, #315). Ветви `if`/`match`
+/// сообщаются так же (#982): `[[]]` подходит к обеим `[[1]]` и `[["x"]]`, а
+/// объединение `@@int` с `@@string` — нет.
+pub(super) fn conflict(types: &[Ty]) -> (Ty, Ty) {
     let mut joined = types[0].clone();
     for ty in &types[1..] {
         match joined.unify_untagged(ty) {
@@ -2116,6 +2116,8 @@ fn conflict(types: &[Ty]) -> (Ty, Ty) {
     unreachable!("the types have no common type")
 }
 
+/// Как сравниваются на равенство два значения типа `ty` (`==`, `contains`).
+/// `any` не распаковывается: коллекция из `any` не сравнима никогда.
 pub(super) fn equality_kind(ty: &Ty) -> Option<CompareKind> {
     if holds_any(ty) {
         return None;
