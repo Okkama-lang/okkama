@@ -131,6 +131,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
+- **`Response(status:, content:)` frames its content like the other content overloads (#942).** It now adds
+  the known Content-Length and refuses a Content-Type that contradicts the content (`ConflictingContentType`),
+  as the documentation says and as `Response(head:, content:)` and `Request` already did; fields that frame the
+  body themselves are kept.
+
 ### Changed
 
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
