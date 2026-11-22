@@ -1606,3 +1606,30 @@ fn a_field_without_a_determined_type_is_reported_at_its_name() {
         "Field \"value\" of object \"Q\" needs a type: write \"has value is T;\", or give it an initializer to infer the type from"
     );
 }
+
+/// A case of a plain enum in a catch pattern is "not an error enum", whether it is written
+/// with its own name or through a namespace; a case of an error enum is still caught (#983).
+#[test]
+fn a_plain_enum_case_in_catch_is_not_an_error_enum() {
+    assert_eq!(
+        messages(
+            "enum Color = (red, green); \
+             main() is int { let v = try { 1; } catch Color.red { 2; }; v; }"
+        ),
+        ["Catch pattern belongs to \"Color\", which is not an error enum"]
+    );
+    assert_eq!(
+        messages(
+            "enum Color = (red, green); \
+             main() is int { let v = try { 1; } catch Color.green(x) { 2; }; v; }"
+        ),
+        ["Catch pattern belongs to \"Color\", which is not an error enum"]
+    );
+    assert!(
+        messages(
+            "enum Bad is Error = (late); \
+             main() is int { let v = try { throw Bad.late; } catch Bad.late { 2; }; v; }"
+        )
+        .is_empty()
+    );
+}

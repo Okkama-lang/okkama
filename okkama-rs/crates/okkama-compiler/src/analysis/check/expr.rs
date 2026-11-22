@@ -1117,6 +1117,18 @@ impl Checker<'_, '_> {
                 };
                 return Some((alt, Some((id, case, args.cloned().unwrap_or_default()))));
             }
+        // A case of a plain enum (#983): never an error enum, since error enums are always variant
+        // enums; say so instead of reading `Color.red` as a type path.
+        if let ast::ExprKind::Get { object, .. } = &strip_grouping(callee).kind
+            && let Some(id) = self.enum_receiver(object)
+        {
+            let name = self.reg.enums[id.0].name.clone();
+            self.error(
+                pattern.span,
+                format!("Catch pattern belongs to \"{name}\", which is not an error enum"),
+            );
+            return None;
+        }
         let path = args.is_none().then(|| expr_path(callee)).flatten();
         let Some(path) = path else {
             self.error(
