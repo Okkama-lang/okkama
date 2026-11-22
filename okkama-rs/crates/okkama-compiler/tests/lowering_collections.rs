@@ -241,6 +241,55 @@ fn join_of_an_untyped_empty_array_joins_an_empty_string_array() {
     }
 }
 
+/// Loads std from the repository, so a program can `import "compare"`.
+struct Std;
+
+impl okkama_compiler::lowering::ModuleLoader for Std {
+    fn load(&mut self, path: &str, _importer: &str) -> Result<Option<okkama_compiler::lowering::LoadedModule>, String> {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std").join(format!("{path}.ok"));
+        let text = std::fs::read_to_string(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+        let source = SourceFile::new(file.to_string_lossy(), text).expect("std source");
+        let program = syntax::parse(&source, &ParseOptions::default()).map_err(|error| format!("{error:?}"))?;
+        Ok(Some(okkama_compiler::lowering::LoadedModule {
+            id: source.name().to_string(), source, program: prune::strip_test_items(program),
+        }))
+    }
+}
+
+/// `main` of a program that imports `Comparing`, lowered with std and verified.
+fn compared_main(body: &str) -> String {
+    let text = format!("module app v1.0.0; import \"compare\" take Comparing; main() is int {{ {body} }}");
+    let source = SourceFile::new("test.ok", text).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let module = okkama_compiler::lowering::lower_linked(&prune::strip_test_items(program), source.name(), &mut Std)
+        .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    ir::verify(&module).unwrap_or_else(|error| panic!("{body}: {error}"));
+    let text = module.to_string();
+    let start = text.find("func @main").expect("main is printed");
+    let end = text[start..].find("\n}\n").map_or(text.len(), |end| start + end + 3);
+    text[start..end].to_string()
+}
+
+/// #971: an untyped `[]` has no element to compare, so its ordering is an
+/// empty array (as `[].join(",")` is "", #969): `main` builds a fresh empty
+/// array and never calls the runtime sort, which needs an ordered element.
+#[test]
+fn ordering_of_an_untyped_empty_array_is_an_empty_array() {
+    for body in [
+        "let o = [].ordering(); o.size();",
+        "let e = []; let o = e.ordering(); o.size();",
+    ] {
+        let listing = compared_main(body);
+        assert!(!listing.contains("okkama.array.ordering"), "{body}: no runtime sort\n{listing}");
+        let size = listing.lines().find(|line| line.contains("array.len")).unwrap_or_else(|| panic!("{body}:\n{listing}"));
+        let array = size.split("array.len ").nth(1).unwrap().trim();
+        assert!(
+            listing.lines().any(|line| line.trim_start() == format!("{array}: array<never> = array.new []")),
+            "{body}: the ordering is a fresh empty array\n{listing}"
+        );
+    }
+}
+
 /// #969: the typed empty array joins as before, and an array that is not of
 /// string is still rejected: the retag covers only the untyped `[]`.
 #[test]
@@ -253,5 +302,17 @@ fn join_keeps_typed_receivers_and_rejects_non_string_elements() {
         let error = lower(body).unwrap_err();
         assert!(matches!(error, LoweringError::Invalid { .. }), "{body}: {error:?}");
         assert!(error.message().starts_with(expected), "{body}: {}", error.message());
+    }
+}
+
+/// #971: a typed empty array is still sorted by the runtime, by its element order.
+#[test]
+fn ordering_of_a_typed_empty_array_still_sorts() {
+    for body in [
+        "let xs is @int = []; let o = xs.ordering(); o.size();",
+        "let o = [3, 1, 2].ordering(); o.size();",
+    ] {
+        let listing = compared_main(body);
+        assert!(listing.contains("okkama.array.ordering"), "{body}: the runtime sorts\n{listing}");
     }
 }
