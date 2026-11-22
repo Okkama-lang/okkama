@@ -154,6 +154,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   as the documentation says and as `Response(head:, content:)` and `Request` already did; fields that frame the
   body themselves are kept.
 
+- **`Storage.usage()` asks the file system instead of running `df` (#944).** It took about 1.2 ms per call and
+  failed with `unsupported` where no `df` was installed; it now calls `statvfs` and reports exact bytes.
+
 ### Changed
 
 - **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
