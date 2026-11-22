@@ -3,7 +3,7 @@ module app v1.0.0;
 import "io/stdout" take Stdout;
 
 object Counter {
-    has count = 0;
+    has count;
     Counter(:count);
 }
 

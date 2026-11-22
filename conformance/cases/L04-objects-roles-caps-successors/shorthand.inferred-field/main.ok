@@ -1,0 +1,19 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count = 0;
+    has label = "n";
+    Counter(:count);
+    show() is string { label + "=" + (count + 1).string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let c = Counter(count: 41);
+    out.writeln(c.show());
+    let d = Counter(count: -1);
+    out.writeln(d.show());
+    0;
+}

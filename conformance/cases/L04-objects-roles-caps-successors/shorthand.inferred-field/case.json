@@ -1,0 +1,43 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L04.shorthand.inferred-field",
+  "title": "field shorthand binds a field whose type is inferred from its initializer",
+  "purpose": "Observe object, role, cap and successor semantics.",
+  "level": "L04",
+  "contracts": [
+    {
+      "contract": "OBJ.SHORTHAND",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "n=42\nn=0\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#11.3"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #967 from the owner decision",
+    "expected_basis": "#967: has count = 0 infers int; Counter(:count) binds it by name and the inferred type is used in arithmetic; the unlisted inferred field keeps its initializer (\"n\")."
+  },
+  "status": "mandatory"
+}

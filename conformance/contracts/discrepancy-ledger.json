@@ -368,13 +368,14 @@
         "docs/okkama-spec-11072026.md section 11.2"
       ],
       "observed": "okkama-pl (Perl) at git f1ad6d43: `has count = 0;` parses.",
-      "intended_contract": "The grammar allows omitting the type; the specification does not define the field's runtime type.",
-      "authority": "Grammar only.",
-      "conformance_expectation": "Only syntactic acceptance is mandatory (GRAM.HAS-DECL boundary); shorthand rejects untyped fields (spec 11.3).",
-      "resolution": "resolved (runtime typing of untyped fields not asserted)",
+      "intended_contract": "A has field's type is inferred from its initializer (#967); without an initializer the type is mandatory.",
+      "authority": "Owner decision on #967 (2026-11-22).",
+      "conformance_expectation": "An inferred field behaves as a typed field, shorthand included (L04.shorthand.inferred-field); a field with neither type nor initializer is rejected (L04.shorthand.untyped-field).",
+      "resolution": "resolved (#967: type inferred from the initializer)",
       "cases": [
         "L01.gram.has.untyped-with-default",
-        "L04.shorthand.untyped-field"
+        "L04.shorthand.untyped-field",
+        "L04.shorthand.inferred-field"
       ],
       "contracts": [
         "GRAM.HAS-DECL"
