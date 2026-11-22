@@ -153,6 +153,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
+  secret scalar alone, still with RFC 6979 deterministic nonces: a P-256 signature plus two verifications takes
+  178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs.
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
   most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
