@@ -564,6 +564,62 @@ def contribution(name, i):
     if name=='host-digest':
         digest=hashlib.sha256(bytes((i*3+k)%256 for k in range(24))).digest()
         return (digest[0]+digest[31])%7
+    # #244, the remaining measurable std modules.
+    if name=='sqlite-memory-aggregate':
+        import sqlite3
+        db=sqlite3.connect(':memory:',isolation_level=None)
+        db.execute('CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, amount INTEGER)')
+        for k in range(5):
+            db.execute('INSERT INTO t(name, amount) VALUES (?, ?)',('n'+str(k),i%7+k))
+        count,total=db.execute('SELECT COUNT(*), SUM(amount) FROM t WHERE amount > ?',(2,)).fetchone()
+        db.execute('BEGIN')
+        deleted=db.execute('DELETE FROM t WHERE amount < ?',(i%4+1,)).rowcount
+        db.execute('COMMIT' if i%2==0 else 'ROLLBACK')
+        left=db.execute('SELECT COUNT(*) FROM t').fetchone()[0]
+        db.close()
+        return (count+total+left+2*deleted)%7
+    if name=='sqlite-prepared-blob':
+        import sqlite3
+        db=sqlite3.connect(':memory:',isolation_level=None)
+        db.executescript('CREATE TABLE v(id INTEGER PRIMARY KEY, n INTEGER, data BLOB); INSERT INTO v(n, data) VALUES (1, zeroblob(8));')
+        for k in range(3):
+            db.execute('INSERT INTO v(n, data) VALUES (?, ?)',(i%5+k,bytes([k,i%256])))
+        rows=db.execute('SELECT n FROM v WHERE n >= ? ORDER BY n',(2,)).fetchall()
+        db.close()
+        return (2+len(rows)+rows[0][0]+i%256+9+8)%7
+    if name=='log-file':return (len('line '+str(i)+'\n')+len('second\n'))%7
+    if name=='queued-logs':return (1+i%3)%7
+    if name=='process-capture':
+        return (len('hello '+str(i)+'\n')+len('in '+str(i))+len('p'+str(i)+'\n')+1)%7
+    if name=='host-facts':return (1+2+1+i%3)%7
+    if name=='cldr-tables':
+        # IANA preferred values, CLDR likely subtags, parent locales, canonical zone ids
+        # (CLDR keeps Asia/Calcutta), numbering-system digits and ISO 4217 minor units.
+        k=i%4
+        alias=['he','ro','id','en'][k]
+        full=['ru-Cyrl-RU','ja-Jpan-JP','zh-Hans-CN','sr-Latn-ME'][k]
+        parent=['en-001','es-419','pt-PT',''][k]
+        zone=['Asia/Calcutta','Asia/Calcutta','Europe/Paris','America/Buenos_Aires'][k]
+        one=['\u0661','1','\u0967','\u0e51'][k]
+        minor=['0','2','3','2'][k]
+        return (len(alias)+len(full)+len(parent)+len(zone)+ord(one)+len(minor)+ord(minor))%7
+    if name=='test-reports':
+        # TAP 13: passed and skipped (with # SKIP) are "ok" lines, failures "not ok"; JUnit: one
+        # <testcase> per case and a <failure> per failed case.
+        statuses=[['passed','failed','skipped','passed'][(i+k)%4] for k in range(1+i%4)]
+        failed=statuses.count('failed')
+        return ((len(statuses)-failed)+2*failed+1+3*len(statuses)+failed)%7
+    if name=='sqlite-file-pool':
+        # The backup copies every page in one 16-page step; the page count comes from SQLite itself.
+        import sqlite3
+        db=sqlite3.connect(':memory:',isolation_level=None)
+        db.execute('CREATE TABLE t(x INTEGER)')
+        db.execute('INSERT INTO t(x) VALUES (?)',(i%9,))
+        db.execute('INSERT INTO t(x) VALUES (?)',(3,))
+        pages=db.execute('PRAGMA page_count').fetchone()[0]
+        db.close()
+        return (i%9+pages+1)%7
+    if name=='db-column-reader':return (i%1000+len('v'+str(i))+i%13+1)%7
     raise ValueError('No independent oracle: '+name)
 
 

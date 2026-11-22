@@ -1,0 +1,42 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "testing/runner" take RecordedTestReport;
+import "testing/report" take TapTestReport, JUnitTestReport;
+
+object Bench {
+    has statuses is @string;
+    Bench() {
+        statuses = ["passed", "failed", "skipped", "passed"];
+    }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let cases is @string = (0..1 + i % 4).map() -> k {
+            let status = statuses[(i + k) % 4];
+            let failures = if status == "failed" { "[\"boom " + k.string() + "\"]"; } else { "[]"; };
+            "{\"name\":\"case" + k.string() + "\",\"status\":\"" + status + "\",\"duration_ns\":\"5\",\"failures\":" + failures + ",\"stdout_base64\":\"\",\"stderr_base64\":\"\",\"truncated\":false}";
+        };
+        let recorded = "{\"start_ns\":\"0\",\"duration_ns\":\"1000\",\"seed\":" + i.string() + ",\"results\":[" + cases.join(",") + "]}";
+        let report = RecordedTestReport(recorded).report();
+        let tap = TapTestReport(report).string().split("\n");
+        let passing = tap.filter() -> line { line.starts_with("ok "); }.size();
+        let failing = tap.filter() -> line { line.starts_with("not ok "); }.size();
+        let version = if tap[0] == "TAP version 13" { 1; } else { 0; };
+        let junit = JUnitTestReport(origin: report, suite: "bench").string();
+        let testcases = junit.split("<testcase").size() - 1;
+        let failed = junit.split("<failure").size() - 1;
+        self.run(i + 1, n, acc + (passing + 2 * failing + version + 3 * testcases + failed) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

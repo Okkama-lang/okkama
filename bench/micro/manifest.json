@@ -6224,5 +6224,249 @@
       "digest/host:HostDigest.bytes",
       "digest/host:HostDigest.new"
     ]
+  },
+  "sqlite-memory-aggregate": {
+    "path": "std/sqlite-memory-aggregate.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "db/row",
+      "db/sqlite",
+      "db/statement",
+      "db/transaction",
+      "db/value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "db/row:DbQuery.all",
+      "db/row:Row.int",
+      "db/sqlite:SqliteConnection.close",
+      "db/sqlite:SqliteConnection.execution",
+      "db/sqlite:SqliteConnection.query",
+      "db/sqlite:SqliteConnection.transaction",
+      "db/sqlite:SqliteMemory.connection",
+      "db/sqlite:SqliteMemory.new",
+      "db/statement:Execution.affected_rows",
+      "db/transaction:Transaction.commit",
+      "db/transaction:Transaction.execution",
+      "db/transaction:Transaction.rollback",
+      "db/transaction:TransactionOptions.new",
+      "db/value:DbInteger.new",
+      "db/value:DbText.new"
+    ]
+  },
+  "sqlite-prepared-blob": {
+    "path": "std/sqlite-prepared-blob.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "db/prepared",
+      "db/query",
+      "db/sqlite",
+      "db/sqlite/blob",
+      "db/sqlite/script",
+      "db/value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "db/prepared:PreparedStatement.close",
+      "db/prepared:PreparedStatement.execution",
+      "db/query:Query.all",
+      "db/query:Query.new",
+      "db/sqlite/blob:SqliteBlob.bytes",
+      "db/sqlite/blob:SqliteBlob.close",
+      "db/sqlite/blob:SqliteBlob.size",
+      "db/sqlite/blob:SqliteBlob.write",
+      "db/sqlite:SqliteConnection.opened_blob",
+      "db/sqlite:SqliteConnection.prepared",
+      "db/sqlite:SqliteConnection.script",
+      "db/value:DbBytes.new"
+    ]
+  },
+  "log-file": {
+    "path": "std/log-file.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "logging/file"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "logging/file:FileLogOptions.new",
+      "logging/file:LogFile.close",
+      "logging/file:LogFile.flush",
+      "logging/file:LogFile.new",
+      "logging/file:LogFile.write"
+    ]
+  },
+  "queued-logs": {
+    "path": "std/queued-logs.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "async/scope",
+      "logging/queue"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "async/scope:FutureScope.new",
+      "async/scope:FutureScope.outcome",
+      "logging/queue:QueuedLogs.close",
+      "logging/queue:QueuedLogs.drain",
+      "logging/queue:QueuedLogs.new",
+      "logging/queue:QueuedLogs.write"
+    ]
+  },
+  "process-capture": {
+    "path": "std/process-capture.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "os/command_capture",
+      "os/pipeline_capture",
+      "os/run"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "os/command_capture:CommandCapture.completion",
+      "os/command_capture:CommandCapture.new",
+      "os/command_capture:CompletedCommand.exit",
+      "os/pipeline_capture:CompletedPipeline.exits",
+      "os/pipeline_capture:PipelineCapture.completion",
+      "os/pipeline_capture:PipelineCapture.new",
+      "os/run:Run.new",
+      "os/run:Run.text"
+    ]
+  },
+  "host-facts": {
+    "path": "std/host-facts.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "os/directory",
+      "os/platform"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "os/directory:WorkingDirectory.new",
+      "os/directory:WorkingDirectory.path",
+      "os/platform:Host.cpu_count",
+      "os/platform:Host.new",
+      "os/platform:Platform.byte_order",
+      "os/platform:Platform.new"
+    ]
+  },
+  "cldr-tables": {
+    "path": "std/cldr-tables.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "locale/internal/currencies",
+      "locale/internal/iana",
+      "locale/internal/likely",
+      "locale/internal/numbers",
+      "locale/internal/parents",
+      "locale/internal/zone_meta"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "locale/internal/currencies:CldrCurrencies.digits",
+      "locale/internal/currencies:CldrCurrencies.new",
+      "locale/internal/iana:IanaLanguages.alias",
+      "locale/internal/iana:IanaLanguages.new",
+      "locale/internal/likely:CldrLikely.lookup",
+      "locale/internal/likely:CldrLikely.new",
+      "locale/internal/numbers:CldrNumbers.digits",
+      "locale/internal/numbers:CldrNumbers.new",
+      "locale/internal/parents:CldrParents.new",
+      "locale/internal/parents:CldrParents.parent",
+      "locale/internal/zone_meta:CldrZoneMeta.canonical",
+      "locale/internal/zone_meta:CldrZoneMeta.new"
+    ]
+  },
+  "test-reports": {
+    "path": "std/test-reports.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "testing/report",
+      "testing/runner"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "testing/report:JUnitTestReport.new",
+      "testing/report:JUnitTestReport.string",
+      "testing/report:TapTestReport.new",
+      "testing/report:TapTestReport.string",
+      "testing/runner:RecordedTestReport.new",
+      "testing/runner:RecordedTestReport.report"
+    ]
+  },
+  "sqlite-file-pool": {
+    "path": "std/sqlite-file-pool.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "db/acquisition",
+      "db/connection",
+      "db/pool",
+      "db/sqlite",
+      "db/sqlite/backup"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "db/acquisition:DbAcquisition.connection",
+      "db/acquisition:PortableDbAcquiring.acquisition",
+      "db/acquisition:PortableDbAcquiring.new",
+      "db/connection:DbConnection.close",
+      "db/connection:DbConnection.execution",
+      "db/connection:DbConnection.query",
+      "db/pool:DbPool.close",
+      "db/pool:DbPool.connection",
+      "db/pool:DbPool.new",
+      "db/pool:PoolOptions.new",
+      "db/pool:PooledConnection.close",
+      "db/pool:PooledConnection.execution",
+      "db/sqlite/backup:BackupReport.copies",
+      "db/sqlite/backup:BackupReport.total",
+      "db/sqlite:SqliteConnection.backup",
+      "db/sqlite:SqliteConnector.connection",
+      "db/sqlite:SqliteConnector.new",
+      "db/sqlite:SqliteDatabase.connection",
+      "db/sqlite:SqliteDatabase.new",
+      "db/sqlite:SqliteOptions.new"
+    ]
+  },
+  "db-column-reader": {
+    "path": "std/db-column-reader.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "db/read",
+      "db/row",
+      "db/value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "db/read:DbColumnReader.int",
+      "db/read:DbColumnReader.new",
+      "db/read:DbColumnReader.text",
+      "db/row:Column.new",
+      "db/row:Row.int",
+      "db/row:Row.new",
+      "db/row:Row.text",
+      "db/value:DbInteger.new",
+      "db/value:DbText.new"
+    ]
   }
 }

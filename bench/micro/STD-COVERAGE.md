@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-356 of 435 non-runtime module files have an explicitly declared measured action.
+385 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -20,7 +20,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `async/collect` | async-all-futures |
 | `async/event` | async-event |
 | `async/lock` | async-lock-guard |
-| `async/scope` | async-future-group |
+| `async/scope` | async-future-group, queued-logs |
 | `async/semaphore` | async-semaphore |
 | `async/timeout` | async-within |
 | `calendar` | calendar-month |
@@ -82,24 +82,24 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `csv` | csv-round-trip |
 | `csv/input` | csv-input |
 | `csv/stream` | csv-stream |
-| `db/acquisition` | — |
-| `db/connection` | — |
+| `db/acquisition` | sqlite-file-pool |
+| `db/connection` | sqlite-file-pool |
 | `db/error` | — |
-| `db/pool` | — |
+| `db/pool` | sqlite-file-pool |
 | `db/postgres` | — |
 | `db/postgres/auth` | — |
 | `db/postgres/wire` | — |
-| `db/prepared` | — |
-| `db/query` | — |
-| `db/read` | — |
-| `db/row` | — |
-| `db/sqlite` | — |
-| `db/sqlite/backup` | — |
-| `db/sqlite/blob` | — |
-| `db/sqlite/script` | — |
-| `db/statement` | — |
-| `db/transaction` | — |
-| `db/value` | — |
+| `db/prepared` | sqlite-prepared-blob |
+| `db/query` | sqlite-prepared-blob |
+| `db/read` | db-column-reader |
+| `db/row` | sqlite-memory-aggregate, db-column-reader |
+| `db/sqlite` | sqlite-memory-aggregate, sqlite-prepared-blob, sqlite-file-pool |
+| `db/sqlite/backup` | sqlite-file-pool |
+| `db/sqlite/blob` | sqlite-prepared-blob |
+| `db/sqlite/script` | sqlite-prepared-blob |
+| `db/statement` | sqlite-memory-aggregate |
+| `db/transaction` | sqlite-memory-aggregate |
+| `db/value` | sqlite-memory-aggregate, sqlite-prepared-blob, db-column-reader |
 | `debug/dumper` | dumper-shape |
 | `diff` | diff-edits |
 | `digest/blake2` | blake2b |
@@ -258,16 +258,16 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/currency` | currency-digits |
 | `locale/data` | locale-fallbacks |
 | `locale/date_time` | localized-date |
-| `locale/internal/currencies` | — |
+| `locale/internal/currencies` | cldr-tables |
 | `locale/internal/day_periods` | — |
 | `locale/internal/gregorian` | — |
-| `locale/internal/iana` | — |
-| `locale/internal/likely` | — |
+| `locale/internal/iana` | cldr-tables |
+| `locale/internal/likely` | cldr-tables |
 | `locale/internal/lists` | — |
-| `locale/internal/numbers` | — |
-| `locale/internal/parents` | — |
+| `locale/internal/numbers` | cldr-tables |
+| `locale/internal/parents` | cldr-tables |
 | `locale/internal/plurals` | — |
-| `locale/internal/zone_meta` | — |
+| `locale/internal/zone_meta` | cldr-tables |
 | `locale/internal/zone_names` | — |
 | `locale/likely` | likely-locale |
 | `locale/list` | locale-list |
@@ -277,14 +277,14 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/tag` | locale-case, plural-ru, locale-decimal, locale-list |
 | `logging/enrichment` | log-pipeline |
 | `logging/field` | json-log-line |
-| `logging/file` | — |
+| `logging/file` | log-file |
 | `logging/filter` | log-pipeline |
 | `logging/level` | logger-levels |
 | `logging/line` | json-log-line |
 | `logging/logger` | logger-levels |
 | `logging/name` | json-log-line |
 | `logging/named` | log-pipeline |
-| `logging/queue` | — |
+| `logging/queue` | queued-logs |
 | `logging/record` | json-log-line |
 | `logging/redact` | log-pipeline |
 | `logging/rotation` | size-rotation |
@@ -349,13 +349,13 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `operators` | operator-adding |
 | `os/account` | — |
 | `os/command` | command-string |
-| `os/command_capture` | — |
-| `os/directory` | — |
+| `os/command_capture` | process-capture |
+| `os/directory` | host-facts |
 | `os/environment` | http-environment-proxy, environment-values, fs-temporary-tree |
-| `os/pipeline_capture` | — |
-| `os/platform` | — |
+| `os/pipeline_capture` | process-capture |
+| `os/platform` | host-facts |
 | `os/process` | process-exit |
-| `os/run` | — |
+| `os/run` | process-capture |
 | `os/signal` | — |
 | `os/storage` | — |
 | `parallel/map` | parallel-map |
@@ -402,9 +402,9 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/error` | error-matching |
 | `testing/generation` | integer-generation |
 | `testing/property` | — |
-| `testing/report` | — |
+| `testing/report` | test-reports |
 | `testing/result` | test-report-counts |
-| `testing/runner` | — |
+| `testing/runner` | test-reports |
 | `testing/signal` | — |
 | `testing/snapshot` | text-snapshot |
 | `testing/time` | — |

@@ -1,0 +1,52 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "db/sqlite" take SqliteMemory;
+import "db/value" take DbInteger, DbBytes;
+import "db/query" take Query;
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let db = await SqliteMemory().connection();
+            let created = await db.script("CREATE TABLE v(id INTEGER PRIMARY KEY, n INTEGER, data BLOB); INSERT INTO v(n, data) VALUES (1, zeroblob(8));");
+            let insert = await db.prepared("INSERT INTO v(n, data) VALUES (?, ?)");
+            for (0..3) -> k {
+                await insert.execution(DbInteger(i % 5 + k), DbBytes([byte(k), byte(i % 256)]));
+            }
+            insert.close();
+            let select = await db.prepared("SELECT n FROM v WHERE n >= ? ORDER BY n");
+            let rows = await Query(prepared: select, values: [DbInteger(2)]).all(10);
+            select.close();
+            let blob = await db.opened_blob("main", "v", "data", 1, true);
+            await blob.write(0, [byte(i % 256), byte(9)]);
+            let head = await blob.bytes(0, 2);
+            let size = blob.size();
+            blob.close();
+            db.close();
+            sum = sum.add((created.size() + rows.size() + rows[0].int("n") + head[0].int() + head[1].int() + size) % 7);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}
