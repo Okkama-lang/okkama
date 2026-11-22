@@ -4,9 +4,10 @@
 **A complete guide to the Okkama programming language**
 
 Edition: 19 July 2026 — Okkama 1.0 implementation line
-Companion documents: `docs/okkama-spec-11072026.md` (normative specification),
-`docs/okkama-grammar-1.0.md` (EBNF grammar), `docs/okkama-llm-context-1.0.md`
-(code-generation context pack).
+Companion documents (okkama-docs): `docs/okkama-spec-11072026.md` (language
+specification), `docs/okkama-grammar-1.0.md` (EBNF grammar),
+`docs/okkama-llm-context-1.0.md` (code-generation context pack). Where any of
+them disagrees with the implementation, the implementation is right.
 
 This book is a textbook. It teaches the language from first principles,
 explains *why* Okkama is shaped the way it is, and walks through every part of
@@ -568,7 +569,8 @@ The two-argument `rat(numerator, denominator)` constructor is unchanged.
 
 Run primitive-casts.ok (okkama-docs `examples/primitive-casts.ok`) for a complete example.
 The [specification](okkama-spec-11072026.md#661-primitive-cast-calls-and-array-casts)
-contains the normative conversion table.
+has the full conversion table; the compiler's behaviour described here is the
+reference where they differ.
 
 ### 5.2 `rat` — an exact rational
 
@@ -1870,7 +1872,8 @@ has digit, cents is int;       // several names may share one declaration
   imports) but never see caller locals or sibling fields of the instance
   being built.
 - **Fields are private through ordinary references.** `Cash(digit: 1).digit`
-  is a runtime error; peers call public owner behavior.
+  is a compile-time error (`Field "digit" of object "Cash" is private; call an
+  action instead`); peers call public owner behavior.
   Grants control field reads and never make hidden actions public. There is
   no setter syntax.
 - Inside the object's own code, fields are read bare (`digit`) or explicitly
@@ -1944,8 +1947,8 @@ This is an interface boundary with no general secrecy, purity or revocation
 promise. Other full references retain their capabilities.
 
 Object views and `#projected` have been removed. Roles keep their
-separate contracts. OIR Profile 0 remains int-only and explicitly refuses
-objects and caps. See the working example (okkama-docs `examples/object-caps.ok`) and
+separate contracts. Objects and caps compile like everything else;
+`okkama ir FILE.ok` shows how a cap is lowered. See the working example (okkama-docs `examples/object-caps.ok`) and
 [full guide](object-caps-0.0.1-ru.md).
 
 ## Chapter 17. Constructors
@@ -1962,9 +1965,8 @@ object Marker {
 }
 ```
 
-Construction is call-based: `Cash(digit: 1, cents: 25)`. (A construction
-*block* form exists in the parser for future use; call syntax is the 1.0
-idiom.)
+Construction is call-based: `Cash(digit: 1, cents: 25)`. There is no
+construction block: `Cash { digit = 1; }` is a syntax error.
 
 ### 17.2 Full constructors
 
@@ -2096,7 +2098,7 @@ Likewise, the bool result of a comparison does not retag its integer operands.
 
 There is no separate post-constructor validation phase. A shorthand with
 checks needs a body, for example `Score(:value) { confirm value >= 0 else
-throw InvalidScore(value: value); }`. Checks are explicit in each overload;
+throw InvalidScore.negative(value); }`. Checks are explicit in each overload;
 they are not inherited from another overload. A bare `confirm condition;`
 panics on failure instead of raising a catchable typed error.
 
@@ -2104,8 +2106,9 @@ On constructor failure, registered defers run before owned-resource cleanup.
 The unfinished receiver is not returned and its own `destroy` is not invoked
 as though it were a completed object. Resources owned by the constructor,
 including newly created field values, are released; borrowed caller-owned
-resources remain the caller's responsibility. See Chapter 15 and
-`t/interpreter/258-constructor-confirm.t`.
+resources remain the caller's responsibility. See Chapter 15 and the
+conformance cases `L07-errors-cleanup-and-lifetimes/constructor-failure.no-destroy-of-unfinished`
+and `L12-cross-feature-adversarial/constructor-nested-resource-failure`.
 
 ### 17.6 A plain call after the constructor
 
@@ -2360,8 +2363,8 @@ for values... -> value {
     value;
 }
 
-delegate(pattern is string, values is ...any) is string {
-    string Formatted(pattern, values...);
+delegate(pattern is string, values is ...string) is string {
+    Formatted(pattern, values...).string();
 }
 ```
 
@@ -2371,7 +2374,10 @@ into text with its own `string()`: `int`, `float`, `rat`, `byte`, `bool` and
 The conversion is static, and it is the last resort: a signature that fits the
 call as written wins, so `kind(1, "a")` still picks `kind(values is ...any)`
 over `kind(values is ...string)`. A value without `string()` is rejected. A
-spread `values...` is not converted; its elements must already be strings.
+spread `values...` is not converted; its elements must already be strings, so
+`delegate` above takes `...string`, not `...any`. (Spreading an `...any` into a
+`...string` constructor currently stops the compiler with an internal error
+instead of this diagnostic, #970.)
 
 ```okkama
 out.writeln("count: ", 5, ", ready: ", true);       // count: 5, ready: true
@@ -2936,7 +2942,7 @@ object Reader {
     Reader() {}
 
     read() is int {
-        leaked;   // Runtime error: Undefined variable "leaked"
+        leaked;   // compile-time error: Undefined variable "leaked"
     }
 }
 
@@ -2995,8 +3001,10 @@ Conformance is checked at registration:
 - return types must be *compatible* — in particular `^Bottle` satisfies
   `^Package` because `Bottle does Package`;
 - a role may declare same-name/same-arity signatures when their complete
-  parameter type vectors differ and the return contract is the same; exact
-  duplicates are errors.
+  parameter type vectors differ, and those overloads may declare different
+  results (`value(n is int) is int` beside `value(s is string) is string`);
+  the signature a call selects decides its result. Exact duplicates are
+  errors.
 
 Once an object conforms:
 
@@ -3204,8 +3212,10 @@ There is no implicit test timeout. Async tests are pruned in production and
 share discovery, naming and assertion rules with sync tests. No generated main
 wrapper is needed.
 
-Production parsing consumes the header and balanced body but emits no Test or
-Fake AST, so test-only inner grammar cannot affect production. Run tests with:
+Production parsing reads a test or fake header and skips its balanced body
+without parsing it, so test-only inner grammar cannot affect production; the
+declaration is then removed before the program is checked
+(`okkama ast --mode production` still shows it, with a skipped body). Run tests with:
 
 ```text
 okkama run -t path/to/module.ok
@@ -3241,8 +3251,9 @@ fail the run. The report keeps declaration order whichever worker finishes
 first. Workers share the terminal's process group, so Ctrl-C stops them too;
 processes a test starts itself are not stopped with a timed-out worker.
 
-The runner retains test/fake AST across imports but executes only tests owned
-by the root file. It does not run or require `main`. Object/role test names are
+The runner retains test/fake AST across imports but executes only tests of
+the root module, in every file given on the command line; tests of imported
+modules do not run. It does not run or require `main`. Object/role test names are
 displayed as `Owner :: name`; this is namespacing only, with no implicit
 `self` or hidden-access exception. A test may stand anywhere in an object's
 body, also between hidden actions. Test names must be unique within the
@@ -3328,24 +3339,24 @@ totals count sub-cases, and a test with sub-cases only when it failed or
 skipped outside them; JSON lists the sub-cases under their test with an `id`,
 and JUnit has one test case per sub-case. The test stays the unit that runs.
 
-Reusable assertions come from the bundled module:
+Checks beyond `test.ok`, `test.is` and `test.isnt` are objects from
+`testing/check`, each run with `.check()` inside a test:
 
 ```okkama
-import "test/more" take Assertions, AssertionFailure;
+import "testing/check" take CloseTo, TextEquals;
 
 test "total" {
-    Assertions()
-        .ok(true)
-        .is([1, 2], [1, 2])
-        .isnt("draft", "paid");
+    test.ok(true);
+    test.is([1, 2], [1, 2]);
+    test.isnt("draft", "paid");
+    CloseTo(actual: 0.1 + 0.2, expected: 0.3, relative: 1e-9, absolute: 0.0).check();
+    TextEquals(actual: rendered, expected: wanted).check();   // shows a diff
 }
 ```
 
-`Assertions` is stateless. Its `ok`, `is`, and `isnt` actions record checks in
-the active test; `fails(error is Error)` records `error.text()` unconditionally.
-`AssertionFailure(message)` only retains its message and computes the stable
-`assertion failed: ...` text in its action. Assertion actions cannot be called
-outside a running test.
+A failed check fails the running test with its message; `SequenceEquals`,
+`MatchingRegex` and the async `Eventually` follow the same shape. A check
+cannot run outside a running test.
 
 ## Chapter 24. Enums
 
@@ -3576,8 +3587,8 @@ local. A result declared as `Empty<int>` may use `return Empty();` or a tail
 
 Nested construction uses only parameters already determined by the expected
 type: `let x is Box<Empty<int>> = Box(item: Empty());` supplies `int` to the inner
-constructor. The analyzer retains this context and the runtime checks actual
-argument evidence against it. Conflicting numeric types, ambiguous role
+constructor. The compiler keeps this context and checks the arguments against
+it before the program runs. Conflicting numeric types, ambiguous role
 specializations, and missing evidence remain errors. The compiler does not
 look ahead to later uses or guess overloads to obtain a type. An untagged empty
 collection adds no conflict to a known collection slot, such as `Box<@int>`.
@@ -3587,13 +3598,12 @@ The same rule applies recursively to array and map literals. If `Box` takes
 `T=@int` and checks each element against `int`. An empty `[]` also works in
 that context; without an expected type or other evidence it cannot determine
 `T`. Nested arrays, map values and generic objects receive the corresponding
-element types. Known element conflicts are reported during analysis, while
-values whose types depend on execution are still checked at runtime.
+element types. Element conflicts are reported before the program runs.
 
 Explicit role evidence remains a role specialization when a concrete
-implementation arrives through another equation. A `List<Json>` prepended
-with `JsonBool` therefore stays `List<Json>`; it is not narrowed to
-`List<JsonBool>`. This rule does not search for a common role between two
+implementation arrives through another equation. With a role `Named` and an
+object `Item does Named`, a `List<Named>` prepended with an `Item` therefore
+stays `List<Named>`; it is not narrowed to `List<Item>`. This rule does not search for a common role between two
 concrete values, so unrelated concrete equations remain an error.
 
 Builtin arrays are `Iterating<T>`, `Sequencing<T>` and `Sizing`, and their
@@ -3642,9 +3652,9 @@ Without a target, fake construction fails rather than guessing.
 ### 26.1 Import forms
 
 ```okkama
-import "money";
-import "money" take Cash;
-import "io/stdout" as out take println, printf;   // selected names under out
+import "money";                         // a module money.ok of your own: money.Cash(...)
+import "money" take Cash;               // the bare name Cash
+import "io/stdout" as out take Stdout;  // only Stdout, under out: out.Stdout().writeln(...)
 ```
 
 - Imports appear after the module declaration and before other declarations.
@@ -4393,8 +4403,9 @@ The file is a distinct protocol boundary, without arbitrary private-field reflec
 
 Cookie contract (okkama-docs `docs/std/http-cookie.md`),
 persistence example (okkama-docs `examples/std-v4/http-cookie-persistence.ok`).
-Full HTTP transport/client/server remains subsequent roadmap work; these examples
-verify policy/storage and do not perform a network request.
+HTTP transport, pooled clients and HTTP/1.1 and HTTP/2 servers are
+implemented (`http/client`, `http/server`); these examples exercise policy and
+storage only and do not perform a network request.
 
 HTTP/1 heads can now be read asynchronously with
 `Http1ResponseHeadReading(stream).result()`. The result retains typed head(),
@@ -4519,7 +4530,8 @@ result acquires no socket. Contract (okkama-docs `docs/std/http-endpoints.md`).
 
 Http1Connecting opens a conversation using only a checked route's numeric
 endpoints. HTTPS verifies that URL's DNS/IP reference and negotiated HTTP1 ALPN;
-ready unclaimed and unpublished results are disposed. Bounded connection racing is now implemented; shared pools remain separate work.
+ready unclaimed and unpublished results are disposed. Bounded connection racing is implemented, and `HttpTransport` is the
+connection pool under `HttpClient`.
 Contract (okkama-docs `docs/std/http1-connecting.md`).
 
 TcpRacing removes checked-address head-of-line waiting: it interleaves families,
@@ -4532,7 +4544,8 @@ Contract (okkama-docs `docs/std/tcp-racing.md`).
 
 Okkama's connection to the host system is deliberately thin, explicit, and
 portable. This chapter is an overview; the full contracts live in the
-specification (§5.3–§5.8) and `docs/native-functions-tutorial.md`.
+`runtime/*` modules of the standard library and the native-functions tutorial
+(okkama-docs `docs/native-functions-tutorial.md`).
 
 ### 27.1 Native declarations
 
@@ -4544,7 +4557,7 @@ module runtime/time v1.0.0;
 
 native wall_clock() is int;
 native monotonic_clock() is int;
-native sleep(duration is int) is bool;
+native async sleep_nanoseconds(duration is string) is bool;   // nanoseconds as decimal text
 ```
 
 Each declaration has a canonical identity
@@ -4600,31 +4613,36 @@ exceptional exit.
 
 | Module | Provides |
 |---|---|
-| `runtime/time` | `wall_clock()` (Unix-epoch ns), `monotonic_clock()` (ordering-only ns), `sleep(ns)` (interruption-retrying) |
-| `runtime/fs` | `@byte` paths with fallible `path_encode`/`path_decode`; binary `open/read/write/seek/flush/truncate/sync/close` and advisory shared/exclusive locks over `FileHandle`; stable metadata/mutation/directory operations |
-| `runtime/process` | opaque pipes; shell-free `spawn`; isolated `spawn_configured` with exact child cwd/replacement environment; portable wait/kill; argv/pids; deterministic child reaping |
-| `runtime/net` | opaque blocking IPv4/IPv6 sockets, versioned `@byte` endpoint/datagram envelopes, stream/datagram I/O, DNS `resolve`/`reverse_name`, `ip_parse`/`ip_format`, closed boolean option set |
-| `runtime/poll` | typed readiness polling over file/pipe/socket handles: registration ids and tags, readable/writable masks, absolute monotonic deadlines, consumed cancellation |
-| `runtime/environment` | raw-`@byte` environment get/set/remove/all (mutation is process-global) |
-| `runtime/system` | portable platform/architecture strings; `secure_random(size)` from the OS CSPRNG with no PRNG fallback |
-| `runtime/debug` | `data_dump(any) is string` backing `okkama.Dump`; `data_kind`, `data_type`, `data_size`, `data_leaf`, `data_names`, `data_keys`, `data_items` backing `debug/dumper.Dumper` |
-| `runtime/regex` | opaque `RegexHandle` patterns: compile, exact invalid offset, boolean search/whole match, first/all leftmost-longest code-point spans, idempotent close |
-| `runtime/format` | opaque-`any` concatenation plus positional `{}` and named `{field}` formatting with escaped braces |
-| `runtime/crypto` | closed SHA-256/384/512 digest/HMAC set and constant-work byte comparison |
-| `runtime/tls` | owning TLS sessions over consumed stream sockets; strict client verification, server PEM credentials, encrypted bytes, fixed subject/issuer/validity/DER projection |
-| `runtime/stdio` | shared-buffer stdin bytes/lines and distinct stdout/stderr byte channels |
-| `runtime/memory` | owned generic byte state: snapshot/size/consume/append/reset/lifecycle; no I/O buffering policy |
-| `runtime/utf8` | strict UTF-8 encode/decode plus the exact valid-byte-prefix length used by the typed stdlib adapter |
+| `runtime/time` | `wall_clock()` (Unix-epoch ns), `monotonic_clock()` (ordering-only ns), `clock_domain`, async `sleep_nanoseconds(text)` |
+| `runtime/fs` | lexical path helpers; `@byte` paths with fallible `path_encode`/`path_decode`; binary `open/read/write/seek/flush/truncate/sync/close` and advisory shared/exclusive locks over `FileHandle`; metadata, directory and watch operations |
+| `runtime/process` | `ProcessState` and `PipelineState`: explicit start, async exit and capture, stream I/O, signals and close; process arguments and id |
+| `runtime/network` | nonblocking socket state, async TCP/UDP I/O, listeners and async DNS; readiness is handled inside the runtime |
+| `runtime/net` | `ip_parse`, `ip_format` |
+| `runtime/environment` | environment snapshots (`environment_snapshot`, add, diff) and raw get/set/remove/all |
+| `runtime/system` | platform, architecture, byte order, host name, CPU count; `secure_random` and friends from the OS CSPRNG with no PRNG fallback |
+| `runtime/debug` | `data_dump(any) is string` and `data_kind`, `data_type`, `data_size`, `data_leaf`, `data_names`, `data_keys`, `data_items`, backing `debug/dumper.Dumper` |
+| `runtime/regex` | retained pattern, query, match, replacement and substitution states |
+| `runtime/format` | `sprintf_values(pattern, values is @any)` |
+| `runtime/crypto` | `digest(algorithm, bytes)` and constant-time `secure_equal` |
+| `runtime/tls_transport` | TLS client and server state: async handshake, read, write and shutdown, peer authorization, negotiated version/cipher/protocol |
+| `runtime/stdio` | stdin bytes and lines; stdout/stderr writes and flush |
+| `runtime/buffer` | opaque byte and text buffers |
+| `runtime/utf` | strict UTF-8/16/32 encode/decode and the valid-prefix length |
+
+The table names the substrate modules a program meets first; `std/runtime/`
+holds about sixty, one under each family of the standard library.
 
 Usage looks like any other import:
 
 ```okkama
-import "runtime/time" take monotonic_clock, sleep;
+import "runtime/time" take monotonic_clock, sleep_nanoseconds;
+import "io/stdout" take Stdout;
 
-main() is int {
+async main() is int {
     let started = monotonic_clock();
-    sleep(1000000);
-    monotonic_clock() - started;
+    await sleep_nanoseconds("1000000");     // one millisecond, as decimal text
+    Stdout().writeln((monotonic_clock() - started).string());
+    0;
 }
 ```
 
@@ -4635,37 +4653,49 @@ leaking through, and runtime-owned resource lifecycles.
 
 ## Chapter 28. Debugging and Diagnostics
 
-### 28.1 `Dump`
+### 28.1 `Dumper`
 
-The bundled `okkama` module provides a compact deterministic debug formatter:
+`debug/dumper` shows any value for debugging: its type, its size and
+everything inside, indented by nesting:
 
 ```okkama
-import "okkama" take Dump;
+import "debug/dumper" take Dumper;
 
 let values is @int = [1..10];
-Dump(values).string();
-// [1, 2, 3, 4, 5, 6, 7, 8, 9]
+Dumper(values).all();
+// @int (9) [
+//     [0] 1,
+//     ...
+// ]
 ```
 
-`Dump(value).string()` supports numbers, `byte`, `bool`, `char`, `string`,
-enums, typed arrays, and typed maps — recursively, including typed values
-boxed in `any`. Strings and chars come out in escaped source-like form; maps
-in deterministic ordered-pair form. It is for diagnostics, **not**
-serialization: it never reflects object fields, never exposes native handles,
-and does not add a universal `.dump()` action to values.
+`Dumper(value).all()` renders numbers, `byte`, `bool`, `char`, `string`,
+enums, arrays and maps, and objects with all their fields, private ones
+included. `type()`, `kind()`, `size()` and `fields()` answer single questions,
+and `max_depth(n)` and `max_items(n)` return a dumper that stops deeper or
+earlier. Actions, futures and native handles are not looked into. It is for
+diagnostics, **not** serialization, and it adds no universal `.dump()` action
+to values. The compact one-line form is the native
+`std.runtime.debug.data_dump(value)` (`["a": 1]`), which covers scalars,
+enums, arrays and maps.
 
 ### 28.2 Error formats
 
-Diagnostics come from two phases. The static analyzer rejects everything
-decidable from source alone — before any code runs, including code that would
-never execute:
+Diagnostics come from two phases. The compiler rejects everything decidable
+from source alone — before any code runs, including code that would never
+execute:
 
 ```text
-Semantic error at line N: message
+FILE:LINE:COLUMN: semantic error: message
 ```
 
 ```text
 Variable "leaked" uses undeclared type "T"
+Undefined variable "missing"
+Object "Box" has no action "missing"
+Duplicate argument "digit"
+Action "secret" on object "Cash" is hidden
+Cannot rebind variable "n": type "int" has no successor actions
 Successor assignment is not allowed inside destroy
 Object "Cash" does role "Priced" but does not implement action "price"
 Duplicate test "Box :: same"
@@ -4676,25 +4706,18 @@ Type "payments.Payment" is hidden in module "payments"
 try? needs a value; a void call is handled with try/catch
 ```
 
-Genuinely dynamic failures — those that depend on values — remain runtime
-errors:
+Genuinely dynamic failures — those that depend on values — are reported by
+Sparrow when they happen, with the source line and the call stack
+(`OKKAMA_TRACE=off` prints the failure alone):
 
 ```text
-Runtime error at line N: message
+RuntimeError: main() must return an int in 0..255, got 256
+RuntimeError: Object "Cash" field "cents" was not initialized
+RuntimeError: Division by zero
 ```
 
-```text
-Runtime error at line 4: Undefined variable "missing"
-Runtime error at line 7: Object "Box" has no action "missing"
-Runtime error at line 10: Duplicate construction field "digit"
-Object "Cash" field "cents" was not initialized
-Action "secret" on object "Cash" is hidden
-Cannot rebind variable "n": type "int" has no successor actions
-Cannot rebind variable "counter" of type Counter with int
-```
-
-In both phases the location prefix appears only when a source token is
-available.
+An uncaught typed error is reported by its type and `text()`, and a panic by
+its message, in the same form.
 
 ### 28.3 `okkama lint`
 
@@ -4849,8 +4872,9 @@ is `io/stdout`, `collections/sequence`, `fs/file` and `json`; see the
 
 Explicitly not part of Okkama 1.0 — these are decisions, not gaps:
 
-- **null / nil** — no null in any spelling (Chapter 7); `none` exists only
-  as the case `Maybe.none` / `Presence.none`.
+- **null / nil** — no null in any spelling (Chapter 7); there is no bare
+  `none` value. `Maybe.none` and `Presence.none` are enum cases, and an enum
+  of your own may name a case `none` too, reached through its type.
 - **Implicit optionals and `?.`** — absence is the explicit `Maybe<T>` /
   `Presence<T>` that must be opened (Chapter 24.2).
 - **Catch-all `catch` and `finally`** — catches name types or error enum
@@ -4868,8 +4892,8 @@ Explicitly not part of Okkama 1.0 — these are decisions, not gaps:
 - **Wildcard imports** — dependencies are named (Chapter 26).
 - **Getters/setters and public fields** — behavior, not state (Chapter 16).
 
-Alias imports and named construction are implemented.
-Decimal literal semantics remain deferred. The test runner and `async`/`await`
+Alias imports and named construction are implemented. There is no decimal
+literal; exact decimals are the library's `Decimal` (31.6). The test runner and `async`/`await`
 are implemented; Appendix B records their current boundaries.
 
 ## Chapter 30. Design Patterns: Composition over Inheritance
@@ -4947,8 +4971,10 @@ catch CashError.invalid_cents(cents) { "bad cents: " + cents.string(); }
 catch e is CashError { e.text(); };
 ```
 
-Adding a case to `CashError` makes every exhaustive `match` over it a compile
-error until the new case is handled — the enum is the contract.
+Adding a case to `CashError` makes every `match` that lists the cases without
+`else` or `case _` a compile error until the new case is handled — the enum is
+the contract. A catch-all arm covers the new case silently, which is why
+listing the cases is the safer habit.
 
 ### 30.4 Test with fakes, not mocks
 
@@ -5070,7 +5096,7 @@ The fixed rules follow the language's existing philosophy:
 - **Empty collections stay untagged without context.** `[]` and `[:]` still
   take their tag from the first explicit boundary; emptiness proves nothing.
 - Inference is recursive through nesting, and the exact identity becomes
-  available in direct expressions too (`Dump([1, 2, 3])`, generic inference
+  available in direct expressions too (`Dumper([1, 2, 3]).type()` is `"@int"`, generic inference
   from literals, overload resolution).
 
 Map keys preserve exact scalar or enum identity, including `char` and `bool`.
@@ -5084,67 +5110,56 @@ including empty, mixed concrete role implementations, branches and await paths.
 
 `any` values are fully opaque today (Chapter 9). Explicit scalar casts are
 implemented as the builtin actions documented in Chapter 5, but they cannot
-inspect an `any` box. The specification still reserves explicit narrowing as
-the only future path from `any` to a concrete type. Inference never narrows or
+inspect an `any` box. Explicit narrowing remains the only planned path from
+`any` to a concrete type. Inference never narrows or
 casts automatically; no `any`-narrowing syntax is fixed yet.
 
-### 31.3 Portable regular expressions
+### 31.3 Portable regular expressions (implemented)
 
-Regexes are implemented as a two-layer feature with a strict portability rule:
-the dialect is a reviewed cross-runtime subset, *never* "whatever the host
-engine accepts". The design (TODO.md, Milestone 13A) fixes the architecture:
+Regular expressions follow a strict portability rule: the dialect is a
+reviewed cross-runtime subset, *never* "whatever the host engine accepts". It
+has literals, escapes, `.`, `^`, `$`, character classes, alternation,
+capturing, non-capturing and named groups, and the usual quantifiers;
+backreferences, lookaround and recursion are not part of it. Matching runs on
+a bounded Thompson automaton, so no pattern can backtrack catastrophically.
 
-- a declaration-only `runtime/regex` module behind a native provider, with a
-  compiled pattern as an opaque nominal handle — no `qr//`, no host engine
-  objects, no capture globals ever visible to Okkama code;
-- a high-level `regex` stdlib module written in Okkama over those primitives,
-  with construction from an ordinary string (literal syntax remains
-  deferred):
+Two layers implement it: the declaration-only `runtime/regex` module behind a
+native provider, with patterns, queries and matches as opaque states — no
+host engine objects and no capture globals visible to Okkama code — and the
+`regex/*` modules written in Okkama over those primitives:
 
 ```okkama
-import "regex" take Regex, Match, InvalidRegex, MissingMatch;
+import "regex/pattern" take Regex, RegexFlag;
 
 let pattern = Regex("([a-z]+)");
-pattern.matches("okkama");       // true
-
-let first is Match = pattern.first("123okkama!");
-first.string();                  // "okkama"
-first.start();                   // 3
-first.groups();                  // ["okkama"]
-
-pattern.all("one 2 two")
-    .map() -> found { found.string(); }; // ["one", "two"]
-pattern.replaced("one two", "_"); // "_ _"
+pattern.found("okkama");                        // true
+pattern.first("123okkama!");                    // Maybe<RegexMatch>: some, text() is "okkama"
+pattern.all("one 2 two").map() -> found { found.text(); };   // ["one", "two"]
+pattern.replaced(origin: "one two", by: "_");   // "_ _"
+Regex(",\\s*").parts("a, b,,c");               // ["a", "b", "", "c"]
+Regex("OK", [RegexFlag.ignore_case]).found("okkama");   // true
 ```
 
-- explicit immutable results — no magic "last match" state, no null for a
-  failed match, typed `MissingMatch`, and a documented empty-string
-  representation for unmatched optional groups;
-- safety commitments: resistance to catastrophic backtracking, a closed
-  flags model, sanitized compile errors through `NativeFailure`, code-point
-  offsets consistent with `string.length()`/`.slice()`.
-
-`Regex(pattern)` only retains the pattern string. Each action creates one
-private owning prepared value, compiles through `runtime/regex`, performs the
-operation and deterministically closes its handle. Thus constructors remain
-state-only, while returned `Match` objects are detached string/span values.
-
-The runtime vertical includes boolean `contains`/`matches`, `spans`,
-`all_spans`, and `invalid_offset`. Spans contain the leftmost-longest full
-range followed by captures in source order. Offsets count code points,
-unmatched groups are `[-1,-1]`, and equal-end ambiguity follows source/NFA
-priority. All-match scanning is non-overlapping; a zero-length match advances
-one code point and the terminal boundary appears once. The default provider
-uses capture-tagged Thompson instructions rather than Perl regex, retaining
-bounded state-set execution.
-
-`first` throws `MissingMatch`; malformed patterns become `InvalidRegex` at the
-first action with an exact source offset. `replaced` is global and literal:
-`$1`, backslashes and braces are not expanded. There is no regex literal or
-flags argument. Split and capture-expanding/callback replacement remain
-deferred. The normative contract is
-`docs/todo/portable-regex-15072026.md`.
-
+- Results are explicit immutable values: no "last match" state and no null
+  for a failed match. `first` answers a `Maybe<RegexMatch>`; where a match is
+  required, `FirstRegexMatch(origin:, regex:)` from `regex/search` throws
+  `NoRegexMatch` instead.
+- A match gives its `text()`, `range()`, numbered `capture(i)` and named
+  `group(name)`. An optional group that did not take part answers
+  `matched()` with `false`, and asking its `text()` throws
+  `UnmatchedRegexCapture`.
+- Offsets count code points, consistently with `string.length()` and
+  `.slice()`.
+- Flags are a closed enum, `RegexFlag` (`ascii`, `ignore_case`, `multiline`,
+  `dot_all`, `verbose`). There is no regex literal.
+- `replaced` is literal: `$1`, backslashes and braces are not expanded.
+  Capture-expanding and computed replacements go through `RegexSubstitution`
+  with a replacement policy (`ExpandedRegexReplacement`, or any object that
+  does `ReplacingRegexMatch`), and `RegexParts` splits with a limit
+  (`regex/replace`, `regex/split`).
+- A malformed pattern throws `InvalidRegex` with the exact offset at the first
+  action that needs the compiled pattern. Construction only keeps the
+  expression and flags; the pattern compiles once, on first use, and is kept.
 ### 31.4 Private fields and owner operations
 
 Only lexical owner fields and `self.field` read private state. Other objects,
@@ -5171,7 +5186,8 @@ async loaded(service is Service) is string {
 
 Calling `loaded(service)` does not start the body. First await starts it;
 later awaits reuse the cached value or typed failure. There is no implicit
-await, and await is valid only inside an async action. Local variables and
+await, and await is valid only in async bodies: async actions (`async main`
+included), async tests and `async destroy` blocks. Local variables and
 ordinary lexical scopes remain available across suspension.
 
 Async does not imply a thread or make CPU-bound work nonblocking. One
@@ -5249,11 +5265,11 @@ defers and `destroy` blocks do not run. A worker leads its own process group on
 Sparrow, and the whole group is killed, so processes the
 worker started go with it (#359).
 
-The worker is the same program run again by the same engine: Tomato runs its
+The worker is the same program run again by the same engine: Sparrow runs its
 `.spb` (one compiled in memory is written to a temporary file first). It gets an explicit working directory; source filenames are made
 absolute in the parent before the worker changes directory, so relative CLI
 source paths work too. An embedder that runs programs which `spawn` must pass
-Tomato the worker command, and a `spawn` without one fails with
+Sparrow the worker command, and a `spawn` without one fails with
 `process workers require an explicit worker command`. Arguments and results
 cross as binary `OKW2` frames, an implementation detail rather than part of the
 language. This is process isolation, not exposed POSIX `fork` semantics.
@@ -5287,6 +5303,16 @@ buffered messages stay receivable, and once they are drained `item()` throws
 `ChannelClosed`. Cancelling a blocked operation removes it from the waiters; a
 completed handoff is never undone or repeated.
 
+`SelectedReceiving(receivers: [a.receiving(), b.receiving()])` waits for one
+message from several channels of one element type: `await selected.item()`
+gives a `SelectedItem<T>` with the zero-based `source()` of the winner and its
+`value()`. The receivers must be non-empty and distinct, and one request may be
+pending per selector at a time. A ready tie rotates from the index after the
+previous winner; closed buffers are drained first, and `ChannelClosed` means
+every source is exhausted. Cancelling before a message is committed withdraws
+every alternative; a committed receive wins over a later cancellation, and
+`Within`/`Before` compose with it for timeouts.
+
 A state owner is one async task that alone owns a local, rebindable binding to
 immutable state. Clients hold only a `Sending<Command>`, and request-response
 puts a capacity-one reply channel in the command. A task's failure does not
@@ -5294,117 +5320,96 @@ close its channels: the owner registers `defer ...close()`, and callers use an
 explicit stop protocol and await the owner's Future. Executable examples are
 in `okkama-rs/examples/channels`.
 
-### 31.6 Decimal (deferred) and exact money
+### 31.6 Decimal and exact money
 
-A `DECIMAL` token type exists in the grammar for future exact-decimal
-arithmetic (money is a core Okkama use case), but decimal runtime semantics
-are unspecified; today decimal-looking source behaves as int/float/string.
-The decimal design pass is explicitly postponed.
-
-The bundled `money` module already covers booked monetary values without
-waiting for a decimal primitive. `Money` stores a signed 64-bit count of minor
-units together with a `Currency`; `rat` is used for exact rates and
-intermediate division.
-
-Money operations follow Okkama's object-composition model. `MoneySum`,
-`MoneyDifference`, and `MoneyNegated` are `Monetary` values themselves, so
-calculations can be nested without adding arithmetic methods to `Money`.
-`MoneyScale` and `MoneyDivide` are exact `MonetaryCalculation` objects. A
-rational calculation becomes posted minor units only through an explicit
-stateful `Rounding` object and `RoundedMoney`:
+There is no decimal literal, no `DECIMAL` token and no decimal primitive type:
+a literal with a decimal point or an exponent is a `float`. Exact decimal
+arithmetic is the library object `Decimal` from `math/decimal`, made from
+text or an integer, with explicit rounding from `math/rounding`:
 
 ```okkama
-import "money" take
-    Currency, Money, Monetary,
-    MoneySum, MoneyScale, RoundedMoney, HalfEven,
-    MoneyAllocation;
+import "math/decimal" take Decimal;
+import "math/rounding" take Rounding;
 
-let usd = Currency("USD", 100);
-let subtotal is Monetary = MoneySum(Money(1299, usd), Money(700, usd));
-let discount = MoneyScale(subtotal, rat(85, 100));
-let discounted is Monetary = RoundedMoney(
-    HalfEven(discount.value()),
-    discount.currency(),
-);
-let shares is @Money = MoneyAllocation(discounted, 3).shares();
+let subtotal = Decimal("12.99").plus(Decimal("7.00"));
+let discounted = subtotal.times(Decimal("0.85")).rounded(scale: 2, rounding: Rounding.half_even);
+let share = discounted.divided(by: Decimal(3), scale: 2, rounding: Rounding.half_even);
+share.string();   // "5.66"
 ```
 
-Sum and difference reject mixed currencies and signed 64-bit overflow.
-`MoneyAllocation` distributes indivisible minor units deterministically while
-preserving the exact total. No `float` enters the API implicitly or
-explicitly: callers that start from external decimal text must first parse it
-into an exact integer or `rat` representation.
+`plus`, `minus` and `times` keep every digit; `divided` and `rounded` take the
+scale and the `Rounding` explicitly, so no rounding mode is a hidden default.
+`string()` is the canonical spelling (`"1.699e1"`), for storage and
+comparison; showing an amount to people goes through a locale
+(`locale/currency`'s `Currency` and `LocalizedCurrency`). There is no money
+module: an application states its own monetary invariants and allocation
+policy on top of `Decimal`, and no `float` needs to enter the arithmetic.
 
-### 31.7 Stdlib MVP (Milestone 13 — intentionally blocked)
+### 31.7 The standard library
 
-The standard library stays narrow on purpose: the milestone is blocked on
-runtime foundations so that stdlib APIs are not grown around temporary
-interpreter shortcuts. The defined minimum for examples is:
+The early "minimum library" plan is long superseded. The standard library now
+covers the domains listed in Chapter 26.5 — collections, text, time, JSON and
+other formats, files and processes, HTTP clients and servers, databases,
+testing — and runs on Sparrow. Intrinsic assertions are `test.is`,
+`test.isnt`, `test.ok`, `test.close`, `test.text`, `test.bytes` and
+`test.fail`; reusable check objects live in `testing/*` (Chapter 23).
 
-- intrinsic test assertions are implemented as contextual `test.is`,
-  `test.isnt`, `test.ok`, `test.close`, `test.text`, `test.bytes` and
-  `test.fail`; bundled `test/more` provides the
-  reusable object facade;
-- simple string behaviors such as `.uppercase()` / `.lower()`;
-- array helpers only if 1.0 examples keep needing them.
+### 31.8 Test runner (implemented)
 
-The foundations it was blocked on — generics, variadic constructors,
-builtin value behavior, functional collections, the native substrate — are
-now complete, so this milestone is the natural next growth point.
-
-### 31.8 Test runner (Milestone 10 — implemented)
-
-`okkama -t file.ok` provides production-pruned/test-retained parsing,
+`okkama run -t file.ok` provides production-pruned/test-retained parsing,
 root-module discovery, intrinsic assertions, per-test lexical state, failure
-isolation, cleanup ordering, deterministic reporting and 0/1 exit status.
-Imported tests are not executed, while imported fakes remain available. See
-Chapter 23 and `docs/todo/test-framework-15072026.md`.
+isolation, cleanup ordering and deterministic reporting. Its exit status is 0
+when every test passed and 1 when one failed; 2 is an invalid command line, 3
+an input/output error, and 4 a run that reached no verdict (no test to run, a
+source error or an engine error). Imported tests are not executed, while
+imported fakes remain available. See Chapter 23.
 
-### 31.9 Match completeness and static semantics (Milestones 16–17)
+### 31.9 Match completeness and static semantics (implemented)
 
-The **static semantic pass (Milestone 17) is implemented**: `Okkama::Analyzer`
-runs before the interpreter and diagnoses field-bind placement,
-successor-assignment context, `next`/`last` placement, bare `throw;`
-placement, variadic-unpack positions, undeclared types (declarations plus
-`let`/`catch` annotations), duplicate names (including tests), role
-conformance, import validity, and empty typed action bodies — all before
-execution, as `Semantic error` diagnostics (28.2). Runtime errors remain for
-genuinely dynamic failures: panics, bounds, value–type mismatches, overload
-selection, generic inference, and full-constructor field completeness.
+The compiler's semantic checker runs before any code: besides declarations,
+field-bind placement, successor-assignment context, `next`/`last` and bare
+`throw;` placement, variadic-unpack positions, undeclared types, duplicate
+names, role conformance and import validity, it checks types at every
+boundary, selects overloads and infers generic arguments — all as `semantic
+error` diagnostics (28.2). Run time keeps only the failures that depend on
+values: panics, bounds, a constructor path that leaves a field unbound, a
+`main` result outside 0..255.
 
-Match completeness is **implemented for variant enums**: matches and compact
-choices over payload enums, error enums, `Maybe` and `Presence` must cover
-every case, and branch result types must agree. Payload-free enums keep the
-older statement rule with a lint warning. Still planned for the remaining
-subjects: type-checking the match subject against arbitrary case values and
-deciding whether such a match *expression* must have `else`. A stronger
-return-path analysis depends on it. Current checks reject empty typed bodies
-and obvious incompatible async tail values; recognized unconditional return
-paths bypass the tail heuristic. This is not a complete control-flow analysis:
-a trailing `if` without `else` or an exhaustive enum `match` can still produce
-a value dynamically. The runtime validates the actual action result.
+Match completeness is complete as well. Matches and compact cases over payload
+enums, error enums, `Maybe` and `Presence` must cover every case; payload-free
+enums keep the older statement rule with a lint warning; case values are
+checked against the subject's type (`case "x"` over an `int` is `Cannot
+compare int and string`); and a value-producing `match` needs `else` or
+`case _` unless its cases provably cover every value (all enum cases, or both
+`bool` values). The same analysis guards action results: a tail
+`if condition { 1; }` without `else` cannot supply an `int` result (`Action
+"value" must produce a return value of type int.`).
 
-### 31.10 CLI and runner modes (Milestone 19)
+### 31.10 CLI and runner modes
 
-`bin/okkama` runs production code by default; `-d` enables debug and `-t`
-runs tests. Consecutive .ok files can form one module. Production main returns
-an exit code0..255; executable diagnostics and failed tests yield failure.
-The test runner supports report, workers, seed, filter, timeout and capture-limit
-options; see testing (okkama-docs `docs/std/testing.md`). Parse/AST-print modes and a usable
-interactive prompt remain future work. Source: Okkama.pm and cli/01,02,04,07 tests.
+`okkama run FILE.ok` runs a program on Sparrow; `okkama run -t FILE.ok` runs
+its tests. Several `.ok` files given together form one module. `main` returns
+an exit code in 0..255. There is no `-d` and no `--engine` option. `tokens`,
+`ast`, `check`, `ir`, `fmt`, `lint`, `man` and `repl` are available too. The
+test runner takes `--filter`, `--report human|json|junit`, `--seed`,
+`--workers` and `--test-timeout` (with workers); a worker's captured output is
+bounded at 64 KiB per stream. See `okkama --help` and Chapter 23.
 
 ### 31.11 Functional collections, next steps
 
-The eager `map`/`filter`/`reduce` milestone is complete (Chapter 13).
-Explicitly deferred follow-ups: `grep`/`fold` aliases, lazy streams,
-file-line iterators, parallel execution, map-entry transformation, and any
-form of hidden mutable accumulator.
+The eager `map`/`filter`/`reduce` operations and the early-stopping
+`any`/`all`/`find` are complete (Chapter 13). Lazy views (`Mapped`,
+`Filtered` and others from `collections/views`), line iteration over files
+and standard input (`FileText` and `Stdin` are `Batching<string>` sources) and
+bounded parallel mapping in worker processes (`ParallelMapped` from
+`parallel/map`) are in the standard library. The built-in operations stay
+eager, and there is no hidden mutable accumulator.
 
 ### 31.12 Alias imports
 
 Alias imports use the same qualified lookup as basename namespaces:
 
-- `import "sql/pool" as db_pool;` exposes the module-owned surface through
+- `import "db/pool" as db_pool;` exposes the module-owned surface through
   `db_pool` instead of `pool`;
 - combining `as` with `take` limits that alias namespace to the selected
   directly owned declarations;
@@ -5416,14 +5421,16 @@ Alias imports use the same qualified lookup as basename namespaces:
 
 ## Appendix A. Reserved and Removed Words
 
-Removed words (parse errors, never valid):
+Removed words and symbols (parse errors, never valid):
 
 ```text
-null nil optional ?. isa super abstract protected with setters mutable var
+null nil none isa super abstract protected with finally ? ?? ?. **
 ```
 
-`none` is not a value: it exists only as the case `Maybe.none` /
-`Presence.none`. A single `?` is an error, `??` is a removed selection syntax
+`none` is not a value. It is allowed only as an enum case name: `Maybe.none`
+and `Presence.none` are built-in cases, and an enum of your own may declare a
+case named `none` too, reached through its own type. Words such as `var`,
+`mutable`, `optional` and `setters` are ordinary identifiers. A single `?` is an error, `??` is a removed selection syntax
 (use a compact `match`, Chapter 24.3), and `try?` / `try!` are prefix forms
 written without a space.
 
@@ -5434,17 +5441,19 @@ Keyword inventory in active use: `module`, `import`, `as`, `take`, `object`,
 `await`, `spawn`, `const`, `true`, `false`, `main` (contextually), `hidden`
 (contextually, before `object`, `role`, `enum`, `const` or an action).
 
-Contextual namespace names (not ordinary identifiers) include keyword-shaped
-module path segments such as `test` in `test/more`, declared action labels such
-as `is`, `fake` in `Role.fake()`, assertion names in `test.ok(...)`, and
-builtin action names such as `size`, `slice`, `length`, `trim`, `chomp`,
-`split`, `join`, `replace`, `replace_first`, `keys`, `values`, `has`, `less`,
-`greater`.
+Keyword-shaped names are accepted where a member or label is expected:
+module path segments such as `test` in `module test/more`, declared action
+labels such as `is` and `has`, `fake` in `Role.fake()` and assertion names in
+`test.ok(...)`. `cap`, `once` (before `let`) and `void` (after `is`) are
+contextual words, not reserved ones. Builtin action names such as `size`,
+`slice`, `length`, `trim`, `keys`, `values`, `less` and `greater` are ordinary
+identifiers that have a builtin meaning on particular receivers.
 
 ## Appendix B. Implementation Status
 
-Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
-`t/suite`):
+Supported by the Rust compiler and the Sparrow runtime, with executable
+conformance cases under `conformance/cases/` and implementation tests under
+`okkama-rs/crates/`:
 
 - modules, `main`, imports (plain/`take`/basename namespaces, dependency
   closure), local-first resolution;
@@ -5456,10 +5465,12 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
 - `confirm`, valued/bare `throw`, string-only `panic`, typed `try`/`catch`;
 - optional single-value `return` from the current action;
 - `defer` (LIFO on normal, return, failure and loop-control exits);
-- mandatory explicit constructors: full (exact arity), field shorthand
-  (named-only), variadic; field defaults; object projections;
-- actions: typed parameters, named arguments, return checks, `self`
-  chaining default, hidden actions, typed overload resolution with
+- mandatory explicit constructors: full (typed parameters with optional
+  trailing defaults), field shorthand (named-only) and variadic; field
+  defaults; construction by explicit calls;
+- actions: typed parameters with optional trailing defaults, named arguments,
+  a mandatory result (`is T`, `is void`, or `is Type { self; }` to return the
+  receiver), return checks, hidden actions, typed overload resolution with
   specificity dominance, variadic tails with `values...` unpack;
 - anonymous action expressions, lexical capture, action-value calls, exact
   `(T, ...) is R` signatures, explicit parameter/result declarations, and
@@ -5481,27 +5492,27 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
 - builtin value behavior (`size`/`slice`/`length`/`trim`/`chomp`/`split`/
   `join`/`replace`/`replace_first`/`keys`/`values`/`has`, exact numeric
   comparisons);
-- functional `map`/`filter`/`reduce` on arrays, ranges, typed maps, and
-  nominal standard `Iterable<T>` objects;
+- functional `map`/`filter`/`reduce`/`any`/`all`/`find` on arrays, ranges,
+  typed maps, and nominal standard `Iterating<T>` and `Batching<T>` sources
+  (Chapter 13);
 - native declarations, canonical providers, `NativeFailure`, opaque handles,
-  and the bundled `runtime/*` verticals (time, fs, process, net, poll,
-  environment, system, debug, regex) plus `okkama.Dump` and the high-level
-  immutable `regex.Regex` object;
+  and the bundled `runtime/*` modules (Chapter 27), with `debug/dumper`'s
+  `Dumper` and `regex/pattern`'s `Regex` above them;
 - exact `json` values, strict parsing and writing in the runtime, readers
   with RFC 6901 pointers and one `JsonError`.
 
-Not implemented in the runtime:
-
-- decimal literal semantics.
+There is no decimal literal; exact decimals are `math/decimal`'s `Decimal`
+(31.6).
 
 Alias (`as`) imports are checked against module boundaries.
 Private fields are accessible only to their owner.
 
-The static semantic pass and builtin scalar casts are implemented. Casts do not
-inspect an `any` box. Still planned: explicit `any` narrowing, decimal literal
-semantics, completeness of matches over arbitrary values, and `throws` in
-signatures (on hold). Parse/AST-print modes and the REPL exist in the Rust
-toolchain (`okkama ast`, `okkama repl`). Production/debug/test runner modes already work. Active stdlib scope
+The static semantic pass, match completeness over arbitrary values and
+builtin scalar casts are implemented. Casts do not inspect an `any` box. Still
+planned: explicit `any` narrowing and `throws` in signatures (on hold).
+Parse/AST-print modes and the REPL exist in the Rust toolchain (`okkama ast`,
+`okkama repl`). Production and test runner modes work; there is no debug
+mode. Active stdlib scope
 and remaining work are tracked in the v4 roadmap (okkama-docs `docs/std/stdlib-roadmap-v4.md`),
 not the historical MVP milestone.
 
@@ -5510,14 +5521,14 @@ not the historical MVP milestone.
 ```okkama
 // ---- module shape ----
 module app v1.0.0;
-import "money" take Cash;
+import "io/stdout" take Stdout;
 
 // ---- object ----
 object Cash {
     has digit is int;                 // private field, required
     has cents is int = 0;             // private field, defaulted
 
-    Cash(digit is int, cents is int) {  // full ctor: exact arity
+    Cash(digit is int, cents is int) {  // full ctor: positional or named
         digit = digit;
         cents = cents;
         confirm self.digit >= 0;
@@ -5613,7 +5624,9 @@ HttpClient sends an absolute HTTP(S) Request through checked numeric endpoints a
 
 ### Redirects are an explicit exchange capability
 
-Wrap HttpClient with Redirecting(client,RedirectPolicy()) to enable bounded follows. 303 changes POST to GET; 307/308 require a replayable preserved body. Each Location resolves against the effective URL; cross-origin credentials are removed and every new route is checked, even on an idle connection. Intermediate bodies are closed and their metadata appears in history; the final body remains owned by the caller. Contract (okkama-docs `docs/std/http-redirect.md`), real loopback example (okkama-docs `examples/std-v4/http-redirect.ok`).
+Wrap HttpClient with `Redirecting(client, Redirects())` from `http/redirect` (in
+earlier stages the policy was named `RedirectPolicy`), or write
+`HttpClient(redirects: Redirects(limit: 5))`, to enable bounded follows. 303 changes POST to GET; 307/308 require a replayable preserved body. Each Location resolves against the effective URL; cross-origin credentials are removed and every new route is checked, even on an idle connection. Intermediate bodies are closed and their metadata appears in history; the final body remains owned by the caller. Contract (okkama-docs `docs/std/http-redirect.md`), real loopback example (okkama-docs `examples/std-v4/http-redirect.ok`).
 
 ### Cookie policy is an explicit adapter
 
@@ -5780,7 +5793,7 @@ body after deciding to close. Trusted WebSocket origin is configured explicitly.
 The internal H2 server preface now verifies exact client magic/SETTINGS and acknowledges without consuming the next frame. The direction-aware reader can await owned body acquisition before DATA; foundation tests pass 35 assertions. This foundation alone does not provide a server session.
 
 
-Http2ServerSession (okkama-docs `docs/std/http2-server.md`) now owns independent H2 request tasks, body buffers and shared flow control. RST/EOF cancel handlers; streaming response trailers retain END_STREAM ordering. A Perl TCP peer independently verifies SETTINGS, HPACK and exact DATA. The listener/TLS/full timeout profile remains separate work.
+Http2ServerSession (okkama-docs `docs/std/http2-server.md`) now owns independent H2 request tasks, body buffers and shared flow control. RST/EOF cancel handlers; streaming response trailers retain END_STREAM ordering. An independent TCP peer verified SETTINGS, HPACK and exact DATA. The listener/TLS/full timeout profile remains separate work.
 
 
 `HttpServer` now also composes an explicit H2-only plaintext listener with `ServerDrain`; 14 listener/H1 compatibility checks pass. TLS/mixed selection and full H2 idle policy remain open.
@@ -6073,8 +6086,9 @@ an explicit empty context distinct from absence. Contract/example (okkama-docs `
 --filter TEXT` runs only the tests whose names contain TEXT. Tests run in
 declaration order, in the process of the run, and print `=== RUN`, then
 `--- PASS`, `--- FAIL` or `--- SKIP`; the run exits 1 when a test failed.
-Report formats, a seed, process workers and deadlines are not part of the
-runner yet.
+That was the runner of this stage. Today `okkama run -t` also takes
+`--report human|json|junit`, `--seed`, `--workers` and `--test-timeout` (with
+workers); see Chapter 23.1.
 
 ```sh
 okkama run -t --filter snapshot path/to/module.ok
@@ -6117,9 +6131,11 @@ See the MIME contract (okkama-docs `docs/std/mime-part.md`) for limits and navig
 ### Separate work guards from elapsed-time measurements
 
 The interpreter CSV/TOML regression fixtures check exact results, recursion
-warnings, interpreter call counts and depth. A separate sequential job, run as
-`perl script/check-parser-performance.pl` from `okkama-pl`, retains the original
-10/25-second budgets using one warmup and five fresh-VM samples and their median.
+warnings, interpreter call counts and depth. In the former Perl implementation a separate sequential job,
+`perl script/check-parser-performance.pl`, kept the original 10/25-second
+budgets using one warmup and five fresh-VM samples and their median; that
+script is not part of the current repository, and current measurements need a
+Sparrow harness and their own recorded baseline.
 Measurements include parsing/imports/execution. Use an idle fixed machine for
 comparative baselines; ordinary parallel regression retains structural guards.
 See the testing contract (okkama-docs `docs/std/testing.md`).
