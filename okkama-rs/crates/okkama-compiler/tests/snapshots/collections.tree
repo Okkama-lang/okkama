@@ -28,6 +28,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           result: NamedType
             path: [int]
             args: []

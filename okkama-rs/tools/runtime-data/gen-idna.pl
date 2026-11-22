@@ -44,6 +44,8 @@ for my $spec (['B', 'Bidi_Class'], ['J', 'Joining_Type']) {
     my ($tag, $property) = @$spec;
     my ($list, $map) = (prop_invmap($property))[0, 1];
     for my $i (0 .. $#$list) {
+        # prop_invmap ends with a sentinel at 0x110000: no code point (#989).
+        next if $list->[$i] > 0x10FFFF;
         my $to = $i < $#$list ? $list->[$i + 1] - 1 : 0x10FFFF;
         my $value = $map->[$i];
         $value = (Unicode::UCD::prop_value_aliases($property, $value))[0] // $value;

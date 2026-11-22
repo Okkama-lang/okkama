@@ -1,4 +1,4 @@
-//! A minimal JSON reader for test metadata (the crate has no dependencies).
+//! A minimal JSON reader for test metadata (`case.json` of the corpus).
 
 #![allow(dead_code)]
 
@@ -40,7 +40,7 @@ impl Json {
 pub fn parse(text: &str) -> Result<Json, String> {
     let chars: Vec<char> = text.chars().collect();
     let mut pos = 0;
-    let value = value(&chars, &mut pos)?;
+    let value = value(&chars, &mut pos, 0)?;
     skip_ws(&chars, &mut pos);
     if pos != chars.len() {
         return Err(format!("trailing data at {pos}"));
@@ -54,7 +54,13 @@ fn skip_ws(c: &[char], pos: &mut usize) {
     }
 }
 
-fn value(c: &[char], pos: &mut usize) -> Result<Json, String> {
+/// Nesting deeper than this is refused rather than recursed into.
+const DEPTH: usize = 256;
+
+fn value(c: &[char], pos: &mut usize, depth: usize) -> Result<Json, String> {
+    if depth > DEPTH {
+        return Err(format!("nesting deeper than {DEPTH} at {pos}"));
+    }
     skip_ws(c, pos);
     match c.get(*pos) {
         Some('{') => {
@@ -73,7 +79,7 @@ fn value(c: &[char], pos: &mut usize) -> Result<Json, String> {
                     return Err(format!("expected ':' at {pos}"));
                 }
                 *pos += 1;
-                map.insert(key, value(c, pos)?);
+                map.insert(key, value(c, pos, depth + 1)?);
                 skip_ws(c, pos);
                 match c.get(*pos) {
                     Some(',') => *pos += 1,
@@ -94,7 +100,7 @@ fn value(c: &[char], pos: &mut usize) -> Result<Json, String> {
                 return Ok(Json::Array(items));
             }
             loop {
-                items.push(value(c, pos)?);
+                items.push(value(c, pos, depth + 1)?);
                 skip_ws(c, pos);
                 match c.get(*pos) {
                     Some(',') => *pos += 1,
@@ -162,13 +168,16 @@ fn string(c: &[char], pos: &mut usize) -> Result<String, String> {
                             c.get(*pos..*pos + 4).ok_or("short \\u")?.iter().collect();
                         *pos += 4;
                         let mut code = u32::from_str_radix(&hex, 16).map_err(|e| e.to_string())?;
-                        if (0xD800..0xDC00).contains(&code) && c.get(*pos) == Some(&'\\') {
-                            let low: String = c
+                        // A low surrogate follows only as `\uDC00`–`\uDFFF`; anything
+                        // else leaves the high one unpaired.
+                        if (0xD800..0xDC00).contains(&code)
+                            && c.get(*pos) == Some(&'\\')
+                            && c.get(*pos + 1) == Some(&'u')
+                            && let Some(low) = c
                                 .get(*pos + 2..*pos + 6)
-                                .ok_or("short surrogate")?
-                                .iter()
-                                .collect();
-                            let low = u32::from_str_radix(&low, 16).map_err(|e| e.to_string())?;
+                                .and_then(|low| u32::from_str_radix(&low.iter().collect::<String>(), 16).ok())
+                                .filter(|low| (0xDC00..0xE000).contains(low))
+                        {
                             *pos += 6;
                             code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
                         }
@@ -182,3 +191,18 @@ fn string(c: &[char], pos: &mut usize) -> Result<String, String> {
     }
     Err("unterminated string".into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surrogates_pair_only_with_a_low_escape_and_nesting_is_bounded() {
+        assert_eq!(parse(r#""\uD83D\uDE00""#), Ok(Json::String("\u{1F600}".into())));
+        assert_eq!(parse(r#""\uD83D\n0041""#), Ok(Json::String("\u{fffd}\n0041".into())));
+        assert_eq!(parse(r#""\uD83D\u0041""#), Ok(Json::String("\u{fffd}A".into())));
+        assert!(parse(&"[".repeat(DEPTH + 2)).is_err());
+        assert!(parse(&format!("{}{}", "[".repeat(8), "]".repeat(8))).is_ok());
+    }
+}
+

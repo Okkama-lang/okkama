@@ -112,12 +112,14 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
             - Param
               name: height
               variadic: false
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           body: Block
             statements:
               - SelfFieldBindStatement

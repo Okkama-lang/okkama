@@ -2779,6 +2779,8 @@ impl<'a> Registry<'a> {
     }
 
     fn find_standard(&mut self) {
+        // The first module of that name is the only one: a program cannot
+        // load two files of one module (lowering/modules.rs, #989).
         let lookup = |registry: &Registry<'_>, module: &str, name: &str| {
             registry
                 .modules

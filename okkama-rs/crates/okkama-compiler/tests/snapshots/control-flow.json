@@ -41,7 +41,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ]
         }
@@ -75,7 +76,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -161,7 +163,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {

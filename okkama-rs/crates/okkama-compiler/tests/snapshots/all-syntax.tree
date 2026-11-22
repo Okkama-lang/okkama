@@ -16,6 +16,12 @@ Program
       alias: (none)
       take: []
   items:
+    - ConstDecl
+      name: LIMIT
+      type: (none)
+      value: IntLiteral
+        radix: decimal
+        digits: 3
     - EnumDecl
       name: Color
       cases: [red, green, blue]
@@ -32,6 +38,7 @@ Program
           type: NamedType
             path: [int]
             args: []
+          default: (none)
       result: VoidResult
     - NativeActionDecl
       async: false
@@ -59,6 +66,7 @@ Program
               type: NamedType
                 path: [T]
                 args: []
+              default: (none)
           result: NamedType
             path: [int]
             args: []
@@ -83,6 +91,7 @@ Program
               type: NamedType
                 path: [T]
                 args: []
+              default: (none)
           result: NamedType
             path: [bool]
             args: []
@@ -112,6 +121,7 @@ Program
                     type: NamedType
                       path: [T]
                       args: []
+                    default: (none)
                 result: NamedType
                   path: [int]
                   args: []
@@ -156,6 +166,15 @@ Program
                     type: NamedType
                       path: [T]
                       args: []
+                    default: (none)
+                  - Param
+                    name: strict
+                    variadic: false
+                    type: NamedType
+                      path: [bool]
+                      args: []
+                    default: BoolLiteral
+                      value: false
                 result: NamedType
                   path: [bool]
                   args: []
@@ -300,12 +319,14 @@ Program
               type: NamedType
                 path: [string]
                 args: []
+              default: (none)
             - Param
               name: rest
               variadic: true
               type: NamedType
                 path: [string]
                 args: []
+              default: (none)
           body: Block
             statements:
               - SelfFieldBindStatement
@@ -428,6 +449,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           result: ArrayType
             element: NamedType
               path: [T]
@@ -456,6 +478,7 @@ Program
               type: NamedType
                 path: [T]
                 args: []
+              default: (none)
           result: NamedType
             path: [int]
             args: []
@@ -477,12 +500,14 @@ Program
               type: NamedType
                 path: [any]
                 args: []
+              default: (none)
             - Param
               name: expected
               variadic: false
               type: NamedType
                 path: [any]
                 args: []
+              default: (none)
           result: VoidResult
           body: Block
             statements: []
@@ -497,6 +522,7 @@ Program
               type: NamedType
                 path: [T]
                 args: []
+              default: (none)
           result: NamedType
             path: [bool]
             args: []
@@ -517,6 +543,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           result: SuccessorResult
             type: NamedType
               path: [Account]
@@ -690,6 +717,7 @@ Program
               type: NamedType
                 path: [T]
                 args: []
+              default: (none)
     - ActionDecl
       async: true
       visibility: public
@@ -1162,12 +1190,14 @@ Program
                   type: NamedType
                     path: [int]
                     args: []
+                  default: (none)
                 - Param
                   name: label
                   variadic: false
                   type: NamedType
                     path: [string]
                     args: []
+                  default: (none)
               result: VoidResult
               body: Block
                 statements:
@@ -1203,6 +1233,7 @@ Program
                           type: NamedType
                             path: [int]
                             args: []
+                          default: (none)
                       result: NamedType
                         path: [int]
                         args: []
@@ -1562,6 +1593,44 @@ Program
                   expression: NameExpression
                     name: key
                   condition: (none)
+          - ForAwaitStatement
+            source: Call
+              callee: Get
+                object: NameExpression
+                  name: channels
+                name: stream
+              arguments: []
+            bindings:
+              - ForBinding
+                name: item
+            body: Block
+              statements:
+                - ExpressionStatement
+                  expression: NameExpression
+                    name: item
+                  condition: (none)
+          - LetStatement
+            name: tried
+            type: (none)
+            value: OptionalFallback
+              value: TryMark
+                force: false
+                value: Call
+                  callee: Get
+                    object: Call
+                      callee: NameExpression
+                        name: Account
+                      arguments: []
+                    name: load
+                  arguments:
+                    - Argument
+                      name: (none)
+                      value: IntLiteral
+                        radix: decimal
+                        digits: 1
+              fallback: IntLiteral
+                radix: decimal
+                digits: 0
           - ExpressionStatement
             expression: LoopExpression
               body: Block

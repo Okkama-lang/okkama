@@ -19,6 +19,9 @@ const ALL_SYNTAX: &str = include_str!("fixtures/all-syntax.ok");
 
 /// Every node kind the printers can emit.
 const ALL_KINDS: &[&str] = &[
+    "ConstDecl",
+    "ForAwaitStatement",
+    "TryMark",
     "ActionDecl",
     "ActionSignature",
     "ActionType",

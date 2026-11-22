@@ -23,6 +23,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
     - ObjectDecl
       name: Checker
       generics: []
@@ -43,6 +44,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           result: NamedType
             path: [int]
             args: []
@@ -85,6 +87,7 @@ Program
               type: NamedType
                 path: [int]
                 args: []
+              default: (none)
           result: NamedType
             path: [string]
             args: []

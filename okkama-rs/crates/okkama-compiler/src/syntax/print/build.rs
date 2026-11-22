@@ -205,11 +205,14 @@ fn action_node(decl: &ActionDecl) -> Node {
         .field("body", Value::node(block_node(&decl.body)))
 }
 
+/// Layout hints that only `okkama fmt` reads (`shares_type` here, `compact`,
+/// `else_compact` and `case_spans` of a match) are not part of the dump (#989).
 fn param_node(param: &Param) -> Node {
     Node::new("Param", param.span)
         .field("name", name(&param.name))
         .field("variadic", Value::Bool(param.variadic))
         .field("type", Value::node(type_node(&param.ty)))
+        .field("default", opt_node(param.default.as_ref(), expr_node))
 }
 
 fn role_node(decl: &RoleDecl) -> Node {

@@ -224,7 +224,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             },
             {
               "node": "Param",
@@ -236,7 +237,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "body": {

@@ -34,11 +34,15 @@ ranges('F', [prop_invlist('East_Asian_Width=Fullwidth')]);
 
 my ($list, $map) = (prop_invmap('General_Category'))[0, 1];
 for my $i (0 .. $#$list) {
+    # prop_invmap ends with a sentinel at 0x110000: no code point (#989).
+    next if $list->[$i] > 0x10FFFF;
     my $to = $i < $#$list ? $list->[$i + 1] - 1 : 0x10FFFF;
     $out .= sprintf("G %s %X %X\n", $map->[$i], $list->[$i], $to);
 }
 ($list, $map) = (prop_invmap('Canonical_Combining_Class'))[0, 1];
 for my $i (0 .. $#$list) {
+    # prop_invmap ends with a sentinel at 0x110000: no code point (#989).
+    next if $list->[$i] > 0x10FFFF;
     my $to = $i < $#$list ? $list->[$i + 1] - 1 : 0x10FFFF;
     my $value = $map->[$i];
     # prop_invmap даёт короткие имена классов; число берём из charinfo.

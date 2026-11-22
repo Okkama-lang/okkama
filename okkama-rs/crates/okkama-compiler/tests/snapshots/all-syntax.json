@@ -35,6 +35,16 @@
   ],
   "items": [
     {
+      "node": "ConstDecl",
+      "name": "LIMIT",
+      "type": null,
+      "value": {
+        "node": "IntLiteral",
+        "radix": "decimal",
+        "digits": "3"
+      }
+    },
+    {
       "node": "EnumDecl",
       "name": "Color",
       "cases": [
@@ -63,7 +73,8 @@
               "int"
             ],
             "args": []
-          }
+          },
+          "default": null
         }
       ],
       "result": {
@@ -113,7 +124,8 @@
                   "T"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -163,7 +175,8 @@
                   "T"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -219,7 +232,8 @@
                         "T"
                       ],
                       "args": []
-                    }
+                    },
+                    "default": null
                   }
                 ],
                 "result": {
@@ -307,6 +321,23 @@
                         "T"
                       ],
                       "args": []
+                    },
+                    "default": null
+                  },
+                  {
+                    "node": "Param",
+                    "name": "strict",
+                    "variadic": false,
+                    "type": {
+                      "node": "NamedType",
+                      "path": [
+                        "bool"
+                      ],
+                      "args": []
+                    },
+                    "default": {
+                      "node": "BoolLiteral",
+                      "value": false
                     }
                   }
                 ],
@@ -631,7 +662,8 @@
                   "string"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             },
             {
               "node": "Param",
@@ -643,7 +675,8 @@
                   "string"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "body": {
@@ -891,7 +924,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -950,7 +984,8 @@
                   "T"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -991,7 +1026,8 @@
                   "any"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             },
             {
               "node": "Param",
@@ -1003,7 +1039,8 @@
                   "any"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -1030,7 +1067,8 @@
                   "T"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -1070,7 +1108,8 @@
                   "int"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ],
           "result": {
@@ -1421,7 +1460,8 @@
                   "T"
                 ],
                 "args": []
-              }
+              },
+              "default": null
             }
           ]
         }
@@ -2312,7 +2352,8 @@
                       "int"
                     ],
                     "args": []
-                  }
+                  },
+                  "default": null
                 },
                 {
                   "node": "Param",
@@ -2324,7 +2365,8 @@
                       "string"
                     ],
                     "args": []
-                  }
+                  },
+                  "default": null
                 }
               ],
               "result": {
@@ -2397,7 +2439,8 @@
                               "int"
                             ],
                             "args": []
-                          }
+                          },
+                          "default": null
                         }
                       ],
                       "result": {
@@ -3140,6 +3183,83 @@
                   "condition": null
                 }
               ]
+            }
+          },
+          {
+            "node": "ForAwaitStatement",
+            "source": {
+              "node": "Call",
+              "callee": {
+                "node": "Get",
+                "object": {
+                  "node": "NameExpression",
+                  "name": "channels"
+                },
+                "name": "stream"
+              },
+              "arguments": []
+            },
+            "bindings": [
+              {
+                "node": "ForBinding",
+                "name": "item"
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "NameExpression",
+                    "name": "item"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "LetStatement",
+            "name": "tried",
+            "type": null,
+            "value": {
+              "node": "OptionalFallback",
+              "value": {
+                "node": "TryMark",
+                "force": false,
+                "value": {
+                  "node": "Call",
+                  "callee": {
+                    "node": "Get",
+                    "object": {
+                      "node": "Call",
+                      "callee": {
+                        "node": "NameExpression",
+                        "name": "Account"
+                      },
+                      "arguments": []
+                    },
+                    "name": "load"
+                  },
+                  "arguments": [
+                    {
+                      "node": "Argument",
+                      "name": null,
+                      "value": {
+                        "node": "IntLiteral",
+                        "radix": "decimal",
+                        "digits": "1"
+                      }
+                    }
+                  ]
+                }
+              },
+              "fallback": {
+                "node": "IntLiteral",
+                "radix": "decimal",
+                "digits": "0"
+              }
             }
           },
           {
