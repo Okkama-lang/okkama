@@ -1138,6 +1138,41 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "panic".into())
 }
 
+/// Objects whose state the runtime holds rather than their fields (#956): an
+/// `Atomic`, a channel and its ends, an event, a lock. They are the receivers of
+/// the runtime's object intrinsics (`okkama.<family>.<Object>.<action>`, the
+/// compiler's table of runtime-backed objects): the result of a constructor
+/// (`new…`) and the first parameter of an action. A constructor's parameters are
+/// values, not the object. Two of them are equal only when they are the same
+/// object.
+pub(crate) fn held_objects(program: &okkama_sparrow::Program) -> Vec<bool> {
+    let mut held = vec![false; program.objects.len()];
+    for function in &program.functions {
+        let Some(intrinsic) = &function.intrinsic else { continue };
+        let parts: Vec<&str> = intrinsic.name.split('.').collect();
+        let [_, _, object, action] = parts[..] else { continue };
+        if !object.starts_with(|c: char| c.is_ascii_uppercase()) {
+            continue;
+        }
+        // A constructor makes the object (its result); an action receives it (its first parameter).
+        let ty = if action.starts_with("new") {
+            match function.result {
+                Some(result) => result,
+                None => continue,
+            }
+        } else {
+            let Some(receiver) = function.params.first() else { continue };
+            function.registers[receiver.0 as usize]
+        };
+        if let Some(okkama_sparrow::Type::Object(id) | okkama_sparrow::Type::Successor(id)) = program.ty(ty)
+            && let Some(slot) = held.get_mut(id.0 as usize)
+        {
+            *slot = true;
+        }
+    }
+    held
+}
+
 #[cfg(test)]
 mod embedding_tests {
     use super::*;
@@ -1297,39 +1332,4 @@ mod embedding_tests {
         // A fresh runtime in the same process works.
         assert!(clock().run_function(1, 1 << 24).is_ok());
     }
-}
-
-/// Objects whose state the runtime holds rather than their fields (#956): an
-/// `Atomic`, a channel and its ends, an event, a lock. They are the receivers of
-/// the runtime's object intrinsics (`okkama.<family>.<Object>.<action>`, the
-/// compiler's table of runtime-backed objects): the result of a constructor
-/// (`new…`) and the first parameter of an action. A constructor's parameters are
-/// values, not the object. Two of them are equal only when they are the same
-/// object.
-pub(crate) fn held_objects(program: &okkama_sparrow::Program) -> Vec<bool> {
-    let mut held = vec![false; program.objects.len()];
-    for function in &program.functions {
-        let Some(intrinsic) = &function.intrinsic else { continue };
-        let parts: Vec<&str> = intrinsic.name.split('.').collect();
-        let [_, _, object, action] = parts[..] else { continue };
-        if !object.starts_with(|c: char| c.is_ascii_uppercase()) {
-            continue;
-        }
-        // A constructor makes the object (its result); an action receives it (its first parameter).
-        let ty = if action.starts_with("new") {
-            match function.result {
-                Some(result) => result,
-                None => continue,
-            }
-        } else {
-            let Some(receiver) = function.params.first() else { continue };
-            function.registers[receiver.0 as usize]
-        };
-        if let Some(okkama_sparrow::Type::Object(id) | okkama_sparrow::Type::Successor(id)) = program.ty(ty) {
-            if let Some(slot) = held.get_mut(id.0 as usize) {
-                *slot = true;
-            }
-        }
-    }
-    held
 }
