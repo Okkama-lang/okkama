@@ -6,6 +6,16 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Format native #13, CSV (owner performance rule).**
+  Accept the pure default-grammar scalar/span parser and the indexed streaming
+  byte scanner: all measured sizes pass 1.5x (worst median 1.326x, worst final
+  run against best baseline 1.337x). Retain all eight natives for owner retirement.
+  Keep custom-dialect behavior and public API unchanged; use hidden helpers.
+  The byte scanner is maintained in csv.ok and mechanically copied into
+  csv/stream.ok, avoiding a new public helper API or a dependency cycle;
+  `tools/csv/sync-scanner.py --check` enforces identical copies.
+  [Numbers, semantic inventory and verification](../csv-13/README.md).
+
 - **2026-11-22. #943 fixed JUnit wire format (performance task).**
   Serialize its constant XML vocabulary directly in testing/report instead
   of constructing and repeatedly validating an XML tree. Keep user text

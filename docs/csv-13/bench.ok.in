@@ -1,0 +1,36 @@
+module csv13/bench v1.0.0;
+import "cell" take Cell;
+import "./harness" take Measurement;
+import "csv" take CsvRows;
+import "csv/stream" take CsvStream, EndOfCsv;
+import "io/stream" take Reading;
+import "encoding/utf" take Utf8Encoded;
+import "async/atomic" take Atomic;
+object Chunks does Reading {
+ has data is @byte; has position, calls is Atomic<int>;
+ Chunks(:data) { position = Atomic(0); calls = Atomic(0); }
+ bytes(limit is int) is @byte {
+ let at = position.value(); let sizes = [1, 2, 7, 4093];
+ let wanted = sizes[calls.value() % 4]; calls.replace(calls.value()+1);
+ let count = if wanted < limit { wanted; } else { limit; };
+ let end = if at + count < data.size() { at+count; } else { data.size(); };
+ position.replace(end); data.slice(at,end);
+ }
+}
+object Bench {
+ has text is string; has data is @byte;
+ Bench(:text) { data = Utf8Encoded(text).bytes(); }
+ run(n is int) is int {
+ let total = Cell(0);
+ for 0..n -> i {
+ BODY
+ }
+ total.value();
+ }
+}
+main() is int {
+ let m = Measurement();
+ let text = (0..ROWS).map() -> i { "a,b,c,\"d,e\",f,g,\"q\"\"t\",h,é,\"x\ny\"\r\n"; };
+ let b = Bench(text: text.join(""));
+ let warm = b.run(m.warmup()); let before = m.start(); let check = b.run(m.n()); m.finish(before,check,warm); 0;
+}

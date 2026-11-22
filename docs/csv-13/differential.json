@@ -1,0 +1,22 @@
+{
+  "seed": 130622,
+  "inputs": 6625,
+  "distinct_parameter_sets": 6625,
+  "public_paths": 4,
+  "comparisons": 26500,
+  "differences": 0,
+  "output_sha256": "cb2154aeef1b8e3d0ba38b63e4ca53f9b192ee576459af7a93a3da44fad56a9f",
+  "native_output_sha256": "cb2154aeef1b8e3d0ba38b63e4ca53f9b192ee576459af7a93a3da44fad56a9f",
+  "parse_outcomes": {
+    "rows": 4251,
+    "CsvLimitExceeded.kind": 1201,
+    "InvalidCsv.at": 1173
+  },
+  "stream_outcomes": {
+    "CsvByteLimitExceeded.exceeded": 946,
+    "CsvLimitExceeded.kind": 815,
+    "EndOfCsv.reached": 1762,
+    "InvalidCsv.at": 2382,
+    "InvalidUtf8.at": 720
+  }
+}

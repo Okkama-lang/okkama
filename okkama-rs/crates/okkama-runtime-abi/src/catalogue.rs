@@ -108,7 +108,7 @@ impl Contract {
 const PURE: &[&str] = &[
     "runtime/base32", "runtime/base64", "runtime/base85", "runtime/bigint", "runtime/binary",
     "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation",
-    "runtime/collections", "runtime/compression", "runtime/crypto", "runtime/csv_state", "runtime/db",
+    "runtime/collections", "runtime/compression", "runtime/crypto", "runtime/db",
     "runtime/debug", "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex",
     "runtime/host_crypto", "runtime/hpack", "runtime/html", "runtime/idna", "runtime/io_decorators",
     "runtime/json", "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
@@ -262,7 +262,7 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 217), ((AbiKind::Sync, Transport::Handle), 345),
+        let expected = [((AbiKind::Sync, Transport::Data), 217), ((AbiKind::Sync, Transport::Handle), 337),
             ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
@@ -275,10 +275,10 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
-        let roles_expected = [(HandleRole::None, 222), (HandleRole::Uses, 269), (HandleRole::Publishes, 99),
-            (HandleRole::Closes, 24)];
+        let roles_expected = [(HandleRole::None, 222), (HandleRole::Uses, 263), (HandleRole::Publishes, 98),
+            (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 302), (Effect::Stdio, 3), (Effect::Host, 309)];
+        let effects_expected = [(Effect::Pure, 294), (Effect::Stdio, 3), (Effect::Host, 309)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 

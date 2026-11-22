@@ -23,35 +23,34 @@ import "io/buffer" take ByteBuffer;
 import "async/atomic" take Atomic;
 import "csv" take InvalidCsv, InvalidCsvLimits, CsvLimitExceeded, CsvLimit, AsyncCsvOrigin;
 import "csv/input" take CsvByteLimitExceeded;
-import "runtime/csv_state" take CsvState, csv_state_create, csv_state_feed, csv_state_advance,
-    csv_state_row, csv_state_offset, csv_state_request, csv_state_closed, csv_state_close;
+import "runtime/utf" take utf8_decode;
 
 // CSV rows read one at a time.
 object CsvStream does Closing {
     has origin is Reading;
     has upstream is Maybe<AsyncReading>;
-    has state is CsvState;
+    has state is CsvScanner;
 
     // Reads origin within 4 MiB read, 1 MiB of input, 64 KiB per field, 10000
     // rows and 1024 columns.
     CsvStream(origin is Reading) {
         self.origin = origin;
         upstream = Maybe<AsyncReading>.none;
-        state = csv_state_create(4194304, 1048576, 65536, 10000, 1024);
+        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
     }
 
     // Rows of CSV text, read one at a time: CsvStream(text: "id,total\r\n1,10\r\n").
     CsvStream(text is string) {
         origin = ByteBuffer(text).reading();
         upstream = Maybe<AsyncReading>.none;
-        state = csv_state_create(4194304, 1048576, 65536, 10000, 1024);
+        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
     }
 
     // Reads origin, which may block, within the same limits.
     CsvStream(origin is AsyncReading) {
         self.origin = ByteBuffer("").reading();
         upstream = Maybe.some(origin);
-        state = csv_state_create(4194304, 1048576, 65536, 10000, 1024);
+        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
     }
 
     // The same within these limits.
@@ -71,12 +70,12 @@ object CsvStream does Closing {
             else throw InvalidCsvLimits.invalid;
         self.origin = ByteBuffer("").reading();
         upstream = Maybe.some(origin);
-        state = csv_state_create(
-            maximum_bytes,
-            maximum_input,
-            maximum_field,
-            maximum_rows,
-            maximum_columns
+        state = CsvScanner(
+            bytes: maximum_bytes,
+            input: maximum_input,
+            field: maximum_field,
+            rows: maximum_rows,
+            columns: maximum_columns
         );
     }
 
@@ -97,12 +96,12 @@ object CsvStream does Closing {
             else throw InvalidCsvLimits.invalid;
         self.origin = origin;
         upstream = Maybe<AsyncReading>.none;
-        state = csv_state_create(
-            maximum_bytes,
-            maximum_input,
-            maximum_field,
-            maximum_rows,
-            maximum_columns
+        state = CsvScanner(
+            bytes: maximum_bytes,
+            input: maximum_input,
+            field: maximum_field,
+            rows: maximum_rows,
+            columns: maximum_columns
         );
     }
 
@@ -110,15 +109,15 @@ object CsvStream does Closing {
     row() is @string {
         confirm !self.asynchronous() else throw AsyncCsvOrigin.walked;
         loop {
-            let status = csv_state_advance(state);
+            let status = state.advance();
             if status == "row" {
-                return csv_state_row(state);
+                return state.row();
             }
             if status == "eof" {
                 throw EndOfCsv.reached;
             }
             self.check(status);
-            let requested = csv_state_request(state);
+            let requested = state.request();
             let chunk = try {
                 let bytes = origin.bytes(requested);
                 confirm bytes.size() <= requested
@@ -131,7 +130,7 @@ object CsvStream does Closing {
                 self.close();
                 throw failure;
             };
-            csv_state_feed(state, chunk);
+            state.feed(chunk);
         }
     }
 
@@ -139,15 +138,15 @@ object CsvStream does Closing {
     // it, whether its origin is a Reading or an AsyncReading.
     async next() is Maybe<@string> {
         loop {
-            let status = csv_state_advance(state);
+            let status = state.advance();
             if status == "row" {
-                return Maybe.some(csv_state_row(state));
+                return Maybe.some(state.row());
             }
             if status == "eof" {
                 return Maybe<@string>.none;
             }
             self.check(status);
-            let requested = csv_state_request(state);
+            let requested = state.request();
             let chunk = try {
                 let bytes = await self.fetched(requested);
                 confirm bytes.size() <= requested
@@ -160,7 +159,7 @@ object CsvStream does Closing {
                 self.close();
                 throw failure;
             };
-            csv_state_feed(state, chunk);
+            state.feed(chunk);
         }
     }
 
@@ -192,10 +191,10 @@ object CsvStream does Closing {
             throw ClosedCsvStream.closed;
         }
         if status == "syntax" {
-            throw InvalidCsv.at(csv_state_offset(state));
+            throw InvalidCsv.at(state.offset());
         }
         if status == "utf8" {
-            throw InvalidUtf8.at(csv_state_offset(state));
+            throw InvalidUtf8.at(state.offset());
         }
         if status == "bytes" {
             throw CsvByteLimitExceeded.exceeded;
@@ -216,12 +215,12 @@ object CsvStream does Closing {
 
     // Whether it was closed.
     closed() is bool {
-        csv_state_closed(state);
+        state.closed();
     }
 
     // Stops reading.
     close() is void {
-        csv_state_close(state);
+        state.close();
     }
 }
 
@@ -230,6 +229,334 @@ enum EndOfCsv is Error = (reached);
 
 // The stream was read after close().
 enum ClosedCsvStream is Error = (closed);
+
+// BEGIN CSV BYTE SCANNER (#13)
+// Kept identical by tools/csv/sync-scanner.py; csv.ok is the source.
+// Private to each module: sharing a public helper would expand the std API.
+// Modes: start=0, plain=1, quoted=2, closed quote=3, pending CR=4.
+// Validate UTF-8 before grammar, retain byte spans, materialize fields only.
+hidden object CsvScanner {
+    has maximum_bytes, maximum_input, maximum_field, maximum_rows, maximum_columns is int;
+    has buffer is Atomic<@byte>;
+    has position, fed, consumed, scalars, count, mode, amount, error_at is Atomic<int>;
+    has active, eof is Atomic<bool>;
+    has status is Atomic<string>;
+    has parts, fields is Atomic<@string>;
+
+    CsvScanner(bytes is int, input is int, field is int, rows is int, columns is int) {
+        maximum_bytes = if bytes >= 4611686018427387904 {
+            4611686018427387903;
+        }
+        else {
+            bytes;
+        };
+        maximum_input = if input >= 4611686018427387904 {
+            4611686018427387903;
+        }
+        else {
+            input;
+        };
+        maximum_field = if field >= 4611686018427387904 {
+            4611686018427387903;
+        }
+        else {
+            field;
+        };
+        maximum_rows = if rows >= 4611686018427387904 {
+            4611686018427387903;
+        }
+        else {
+            rows;
+        };
+        maximum_columns = if columns >= 4611686018427387904 {
+            4611686018427387903;
+        }
+        else {
+            columns;
+        };
+        buffer = Atomic(@byte());
+        position = Atomic(0);
+        fed = Atomic(0);
+        consumed = Atomic(0);
+        scalars = Atomic(0);
+        count = Atomic(0);
+        mode = Atomic(0);
+        amount = Atomic(0);
+        error_at = Atomic(0);
+        active = Atomic(false);
+        eof = Atomic(false);
+        status = Atomic("need");
+        parts = Atomic(@string());
+        fields = Atomic(@string());
+    }
+
+    request() is int {
+        let remaining = maximum_bytes - fed.value();
+        if remaining >= 4096 {
+            4096;
+        }
+        else if remaining >= 0 {
+            remaining + 1;
+        }
+        else {
+            1;
+        }
+    }
+
+    feed(bytes is @byte) is void {
+        confirm status.value() == "need" && bytes.size() <= self.request() && !eof.value();
+        buffer.replace(buffer.value().slice(position.value(), buffer.value().size()) + bytes);
+        position.replace(0);
+        fed.replace(fed.value() + bytes.size());
+        if bytes.size() == 0 {
+            eof.replace(true);
+        }
+    }
+
+    row() is @string {
+        confirm status.value() == "row";
+        let answer = fields.value();
+        fields.replace(@string());
+        status.replace("need");
+        answer;
+    }
+
+    offset() is int {
+        error_at.value();
+    }
+
+    closed() is bool {
+        status.value() == "closed";
+    }
+
+    close() is void {
+        self.failed("closed", 0);
+    }
+
+    hidden failed(kind is string, at is int) is string {
+        status.replace(kind);
+        error_at.replace(at);
+        buffer.replace(@byte());
+        position.replace(0);
+        parts.replace(@string());
+        amount.replace(0);
+        fields.replace(@string());
+        kind;
+    }
+
+    hidden span(data is @byte, start is int, end is int) is void {
+        if end > start {
+            parts.replace(parts.value() + [utf8_decode(data.slice(start, end))]);
+        }
+    }
+
+    hidden field(data is @byte, start is int, end is int, at is int) is bool {
+        if fields.value().size() >= maximum_columns {
+            self.failed("columns", at);
+            return false;
+        }
+        let tail = if end > start {
+            utf8_decode(data.slice(start, end));
+        }
+        else {
+            "";
+        };
+        let chunks = parts.value();
+        let text = if chunks.size() == 0 {
+            tail;
+        }
+        else if chunks.size() == 1 && tail == "" {
+            chunks[0];
+        }
+        else {
+            (chunks + [tail]).join("");
+        };
+        fields.replace(fields.value() + [text]);
+        parts.replace(@string());
+        amount.replace(0);
+        true;
+    }
+
+    hidden record(at is int) is string {
+        if count.value() >= maximum_rows {
+            return self.failed("rows", at);
+        }
+        count.replace(count.value() + 1);
+        active.replace(false);
+        mode.replace(0);
+        status.replace("row");
+        "row";
+    }
+
+    advance() is string {
+        if status.value() != "need" {
+            return status.value();
+        }
+        let data = buffer.value();
+        let start = position.value();
+        let begin = Atomic(start);
+        let base_bytes = consumed.value() - start;
+        let base_scalars = scalars.value() - start;
+        let extra = Atomic(0);
+        let skip = Atomic(start);
+        for start..data.size() -> index {
+            next if index < skip.value();
+            let at = base_scalars + index - extra.value();
+            let used = base_bytes + index;
+            if used >= maximum_bytes {
+                return self.failed("bytes", at);
+            }
+            let lead = int(data[index]);
+            let size = if lead < 128 {
+                1;
+            }
+            else if lead >= 194 && lead <= 223 {
+                2;
+            }
+            else if lead >= 224 && lead <= 239 {
+                3;
+            }
+            else if lead >= 240 && lead <= 244 {
+                4;
+            }
+            else {
+                0;
+            };
+            if size == 0 {
+                return self.failed("utf8", used);
+            }
+            if data.size() - index < size {
+                if fed.value() > maximum_bytes {
+                    return self.failed("bytes", at);
+                }
+                if eof.value() {
+                    return self.failed("utf8", used);
+                }
+                self.span(data, begin.value(), index);
+                position.replace(index);
+                consumed.replace(used);
+                scalars.replace(at);
+                return "need";
+            }
+            if size > maximum_bytes - used {
+                return self.failed("bytes", at);
+            }
+            if size > 1 {
+                let second = int(data[index + 1]);
+                if second < 128
+                    || second > 191
+                    || (lead == 224 && second < 160)
+                    || (lead == 237 && second >= 160)
+                    || (lead == 240 && second < 144)
+                    || (lead == 244 && second >= 144) {
+                        return self.failed("utf8", used);
+                    }
+                for 2..size -> tail {
+                    if int(data[index + tail]) < 128 || int(data[index + tail]) > 191 {
+                        return self.failed("utf8", used);
+                    }
+                }
+            }
+            if at >= maximum_input {
+                return self.failed("input", at);
+            }
+            if size > 1 {
+                skip.replace(index + size);
+                extra.replace(extra.value() + size - 1);
+            }
+            let state = mode.value();
+            if state == 4 {
+                if lead != 10 {
+                    return self.failed("syntax", at);
+                }
+                position.replace(index + 1);
+                consumed.replace(used + 1);
+                scalars.replace(at + 1);
+                return self.record(at + 1);
+            }
+            if state == 2 {
+                if lead == 34 {
+                    self.span(data, begin.value(), index);
+                    begin.replace(index + 1);
+                    mode.replace(3);
+                }
+                else {
+                    if amount.value() >= maximum_field {
+                        return self.failed("field", at);
+                    }
+                    amount.replace(amount.value() + 1);
+                }
+            }
+            else if state == 3 && lead == 34 {
+                if amount.value() >= maximum_field {
+                    return self.failed("field", at);
+                }
+                amount.replace(amount.value() + 1);
+                mode.replace(2);
+            }
+            else if lead == 44 {
+                if fields.value().size() + 1 >= maximum_columns {
+                    return self.failed("columns", at);
+                }
+                if !self.field(data, begin.value(), index, at) {
+                    return status.value();
+                }
+                begin.replace(index + 1);
+                mode.replace(0);
+                active.replace(true);
+            }
+            else if lead == 13 {
+                if !self.field(data, begin.value(), index, at) {
+                    return status.value();
+                }
+                begin.replace(index + 1);
+                mode.replace(4);
+            }
+            else if lead == 10 || state == 3 {
+                return self.failed("syntax", at);
+            }
+            else if lead == 34 {
+                if state != 0 {
+                    return self.failed("syntax", at);
+                }
+                begin.replace(index + 1);
+                mode.replace(2);
+                active.replace(true);
+            }
+            else {
+                if amount.value() >= maximum_field {
+                    return self.failed("field", at);
+                }
+                amount.replace(amount.value() + 1);
+                if state == 0 {
+                    mode.replace(1);
+                    active.replace(true);
+                }
+            }
+        }
+        position.replace(data.size());
+        consumed.replace(base_bytes + data.size());
+        let at = base_scalars + data.size() - extra.value();
+        scalars.replace(at);
+        self.span(data, begin.value(), data.size());
+        if !eof.value() {
+            return "need";
+        }
+        if mode.value() == 2 || mode.value() == 4 {
+            return self.failed("syntax", scalars.value());
+        }
+        if active.value() {
+            if !self.field(data, data.size(), data.size(), at) {
+                return status.value();
+            }
+            return self.record(at);
+        }
+        status.replace("eof");
+        "eof";
+    }
+}
+
+// END CSV BYTE SCANNER
 
 test "rows come one at a time, then the end, stable until close" {
     let stream = CsvStream(
@@ -362,4 +689,192 @@ async test "rows stream from an upload with for await" {
         "invalid";
     };
     test.is(broken, "invalid");
+}
+
+// A borrowed byte source with an arbitrary first cut and bounded later chunks.
+hidden object CsvBoundarySource does Reading {
+    has data is @byte;
+    has cut, width is int;
+    has at is Atomic<int>;
+
+    CsvBoundarySource(:data, :cut, :width) {
+        at = Atomic(0);
+    }
+
+    bytes(limit is int) is @byte {
+        let start = at.value();
+        let wanted = if start == 0 {
+            cut;
+        }
+        else {
+            width;
+        };
+        let count = if wanted < limit {
+            wanted;
+        }
+        else {
+            limit;
+        };
+        let end = if start + count < data.size() {
+            start + count;
+        }
+        else {
+            data.size();
+        };
+        at.replace(end);
+        data.slice(start, end);
+    }
+}
+
+test "CSV stream accepts every byte cut through quotes CRLF and Unicode" {
+    let text = "\u{feff},é😀\r\n\"a\r\nb\",\"q\"\"t\"\r\n,";
+    let bytes = Utf8Encoded(text).bytes();
+    for 1..=bytes.size() -> cut {
+        let stream = CsvStream(CsvBoundarySource(data: bytes, cut: cut, width: 1));
+        test.is(stream.row(), ["\u{feff}", "é😀"]);
+        test.is(stream.row(), ["a\r\nb", "q\"t"]);
+        test.is(stream.row(), ["", ""]);
+        test.throws(EndOfCsv) {
+            stream.row();
+        };
+        test.throws(EndOfCsv) {
+            stream.row();
+        };
+        test.ok(!stream.closed());
+        stream.close();
+        stream.close();
+        test.ok(stream.closed());
+        test.throws(ClosedCsvStream) {
+            stream.row();
+        };
+    }
+}
+
+test "CSV stream error offsets survive split invalid UTF8 and repeated reads" {
+    let broken = [
+        [byte(194)],
+        [byte(255)],
+        [byte(224), byte(128), byte(128)],
+        [byte(237), byte(160), byte(128)],
+        [byte(244), byte(144), byte(128), byte(128)]
+    ];
+    for broken -> suffix {
+        let data = Utf8Encoded("é\r\n").bytes() + suffix;
+        let stream = CsvStream(CsvBoundarySource(data: data, cut: 1, width: 1));
+        test.is(stream.row(), ["é"]);
+        for 0..2 -> repeat {
+            let error = try {
+                stream.row();
+                "accepted";
+            }
+            catch failure is Error {
+                failure.text();
+            };
+            test.is(error, "InvalidUtf8.at(4)");
+        }
+    }
+    let syntax = CsvStream(CsvBoundarySource(data: Utf8Encoded("é\rX").bytes(), cut: 1, width: 1));
+    for 0..2 -> repeat {
+        let error = try {
+            syntax.row();
+            "accepted";
+        }
+        catch failure is Error {
+            failure.text();
+        };
+        test.is(error, "InvalidCsv.at(2)");
+    }
+}
+
+test "CSV stream exact byte scalar field and row budgets" {
+    let good = CsvStream(
+        origin: CsvBoundarySource(data: Utf8Encoded("\"é\"\"😀\"\r\n").bytes(), cut: 1, width: 1),
+        maximum_bytes: 12,
+        maximum_input: 8,
+        maximum_field: 3,
+        maximum_rows: 1,
+        maximum_columns: 1
+    );
+    test.is(good.row(), ["é\"😀"]);
+    test.throws(EndOfCsv) {
+        good.row();
+    };
+    let bytes = CsvStream(
+        origin: CsvBoundarySource(data: [byte(194)], cut: 1, width: 1),
+        maximum_bytes: 0,
+        maximum_input: 0,
+        maximum_field: 0,
+        maximum_rows: 0,
+        maximum_columns: 0
+    );
+    for 0..2 -> repeat {
+        let error = try {
+            bytes.row();
+            "accepted";
+        }
+        catch failure is Error {
+            failure.text();
+        };
+        test.is(error, "CsvByteLimitExceeded.exceeded");
+    }
+    let narrow = CsvStream(
+        origin: ByteBuffer("a\rX").reading(),
+        maximum_bytes: 3,
+        maximum_input: 3,
+        maximum_field: 1,
+        maximum_rows: 0,
+        maximum_columns: 1
+    );
+    let error = try {
+        narrow.row();
+        "accepted";
+    }
+    catch failure is Error {
+        failure.text();
+    };
+    test.is(error, "InvalidCsv.at(2)");
+}
+
+test "CSV stream each decoded limit rejects excess and remains stable" {
+    let kinds = ["input", "field", "rows", "columns"];
+    for 0..4 -> index {
+        let stream = CsvStream(
+            origin: CsvBoundarySource(data: Utf8Encoded("\"é\"\"😀\"\r\n").bytes(), cut: 1, width: 1),
+            maximum_bytes: 12,
+            maximum_input: if index == 0 {
+                7;
+            }
+            else {
+                8;
+            },
+            maximum_field: if index == 1 {
+                2;
+            }
+            else {
+                3;
+            },
+            maximum_rows: if index == 2 {
+                0;
+            }
+            else {
+                1;
+            },
+            maximum_columns: if index == 3 {
+                0;
+            }
+            else {
+                1;
+            }
+        );
+        for 0..2 -> repeat {
+            let error = try {
+                stream.row();
+                "accepted";
+            }
+            catch failure is Error {
+                failure.text();
+            };
+            test.is(error, "CsvLimitExceeded.kind(CsvLimit." + kinds[index] + ")");
+        }
+    }
 }

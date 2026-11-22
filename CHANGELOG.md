@@ -180,8 +180,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   (250 → 33 µs for two cases). SQLite reuses idle worker threads for new connections, sets foreign keys in
   one call, and its replies no longer make the waiting scheduler turn the event loop: an INSERT takes 7.5 µs
   instead of 19.6 µs, opening and closing an in-memory database 27 µs instead of 41 µs.
-- **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
-  most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
+- **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs,
+  most of `uuid` (parsing, printing, version, variant, v4/v8 layout), text indentation and CSV reading (whole and
+  streaming; 0.7–1.3× the native time, 8 natives retired) are now Okkama; the
   native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
   (template, json, bigint) are gone. `diff`, hex, base32/64/85, quoted-printable, `dedent`, `wrap`, `shorten` and
   `uuid_named` stay native on measured evidence (2–30× slower in Okkama). `docs/format-natives-13.md` records every

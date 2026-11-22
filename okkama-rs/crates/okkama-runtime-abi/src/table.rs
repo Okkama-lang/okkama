@@ -88,14 +88,6 @@ natives! {
     CollectionsStringMapSnapshot = 96, "runtime/collections@1::string_map_snapshot/4", "(@string, @string, int, int) -> %string:string";
     CryptoDigest = 97, "runtime/crypto@1::digest/2", "(string, @byte) -> @byte";
     CryptoSecureEqual = 98, "runtime/crypto@1::secure_equal/2", "(@byte, @byte) -> bool";
-    CsvStateCsvStateCreate = 99, "runtime/csv_state@1::csv_state_create/5", "(int, int, int, int, int) -> CsvState";
-    CsvStateCsvStateFeed = 100, "runtime/csv_state@1::csv_state_feed/2", "(CsvState, @byte) -> bool";
-    CsvStateCsvStateAdvance = 101, "runtime/csv_state@1::csv_state_advance/1", "(CsvState) -> string";
-    CsvStateCsvStateRow = 102, "runtime/csv_state@1::csv_state_row/1", "(CsvState) -> @string";
-    CsvStateCsvStateOffset = 103, "runtime/csv_state@1::csv_state_offset/1", "(CsvState) -> int";
-    CsvStateCsvStateRequest = 104, "runtime/csv_state@1::csv_state_request/1", "(CsvState) -> int";
-    CsvStateCsvStateClosed = 105, "runtime/csv_state@1::csv_state_closed/1", "(CsvState) -> bool";
-    CsvStateCsvStateClose = 106, "runtime/csv_state@1::csv_state_close/1", "(CsvState) -> bool";
     DatabaseSqliteCreate = 107, "runtime/database@1::sqlite_create/7", "(@byte, bool, bool, bool, int, string, bool) -> SqliteState";
     DatabaseSqliteConnect = 108, "runtime/database@1::sqlite_connect/1", "async (SqliteState) -> SqliteReplyState";
     DatabaseSqliteExecution = 109, "runtime/database@1::sqlite_execution/4", "async (SqliteState, @byte, @int, @@byte) -> SqliteReplyState";
@@ -625,4 +617,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546

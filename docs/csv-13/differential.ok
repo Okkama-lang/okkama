@@ -1,0 +1,87 @@
+module csv13/differential v1.0.0;
+import "cli/arguments" take ProcessArguments;
+import "csv" take CsvRows, CsvDialect, CsvRecords;
+import "csv/stream" take CsvStream, EndOfCsv;
+import "async/atomic" take Atomic;
+import "io/stream" take Reading, AsyncReading;
+import "fs/file" take File;
+import "fs/path" take Path;
+import "json" take ParsedJson, Json;
+import "io/stdout" take Stdout;
+object Chunks does Reading {
+ has data is @byte; has chunks is @int; has at, calls is Atomic<int>;
+ Chunks(:data,:chunks) { at=Atomic(0); calls=Atomic(0); }
+ bytes(limit is int) is @byte {
+ let start=at.value(); let wanted=chunks[calls.value()%chunks.size()]; calls.replace(calls.value()+1);
+ let n=if wanted<limit {wanted;} else {limit;};
+ let end=if start+n<data.size() {start+n;} else {data.size();};
+ at.replace(end); data.slice(start,end);
+ }
+}
+object AsyncChunks does AsyncReading {
+ has source is Chunks;
+ AsyncChunks(:source);
+ async bytes(limit is int) is @byte { source.bytes(limit); }
+}
+object Probe {
+ Probe();
+ parsed(c is Json) is string {
+  try {
+   let limits=c.list("limits");
+   let rows=CsvRows(origin:c.text("text"), maximum_input:limits[0].int(), maximum_field:limits[1].int(), maximum_rows:limits[2].int(), maximum_columns:limits[3].int(), dialect:CsvDialect(c.text("d"),c.text("q"),c.text("e")));
+   let result is @Json=rows.map() -> row { Json(items:row.map() -> field {Json(field);}); };
+   Json(items:result).string();
+  } catch error is Error { error.text(); }
+ }
+ streamed(c is Json) is string {
+  let limits=c.list("limits");
+  let data is @byte=c.list("data").map() -> item {byte(item.int());};
+  let chunks is @int=c.list("chunks").map() -> item {item.int();};
+  let stream=CsvStream(origin:Chunks(data:data,chunks:chunks), maximum_bytes:c.int("bytes"), maximum_input:limits[0].int(), maximum_field:limits[1].int(), maximum_rows:limits[2].int(), maximum_columns:limits[3].int());
+  let empty is @Json=[]; let seen=Atomic(empty);
+  let result=try {
+   loop { let row=stream.row(); seen.replace(seen.value()+[Json(items:row.map() -> field {Json(field);})]); }
+   "unreachable";
+  } catch error is Error {error.text();};
+  let repeated=try {stream.row(); "row";} catch error is Error {error.text();};
+  let open=stream.closed(); stream.close(); stream.close();
+  let closed=try {stream.row(); "row";} catch error is Error {error.text();};
+  Json(items:[Json(items:seen.value()),Json(result),Json(repeated),Json(open),Json(stream.closed()),Json(closed)]).string();
+ }
+ async records(c is Json) is string {
+  let limits=c.list("limits");
+  let data is @byte=c.list("data").map() -> item {byte(item.int());};
+  let chunks is @int=c.list("chunks").map() -> item {item.int();};
+  let source=AsyncChunks(source:Chunks(data:data,chunks:chunks));
+  let rows=CsvRecords(origin:source, maximum_bytes:c.int("bytes"), maximum_input:limits[0].int(), maximum_field:limits[1].int(), maximum_rows:limits[2].int(), maximum_columns:limits[3].int());
+  let empty is @Json=[]; let seen=Atomic(empty);
+  let result=try {
+   for await rows -> row { seen.replace(seen.value()+[Json(row.string())]); }
+   "eof";
+  } catch error is Error {error.text();};
+  let repeated=try { match await rows.next() { case Maybe.some(_row) { "row"; } else { "eof"; } } } catch error is Error {error.text();};
+  Json(items:[Json(items:seen.value()),Json(result),Json(repeated)]).string();
+ }
+
+ async asynchronous(c is Json) is string {
+  let limits=c.list("limits");
+  let data is @byte=c.list("data").map() -> item {byte(item.int());};
+  let chunks is @int=c.list("chunks").map() -> item {item.int();};
+  let source=AsyncChunks(source:Chunks(data:data,chunks:chunks));
+  let rows=CsvStream(origin:source, maximum_bytes:c.int("bytes"), maximum_input:limits[0].int(), maximum_field:limits[1].int(), maximum_rows:limits[2].int(), maximum_columns:limits[3].int());
+  let empty is @Json=[]; let seen=Atomic(empty);
+  let result=try {
+   for await rows -> row { seen.replace(seen.value()+[Json(items:row.map() -> field {Json(field);})]); }
+   "eof";
+  } catch error is Error {error.text();};
+  let repeated=try { match await rows.next() { case Maybe.some(_row) { "row"; } else { "eof"; } } } catch error is Error {error.text();};
+  Json(items:[Json(items:seen.value()),Json(result),Json(repeated)]).string();
+ }
+
+}
+async main() is int {
+ let cases=ParsedJson(File(path:Path(ProcessArguments().strings()[0])).text().content()).root();
+ let probe=Probe();
+ for cases.items() -> c { Stdout().writeln(c.int("id")," ",Json(items:[Json(probe.parsed(c)),Json(probe.streamed(c)),Json(await probe.records(c)),Json(await probe.asynchronous(c))]).string()); }
+ 0;
+}
