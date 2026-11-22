@@ -1,0 +1,41 @@
+module bible/select v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, SelectedReceiving, SelectedItem, ChannelClosed;
+
+// Two sources of one kind of message: orders from the shop, orders by phone.
+object Source {
+    has output is Sending<string>;
+    has prefix is string;
+    has count is int;
+    Source(output is Sending<string>, prefix is string, count is int) {
+        self.output = output; self.prefix = prefix; self.count = count;
+    }
+    async run() is void {
+        defer output.close();
+        for 1..=count -> n { await output.send(prefix + " " + n.string()); }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let shop is Channel<string> = Channel(capacity: 1);
+    let phone is Channel<string> = Channel(capacity: 1);
+    let a = spawn Source(output: shop.sending(), prefix: "shop", count: 3).run();
+    let b = spawn Source(output: phone.sending(), prefix: "phone", count: 2).run();
+    let names = ["shop", "phone"];
+    let orders is SelectedReceiving<string> =
+        SelectedReceiving(receivers: [shop.receiving(), phone.receiving()]);
+    loop {
+        let got = try { Maybe.some(await orders.item()); }
+                  catch e is ChannelClosed { Maybe<SelectedItem<string>>.none; };
+        match got {
+            case Maybe.some(item) { out.writeln(names[item.source()] + ": " + item.value()); }
+            case Maybe.none { last; }
+        }
+    }
+    await a;
+    await b;
+    out.writeln("both sources closed");
+    0;
+}

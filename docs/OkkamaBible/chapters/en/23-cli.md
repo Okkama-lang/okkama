@@ -22,7 +22,7 @@ right: arguments and their mistakes, files that are missing, the difference
 between output and messages, exit status, help text and tests. The chapter
 builds it in the order a reader would meet those questions, and each section
 leans on an earlier chapter: roles (Chapter 14), failures (Chapter 10),
-resources (Chapter 11) and the decide-then-do shape of Section 26.5.
+resources (Chapter 11) and the decide-then-do shape of Section 25.5.
 
 ## 23.1 What a tool owes its user
 
@@ -411,7 +411,7 @@ compares objects rather than strings:
   the default with `else`.
 - A root with subcommands is a branch. It expects one of its children, so an
   empty command line and an unknown verb are both a `CliFailure` naming the
-  argument, which the tool answers with status 2 as in Section 24.5.
+  argument, which the tool answers with status 2 as in Section 23.5.
 - `call.path()` gives the names from the root to the selected command, for
   messages such as `tally top: …`. The usage text of a subcommand comes from
   its own declaration, so `tally top --help` can show only what `top` takes.

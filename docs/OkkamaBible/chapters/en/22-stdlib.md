@@ -106,7 +106,9 @@ Five rules follow from it.
 
 Data that really is data still answers questions rather than exposing
 columns: a parsed `Accept-Encoding` header answers
-`header.allows("gzip")`, not a list of tokens and their weights.
+`AcceptedContentCodings("gzip;q=0.8, br").preference([ContentCoding("gzip"),
+ContentCoding("br")])` with the coding to use, `br`, not with a list of
+tokens and their weights.
 
 ## 22.4 Flat, short, one way
 
@@ -208,8 +210,8 @@ library this is a rule with four parts.
   reaches past its parameters for the real ones.
 
 The common case stays short through a default, not through an ambient
-source. Sixteen signatures in std, across the HTTP client and server,
-JWT, logging, mail and web sessions, take a clock as
+source. Twenty signatures in std, across the HTTP client and server,
+JWT, logging, mail, web sessions and `Now` and `Today`, take a clock as
 `clock is Timing = SystemClock()`: the JWT token checks its expiry with
 it, the mail message stamps its date, the HTTP client measures its
 timeouts. A program writes `HttpClient()` and gets the system's clock; a
@@ -219,8 +221,10 @@ the authority is still a value: it is just one the caller did not have to
 spell.
 
 The rule is the library's, not the language's (Section 21.4): a program
-can still construct a `SystemClock()` anywhere it likes. What the rule
-buys is that the library itself never does so behind its caller's back.
+can still construct a `SystemClock()` anywhere it likes, and so, in a few
+places, does the library: some HTTP and TLS constructors still make their
+own clock (Section 21.4). Those are the exceptions the rule is meant to
+remove; everywhere else the clock is the caller's value.
 
 ## 22.7 Failures and asynchrony
 
@@ -249,10 +253,9 @@ the `FileError` that names the path.
 **Async only where something waits.** An action is `async` when it waits
 for I/O, a timer or another task, and only then; a parser or a formatter is
 never `async`, however large its input. Releasing a resource at the end of
-a scope is still written `defer await guard.close()` where the close
-waits; whether those guards become `async destroy` is an open question of
-its own (issue #329), to be decided when `async destroy` costs no more than
-the deferred close.
+a scope where the close waits is an `async destroy` object since 0.6.2,
+where that costs no more than the deferred close `defer await
+guard.close()` it replaces (issue #329).
 
 ## 22.8 Tests
 
@@ -281,8 +284,8 @@ The modules fall into two layers.
 - **The foundation** is what everything stands on: `encoding`, `io`,
   `collections`, `compare`, `error`, `async`, `numbers`, `strings`, `time`,
   `fs`, `os`, `cli`, `url`, `json` and `regex`. It is imported most: in
-  the release this book describes, `encoding/utf` is imported by 148 of
-  std's 499 modules and `collections/sequence` by 113. A mistake here is
+  the release this book describes, `encoding/utf` is imported by 150 of
+  std's 499 modules and `collections/sequence` by 115. A mistake here is
   everyone's mistake, so the foundation was reviewed first.
 - **The domains** are the large areas built on it: `http`, `mail`, `mime`,
   `i18n`, `cli`, `testing`, `db` and the rest. Before the review they were
@@ -381,12 +384,15 @@ reads the comments and the declarations together and prints a page (#512):
 $ okkama man json
 NAME
     json - JSON values: one immutable Json, parsed or built in code, read
-    without casts and serialized as compact text.
+    without casts and written by the runtime in one call.
+
+VERSION
+    v1.0.0
 
 SYNOPSIS
-    let order = ParsedJson(text).root();
-    order.int("id");                                // 4711
-    order.maybe("note").text() else "";             // "" when absent or null
+    import "io/stdout" take Stdout;
+    let order = ParsedJson("{\"id\":4711}").root();
+    Stdout().writeln(order.int("id").string());
     …
 ```
 

@@ -32,7 +32,7 @@ fails with `RuntimeError: Native symbol "bible/unregistered@1::vault_open/1"
 is not registered`, and the run ends with status 1. A native's name is its
 module, the module's major version, its own name and its arity, and only a
 provider registered under exactly that name answers it. A program cannot
-reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.7).
+reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.6).
 
 The rule has a cost that the next sections pay off. Every effect a program
 can have outside itself has a name in `runtime/*`, so the list of what a
@@ -41,11 +41,12 @@ reach. That list is what the native groups of Section 21.6 restrict.
 
 ## 21.2 What a native may take and return
 
-The native ABI is deliberately narrow. A native takes and returns
-`int`, `float`, `bool`, `string`, arrays and maps of such values (`@byte`,
-`@string`, `%string:int`) and *native objects*. It takes no objects of the
-program, no closures and no `any`, so it cannot call back into Okkama. A
-native declaration has no body, no defaults and no variadic parameters.
+The native ABI is deliberately narrow. The natives of the standard library
+take and return `int`, `float`, `bool`, `string`, arrays and maps of such
+values (`@byte`, `@string`, `%string:int`) and *native objects*; a few
+diagnostic ones take `any`. No native takes or returns an action value, so
+none can call back into Okkama. A native declaration has no body, no
+defaults and no variadic parameters.
 What crosses is data, copied or encoded; what comes back is data or a
 handle.
 
@@ -82,7 +83,7 @@ A `native object` is a type with no fields, no actions and no constructor.
 Only its provider can make one. The program can store it, pass it and give
 it back to the natives of the same module, and nothing else: it cannot be
 compared, used as a map key, put into `any`, printed or taken apart. What
-stands behind it — a file descriptor, a socket, a Java channel — never
+stands behind it — a file descriptor, a socket, a TLS session — never
 becomes a value the program can see.
 
 Closing a handle is idempotent, and using a closed handle fails safely:
@@ -103,7 +104,7 @@ Programs rarely hold handles directly. std wraps each in an object with a `destr
 
 A program run from the command line has the authority of the user who ran
 it: it may read any file that user may read. Okkama does not change that
-(Section 21.8). What std does is make the authority *visible*. Wherever a
+(Section 21.7). What std does is make the authority *visible*. Wherever a
 library could act on an ambient, process-wide notion — the current
 directory, the environment, the standard streams — it asks instead for an
 object that names what it may use:

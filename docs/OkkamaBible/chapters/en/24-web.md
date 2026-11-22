@@ -444,7 +444,7 @@ gets a graceful shutdown without any code in the service.
 
 The address is an IP literal; `web/app` does no name resolution. The port,
 the address, the database URL and other settings come in the same layers as
-a tool's (Section 23.8): a flag, then the environment, then a default, read
+a tool's (Section 23.10): a flag, then the environment, then a default, read
 in `main` and passed down. A database password does not belong in a URL that
 a log might print: `PostgresDatabase(url:, password:)` takes it separately,
 as `SecretBytes`. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
@@ -463,8 +463,9 @@ with a mutable dictionary and a handler per URL. What the extra length buys:
   client mistakes.
 - **Lists are bounded.** No request can make the service build an answer of
   every note, and pages stay correct while the list changes.
-- **Shared state cannot be torn.** The store publishes whole values, and
-  the language does not offer a way to share a mutable object between tasks.
+- **Shared state cannot be torn.** The store publishes whole values through
+  an `Atomic`, the one thing tasks can share and replace, and an `Atomic` is
+  replaced whole, never in part.
 - **Storage is replaceable.** The database arrived as a new doer of the
   role, and the API, the routes and the tests did not change.
 - **The service is tested as its clients see it,** without a network and

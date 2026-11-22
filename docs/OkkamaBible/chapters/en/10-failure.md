@@ -718,7 +718,7 @@ The two channels are a strong opinion, and opinions cost something.
   it. A cause the program must inspect has to be a payload.
 - **No named handlers yet.** A handler shared by several `try` blocks has to
   be an action called from each clause. Named catch handlers were proposed
-  and postponed as too magical for 0.4.1
+  and declined as too magical
   ([#148](https://github.com/Okkama-lang/okkama/issues/148)).
 
 Against these costs stands what the design removes:

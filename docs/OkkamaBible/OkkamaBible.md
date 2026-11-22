@@ -7255,7 +7255,7 @@ The two channels are a strong opinion, and opinions cost something.
   it. A cause the program must inspect has to be a payload.
 - **No named handlers yet.** A handler shared by several `try` blocks has to
   be an action called from each clause. Named catch handlers were proposed
-  and postponed as too magical for 0.4.1
+  and declined as too magical
   ([#148](https://github.com/Okkama-lang/okkama/issues/148)).
 
 Against these costs stands what the design removes:
@@ -17048,9 +17048,10 @@ cases with many.
 
 ## 20.6 Channels and the state owner
 
-Okkama has no mutable fields and no shared mutable state. Two tasks therefore
-cannot share a counter, a cache or a repository by writing to it. They can
-send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
+Okkama has no mutable fields. The one value tasks can share and replace is
+an `Atomic` (Section 20.8), a single cell replaced whole; a counter, a cache
+or a repository that several tasks update is not written to by all of them.
+They send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
 of values of one type, and two capabilities over it: `Sending<T>`, which can
 only send, and `Receiving<T>`, which can only receive.
 
@@ -17162,6 +17163,89 @@ The rest of a channel's contract is short:
 There is no `try_send`, no `try_receive`, no `closed()`: a task that wants to
 know whether it can proceed waits, and the scheduler runs somebody else
 meanwhile.
+
+### Several channels at once: `SelectedReceiving`
+
+A task that serves more than one source waits on all of them and takes
+whichever message comes first. `SelectedReceiving` does that over receivers
+of one element type:
+
+```okkama
+module bible/select v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, SelectedReceiving, SelectedItem, ChannelClosed;
+
+// Two sources of one kind of message: orders from the shop, orders by phone.
+object Source {
+    has output is Sending<string>;
+    has prefix is string;
+    has count is int;
+    Source(output is Sending<string>, prefix is string, count is int) {
+        self.output = output; self.prefix = prefix; self.count = count;
+    }
+    async run() is void {
+        defer output.close();
+        for 1..=count -> n { await output.send(prefix + " " + n.string()); }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let shop is Channel<string> = Channel(capacity: 1);
+    let phone is Channel<string> = Channel(capacity: 1);
+    let a = spawn Source(output: shop.sending(), prefix: "shop", count: 3).run();
+    let b = spawn Source(output: phone.sending(), prefix: "phone", count: 2).run();
+    let names = ["shop", "phone"];
+    let orders is SelectedReceiving<string> =
+        SelectedReceiving(receivers: [shop.receiving(), phone.receiving()]);
+    loop {
+        let got = try { Maybe.some(await orders.item()); }
+                  catch e is ChannelClosed { Maybe<SelectedItem<string>>.none; };
+        match got {
+            case Maybe.some(item) { out.writeln(names[item.source()] + ": " + item.value()); }
+            case Maybe.none { last; }
+        }
+    }
+    await a;
+    await b;
+    out.writeln("both sources closed");
+    0;
+}
+```
+
+Output:
+
+```text
+shop: shop 1
+phone: phone 1
+shop: shop 2
+phone: phone 2
+shop: shop 3
+both sources closed
+```
+
+- **One message per `item()`.** `await orders.item()` commits to exactly
+  one receive and answers a `SelectedItem`: `source()` is the position of
+  the winning receiver in the array, `value()` the message.
+- **Fair by rotation.** When several sources are ready, the first in the
+  array wins the first tie, and the next tie starts from the source after
+  the previous winner. Neither source starves the other, and the order of
+  the output above is the same on every run.
+- **Closed means exhausted.** A closed channel's buffered messages are still
+  delivered. `item()` throws `ChannelClosed` only when every source is
+  closed and empty, which is how the loop above ends.
+- **Mistakes are typed errors.** An empty array of receivers is
+  `EmptyChannelSelection`, the same channel twice is
+  `DuplicateChannelReceiver`, and a second `item()` while one is pending is
+  `ConcurrentChannelSelection`.
+- **Cancellation withdraws every alternative.** A task cancelled while it
+  waits takes nothing from any channel; a receive that already committed is
+  delivered. `Within` and `Before` (Section 20.7) put a deadline on `item()`.
+
+This is Go's `select` and CSP's guarded choice [[Hoare 1978](#ref-hoare1978)] as an object:
+the choice has a name, a type and an error vocabulary, and it composes with
+the deadlines the next section introduces.
 
 ## 20.7 Fan-out, races and deadlines
 
@@ -17527,8 +17611,8 @@ shape. Okkama's version names the capability the body gets (`Supervising`),
 so the body cannot finish the scope it runs in.
 
 Each of these objects follows the rule of Section 20.5: a child it cancels is
-waited for, so when its `result()` returns or throws, no child it started is
-still running. The deadline uses a monotonic clock that the program passes in
+waited for, so when its `results()`, `winner()`, `outcome()` or `wait()`
+returns or throws, no child it started is still running. The deadline uses a monotonic clock that the program passes in
 (`SystemClock()` here, a manual clock in a test); a civil `Instant` is not
 accepted as a deadline, so a change of the wall clock cannot fire or hold
 back a timeout.
@@ -17784,8 +17868,9 @@ the scheduler runs others. Waking a waiter follows the rule of Section 20.3:
 makes the waiters ready; they run after the current task suspends, in the
 order they started waiting.
 
-A lock in Okkama protects less than a lock in Java. There is no shared
-mutable memory to protect, so a lock serializes *sections of work*, for
+A lock in Okkama protects less than a lock in Java. The only shared mutable
+memory is an `Atomic`, replaced whole in one step, so a lock serializes
+*sections of work*, for
 example two tasks that must not talk to the same device at once. When the
 work is "update the shared state", the state owner of Section 20.6 is the
 better tool: it needs no lock because nobody but the owner can reach the
@@ -18706,14 +18791,14 @@ an effect: the place where the rest of the program may change things.
 - **No cancellation in synchronous code.** Cancellation is delivered at a
   suspension point. A long synchronous loop sees it only if it checks a
   `Cancellation` token.
-- **std's cleanup guards still use `defer await`.** Moving them to
-  `async destroy` waits for the std rewrite (issue #329).
 - **Parts of std are still synchronous.** Since 0.5.5 a server reads rooted
   files off the program's thread (issue #121), a child process's pipes are
   asynchronous (issue #196), and CSV streams are walked with `for await`
-  (issue #204). Asynchronous I/O decorators are still open (issue #131),
-  and waiting on several channels at once, a `select`, is postponed (issue
-  #509).
+  (issue #204). Since 0.6.2 the I/O decorators have asynchronous forms such
+  as `LimitedAsyncReading` (issue #131), several channels are waited on with
+  `SelectedReceiving` (issue #509), and nine cleanup guards of the HTTP and
+  TCP modules are `async destroy` objects (issue #329). Other modules still
+  read and write synchronously.
 
 ## 20.16 What this design costs
 
@@ -18790,7 +18875,7 @@ fails with `RuntimeError: Native symbol "bible/unregistered@1::vault_open/1"
 is not registered`, and the run ends with status 1. A native's name is its
 module, the module's major version, its own name and its arity, and only a
 provider registered under exactly that name answers it. A program cannot
-reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.7).
+reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.6).
 
 The rule has a cost that the next sections pay off. Every effect a program
 can have outside itself has a name in `runtime/*`, so the list of what a
@@ -18799,11 +18884,12 @@ reach. That list is what the native groups of Section 21.6 restrict.
 
 ## 21.2 What a native may take and return
 
-The native ABI is deliberately narrow. A native takes and returns
-`int`, `float`, `bool`, `string`, arrays and maps of such values (`@byte`,
-`@string`, `%string:int`) and *native objects*. It takes no objects of the
-program, no closures and no `any`, so it cannot call back into Okkama. A
-native declaration has no body, no defaults and no variadic parameters.
+The native ABI is deliberately narrow. The natives of the standard library
+take and return `int`, `float`, `bool`, `string`, arrays and maps of such
+values (`@byte`, `@string`, `%string:int`) and *native objects*; a few
+diagnostic ones take `any`. No native takes or returns an action value, so
+none can call back into Okkama. A native declaration has no body, no
+defaults and no variadic parameters.
 What crosses is data, copied or encoded; what comes back is data or a
 handle.
 
@@ -18840,7 +18926,7 @@ A `native object` is a type with no fields, no actions and no constructor.
 Only its provider can make one. The program can store it, pass it and give
 it back to the natives of the same module, and nothing else: it cannot be
 compared, used as a map key, put into `any`, printed or taken apart. What
-stands behind it — a file descriptor, a socket, a Java channel — never
+stands behind it — a file descriptor, a socket, a TLS session — never
 becomes a value the program can see.
 
 Closing a handle is idempotent, and using a closed handle fails safely:
@@ -18893,7 +18979,7 @@ Programs rarely hold handles directly. std wraps each in an object with a `destr
 
 A program run from the command line has the authority of the user who ran
 it: it may read any file that user may read. Okkama does not change that
-(Section 21.8). What std does is make the authority *visible*. Wherever a
+(Section 21.7). What std does is make the authority *visible*. Wherever a
 library could act on an ambient, process-wide notion — the current
 directory, the environment, the standard streams — it asks instead for an
 object that names what it may use:
@@ -19425,7 +19511,9 @@ Five rules follow from it.
 
 Data that really is data still answers questions rather than exposing
 columns: a parsed `Accept-Encoding` header answers
-`header.allows("gzip")`, not a list of tokens and their weights.
+`AcceptedContentCodings("gzip;q=0.8, br").preference([ContentCoding("gzip"),
+ContentCoding("br")])` with the coding to use, `br`, not with a list of
+tokens and their weights.
 
 ## 22.4 Flat, short, one way
 
@@ -19527,8 +19615,8 @@ library this is a rule with four parts.
   reaches past its parameters for the real ones.
 
 The common case stays short through a default, not through an ambient
-source. Sixteen signatures in std, across the HTTP client and server,
-JWT, logging, mail and web sessions, take a clock as
+source. Twenty signatures in std, across the HTTP client and server,
+JWT, logging, mail, web sessions and `Now` and `Today`, take a clock as
 `clock is Timing = SystemClock()`: the JWT token checks its expiry with
 it, the mail message stamps its date, the HTTP client measures its
 timeouts. A program writes `HttpClient()` and gets the system's clock; a
@@ -19538,8 +19626,10 @@ the authority is still a value: it is just one the caller did not have to
 spell.
 
 The rule is the library's, not the language's (Section 21.4): a program
-can still construct a `SystemClock()` anywhere it likes. What the rule
-buys is that the library itself never does so behind its caller's back.
+can still construct a `SystemClock()` anywhere it likes, and so, in a few
+places, does the library: some HTTP and TLS constructors still make their
+own clock (Section 21.4). Those are the exceptions the rule is meant to
+remove; everywhere else the clock is the caller's value.
 
 ## 22.7 Failures and asynchrony
 
@@ -19568,10 +19658,9 @@ the `FileError` that names the path.
 **Async only where something waits.** An action is `async` when it waits
 for I/O, a timer or another task, and only then; a parser or a formatter is
 never `async`, however large its input. Releasing a resource at the end of
-a scope is still written `defer await guard.close()` where the close
-waits; whether those guards become `async destroy` is an open question of
-its own (issue #329), to be decided when `async destroy` costs no more than
-the deferred close.
+a scope where the close waits is an `async destroy` object since 0.6.2,
+where that costs no more than the deferred close `defer await
+guard.close()` it replaces (issue #329).
 
 ## 22.8 Tests
 
@@ -19600,8 +19689,8 @@ The modules fall into two layers.
 - **The foundation** is what everything stands on: `encoding`, `io`,
   `collections`, `compare`, `error`, `async`, `numbers`, `strings`, `time`,
   `fs`, `os`, `cli`, `url`, `json` and `regex`. It is imported most: in
-  the release this book describes, `encoding/utf` is imported by 148 of
-  std's 499 modules and `collections/sequence` by 113. A mistake here is
+  the release this book describes, `encoding/utf` is imported by 150 of
+  std's 499 modules and `collections/sequence` by 115. A mistake here is
   everyone's mistake, so the foundation was reviewed first.
 - **The domains** are the large areas built on it: `http`, `mail`, `mime`,
   `i18n`, `cli`, `testing`, `db` and the rest. Before the review they were
@@ -19700,12 +19789,15 @@ reads the comments and the declarations together and prints a page (#512):
 $ okkama man json
 NAME
     json - JSON values: one immutable Json, parsed or built in code, read
-    without casts and serialized as compact text.
+    without casts and written by the runtime in one call.
+
+VERSION
+    v1.0.0
 
 SYNOPSIS
-    let order = ParsedJson(text).root();
-    order.int("id");                                // 4711
-    order.maybe("note").text() else "";             // "" when absent or null
+    import "io/stdout" take Stdout;
+    let order = ParsedJson("{\"id\":4711}").root();
+    Stdout().writeln(order.int("id").string());
     …
 ```
 
@@ -20631,7 +20723,7 @@ right: arguments and their mistakes, files that are missing, the difference
 between output and messages, exit status, help text and tests. The chapter
 builds it in the order a reader would meet those questions, and each section
 leans on an earlier chapter: roles (Chapter 14), failures (Chapter 10),
-resources (Chapter 11) and the decide-then-do shape of Section 26.5.
+resources (Chapter 11) and the decide-then-do shape of Section 25.5.
 
 ## 23.1 What a tool owes its user
 
@@ -21604,7 +21696,7 @@ refused: CliFailure.detailed(0, "sort", "unknown child command")
   the default with `else`.
 - A root with subcommands is a branch. It expects one of its children, so an
   empty command line and an unknown verb are both a `CliFailure` naming the
-  argument, which the tool answers with status 2 as in Section 24.5.
+  argument, which the tool answers with status 2 as in Section 23.5.
 - `call.path()` gives the names from the root to the selected command, for
   messages such as `tally top: …`. The usage text of a subcommand comes from
   its own declaration, so `tally top --help` can show only what `top` takes.
@@ -22575,7 +22667,7 @@ gets a graceful shutdown without any code in the service.
 
 The address is an IP literal; `web/app` does no name resolution. The port,
 the address, the database URL and other settings come in the same layers as
-a tool's (Section 23.8): a flag, then the environment, then a default, read
+a tool's (Section 23.10): a flag, then the environment, then a default, read
 in `main` and passed down. A database password does not belong in a URL that
 a log might print: `PostgresDatabase(url:, password:)` takes it separately,
 as `SecretBytes`. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
@@ -22594,8 +22686,9 @@ with a mutable dictionary and a handler per URL. What the extra length buys:
   client mistakes.
 - **Lists are bounded.** No request can make the service build an answer of
   every note, and pages stay correct while the list changes.
-- **Shared state cannot be torn.** The store publishes whole values, and
-  the language does not offer a way to share a mutable object between tasks.
+- **Shared state cannot be torn.** The store publishes whole values through
+  an `Atomic`, the one thing tasks can share and replace, and an `Atomic` is
+  replaced whole, never in part.
 - **Storage is replaceable.** The database arrived as a new doer of the
   role, and the API, the routes and the tests did not change.
 - **The service is tested as its clients see it,** without a network and
@@ -23500,9 +23593,10 @@ Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; de
 The antipattern this replaces is the hidden collaborator: an object that
 creates its own database connection, reads the clock directly or writes to
 a global logger, and so can be tested only by replacing the world around
-it. In Okkama such an object cannot exist for clocks and loggers, because
-there is no world to reach into; it can exist for objects it constructs
-itself, and the habit of the standard library is not to (Section 22.6).
+it. In Okkama such an object can still be written, by constructing
+`SystemClock()` or `Stdout()` itself, but nothing global can be patched in
+a test to undo it. So the habit, and the standard library's rule
+(Section 22.6), is to take the clock and the destination as values.
 
 ### Decide, then do
 
@@ -23762,13 +23856,13 @@ usually an edge. A property generates the cases nobody thought of, and
 checks a rule that holds for all of them: here, that the price never
 falls as the weight grows. A tariff deserves both.
 
-The cost is in the report. The whole table is one test, so it is one line
-when it passes, and a single row cannot be run on its own. Go's `t.Run`
-and JUnit's parameterized tests [[JUnit User Guide](#ref-junit5)] give every row its own name in
-the report and let the runner select it. Okkama's test runner has no such
-thing. A row names itself only when it fails, and only because the row
-carries its input. When one row needs to run alone, for example while
-debugging it, the remedy is to copy it into a test of its own.
+The report needs one more word. A table is one test, and a row gets a name
+of its own only when it runs inside `test.case(name) { … }`, as in Go's
+`t.Run` and JUnit's parameterized tests [[JUnit User Guide](#ref-junit5)]. Then the report lists
+every row as `postage/50 g`, and `okkama run -t --filter "postage/50 g"`
+runs that row alone (Section 15.9). Without `test.case`, the whole table is
+one line when it passes, and a row names itself only when it fails, through
+the input it carries.
 
 ## 25.7 Resources belong to scopes
 
@@ -24333,7 +24427,7 @@ through the ones that change most.
 | Observer | Events returned as values (Section 25.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
 | Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 25.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
-| State | Typestate: a role per state, transitions as successors (Section 25.3) |
+| State | Typestate: a role per state, each transition returns the next state's role (Section 25.3); successors on one object (Section 14.5) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |
 | Visitor | `match` over an enum; across roles, the expression problem stands (Chapter 16) |
 | Null object | Unneeded as a workaround: absence is `Maybe`; still useful as a real "do nothing" implementation of a role |
@@ -24915,8 +25009,7 @@ caught, each where an example did something ordinary.
 - **A failed test could not say why (#756, fixed).** When `test.is`
   compared two objects that differ, the report printed their heap
   identities, `Duration@52e44f14340`, instead of their values
-  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`, the same on
-  both engines.
+  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`.
 
 The first changed what programs see, and the second settled a question
 the rule had left open; both took the owner's decision. All three are
@@ -24951,23 +25044,19 @@ The standard library was written quickly, before several builtins existed,
 and it is to be rewritten in the style Chapter 22 describes. Most of its
 open items wait for that rewrite.
 
-- **Workarounds for missing builtins (#260).** About forty modules still
-  search strings, compare prefixes and walk characters by slicing, as they
-  had to before #210, #211 and #231.
-- **Locale-sensitive case (#261).** `lower()` and `upper()` follow the
-  Unicode default. Turkish, Azeri and Lithuanian rules need a locale, and
-  the library has none yet.
-- **Asynchronous decorators (#131)** and **cleanup guards that are
-  `async destroy` objects (#329).** Some of the library's I/O decorators
-  are synchronous only, and its cleanup guards still close through
-  `defer await`.
+- **Closed in 0.6.2.** Five items this section used to list are done: the
+  library calls the string builtins instead of its old workarounds (#260),
+  `LocalizedCase` gives Turkish, Azeri and Lithuanian case (#261), the I/O
+  decorators have asynchronous forms (#131), nine cleanup guards are
+  `async destroy` objects (#329), and `okkama run -t` has report formats,
+  seeds, workers and deadlines (#339).
 - **Absence is not reported uniformly.** Some modules return a `Maybe`,
   some throw a typed error for a missing value, some take a fallback
   (Section 7.14). The json module's reading style is the reference the
   library is being aligned with.
-- **The test runner (#339).** `okkama run -t` has no report formats, seeds,
-  parallel workers or deadlines yet; the library can already render reports
-  (Section 15.1).
+- **The test runner.** TAP is not one of its report formats, and a
+  per-test deadline needs `--workers`: a test in the runner's own process
+  cannot be stopped from outside (Section 15.11).
 - **A set that has been added to cannot be walked (Section 8.11).**
   `addition` and `difference` return the role `Set<T>`, which cannot also
   promise `Iterating<T>` until roles compose. Either role composition or an
@@ -25026,7 +25115,7 @@ errors from documentation and source.
 
 **Named catch handlers (#148).** A handler shared by several `try` blocks
 must be an action called from each clause. Named handlers were proposed and
-postponed because they add behaviour that is not visible at the `try`.
+declined, because they add behaviour that is not visible at the `try`.
 
 **Generic actions.** An algorithm generic in its inputs is written as a
 generic object today (Section 17.11). Generic actions would remove that

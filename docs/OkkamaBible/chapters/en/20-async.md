@@ -316,9 +316,10 @@ cases with many.
 
 ## 20.6 Channels and the state owner
 
-Okkama has no mutable fields and no shared mutable state. Two tasks therefore
-cannot share a counter, a cache or a repository by writing to it. They can
-send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
+Okkama has no mutable fields. The one value tasks can share and replace is
+an `Atomic` (Section 20.8), a single cell replaced whole; a counter, a cache
+or a repository that several tasks update is not written to by all of them.
+They send each other values. `async/channel` provides `Channel<T>`, a bounded FIFO
 of values of one type, and two capabilities over it: `Sending<T>`, which can
 only send, and `Receiving<T>`, which can only receive.
 
@@ -362,6 +363,36 @@ The rest of a channel's contract is short:
 There is no `try_send`, no `try_receive`, no `closed()`: a task that wants to
 know whether it can proceed waits, and the scheduler runs somebody else
 meanwhile.
+
+### Several channels at once: `SelectedReceiving`
+
+A task that serves more than one source waits on all of them and takes
+whichever message comes first. `SelectedReceiving` does that over receivers
+of one element type:
+
+{{example:20-select}}
+
+- **One message per `item()`.** `await orders.item()` commits to exactly
+  one receive and answers a `SelectedItem`: `source()` is the position of
+  the winning receiver in the array, `value()` the message.
+- **Fair by rotation.** When several sources are ready, the first in the
+  array wins the first tie, and the next tie starts from the source after
+  the previous winner. Neither source starves the other, and the order of
+  the output above is the same on every run.
+- **Closed means exhausted.** A closed channel's buffered messages are still
+  delivered. `item()` throws `ChannelClosed` only when every source is
+  closed and empty, which is how the loop above ends.
+- **Mistakes are typed errors.** An empty array of receivers is
+  `EmptyChannelSelection`, the same channel twice is
+  `DuplicateChannelReceiver`, and a second `item()` while one is pending is
+  `ConcurrentChannelSelection`.
+- **Cancellation withdraws every alternative.** A task cancelled while it
+  waits takes nothing from any channel; a receive that already committed is
+  delivered. `Within` and `Before` (Section 20.7) put a deadline on `item()`.
+
+This is Go's `select` and CSP's guarded choice [@hoare1978] as an object:
+the choice has a name, a type and an error vocabulary, and it composes with
+the deadlines the next section introduces.
 
 ## 20.7 Fan-out, races and deadlines
 
@@ -445,8 +476,8 @@ shape. Okkama's version names the capability the body gets (`Supervising`),
 so the body cannot finish the scope it runs in.
 
 Each of these objects follows the rule of Section 20.5: a child it cancels is
-waited for, so when its `result()` returns or throws, no child it started is
-still running. The deadline uses a monotonic clock that the program passes in
+waited for, so when its `results()`, `winner()`, `outcome()` or `wait()`
+returns or throws, no child it started is still running. The deadline uses a monotonic clock that the program passes in
 (`SystemClock()` here, a manual clock in a test); a civil `Instant` is not
 accepted as a deadline, so a change of the wall clock cannot fire or hold
 back a timeout.
@@ -517,8 +548,9 @@ the scheduler runs others. Waking a waiter follows the rule of Section 20.3:
 makes the waiters ready; they run after the current task suspends, in the
 order they started waiting.
 
-A lock in Okkama protects less than a lock in Java. There is no shared
-mutable memory to protect, so a lock serializes *sections of work*, for
+A lock in Okkama protects less than a lock in Java. The only shared mutable
+memory is an `Atomic`, replaced whole in one step, so a lock serializes
+*sections of work*, for
 example two tasks that must not talk to the same device at once. When the
 work is "update the shared state", the state owner of Section 20.6 is the
 better tool: it needs no lock because nobody but the owner can reach the
@@ -841,14 +873,14 @@ an effect: the place where the rest of the program may change things.
 - **No cancellation in synchronous code.** Cancellation is delivered at a
   suspension point. A long synchronous loop sees it only if it checks a
   `Cancellation` token.
-- **std's cleanup guards still use `defer await`.** Moving them to
-  `async destroy` waits for the std rewrite (issue #329).
 - **Parts of std are still synchronous.** Since 0.5.5 a server reads rooted
   files off the program's thread (issue #121), a child process's pipes are
   asynchronous (issue #196), and CSV streams are walked with `for await`
-  (issue #204). Asynchronous I/O decorators are still open (issue #131),
-  and waiting on several channels at once, a `select`, is postponed (issue
-  #509).
+  (issue #204). Since 0.6.2 the I/O decorators have asynchronous forms such
+  as `LimitedAsyncReading` (issue #131), several channels are waited on with
+  `SelectedReceiving` (issue #509), and nine cleanup guards of the HTTP and
+  TCP modules are `async destroy` objects (issue #329). Other modules still
+  read and write synchronously.
 
 ## 20.16 What this design costs
 

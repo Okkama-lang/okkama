@@ -305,9 +305,10 @@ Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; de
 The antipattern this replaces is the hidden collaborator: an object that
 creates its own database connection, reads the clock directly or writes to
 a global logger, and so can be tested only by replacing the world around
-it. In Okkama such an object cannot exist for clocks and loggers, because
-there is no world to reach into; it can exist for objects it constructs
-itself, and the habit of the standard library is not to (Section 22.6).
+it. In Okkama such an object can still be written, by constructing
+`SystemClock()` or `Stdout()` itself, but nothing global can be patched in
+a test to undo it. So the habit, and the standard library's rule
+(Section 22.6), is to take the clock and the destination as values.
 
 ### Decide, then do
 
@@ -396,13 +397,13 @@ usually an edge. A property generates the cases nobody thought of, and
 checks a rule that holds for all of them: here, that the price never
 falls as the weight grows. A tariff deserves both.
 
-The cost is in the report. The whole table is one test, so it is one line
-when it passes, and a single row cannot be run on its own. Go's `t.Run`
-and JUnit's parameterized tests [@junit5] give every row its own name in
-the report and let the runner select it. Okkama's test runner has no such
-thing. A row names itself only when it fails, and only because the row
-carries its input. When one row needs to run alone, for example while
-debugging it, the remedy is to copy it into a test of its own.
+The report needs one more word. A table is one test, and a row gets a name
+of its own only when it runs inside `test.case(name) { … }`, as in Go's
+`t.Run` and JUnit's parameterized tests [@junit5]. Then the report lists
+every row as `postage/50 g`, and `okkama run -t --filter "postage/50 g"`
+runs that row alone (Section 15.9). Without `test.case`, the whole table is
+one line when it passes, and a row names itself only when it fails, through
+the input it carries.
 
 ## 25.7 Resources belong to scopes
 
@@ -630,7 +631,7 @@ through the ones that change most.
 | Observer | Events returned as values (Section 25.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
 | Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 25.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
-| State | Typestate: a role per state, transitions as successors (Section 25.3) |
+| State | Typestate: a role per state, each transition returns the next state's role (Section 25.3); successors on one object (Section 14.5) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |
 | Visitor | `match` over an enum; across roles, the expression problem stands (Chapter 16) |
 | Null object | Unneeded as a workaround: absence is `Maybe`; still useful as a real "do nothing" implementation of a role |

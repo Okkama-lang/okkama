@@ -68,8 +68,7 @@ caught, each where an example did something ordinary.
 - **A failed test could not say why (#756, fixed).** When `test.is`
   compared two objects that differ, the report printed their heap
   identities, `Duration@52e44f14340`, instead of their values
-  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`, the same on
-  both engines.
+  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`.
 
 The first changed what programs see, and the second settled a question
 the rule had left open; both took the owner's decision. All three are
@@ -104,23 +103,19 @@ The standard library was written quickly, before several builtins existed,
 and it is to be rewritten in the style Chapter 22 describes. Most of its
 open items wait for that rewrite.
 
-- **Workarounds for missing builtins (#260).** About forty modules still
-  search strings, compare prefixes and walk characters by slicing, as they
-  had to before #210, #211 and #231.
-- **Locale-sensitive case (#261).** `lower()` and `upper()` follow the
-  Unicode default. Turkish, Azeri and Lithuanian rules need a locale, and
-  the library has none yet.
-- **Asynchronous decorators (#131)** and **cleanup guards that are
-  `async destroy` objects (#329).** Some of the library's I/O decorators
-  are synchronous only, and its cleanup guards still close through
-  `defer await`.
+- **Closed in 0.6.2.** Five items this section used to list are done: the
+  library calls the string builtins instead of its old workarounds (#260),
+  `LocalizedCase` gives Turkish, Azeri and Lithuanian case (#261), the I/O
+  decorators have asynchronous forms (#131), nine cleanup guards are
+  `async destroy` objects (#329), and `okkama run -t` has report formats,
+  seeds, workers and deadlines (#339).
 - **Absence is not reported uniformly.** Some modules return a `Maybe`,
   some throw a typed error for a missing value, some take a fallback
   (Section 7.14). The json module's reading style is the reference the
   library is being aligned with.
-- **The test runner (#339).** `okkama run -t` has no report formats, seeds,
-  parallel workers or deadlines yet; the library can already render reports
-  (Section 15.1).
+- **The test runner.** TAP is not one of its report formats, and a
+  per-test deadline needs `--workers`: a test in the runner's own process
+  cannot be stopped from outside (Section 15.11).
 - **A set that has been added to cannot be walked (Section 8.11).**
   `addition` and `difference` return the role `Set<T>`, which cannot also
   promise `Iterating<T>` until roles compose. Either role composition or an
@@ -179,7 +174,7 @@ errors from documentation and source.
 
 **Named catch handlers (#148).** A handler shared by several `try` blocks
 must be an action called from each clause. Named handlers were proposed and
-postponed because they add behaviour that is not visible at the `try`.
+declined, because they add behaviour that is not visible at the `try`.
 
 **Generic actions.** An algorithm generic in its inputs is written as a
 generic object today (Section 17.11). Generic actions would remove that
