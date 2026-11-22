@@ -114,7 +114,7 @@ const PURE: &[&str] = &[
     "runtime/json", "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution", "runtime/regex",
     "runtime/secret", "runtime/single_byte", "runtime/statistics", "runtime/template", "runtime/testing",
-    "runtime/time_format", "runtime/time_zone", "runtime/toml", "runtime/unicode_character",
+    "runtime/time_format", "runtime/time_zone", "runtime/unicode_character",
     "runtime/unicode_normalization", "runtime/utf", "runtime/uuid", "runtime/x509",
     "runtime/xml",
 ];
@@ -262,7 +262,7 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 217), ((AbiKind::Sync, Transport::Handle), 337),
+        let expected = [((AbiKind::Sync, Transport::Data), 217), ((AbiKind::Sync, Transport::Handle), 321),
             ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
@@ -275,10 +275,10 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
-        let roles_expected = [(HandleRole::None, 222), (HandleRole::Uses, 263), (HandleRole::Publishes, 98),
+        let roles_expected = [(HandleRole::None, 222), (HandleRole::Uses, 250), (HandleRole::Publishes, 95),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 294), (Effect::Stdio, 3), (Effect::Host, 309)];
+        let effects_expected = [(Effect::Pure, 278), (Effect::Stdio, 3), (Effect::Host, 309)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 

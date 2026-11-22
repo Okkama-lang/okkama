@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36441 lines
+## other — 87 files, 35536 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 617
+- `okkama-runtime-abi/src/table.rs` 601
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -264,7 +264,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/jre.rs` 232 — Совместимая с Java семантика, которую используют natives Sparrow: регулярные
 - `okkama-runtime-core/src/native/json.rs` 798 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
 - `okkama-runtime-core/src/native/json_split.rs` 256 — JSON items cut from a stream (#136): the elements of one top-level array,
-- `okkama-runtime-core/src/native/markup.rs` 1378 — `runtime/toml` (TOML 1.0 в дерево узлов) и `runtime/html` (поток событий
+- `okkama-runtime-core/src/native/markup.rs` 489 — `runtime/html` (поток событий HTML с именованными ссылками WHATWG). TOML
 - `okkama-runtime-core/src/native/math.rs` 786 — Числовые natives: `runtime/format::sprintf_values`
 - `okkama-runtime-core/src/native/misc.rs` 494 — Небольшие natives std: `runtime/crypto`,
 - `okkama-runtime-core/src/native/net.rs` 193 — `runtime/net` (числовые IP-адреса): текст

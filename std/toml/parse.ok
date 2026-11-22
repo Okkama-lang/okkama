@@ -4,10 +4,9 @@ import "toml/value" take TomlValue, TomlVisitor, TomlInteger, TomlFloat, TomlStr
     TomlInfinity, TomlNaN, TomlArray, TomlTable, TomlMember, TomlLocalDate, TomlLocalTime,
     TomlLocalDateTime, TomlOffset, TomlOffsetDateTime, TomlKindMismatch, MissingTomlMember,
     DuplicateTomlMember;
-import "runtime/toml" take TomlParseState, TomlNodeState, toml_parse_state, toml_parse_valid,
-    toml_parse_offset, toml_parse_line, toml_parse_column, toml_parse_message, toml_parse_root,
-    toml_node_kind, toml_node_size, toml_node_integer, toml_node_real, toml_node_boolean,
-    toml_node_text, toml_node_coordinates, toml_node_item, toml_member_name;
+import "runtime/number_text" take float_parse, int_parse;
+import "async/atomic" take Atomic;
+import "cell" take Cell;
 
 // Immutable TOML 1.0 document representation; parsing occurs on value().
 // Construction binds text/budgets and rejects invalid configuration only.
@@ -18,7 +17,7 @@ import "runtime/toml" take TomlParseState, TomlNodeState, toml_parse_state, toml
 // to prevent host stack exhaustion. No unbounded recursive configuration.
 // value() returns a complete nominal TomlTable, preserving insertion order;
 // syntax/number/conflict/budget errors throw InvalidToml with source coordinates.
-// Repeated observations are deterministic. Native parse memoization is private.
+// Repeated observations are deterministic: each root() reads the text again.
 // Returned values contain their own coordinates, so they outlive this object.
 // No resource acquisition/close/destroy, host zone, locale or implicit output.
 //
@@ -41,11 +40,15 @@ import "runtime/toml" take TomlParseState, TomlNodeState, toml_parse_state, toml
 
 // TOML 1.0 text, read when root() is asked.
 object ParsedToml {
-    has state is TomlParseState;
+    has origin is string;
+    has maximum_input, maximum_depth, maximum_nodes is int;
 
     // Text within 1 Mi characters, depth 64 and 10000 nodes.
     ParsedToml(origin is string) {
-        state = toml_parse_state(origin, 1048576, 64, 10000);
+        self.origin = origin;
+        maximum_input = 1048576;
+        maximum_depth = 64;
+        maximum_nodes = 10000;
     }
 
     // Text within these limits.
@@ -55,113 +58,1395 @@ object ParsedToml {
             && maximum_depth <= 128
             && maximum_nodes >= 1
             else throw InvalidTomlBudget.invalid;
-        state = toml_parse_state(origin, maximum_input, maximum_depth, maximum_nodes);
+        self.origin = origin;
+        self.maximum_input = maximum_input;
+        self.maximum_depth = maximum_depth;
+        self.maximum_nodes = maximum_nodes;
     }
 
     // The document as a table; InvalidToml says where the text is wrong.
     root() is TomlTable {
-        confirm toml_parse_valid(state)
-            else throw InvalidToml.located(
-                toml_parse_offset(state),
-                toml_parse_line(state),
-                toml_parse_column(state),
-                toml_parse_message(state)
-            );
-        TomlNode(toml_parse_root(state)).table();
+        let reading = self.reading();
+        match reading {
+            case TomlReading.read(table) {
+                table;
+            }
+            case TomlReading.failed(offset, message) {
+                throw TomlPlace(origin: origin, offset: offset).failure(message);
+            }
+        }
+    }
+
+    hidden reading() is TomlReading {
+        let size = origin.length();
+        if size > maximum_input {
+            return TomlReading.failed(maximum_input, "maximum TOML input exceeded");
+        }
+        let codes is @int = origin.characters().map() -> character {
+            character.code();
+        };
+        try {
+            TomlReading.read(TomlReader(origin, codes, maximum_depth, maximum_nodes).document());
+        }
+        catch TomlStop.at(offset, message) {
+            TomlReading.failed(offset, message);
+        }
     }
 }
 
-// Internal projection entity: one validated native node. Its represented
-// value/table is reconstructed with nominal constructors, never casts or JSON.
-// The kind switch is private substrate translation, not a TomlValue protocol.
-// Recursive projection is bounded by the parser's depth/node checks.
-hidden object TomlNode {
-    has origin is TomlNodeState;
+// A finished reading: the root table, or where and why the text is wrong.
+hidden enum TomlReading = (read(table is TomlTable), failed(offset is int, message is string));
 
-    TomlNode(origin is TomlNodeState) {
+// A refusal inside the reader: the offending character offset.
+hidden enum TomlStop is Error = (at(offset is int, message is string));
+
+// A character offset as InvalidToml: lines from 1 with CRLF one line, and the
+// column within the line from 1.
+hidden object TomlPlace {
+    has origin is string;
+    has offset is int;
+
+    TomlPlace(origin is string, offset is int) {
         self.origin = origin;
+        self.offset = offset;
     }
 
-    table() is TomlTable {
-        let members is @TomlMember = (0..toml_node_size(origin)).map() -> index {
-            TomlMember(
-                name: toml_member_name(origin, index),
-                value: TomlNode(toml_node_item(origin, index)).toml()
-            );
+    failure(message is string) is InvalidToml {
+        let end = if offset < origin.length() {
+            offset;
+        }
+        else {
+            origin.length();
         };
-        TomlTable(members);
+        // A CR before LF is never in the last line, so CRLF counts once.
+        let prefix = origin.slice(0, end);
+        let newline = prefix.find_last("\n") else -1;
+        InvalidToml.located(offset, prefix.split("\n").size(), prefix.length() - newline, message);
+    }
+}
+
+// A table or an array of tables still open to later statements. Tables
+// record how they came to be: 0 implicitly (a header path), 1 by dotted keys,
+// 2 by a header, 3 inline. An inline table is finished when it closes, so a
+// finished member value never changes again.
+hidden enum TomlDraft = (
+    table(definition is int, depth is int, names is @string, slots is @TomlSlot),
+    stack(depth is int, elements is @int)
+);
+
+// A member of an open table: a finished value (an inline array or not), or
+// an open table or array of tables by its number.
+hidden enum TomlSlot = (done(value is TomlValue, array is bool), open(draft is int));
+
+// One reading of a document: a hand scanner over its code points, with no
+// allocation per character, and the open tables (an arena of drafts).
+// Offsets, messages and the order of the checks are those of the TOML 1.0
+// reader this replaced (#13), so a document fails at the same place.
+hidden object TomlReader {
+    has origin is string;
+    has codes is @int;
+    has size, depth_limit, node_limit is int;
+    has position is Atomic<int>;
+    has nodes is Atomic<int>;
+    has drafts is Atomic<@TomlDraft>;
+    // The table that bindings go to now, kept out of the arena while it
+    // grows (its arena entry is stale): one append per binding.
+    has open, open_definition, open_depth is Atomic<int>;
+    has open_names is Atomic<@string>;
+    has open_slots is Atomic<@TomlSlot>;
+
+    TomlReader(origin is string, codes is @int, depth_limit is int, node_limit is int) {
+        self.origin = origin;
+        self.codes = codes;
+        size = codes.size();
+        self.depth_limit = depth_limit;
+        self.node_limit = node_limit;
+        position = Atomic(0);
+        nodes = Atomic(0);
+        let empty is @TomlDraft = [];
+        drafts = Atomic(empty);
+        open = Atomic(-1);
+        open_definition = Atomic(0);
+        open_depth = Atomic(0);
+        let names is @string = [];
+        let slots is @TomlSlot = [];
+        open_names = Atomic(names);
+        open_slots = Atomic(slots);
     }
 
-    toml() is TomlValue {
-        match toml_node_kind(origin) {
-            case 1 {
-                let result is TomlValue = TomlInteger(toml_node_integer(origin));
-                result;
-            }
-            case 2 {
-                let result is TomlValue = TomlFloat(toml_node_real(origin));
-                result;
-            }
-            case 3 {
-                let result is TomlValue = TomlString(toml_node_text(origin));
-                result;
-            }
-            case 4 {
-                let result is TomlValue = TomlBoolean(toml_node_boolean(origin));
-                result;
-            }
-            case 5 {
-                let values is @TomlValue = (0..toml_node_size(origin)).map() -> index {
-                    TomlNode(toml_node_item(origin, index)).toml();
-                };
-                let result is TomlValue = TomlArray(values);
-                result;
-            }
-            case 6 {
-                let result is TomlValue = self.table();
-                result;
-            }
-            case 7 {
-                let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlLocalDate(year: c[0], month: c[1], day: c[2]);
-                result;
-            }
-            case 8 {
-                let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlLocalTime(
-                    hour: c[0],
-                    minute: c[1],
-                    second: c[2],
-                    nanosecond: c[3]
-                );
-                result;
-            }
-            case 9 {
-                let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlLocalDateTime(
-                    date: TomlLocalDate(c[0], c[1], c[2]),
-                    time: TomlLocalTime(c[3], c[4], c[5], c[6])
-                );
-                result;
-            }
-            case 10 {
-                let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlOffsetDateTime(
-                    local: TomlLocalDateTime(
-                        TomlLocalDate(c[0], c[1], c[2]),
-                        TomlLocalTime(c[3], c[4], c[5], c[6])
-                    ),
-                    offset: TomlOffset(c[7], c[8] == 1)
-                );
-                result;
-            }
-            case 11 {
-                let result is TomlValue = TomlInfinity(toml_node_boolean(origin));
-                result;
+    document() is TomlTable {
+        let root = self.open_table(1, 2);
+        let current = Cell(root);
+        self.space();
+        loop {
+            last if position.value() >= size;
+            if codes[position.value()] == 91 {
+                current.replace(self.header(root));
             }
             else {
-                let result is TomlValue = TomlNaN();
-                result;
+                self.binding(current.value());
+            }
+            self.horizontal();
+            self.comment();
+            last if position.value() == size;
+            confirm self.newline()
+                else throw TomlStop.at(position.value(), "expected newline after statement");
+            self.space();
+        }
+        self.table(root);
+    }
+
+    // ---- characters ----
+
+    hidden code(at is int) is int {
+        if at < size {
+            codes[at];
+        }
+        else {
+            -1;
+        }
+    }
+
+    hidden horizontal() is void {
+        for position.value()..size -> at {
+            let code = codes[at];
+            if code != 32 && code != 9 {
+                position.replace(at);
+                return;
+            }
+        }
+        position.replace(size);
+    }
+
+    hidden newline() is bool {
+        let at = position.value();
+        let code = self.code(at);
+        if code == 10 {
+            position.replace(at + 1);
+            return true;
+        }
+        if code == 13 {
+            confirm self.code(at + 1) == 10
+                else throw TomlStop.at(at, "bare carriage return is not a TOML newline");
+            position.replace(at + 2);
+            return true;
+        }
+        false;
+    }
+
+    hidden comment() is void {
+        if self.code(position.value()) == 35 {
+            for position.value()..size -> at {
+                let code = codes[at];
+                if code == 10 || code == 13 {
+                    position.replace(at);
+                    return;
+                }
+                confirm (code >= 32 || code == 9) && code != 127
+                    else throw TomlStop.at(at, "control character in comment");
+            }
+            position.replace(size);
+        }
+    }
+
+    hidden space() is void {
+        loop {
+            self.horizontal();
+            self.comment();
+            last if !self.newline();
+        }
+    }
+
+    hidden expect(code is int, token is string) is void {
+        confirm self.code(position.value()) == code
+            else throw TomlStop.at(position.value(), "expected " + token);
+        position.replace(position.value() + 1);
+    }
+
+    // ---- nodes and the arena ----
+
+    hidden node(depth is int) is void {
+        confirm depth <= depth_limit
+            else throw TomlStop.at(position.value(), "maximum TOML depth exceeded");
+        confirm nodes.value() < node_limit
+            else throw TomlStop.at(position.value(), "maximum TOML nodes exceeded");
+        nodes.replace(nodes.value() + 1);
+    }
+
+    hidden open_table(depth is int, definition is int) is int {
+        self.node(depth);
+        let all = drafts.value();
+        let names is @string = [];
+        let slots is @TomlSlot = [];
+        drafts.replace(all + [TomlDraft.table(definition, depth, names, slots)]);
+        all.size();
+    }
+
+    hidden open_stack(depth is int) is int {
+        self.node(depth);
+        let all = drafts.value();
+        let elements is @int = [];
+        drafts.replace(all + [TomlDraft.stack(depth, elements)]);
+        all.size();
+    }
+
+    hidden draft(number is int) is TomlDraft {
+        if number == open.value() {
+            TomlDraft.table(
+                open_definition.value(),
+                open_depth.value(),
+                open_names.value(),
+                open_slots.value()
+            );
+        }
+        else {
+            drafts.value()[number];
+        }
+    }
+
+    hidden update(draft is int, value is TomlDraft) is void {
+        if draft == open.value() {
+            match value {
+                case TomlDraft.table(definition, depth, names, slots) {
+                    open_definition.replace(definition);
+                    open_names.replace(names);
+                    open_slots.replace(slots);
+                }
+                case TomlDraft.stack(depth, elements) {}
+            }
+        }
+        else {
+            drafts.replace(drafts.value().replaced(draft, value));
+        }
+    }
+
+    // Makes table the one bindings go to, putting the previous one back.
+    hidden focus(table is int) is void {
+        let previous = open.value();
+        if previous >= 0 {
+            drafts.replace(drafts.value().replaced(previous, self.draft(previous)));
+        }
+        match self.draft(table) {
+            case TomlDraft.table(definition, depth, names, slots) {
+                open_definition.replace(definition);
+                open_depth.replace(depth);
+                open_names.replace(names);
+                open_slots.replace(slots);
+                open.replace(table);
+            }
+            case TomlDraft.stack(depth, elements) {}
+        }
+    }
+
+    hidden put(table is int, name is string, slot is TomlSlot) is void {
+        match self.draft(table) {
+            case TomlDraft.table(definition, depth, names, slots) {
+                confirm names.size() < 1024
+                    else throw TomlStop.at(position.value(), "maximum TOML table members exceeded");
+                self.update(
+                    table,
+                    TomlDraft.table(definition, depth, names + [name], slots + [slot])
+                );
+            }
+            case TomlDraft.stack(depth, elements) {}
+        }
+    }
+
+    // The table a key part names under table, made implicitly when absent.
+    hidden descend(table is int, name is string, dotted is bool) is int {
+        match self.draft(table) {
+            case TomlDraft.table(definition, depth, names, slots) {
+                let at = names.index_of(name) else -1;
+                if at < 0 {
+                    let made = self.open_table(depth + 1, if dotted {
+                        1;
+                    }
+                    else {
+                        0;
+                    });
+                    self.put(table, name, TomlSlot.open(made));
+                    made;
+                }
+                else {
+                    self.extended(slots[at], dotted);
+                }
+            }
+            case TomlDraft.stack(depth, elements) {
+                table;
+            }
+        }
+    }
+
+    hidden extended(slot is TomlSlot, dotted is bool) is int {
+        match slot {
+            case TomlSlot.done(value, array) {
+                confirm !(dotted && array)
+                    else throw TomlStop.at(
+                        position.value(),
+                        "dotted key cannot extend a header-defined table"
+                    );
+                throw TomlStop.at(position.value(), "key is not an extensible table");
+            }
+            case TomlSlot.open(draft) {
+                match self.draft(draft) {
+                    case TomlDraft.stack(depth, elements) {
+                        confirm !dotted
+                            else throw TomlStop.at(
+                                position.value(),
+                                "dotted key cannot extend a header-defined table"
+                            );
+                        elements[elements.size() - 1];
+                    }
+                    case TomlDraft.table(definition, depth, names, slots) {
+                        confirm !(dotted && definition == 2)
+                            else throw TomlStop.at(
+                                position.value(),
+                                "dotted key cannot extend a header-defined table"
+                            );
+                        if dotted && definition == 0 {
+                            self.update(draft, TomlDraft.table(1, depth, names, slots));
+                        }
+                        draft;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- statements ----
+
+    hidden binding(table is int) is void {
+        let key_offset = position.value();
+        let path = self.key();
+        self.expect(61, "=");
+        self.horizontal();
+        let target = if path.size() == 1 {
+            table;
+        }
+        else {
+            (0..(path.size() - 1)).reduce(table) -> parent, index {
+                self.descend(parent, path[index], true);
+            };
+        };
+        let name = path[path.size() - 1];
+        if target != open.value() {
+            self.focus(target);
+        }
+        let names = open_names.value();
+        confirm !names.contains(name) else throw TomlStop.at(key_offset, "duplicate TOML key");
+        confirm names.size() < 1024
+            else throw TomlStop.at(key_offset, "maximum TOML table members exceeded");
+        let array = self.code(position.value()) == 91;
+        let value = self.value(open_depth.value() + 1);
+        // An inline table takes the focus while it is read.
+        if target != open.value() {
+            self.focus(target);
+        }
+        open_names.replace(open_names.value() + [name]);
+        open_slots.replace(open_slots.value() + [TomlSlot.done(value, array)]);
+    }
+
+    hidden header(root is int) is int {
+        let begin = position.value();
+        let array = self.code(begin + 1) == 91;
+        position.replace(begin + if array {
+            2;
+        }
+        else {
+            1;
+        });
+        let path = self.key();
+        if array {
+            confirm self.code(position.value()) == 93 && self.code(position.value() + 1) == 93
+                else throw TomlStop.at(position.value(), "expected ]]");
+            position.replace(position.value() + 2);
+        }
+        else {
+            self.expect(93, "]");
+        }
+        let parent = (0..(path.size() - 1)).reduce(root) -> above, index {
+            self.descend(above, path[index], false);
+        };
+        let name = path[path.size() - 1];
+        match self.draft(parent) {
+            case TomlDraft.table(definition, depth, names, slots) {
+                let at = names.index_of(name) else -1;
+                if array {
+                    let stack = if at < 0 {
+                        let made = self.open_stack(depth + 1);
+                        self.put(parent, name, TomlSlot.open(made));
+                        made;
+                    }
+                    else {
+                        self.stack_of(slots[at]);
+                    };
+                    self.element(stack);
+                }
+                else if at < 0 {
+                    let made = self.open_table(depth + 1, 2);
+                    self.put(parent, name, TomlSlot.open(made));
+                    made;
+                }
+                else {
+                    self.reopened(slots[at]);
+                }
+            }
+            case TomlDraft.stack(depth, elements) {
+                root;
+            }
+        }
+    }
+
+    hidden stack_of(slot is TomlSlot) is int {
+        let conflict = "array-of-tables conflicts with existing value";
+        match slot {
+            case TomlSlot.done(value, array) {
+                throw TomlStop.at(position.value(), conflict);
+            }
+            case TomlSlot.open(draft) {
+                match self.draft(draft) {
+                    case TomlDraft.stack(depth, elements) {
+                        draft;
+                    }
+                    case TomlDraft.table(definition, depth, names, slots) {
+                        throw TomlStop.at(position.value(), conflict);
+                    }
+                }
+            }
+        }
+    }
+
+    hidden element(stack is int) is int {
+        match self.draft(stack) {
+            case TomlDraft.stack(depth, elements) {
+                confirm elements.size() < 10000
+                    else throw TomlStop.at(position.value(), "maximum TOML array items exceeded");
+                let made = self.open_table(depth + 1, 2);
+                self.update(stack, TomlDraft.stack(depth, elements + [made]));
+                made;
+            }
+            case TomlDraft.table(definition, depth, names, slots) {
+                stack;
+            }
+        }
+    }
+
+    hidden reopened(slot is TomlSlot) is int {
+        let conflict = "table redefinition or conflict";
+        match slot {
+            case TomlSlot.done(value, array) {
+                throw TomlStop.at(position.value(), conflict);
+            }
+            case TomlSlot.open(draft) {
+                match self.draft(draft) {
+                    case TomlDraft.table(definition, depth, names, slots) {
+                        confirm definition == 0 else throw TomlStop.at(position.value(), conflict);
+                        self.update(draft, TomlDraft.table(2, depth, names, slots));
+                        draft;
+                    }
+                    case TomlDraft.stack(depth, elements) {
+                        throw TomlStop.at(position.value(), conflict);
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- keys and strings ----
+
+    hidden key() is @string {
+        // Most keys are one bare word.
+        self.horizontal();
+        let start = position.value();
+        let end = self.bare(start);
+        if end > start {
+            let after = self.blank(end);
+            if self.code(after) != 46 {
+                position.replace(after);
+                return [origin.slice(start, end)];
+            }
+        }
+        let parts = Cell(@string());
+        loop {
+            self.horizontal();
+            let start = position.value();
+            let first = self.code(start);
+            if first == 34 || first == 39 {
+                parts.replace(parts.value() + [self.string(true)]);
+            }
+            else {
+                let end = self.bare(start);
+                confirm end > start else throw TomlStop.at(start, "expected key");
+                position.replace(end);
+                parts.replace(parts.value() + [origin.slice(start, end)]);
+            }
+            self.horizontal();
+            last if self.code(position.value()) != 46;
+            position.replace(position.value() + 1);
+        }
+        parts.value();
+    }
+
+    // Where the bare key starting at `from` ends.
+    hidden bare(from is int) is int {
+        for from..size -> at {
+            let code = codes[at];
+            if !((code >= 97 && code <= 122)
+                || (code >= 65 && code <= 90)
+                || (code >= 48 && code <= 57)
+                || code == 95
+                || code == 45) {
+                    return at;
+                }
+        }
+        size;
+    }
+
+    // Where the spaces and tabs starting at `from` end.
+    hidden blank(from is int) is int {
+        for from..size -> at {
+            let code = codes[at];
+            if code != 32 && code != 9 {
+                return at;
+            }
+        }
+        size;
+    }
+
+    // Where a plain run of a single-line string starting at `from` ends: at
+    // its quote, a backslash of a basic string, or a control character.
+    hidden plain(from is int, quote is int) is int {
+        for from..size -> at {
+            let code = codes[at];
+            if code == quote
+                || (code == 92 && quote == 34)
+                || (code < 32 && code != 9)
+                || code == 127 {
+                    return at;
+                }
+        }
+        size;
+    }
+
+    hidden string(key is bool) is string {
+        let begin = position.value();
+        let quote = codes[begin];
+        let multiline = self.code(begin + 1) == quote && self.code(begin + 2) == quote;
+        confirm !(key && multiline) else throw TomlStop.at(begin, "multiline key is not allowed");
+        if !multiline {
+            // Most strings are one run of plain characters.
+            let end = self.plain(begin + 1, quote);
+            if self.code(end) == quote {
+                position.replace(end + 1);
+                return origin.slice(begin + 1, end);
+            }
+        }
+        position.replace(begin + if multiline {
+            3;
+        }
+        else {
+            1;
+        });
+        if multiline {
+            self.newline();
+        }
+        let parts = Cell(@string());
+        let run = Cell(position.value());
+        loop {
+            let at = position.value();
+            confirm at < size else throw TomlStop.at(at, "unterminated string");
+            let code = codes[at];
+            if code == quote {
+                if !multiline {
+                    position.replace(at + 1);
+                    return (parts.value() + [origin.slice(run.value(), at)]).join("");
+                }
+                let count = Cell(1);
+                loop {
+                    last if self.code(at + count.value()) != quote;
+                    count.replace(count.value() + 1);
+                }
+                confirm count.value() <= 5 else throw TomlStop.at(at, "too many closing quotes");
+                position.replace(at + count.value());
+                if count.value() >= 3 {
+                    return (parts.value() + [origin.slice(run.value(), at + count.value() - 3)]).join(
+                        ""
+                    );
+                }
+            }
+            else if code == 10 || code == 13 {
+                confirm multiline else throw TomlStop.at(at, "newline in single-line string");
+                parts.replace(parts.value() + [origin.slice(run.value(), at)]);
+                self.newline();
+                parts.replace(parts.value() + ["\n"]);
+                run.replace(position.value());
+            }
+            else {
+                confirm (code >= 32 || code == 9) && code != 127
+                    else throw TomlStop.at(at, "control character in string");
+                position.replace(at + 1);
+                if code == 92 && quote == 34 {
+                    parts.replace(parts.value() + [origin.slice(run.value(), at)]);
+                    parts.replace(parts.value() + [self.escape(at, multiline)]);
+                    run.replace(position.value());
+                }
+            }
+        }
+    }
+
+    // What the backslash at `at` stands for; position is just after it.
+    hidden escape(at is int, multiline is bool) is string {
+        if multiline {
+            // A line-ending backslash drops the newline and the blanks after it.
+            let saved = position.value();
+            self.horizontal();
+            if self.newline() {
+                loop {
+                    self.horizontal();
+                    last if !self.newline();
+                }
+                return "";
+            }
+            position.replace(saved);
+        }
+        let code = self.code(position.value());
+        confirm code >= 0 else throw TomlStop.at(at, "unfinished string escape");
+        position.replace(position.value() + 1);
+        if code == 98 {
+            return 8.char().string();
+        }
+        if code == 116 {
+            return "\t";
+        }
+        if code == 110 {
+            return "\n";
+        }
+        if code == 102 {
+            return 12.char().string();
+        }
+        if code == 114 {
+            return "\r";
+        }
+        if code == 34 {
+            return "\"";
+        }
+        if code == 92 {
+            return "\\";
+        }
+        confirm code == 117 || code == 85 else throw TomlStop.at(at, "unknown string escape");
+        let length = if code == 117 {
+            4;
+        }
+        else {
+            8;
+        };
+        let start = position.value();
+        let point = Cell(0);
+        for start..(start + length) -> index {
+            let digit = self.hex(self.code(index));
+            confirm digit >= 0 else throw TomlStop.at(at, "invalid Unicode escape");
+            point.replace(point.value() * 16 + digit);
+        }
+        let scalar = point.value();
+        confirm scalar <= 1114111 && (scalar < 55296 || scalar > 57343)
+            else throw TomlStop.at(at, "escape is not a Unicode scalar");
+        position.replace(start + length);
+        scalar.char().string();
+    }
+
+    hidden hex(code is int) is int {
+        if code >= 48 && code <= 57 {
+            code - 48;
+        }
+        else if code >= 97 && code <= 102 {
+            code - 87;
+        }
+        else if code >= 65 && code <= 70 {
+            code - 55;
+        }
+        else {
+            -1;
+        }
+    }
+
+    // ---- values ----
+
+    hidden value(depth is int) is TomlValue {
+        let code = self.code(position.value());
+        if code == 34 || code == 39 {
+            self.node(depth);
+            let text is TomlValue = TomlString(self.string(false));
+            return text;
+        }
+        if code == 91 {
+            return self.array(depth);
+        }
+        if code == 123 {
+            return self.inline(depth);
+        }
+        self.scalar(depth);
+    }
+
+    hidden array(depth is int) is TomlValue {
+        self.node(depth);
+        position.replace(position.value() + 1);
+        self.space();
+        let empty is @TomlValue = [];
+        let items = Cell(empty);
+        loop {
+            last if self.code(position.value()) == 93;
+            confirm items.value().size() < 10000
+                else throw TomlStop.at(position.value(), "maximum TOML array items exceeded");
+            items.replace(items.value() + [self.value(depth + 1)]);
+            self.space();
+            last if self.code(position.value()) == 93;
+            self.expect(44, ",");
+            self.space();
+        }
+        position.replace(position.value() + 1);
+        let array is TomlValue = TomlArray(items.value());
+        array;
+    }
+
+    hidden inline(depth is int) is TomlValue {
+        let table = self.open_table(depth, 3);
+        position.replace(position.value() + 1);
+        self.horizontal();
+        if self.code(position.value()) != 125 {
+            loop {
+                self.binding(table);
+                self.horizontal();
+                last if self.code(position.value()) == 125;
+                self.expect(44, ",");
+                self.horizontal();
+            }
+        }
+        position.replace(position.value() + 1);
+        let finished is TomlValue = self.table(table);
+        finished;
+    }
+
+    hidden scalar(depth is int) is TomlValue {
+        let start = position.value();
+        let first = self.code(start);
+        let digit = first >= 48 && first <= 57;
+        // `YYYY-MM-DD HH:` is a date and a time apart.
+        if digit
+            && self.code(start + 10) == 32
+            && self.code(start + 13) == 58
+            && self.digits(start, 4)
+            && self.code(start + 4) == 45
+            && self.digits(start + 5, 2)
+            && self.code(start + 7) == 45
+            && self.digits(start + 8, 2)
+            && self.digits(start + 11, 2) {
+                position.replace(start + 11);
+            }
+        let end = self.token(position.value());
+        position.replace(end);
+        // The grammars start apart: dates, times and numbers with a digit or
+        // a sign, booleans with t or f, inf and nan with i, n or a sign.
+        if digit && self.moment(start, end) {
+            let moment = self.temporal(start, end);
+            self.node(depth);
+            return moment;
+        }
+        let length = end - start;
+        if first == 116 || first == 102 {
+            let word = origin.slice(start, end);
+            if word == "true" || word == "false" {
+                self.node(depth);
+                let flag is TomlValue = TomlBoolean(first == 116);
+                return flag;
+            }
+        }
+        else if !digit && (length == 3 || length == 4) {
+            let word = origin.slice(start, end);
+            if word == "inf" || word == "+inf" || word == "-inf" {
+                self.node(depth);
+                let infinity is TomlValue = TomlInfinity(first == 45);
+                return infinity;
+            }
+            if word == "nan" || word == "+nan" || word == "-nan" {
+                self.node(depth);
+                let nan is TomlValue = TomlNaN();
+                return nan;
+            }
+        }
+        if digit || first == 43 || first == 45 {
+            if self.whole(start, end) {
+                let integer is TomlValue = TomlInteger(self.integer(start, end));
+                self.node(depth);
+                return integer;
+            }
+            if self.real(start, end) {
+                let real is TomlValue = TomlFloat(self.float(start, end));
+                self.node(depth);
+                return real;
+            }
+        }
+        throw TomlStop.at(start, "expected TOML value");
+    }
+
+    // Where the scalar token starting at `from` ends.
+    hidden token(from is int) is int {
+        for from..size -> at {
+            let code = codes[at];
+            if code == 32
+                || code == 9
+                || code == 13
+                || code == 10
+                || code == 44
+                || code == 93
+                || code == 125
+                || code == 35 {
+                    return at;
+                }
+        }
+        size;
+    }
+
+    hidden digits(at is int, count is int) is bool {
+        if at + count > size {
+            return false;
+        }
+        for at..(at + count) -> index {
+            if codes[index] < 48 || codes[index] > 57 {
+                return false;
+            }
+        }
+        true;
+    }
+
+    // ---- scalar tokens: codes[start, end), refused at start ----
+
+    hidden tcode(start is int, end is int, at is int) is int {
+        if at >= start && at < end {
+            codes[at];
+        }
+        else {
+            -1;
+        }
+    }
+
+    hidden tdigits(start is int, end is int, at is int, count is int) is bool {
+        if at < start || at + count > end {
+            return false;
+        }
+        for at..(at + count) -> index {
+            if codes[index] < 48 || codes[index] > 57 {
+                return false;
+            }
+        }
+        true;
+    }
+
+    hidden number(at is int, count is int) is int {
+        (at..(at + count)).reduce(0) -> total, index {
+            total * 10 + codes[index] - 48;
+        };
+    }
+
+    // The first position from `from` holding one of two codes (or a third
+    // and fourth), else to.
+    hidden find(from is int, to is int, one is int, two is int, three is int, four is int) is int {
+        for from..to -> at {
+            let code = codes[at];
+            if code == one || code == two || code == three || code == four {
+                return at;
+            }
+        }
+        to;
+    }
+
+    hidden dated(start is int, end is int) is bool {
+        end - start >= 10
+            && self.tcode(start, end, start + 4) == 45
+            && self.tcode(start, end, start + 7) == 45
+            && self.tdigits(start, end, start, 4)
+            && self.tdigits(start, end, start + 5, 2)
+            && self.tdigits(start, end, start + 8, 2);
+    }
+
+    // Whether the token has the shape of a date, a time or both:
+    // `YYYY-MM-DD([Tt ]HH:MM:SS(.f+)?(Z|z|[Zz+-]HH:MM)?)?` or a time alone.
+    hidden moment(start is int, end is int) is bool {
+        if !self.dated(start, end) {
+            return self.clock(start, end, start, end);
+        }
+        if end - start == 10 {
+            return true;
+        }
+        let separator = self.tcode(start, end, start + 10);
+        if separator != 84 && separator != 116 && separator != 32 {
+            return false;
+        }
+        let zone = self.find(start + 11, end, 90, 122, 43, 45);
+        self.clock(start, end, start + 11, zone) && (zone == end || self.zoned(start, end, zone));
+    }
+
+    hidden clock(start is int, end is int, from is int, to is int) is bool {
+        let dot = self.find(from, to, 46, 46, 46, 46);
+        if dot < to {
+            if dot + 1 >= to || !self.tdigits(start, end, dot + 1, to - dot - 1) {
+                return false;
+            }
+        }
+        dot - from == 8
+            && self.tcode(start, end, from + 2) == 58
+            && self.tcode(start, end, from + 5) == 58
+            && self.tdigits(start, end, from, 2)
+            && self.tdigits(start, end, from + 3, 2)
+            && self.tdigits(start, end, from + 6, 2);
+    }
+
+    hidden zoned(start is int, end is int, at is int) is bool {
+        if end - at == 1 {
+            return self.tcode(start, end, at) == 90 || self.tcode(start, end, at) == 122;
+        }
+        end - at == 6
+            && self.tcode(start, end, at + 3) == 58
+            && self.tdigits(start, end, at + 1, 2)
+            && self.tdigits(start, end, at + 4, 2);
+    }
+
+    // The date, time or date-time of a token whose shape moment() accepted.
+    hidden temporal(start is int, end is int) is TomlValue {
+        if !self.dated(start, end) {
+            let time is TomlValue = self.time(start, end, start, end);
+            return time;
+        }
+        let year = self.number(start, 4);
+        let month = self.number(start + 5, 2);
+        let day = self.number(start + 8, 2);
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days = [
+            31,
+            if leap {
+                29;
+            }
+            else {
+                28;
+            },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31
+        ];
+        confirm month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1]
+            else throw TomlStop.at(start, "invalid Gregorian date");
+        let date = TomlLocalDate(year: year, month: month, day: day);
+        if end - start == 10 {
+            let only is TomlValue = date;
+            return only;
+        }
+        let zone = self.find(start + 11, end, 90, 122, 43, 45);
+        let local = TomlLocalDateTime(date: date, time: self.time(start, end, start + 11, zone));
+        if zone == end {
+            let moment is TomlValue = local;
+            return moment;
+        }
+        if end - zone == 1 {
+            let utc is TomlValue = TomlOffsetDateTime(local: local, offset: TomlOffset(0, true));
+            return utc;
+        }
+        let hours = self.number(zone + 1, 2);
+        let minutes = self.number(zone + 4, 2);
+        confirm hours <= 23 && minutes <= 59 else throw TomlStop.at(start, "invalid fixed offset");
+        let west = self.tcode(start, end, zone) == 45;
+        let amount = (hours * 60 + minutes) * if west {
+            -1;
+        }
+        else {
+            1;
+        };
+        let fixed is TomlValue = TomlOffsetDateTime(
+            local: local,
+            offset: TomlOffset(amount, !(west && amount == 0))
+        );
+        fixed;
+    }
+
+    hidden time(start is int, end is int, from is int, to is int) is TomlLocalTime {
+        let hour = self.number(from, 2);
+        let minute = self.number(from + 3, 2);
+        let second = self.number(from + 6, 2);
+        confirm hour <= 23 && minute <= 59 && second <= 60
+            else throw TomlStop.at(start, "invalid local time");
+        // Nine digits of the fraction, padded; further digits truncate.
+        let nanosecond = (0..9).reduce(0) -> total, index {
+            let at = from + 9 + index;
+            total * 10 + if from + 8 < to && at < to {
+                codes[at] - 48;
+            }
+            else {
+                0;
+            };
+        };
+        TomlLocalTime(hour: hour, minute: minute, second: second, nanosecond: nanosecond);
+    }
+
+    hidden digit(code is int, base is int) is bool {
+        if base == 10 {
+            code >= 48 && code <= 57;
+        }
+        else if base == 16 {
+            (code >= 48 && code <= 57) || (code >= 97 && code <= 102) || (code >= 65 && code <= 70);
+        }
+        else if base == 8 {
+            code >= 48 && code <= 55;
+        }
+        else {
+            code == 48 || code == 49;
+        }
+    }
+
+    // `d(_?d)*` over codes[from, to) in base.
+    hidden group(from is int, to is int, base is int) is bool {
+        if to <= from || !self.digit(codes[from], base) || !self.digit(codes[to - 1], base) {
+            return false;
+        }
+        for from..to -> index {
+            let code = codes[index];
+            if code == 95 {
+                if codes[index - 1] == 95 {
+                    return false;
+                }
+            }
+            else if !self.digit(code, base) {
+                return false;
+            }
+        }
+        true;
+    }
+
+    // `[+-]?(0|[1-9](_?[0-9])*)` over codes[from, to).
+    hidden decimal(start is int, end is int, from is int, to is int) is bool {
+        let sign = self.tcode(start, end, from);
+        let body = if (sign == 43 || sign == 45) && from < to {
+            from + 1;
+        }
+        else {
+            from;
+        };
+        if to - body == 1 && self.tcode(start, end, body) == 48 {
+            return true;
+        }
+        let first = self.tcode(start, end, body);
+        body < to && first >= 49 && first <= 57 && self.group(body, to, 10);
+    }
+
+    hidden radix(start is int, end is int) is int {
+        if end - start > 2 && codes[start] == 48 {
+            let mark = codes[start + 1];
+            if mark == 120 {
+                return 16;
+            }
+            if mark == 111 {
+                return 8;
+            }
+            if mark == 98 {
+                return 2;
+            }
+        }
+        0;
+    }
+
+    // Whether the token is a TOML integer: decimal, or 0x, 0o, 0b digits.
+    hidden whole(start is int, end is int) is bool {
+        if self.decimal(start, end, start, end) {
+            return true;
+        }
+        let base = self.radix(start, end);
+        base > 0 && self.group(start + 2, end, base);
+    }
+
+    // The integer whole() accepted, within signed 64 bits.
+    hidden integer(start is int, end is int) is int {
+        let base = self.radix(start, end);
+        let negative = codes[start] == 45;
+        let from = if base > 0 {
+            start + 2;
+        }
+        else if negative || codes[start] == 43 {
+            start + 1;
+        }
+        else {
+            start;
+        };
+        let radix = if base > 0 {
+            base;
+        }
+        else {
+            10;
+        };
+        let magnitude = (from..end).reduce(0) -> total, index {
+            let code = codes[index];
+            if code == 95 {
+                total;
+            }
+            else if code <= 57 {
+                total * radix + code - 48;
+            }
+            else if code >= 97 {
+                total * radix + code - 87;
+            }
+            else {
+                total * radix + code - 55;
+            }
+        };
+        let value = if negative {
+            0 - magnitude;
+        }
+        else {
+            magnitude;
+        };
+        confirm value >= -9223372036854775808 && value <= 9223372036854775807
+            else throw TomlStop.at(start, "integer outside signed 64-bit range");
+        value;
+    }
+
+    hidden exponent_at(start is int, end is int) is int {
+        self.find(start, end, 101, 69, 101, 69);
+    }
+
+    // Whether the token is a TOML float: a decimal integer with a fraction,
+    // an exponent or both.
+    hidden real(start is int, end is int) is bool {
+        let exponent = self.exponent_at(start, end);
+        let dot = self.find(start, exponent, 46, 46, 46, 46);
+        if dot == exponent && exponent == end {
+            return false;
+        }
+        if !self.decimal(start, end, start, dot) {
+            return false;
+        }
+        if dot < exponent && !self.group(dot + 1, exponent, 10) {
+            return false;
+        }
+        if exponent == end {
+            return true;
+        }
+        let sign = self.tcode(start, end, exponent + 1);
+        let from = if sign == 43 || sign == 45 {
+            exponent + 2;
+        }
+        else {
+            exponent + 1;
+        };
+        self.group(from, end, 10);
+    }
+
+    // The nearest binary64 to the float real() accepted; overflow fails.
+    hidden float(start is int, end is int) is float {
+        let negative = codes[start] == 45;
+        let exponent = self.exponent_at(start, end);
+        let dot = self.find(start, exponent, 46, 46, 46, 46);
+        let fraction = if dot < exponent {
+            (dot + 1..exponent).reduce(0) -> count, index {
+                if codes[index] == 95 {
+                    count;
+                }
+                else {
+                    count + 1;
+                }
+            };
+        }
+        else {
+            0;
+        };
+        let power = if exponent < end {
+            let sign = codes[exponent + 1];
+            let from = if sign == 43 || sign == 45 {
+                exponent + 2;
+            }
+            else {
+                exponent + 1;
+            };
+            let written = (from..end).reduce(0) -> total, index {
+                if codes[index] == 95 {
+                    total;
+                }
+                else {
+                    total * 10 + codes[index] - 48;
+                }
+            };
+            if sign == 45 {
+                0 - written;
+            }
+            else {
+                written;
+            }
+        }
+        else {
+            0;
+        };
+        let scale = power - fraction;
+        // Significant digits: the mantissa without its sign, separators and
+        // leading zeros.
+        let significant = (start..exponent).reduce(0) -> count, index {
+            let code = codes[index];
+            if code >= 49 && code <= 57 {
+                count + 1;
+            }
+            else if code == 48 && count > 0 {
+                count + 1;
+            }
+            else {
+                count;
+            }
+        };
+        if significant == 0 {
+            return if negative {
+                0.0 * -1.0;
+            }
+            else {
+                0.0;
+            };
+        }
+        if significant <= 15 && scale >= -22 && scale <= 22 {
+            // Exact digits and an exact power of ten: one rounding (Clinger).
+            let digits = (start..exponent).reduce(0) -> total, index {
+                let code = codes[index];
+                if code >= 48 && code <= 57 {
+                    total * 10 + code - 48;
+                }
+                else {
+                    total;
+                }
+            };
+            let tens = [
+                1.0,
+                10.0,
+                100.0,
+                1000.0,
+                10000.0,
+                100000.0,
+                1000000.0,
+                10000000.0,
+                100000000.0,
+                1000000000.0,
+                10000000000.0,
+                100000000000.0,
+                1000000000000.0,
+                10000000000000.0,
+                100000000000000.0,
+                1000000000000000.0,
+                10000000000000000.0,
+                100000000000000000.0,
+                1000000000000000000.0,
+                10000000000000000000.0,
+                100000000000000000000.0,
+                1000000000000000000000.0,
+                10000000000000000000000.0
+            ];
+            let magnitude = if scale >= 0 {
+                digits.float() * tens[scale];
+            }
+            else {
+                digits.float() / tens[0 - scale];
+            };
+            return if negative {
+                magnitude * -1.0;
+            }
+            else {
+                magnitude;
+            };
+        }
+        let order = significant + scale;
+        confirm order <= 309 else throw TomlStop.at(start, "floating-point overflow");
+        if order <= -324 {
+            return if negative {
+                0.0 * -1.0;
+            }
+            else {
+                0.0;
+            };
+        }
+        let mantissa = origin.slice(
+            if negative || codes[start] == 43 {
+                start + 1;
+            }
+            else {
+                start;
+            },
+            exponent
+        )
+            .replace("_", "")
+            .replace(".", "");
+        let digits = mantissa.slice(mantissa.length() - significant, mantissa.length());
+        if order == 309 {
+            // The least magnitude that rounds to infinity: 2^1024 - 2^970.
+            let limit = 2.pow(1024) - 2.pow(970);
+            let whole = int_parse(digits, 10);
+            let beyond = if scale >= 0 {
+                whole * 10.pow(scale) >= limit;
+            }
+            else {
+                whole >= limit * 10.pow(0 - scale);
+            };
+            confirm !beyond else throw TomlStop.at(start, "floating-point overflow");
+        }
+        let plain = if scale >= 0 {
+            digits + "0".repeat(scale) + ".0";
+        }
+        else if order > 0 {
+            digits.slice(0, order) + "." + digits.slice(order, significant);
+        }
+        else {
+            "0." + "0".repeat(0 - order) + digits;
+        };
+        float_parse(if negative {
+            "-" + plain;
+        }
+        else {
+            plain;
+        });
+    }
+
+    // ---- finishing ----
+
+    hidden table(draft is int) is TomlTable {
+        match self.draft(draft) {
+            case TomlDraft.table(definition, depth, names, slots) {
+                let members is @TomlMember = (0..names.size()).map() -> index {
+                    TomlMember(name: names[index], value: self.member(slots[index]));
+                };
+                TomlTable(members);
+            }
+            case TomlDraft.stack(depth, elements) {
+                let nothing is @TomlMember = [];
+                TomlTable(nothing);
+            }
+        }
+    }
+
+    hidden member(slot is TomlSlot) is TomlValue {
+        match slot {
+            case TomlSlot.done(value, array) {
+                value;
+            }
+            case TomlSlot.open(draft) {
+                match self.draft(draft) {
+                    case TomlDraft.stack(depth, elements) {
+                        let tables is @TomlValue = elements.map() -> element {
+                            let table is TomlValue = self.table(element);
+                            table;
+                        };
+                        let array is TomlValue = TomlArray(tables);
+                        array;
+                    }
+                    case TomlDraft.table(definition, depth, names, slots) {
+                        let table is TomlValue = self.table(draft);
+                        table;
+                    }
+                }
             }
         }
     }
@@ -300,4 +1585,218 @@ test "a parsed table reads like json (#140)" {
     test.throws(DuplicateTomlMember) {
         TomlTable(TomlMember("a", TomlInteger(1)), TomlMember("a", TomlInteger(2)));
     };
+}
+
+// Test-only: where and why a text fails, as "offset line column message".
+hidden object TomlTestFailure {
+    has origin is string;
+    has maximum_depth, maximum_nodes is int;
+
+    TomlTestFailure(origin is string) {
+        self.origin = origin;
+        maximum_depth = 64;
+        maximum_nodes = 10000;
+    }
+
+    TomlTestFailure(origin is string, maximum_depth is int, maximum_nodes is int) {
+        self.origin = origin;
+        self.maximum_depth = maximum_depth;
+        self.maximum_nodes = maximum_nodes;
+    }
+
+    text() is string {
+        try {
+            ParsedToml(origin, 1048576, maximum_depth, maximum_nodes).root();
+            "parsed";
+        }
+        catch InvalidToml.located(offset, line, column, message) {
+            offset.string() + " " + line.string() + " " + column.string() + " " + message;
+        }
+    }
+}
+
+test "strings: escapes, multiline trimming and folding, literal forms" {
+    let table = ParsedToml(
+        "basic = \"a\\tb\\u00E9\\U0001F600\\b\\f\\r\\n\\\"\\\\\"\n" +
+            "lines = \"\"\"\nline1\r\nline2\"\"\"\n" +
+            "folded = \"\"\"a\\\n   \n  b \\\r\n c\"\"\"\n" +
+            "quotes = \"\"\"x\"\"\"\"\"\n" +
+            "inner = \"\"\"say \"\"hi\"\"\"\"\"\n" +
+            "literal = 'C:\\path\\x'\n" +
+            "raw = '''\nraw\\n ''two'' '''\n" +
+            "'quoted key' = 1\n" +
+            "\"\\u0041\" = 2"
+    ).root();
+    test.is(table.text("basic"), "a\tbé😀" + 8.char().string() + 12.char().string() + "\r\n\"\\");
+    test.is(table.text("lines"), "line1\nline2");
+    test.is(table.text("folded"), "ab c");
+    test.is(table.text("quotes"), "x\"\"");
+    test.is(table.text("inner"), "say \"\"hi\"\"");
+    test.is(table.text("literal"), "C:\\path\\x");
+    test.is(table.text("raw"), "raw\\n ''two'' ");
+    test.is(table.int("quoted key"), 1);
+    test.is(table.int("A"), 2);
+    test.is(TomlTestFailure("x = \"a\\u12\"").text(), "6 1 7 invalid Unicode escape");
+    test.is(TomlTestFailure("x = \"\\uD800\"").text(), "5 1 6 escape is not a Unicode scalar");
+    test.is(TomlTestFailure("x = \"\\x41\"").text(), "5 1 6 unknown string escape");
+    test.is(TomlTestFailure("x = \"a\\").text(), "6 1 7 unfinished string escape");
+    test.is(TomlTestFailure("x = \"ab").text(), "7 1 8 unterminated string");
+    test.is(TomlTestFailure("x = \"a\nb\"").text(), "6 1 7 newline in single-line string");
+    test.is(
+        TomlTestFailure("x = \"a" + 1.char().string() + "\"").text(),
+        "6 1 7 control character in string"
+    );
+    test.is(TomlTestFailure("x = \"\"\"a\"\"\"\"\"\"").text(), "8 1 9 too many closing quotes");
+    test.is(TomlTestFailure("\"\"\"k\"\"\" = 1").text(), "0 1 1 multiline key is not allowed");
+}
+
+test "numbers: integer forms, exact range and nearest floats" {
+    let table = ParsedToml(
+        "hex = 0xDEAD_beef\noctal = 0o755\nbinary = 0b1010\nlow = -9223372036854775808\n" +
+            "high = 0x7FFFFFFFFFFFFFFF\nplus = +1_000\nzero = -0\n" +
+            "negative_zero = -0.0\ntiny = 5e-324\nlargest = 1.7976931348623157e308\ntenth = 0.1\n" +
+            "long = 123456789012345678.5\nunder = 1e-400\nscaled = 6.626e-34\nexponent = 1E1_0\n" +
+            "digits = 1.000000000000000111022302462515654042363166809082031251\n" +
+            "tie = 1.00000000000000011102230246251565404236316680908203125"
+    ).root();
+    test.is(table.int("hex"), 3735928559);
+    test.is(table.int("octal"), 493);
+    test.is(table.int("binary"), 10);
+    test.is(table.int("low"), -9223372036854775808);
+    test.is(table.int("high"), 9223372036854775807);
+    test.is(table.int("plus"), 1000);
+    test.is(table.int("zero"), 0);
+    test.is(table.float("negative_zero").string(), "-0");
+    test.is(table.float("tiny"), 5e-324);
+    test.is(table.float("largest"), 1.7976931348623157e308);
+    test.is(table.float("tenth"), 0.1);
+    test.is(table.float("long"), 123456789012345680.0);
+    test.is(table.float("under"), 0.0);
+    test.is(table.float("scaled"), 6.626e-34);
+    test.is(table.float("exponent"), 10000000000.0);
+    test.is(table.float("digits"), 1.0000000000000002);
+    test.is(table.float("tie"), 1.0);
+    test.is(
+        TomlTestFailure("x = 0x8000000000000000").text(),
+        "4 1 5 integer outside signed 64-bit range"
+    );
+    test.is(
+        TomlTestFailure("x = 9223372036854775808").text(),
+        "4 1 5 integer outside signed 64-bit range"
+    );
+    test.is(TomlTestFailure("x = 1.7976931348623159e308").text(), "4 1 5 floating-point overflow");
+    test.is(TomlTestFailure("x = 1e309").text(), "4 1 5 floating-point overflow");
+    for ["01", "1__0", "0x", "1.", ".5", "1e", "1_.5", "+0x1", "0X1F", "True", "nul"] -> spelling {
+        test.is(TomlTestFailure("x = " + spelling).text(), "4 1 5 expected TOML value");
+    }
+}
+
+test "dates and times: calendar, leap second, fractions and offsets" {
+    let table = ParsedToml(
+        "unknown = 1979-05-27 07:32:00.123456789999-00:00\nlower = 1979-05-27t07:32:00z\n" +
+            "east = 1979-05-27T07:32:00+05:30\nleap = 2000-02-29\nsecond = 23:59:60\nlocal = 0000-01-01T00:00:00.5"
+    ).root();
+    let unknown = table.date_time("unknown");
+    test.is(unknown.offset()::Offset::known, false);
+    test.is(unknown.local().time()::Clock::nanosecond, 123456789);
+    test.is(table.date_time("lower").string(), "1979-05-27T07:32:00Z");
+    test.is(table.date_time("east").offset()::Offset::minutes, 330);
+    test.is(table.local_date("leap").string(), "2000-02-29");
+    test.is(table.local_time("second")::Clock::second, 60);
+    test.is(table.local_date_time("local").time()::Clock::nanosecond, 500000000);
+    test.is(TomlTestFailure("x = 1900-02-29").text(), "4 1 5 invalid Gregorian date");
+    test.is(TomlTestFailure("x = 1979-13-01").text(), "4 1 5 invalid Gregorian date");
+    test.is(TomlTestFailure("x = 24:00:00").text(), "4 1 5 invalid local time");
+    test.is(TomlTestFailure("x = 1979-05-27T00:00:00+24:00").text(), "4 1 5 invalid fixed offset");
+    test.is(TomlTestFailure("x = 1979-05-27T07:32").text(), "4 1 5 expected TOML value");
+}
+
+test "failures carry character offsets, lines and columns" {
+    test.is(TomlTestFailure("a = 1\r\nb = 'é'\r\nc = @").text(), "20 3 5 expected TOML value");
+    test.is(
+        TomlTestFailure("a = 1\rb = 2").text(),
+        "5 1 6 bare carriage return is not a TOML newline"
+    );
+    test.is(TomlTestFailure("x=1 y=2").text(), "4 1 5 expected newline after statement");
+    test.is(
+        TomlTestFailure("x = 1 # c" + 1.char().string()).text(),
+        "9 1 10 control character in comment"
+    );
+    test.is(TomlTestFailure("x 1").text(), "2 1 3 expected =");
+    test.is(TomlTestFailure("= 1").text(), "0 1 1 expected key");
+    test.is(TomlTestFailure("x = [1 2]").text(), "7 1 8 expected ,");
+    test.is(TomlTestFailure("x = {a = 1,}").text(), "11 1 12 expected key");
+    test.is(TomlTestFailure("[[a] ]").text(), "3 1 4 expected ]]");
+    test.is(TomlTestFailure("é = 1").text(), "0 1 1 expected key");
+}
+
+test "tables: implicit and dotted definitions, arrays of tables, conflicts" {
+    let table = ParsedToml(
+        "[a.b]\nx = 1\n[a]\ny = 2\n[[t]]\nn = 1\n[t.sub]\nm = 2\n[[t]]\nn = 3\n" +
+            "[d]\np.q.r = 4\np.q.s = 5\ninline = { u.v = 6, w = [ { z = 7 } ] }"
+    ).root();
+    test.is(table.get("a").get("b").int("x"), 1);
+    test.is(table.get("a").int("y"), 2);
+    test.is(table.tables("t").size(), 2);
+    test.is(table.tables("t")[0].get("sub").int("m"), 2);
+    test.is(table.tables("t")[1].int("n"), 3);
+    test.is(table.get("d").get("p").get("q").int("s"), 5);
+    test.is(table.get("d").get("inline").get("u").int("v"), 6);
+    test.is(TomlTestFailure("x=1\nx=2").text(), "4 2 1 duplicate TOML key");
+    test.is(TomlTestFailure("[a]\n[a]").text(), "7 2 4 table redefinition or conflict");
+    test.is(TomlTestFailure("a.b.c=1\n[a.b]").text(), "13 2 6 table redefinition or conflict");
+    test.is(
+        TomlTestFailure("a=[1]\n[[a]]").text(),
+        "11 2 6 array-of-tables conflicts with existing value"
+    );
+    test.is(TomlTestFailure("a={b=1}\na.c=2").text(), "12 2 5 key is not an extensible table");
+    test.is(
+        TomlTestFailure("a=[1]\na.b=2").text(),
+        "10 2 5 dotted key cannot extend a header-defined table"
+    );
+    test.is(
+        TomlTestFailure("[a.b]\nx=1\n[a]\nb.y=2").text(),
+        "18 4 5 dotted key cannot extend a header-defined table"
+    );
+    test.is(
+        TomlTestFailure("[[t]]\n[t.u]\n[[t.u]]").text(),
+        "19 3 8 array-of-tables conflicts with existing value"
+    );
+    test.is(TomlTestFailure("a = {b = 1, b = 2}").text(), "12 1 13 duplicate TOML key");
+}
+
+test "limits: depth, nodes, input, members and items" {
+    test.is(TomlTestFailure("x = [[1]]", 4, 100).text(), "parsed");
+    test.is(TomlTestFailure("x = [[1]]", 3, 100).text(), "7 1 8 maximum TOML depth exceeded");
+    test.is(TomlTestFailure("a = 1\nb = 2", 64, 3).text(), "parsed");
+    test.is(TomlTestFailure("a = 1\nb = 2", 64, 2).text(), "11 2 6 maximum TOML nodes exceeded");
+    test.is(
+        try {
+            ParsedToml("x = 12", 5, 64, 100).root();
+            "parsed";
+        }
+        catch InvalidToml.located(offset, line, column, message) {
+            offset.string() + " " + message;
+        },
+        "5 maximum TOML input exceeded"
+    );
+    let members is @string = (0..1025).map() -> index {
+        "k" + index.string() + " = 1\n";
+    };
+    test.is(TomlTestFailure(members.take(1024).join("")).text(), "parsed");
+    test.is(
+        TomlTestFailure(members.join("")).text(),
+        "9130 1025 1 maximum TOML table members exceeded"
+    );
+    let items is @string = (0..10001).map() -> index {
+        "1";
+    };
+    test.is(
+        TomlTestFailure("x = [" + items.take(10000).join(",") + "]", 64, 20000).text(),
+        "parsed"
+    );
+    test.is(
+        TomlTestFailure("x = [" + items.join(",") + "]", 64, 20000).text(),
+        "20005 1 20006 maximum TOML array items exceeded"
+    );
 }

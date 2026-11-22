@@ -203,7 +203,7 @@ fn route(native: Native) -> Provider {
         "runtime/idna" | "runtime/public_suffix" => return Provider::Idna,
         "runtime/json" => return Provider::Json,
         "runtime/db" => return Provider::Db,
-        "runtime/toml" | "runtime/html" => return Provider::Markup,
+        "runtime/html" => return Provider::Markup,
         "runtime/xml" => return Provider::Xml,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => {
             return Provider::Math;
