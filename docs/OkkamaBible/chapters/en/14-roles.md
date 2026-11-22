@@ -30,8 +30,9 @@ role Package {
 A role is a list of action signatures: names, parameters and results. It
 has no fields, no constructors and no bodies. (The one exception is a
 `fake` block for tests, the subject of Chapter 15.) A role may declare
-several signatures with one name, as long as their parameter types differ
-and their results agree.
+several signatures with one name, as long as their parameter types differ;
+like the overloads of an object (Section 13.3), they may declare different
+results.
 
 An object implements a role by saying so:
 

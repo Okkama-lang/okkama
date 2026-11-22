@@ -8869,11 +8869,15 @@ Cash(digit is int, cents is int) {
 ```
 
 - A field bind is legal only inside a constructor body and its nested
-  blocks. It is not an assignment: each field is bound once, and there is
-  no other kind of assignment in the language.
+  blocks, while the object is being built. A later bind of the same field
+  replaces an earlier one, and once the constructor returns the field never
+  changes. Outside constructors the only `name = value;` is the rebinding of
+  a local to its successor (Section 13.7).
 - Every field must be bound or defaulted by the end of the constructor.
   Otherwise the compiler reports `Object "Cash" field "cents" was not
   initialized`.
+- Parameters may have defaults, as an action's may (Section 13.2):
+  `Cash(digit is int, cents is int = 0)` is called as `Cash(3)`.
 - The call uses positional or named arguments, never a mix:
   `Cash(3, 25)` or `Cash(digit: 3, cents: 25)`. Positional arguments bind to
   the constructor's *parameters*, not to the order of the fields.
@@ -8891,8 +8895,9 @@ Cash(:digit, :currency);
 name and type and binds it. The list is a closed allow-list:
 
 - **Named arguments only.** `Cash(digit: 2, currency: "EUR")` works, and
-  `Member(7)` is rejected with `No constructor of "Member" accepts (int)`
-  before any argument is evaluated.
+  `Member(7)` is rejected with `Constructor of "Member" takes named
+  arguments only: write Member(id: …, name: …)` before any argument is
+  evaluated. A listed field that has a default may be left out of the call.
 - **Unlisted fields cannot be supplied.** They take their defaults, or the
   constructor's body must bind them.
 - **A bodyless shorthand must complete the object.** If an unlisted field has
@@ -8950,8 +8955,9 @@ complete (Chapter 11, §11.7).
 How much work belongs in a constructor? The standard library keeps
 constructors cheap: bind, normalise, check. Expensive or effectful work —
 reading a file, parsing a document, opening a connection — happens in an
-action, often the first one called. `ParsedIni(text)` stores the text and
-checks its limits. Parsing happens in `value()`, so constructing a
+action, often the first one called. `ParsedIni(text)` stores the text, and
+the variant that takes explicit limits checks them. Parsing happens in
+`document()`, so constructing a
 `ParsedIni` never fails for a syntax error in the document. This keeps
 construction predictable: it validates what it was given and does nothing
 else.
@@ -10070,6 +10076,87 @@ An action that returns its own receiver says so: `touch() is Cash { self; }`.
 That is the only way to return `self`, and it needs both the explicit
 result and the explicit `self`.
 
+### Recursion
+
+An action may call itself, or another action of its object, through
+`self.`. Okkama has no special form for it and no limit on its depth other
+than the memory of the run (`--max-memory` bounds it, Section 10.13).
+
+```okkama
+module bible/recursion v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Numbers {
+    Numbers() { }
+
+    // Direct recursion: the depth is the size of the input.
+    factorial(n is int) is int {
+        if n <= 1 { 1; } else { n * self.factorial(n - 1); }
+    }
+
+    // Mutual recursion through self.
+    even(n is int) is bool { if n == 0 { true; } else { self.odd(n - 1); } }
+    odd(n is int) is bool { if n == 0 { false; } else { self.even(n - 1); } }
+
+    // A self tail call: nothing is left to do after it, so it runs in
+    // constant stack, a million levels deep.
+    counted(n is int, total is int) is int {
+        if n == 0 { total; } else { self.counted(n - 1, total + n); }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let numbers = Numbers();
+    out.writeln("30! = " + numbers.factorial(30).string());
+    out.writeln("7 is odd: " + numbers.odd(7).string());
+    out.writeln("1 + ... + 1000000 = " + numbers.counted(1000000, 0).string());
+    0;
+}
+```
+
+Output:
+
+```text
+30! = 265252859812191058636308480000000
+7 is odd: true
+1 + ... + 1000000 = 500000500000
+```
+
+- **Direct and mutual recursion are ordinary calls.** `factorial` calls
+  itself, and `even` and `odd` call each other.
+- **A self tail call runs in constant stack.** When the call is the last
+  thing an action does, as in `counted`, nothing is kept for the return, and
+  a million levels need no more stack than one.
+- **Recursion that cannot end is a compile error.** An action whose every
+  path calls itself before it can finish never returns, and the compiler
+  says so before the program runs:
+
+```okkama
+module bible/recursion_rejected v1.0.0;
+
+object Clock {
+    Clock() { }
+    ticks() is int { self.ticks() + 1; }
+}
+
+main() is int {
+    Clock().ticks();
+}
+```
+
+The compiler answers:
+
+```text
+13-recursion-rejected.ok:5:5: semantic error: Infinite recursion: "Clock.ticks" cannot complete without calling itself
+```
+
+The check looks for an action with no way out; it does not try to prove that
+a recursion with a base case reaches it. Anonymous actions cannot call
+themselves by name at all (Section 18.11): recursion is a property of a named
+action of an object, where the reader can find both the call and the exit.
+
 ## 13.2 Parameters and calls
 
 ```okkama
@@ -10580,7 +10667,8 @@ A cell is a fenced exception to immutability:
 
 - It has three operations: `Cell(value: initial)`, `value()` and
   `replace(value)`. The values it holds are ordinary immutable values.
-  Cells compare by identity, not by content.
+  Two cells are meant to compare by identity, but today `==` on any two
+  cells is `true` (issue #956), so a program should not compare them.
 - It stays in synchronous code. An async action cannot create, receive or
   use one. A synchronous action that uses a cell may still be called from
   async code. Synchronous code has no suspension point, so no task can see
@@ -10645,6 +10733,7 @@ hidden values() is @int {
 
 The first successful evaluation is remembered for that object; later calls reuse it (#491). Several actions can share a result by calling one hidden action. The following restrictions apply:
 
+- A `once let` stands only in an object's action, as a statement of the action's body itself, not inside a nested block or branch: there is one remembered value per action and object, and a branch would make it depend on which way the first call went.
 - A `once let` reads fields, `self`, constants and earlier `once let`s, never a call parameter.
 - It must be free of effects: no clock, file, network, process, randomness, `Cell`, async object, `await` or `spawn`. Calls through roles rely on their contracts.
 - Its value must not retain a resource. A closure or role value is allowed only when it cannot retain a resource in this program (issue #520).
@@ -10952,8 +11041,9 @@ role Package {
 A role is a list of action signatures: names, parameters and results. It
 has no fields, no constructors and no bodies. (The one exception is a
 `fake` block for tests, the subject of Chapter 15.) A role may declare
-several signatures with one name, as long as their parameter types differ
-and their results agree.
+several signatures with one name, as long as their parameter types differ;
+like the overloads of an object (Section 13.3), they may declare different
+results.
 
 An object implements a role by saying so:
 
@@ -12134,14 +12224,14 @@ PASS
   them. Test-only code cannot affect a production program, and it costs
   nothing there.
 
-Tests run in the same process.
+Without `--workers`, tests run in the runner's own process (Section 15.9).
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
 may stand anywhere among an object's members, between hidden actions too;
 it is still a test of the object. The standard library can
 render a test report as human text, TAP, JSON or JUnit (`testing/report`),
-but the command line offers no report formats, seeds or parallel workers
-yet. They are planned with the rewritten standard library (#339).
+and the command line writes human text, JSON or JUnit with `--report`
+(Section 15.9).
 
 ## 15.2 The `test` binding
 
@@ -12233,9 +12323,7 @@ not an outcome to assert (Chapter 10), and nothing catches it.
 
 The binding follows the whole dynamic extent of the test, so a helper
 object in another module can call `test.is` on behalf of the test that
-called it. The bundled `test/more` module builds on that: its
-`Assertions()` object chains `ok`, `is` and `isnt` and records them in the
-running case.
+called it. The checks of `testing/check` build on that (Section 15.9).
 
 ## 15.3 Why a fake and not a mock
 
@@ -12430,7 +12518,7 @@ FAIL
 exit 1
 ```
 
-`Property(generation, seed, cases, maximum_size, shrink_limit, condition)`:
+`Property(origin, seed, cases, maximum_size, shrink_limit, condition)`:
 
 - `IntegerGeneration(-100000, 100001)` produces integers from −100000 up
   to, but not including, 100001.
@@ -12710,8 +12798,7 @@ moves it. That is `ManualClock` from `testing/time`, and Section 20.11
 uses it to time out a courier after thirty seconds that never pass.
 
 A failed comparison of two `Duration`s reports both values by their
-fields, `expected Duration(origin: 2), got Duration(origin: 1)`, on both
-engines. Before 0.6.0 it printed heap identities (#756).
+fields, `expected Duration(origin: 2), got Duration(origin: 1)`. Before 0.6.0 it printed heap identities (#756).
 
 ## 15.9 The rest of the toolbox
 
@@ -12767,6 +12854,72 @@ The runner itself has three more switches:
 - **`--workers N`** runs every test in a process of its own and captures
   what it prints. **`--test-timeout SECONDS`** then stops a test that passes
   its deadline and reports it as timed out.
+
+### Examples in documentation are tests too
+
+A doc comment (Section 22.12) may show code in fenced examples, and
+`okkama run -t` checks them with the tests:
+
+```okkama
+module bible/doc_examples v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A price in whole cents.
+//
+// ```okkama
+// let price = Price(250);
+// ```
+//
+// Run, and its output checked:
+//
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// Stdout().writeln(Price(250).shown());
+// ```
+// ```output
+// 2.50
+// ```
+//
+// Shown, never compiled:
+//
+// ```okkama,ignore
+// let price = Price("2.50");   // a sketch: Price takes cents, not text
+// ```
+object Price {
+    has cents is int;
+    Price(cents is int) { self.cents = cents; }
+    shown() is string {
+        let rest = cents % 100;
+        (cents / 100).int().string() + "." + (if rest < 10 { "0"; } else { ""; }) + rest.string();
+    }
+    test "shown" { test.is(Price(305).shown(), "3.05"); }
+}
+
+main() is int {
+    Stdout().writeln(Price(1999).shown());
+    0;
+}
+```
+
+Output:
+
+```text
+=== RUN   Price :: shown
+--- PASS: Price :: shown
+PASS
+ok - doctest 15-doc-examples-tests.ok:7 (compile)
+ok - doctest 15-doc-examples-tests.ok:13 (run)
+```
+
+- A fence marked `okkama` must compile, with the module's own declarations
+  in scope, so an example cannot quietly rot when an action is renamed.
+- A fence marked `okkama,run` runs in a process of its own, and the
+  `output` fence right after it is its exact standard output. Change
+  `2.50` to `2.51` and the run fails with `expected stdout "2.51\n", got
+  "2.50\n"`.
+- A fence marked `okkama,ignore`, and an indented or other-language block,
+  only illustrates: it is shown, never compiled.
 
 ## 15.10 Okkama among other languages
 
@@ -12946,7 +13099,8 @@ The compiler answers:
 
 - **No actions.** An enum value is not an object. `Priority.low.string()` is
   an error, `Can only call actions on objects`, and there is no `values()` that
-  lists the cases.
+  lists the cases. The one exception is an error enum, whose values answer
+  `text()` (Chapter 10).
 - **No mixing.** Two cases are equal only if they belong to the same enum and
   are the same case. `Status.ready == Other.ready` is not `false`, it is a
   compile error, `Cannot compare Status and Other`, like any comparison across
@@ -13256,9 +13410,11 @@ let flag = match priority { case Priority.urgent: "!"; case _: " "; };
 let label = match reading { case Reading.single(value): value.string(); case _: "no single value"; };
 ```
 
-- A compact case is a pattern, a colon, the value and a semicolon. Block cases
-  and compact cases mix in one `match`.
-- `case _` covers the cases not named; it is another spelling of `else`.
+- A compact case is a pattern, a colon, the value and a semicolon. The value
+  may also be a `throw`: `case Reading.none: throw Missing.reading;`. Block
+  cases and compact cases mix in one `match`.
+- `case _` covers the cases not named; it is another spelling of `else`, and
+  it takes either form, while `else` always takes a block.
 - Patterns are written in full (`Priority.urgent`), as in any `match`, and the
   rules are the same: coverage, repeated cases, one result type.
 
@@ -13976,7 +14132,8 @@ What bounds cannot do is as deliberate as what they can:
 
 ## 17.5 Parameters used as map keys
 
-A map key must be a scalar, an enum, a string or a value object (Chapter 8).
+A map key must be a scalar, an enum without payloads, a string or a value
+object (Chapter 8).
 When a generic object uses its parameter as a key, as `%T:V` in a field, a
 signature or a body, or as the key of a map literal, every specialization has
 to respect that:
@@ -14186,8 +14343,8 @@ each other".
 
 ## 17.9 Generics in the standard library
 
-The standard library is the largest user of generics: 195 generic object
-declarations and 17 generic roles. Most of them fall into four groups.
+The standard library is the largest user of generics: 185 generic object
+declarations and 18 generic roles. Most of them fall into four groups.
 
 - **Collection views and cursors.** `Taken<T>`, `Sliced<T>`, `Zipped<A, B>`,
   `Sorted<T: Comparing<T>>`, `SortedBy<T, K: Comparing<K>>` and their cursors
@@ -14197,9 +14354,8 @@ declarations and 17 generic roles. Most of them fall into four groups.
   `Channel<T>` (Chapter 20).
 - **Contracts.** `Comparing<T>`, the operator roles `Adding<T, R>` and its
   siblings, `Iterating<T>`, `Cursor<T>`, `List<T>`, `Set<T>`.
-- **Settlements and cleanups** of asynchronous natives
-  (`HttpProxySettlement<T>`), where the type parameter carries the result of
-  a native call through the scheduler.
+- **Settlements** of asynchronous steps (`FormSettlement<T>`,
+  `RobotsSettlement<T>`), which hold the outcome of a step whatever its type.
 
 ```okkama
 module bible/library v1.0.0;
@@ -14948,7 +15104,7 @@ The compiler answers:
   #322).
 - **Equality is identity.** `pick == retail.of` is `false`. Each `.of`
   makes a new value, and two action values are equal only when they are
-  the same value (Section 18.11).
+  the same value (Section 18.3).
 - **An async action binds the same way.** `endpoint.fetch` of an `async`
   action is a value of type `async (int) is string`. Section 20.11 passes
   one to a retry policy.
@@ -15055,8 +15211,10 @@ by team: refund deploy backup reindex
   and the sort call stays one line.
 - **A `Cell` gathers the names.** `Listing.names` walks any `Iterating<Job>`
   and appends to a `Cell`, the mutable value of synchronous code. A `for`
-  block is not a closure, so it may update the cell. A `Cell` cannot be
-  captured into an action value that outlives the call (Section 18.2).
+  block is not a closure, so it may update the cell. An anonymous action may
+  capture a `Cell` too, and today nothing stops such an action from reaching
+  async code, where a cell must not go (issue #957); keep cells in the
+  synchronous code that made them.
 
 The same shape recurs across the library: keys in `SortedBy`, mappings
 and conditions in the lazy views of `collections/views`, and the condition
@@ -15284,7 +15442,9 @@ signature, and nothing converts it to a role or to a wider function type.
   compiler's check for recursion that cannot end.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
-  variadic anonymous parameters, no defaults.
+  variadic anonymous parameters, no defaults. A default is not rejected yet,
+  only ignored: `(n is int = 1) is int { n; }` compiles and `f()` still fails
+  for want of an argument (issue #958).
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
@@ -15775,10 +15935,10 @@ can join without touching `orders`. The cycle was a symptom: two modules
 that knew each other's objects instead of each other's contracts.
 
 The standard library is layered the same way at its bottom.
-- `compare` declares `Order` and `Comparing`, imports nothing, and 88 of the
+- `compare` declares `Order` and `Comparing`, imports nothing, and 83 of the
   library's modules import it.
 - `collections/iteration` declares `Cursor` and `Iterating`, also imports
-  nothing, and 40 modules import it.
+  nothing, and 41 modules import it.
 
 A contract module is cheap: a few roles, no state, no imports. It turns a
 tangle into layers.
@@ -16135,6 +16295,7 @@ version = "1.0.0"
 
 [build]
 entry = "src/main.ok"
+output = "target/demo.spb"
 
 [run]
 args = []

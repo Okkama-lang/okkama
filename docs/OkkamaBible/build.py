@@ -151,6 +151,10 @@ def engine_flag():
     return ["--engine", "sparrow"] if "--engine" in help_text else []
 
 
+# Examples whose doc tests start a process of their own (okkama,run).
+UNCAGED = {"15-doc-examples-tests"}
+
+
 def check():
     failures = 0
     flag = engine_flag()
@@ -166,6 +170,10 @@ def check():
             # writes outside examples/, bounded CPU and memory.
             cage = [sys.executable, os.path.join(ROOT, "okkama-rs", "tools", "new-runtime", "caged.py"),
                     "--cpu-seconds", "30", "--timeout", "60", "--memory-mb", "1024", "--writable", examples, "--"]
+            # An `okkama,run` doc example runs in a child process, which the
+            # cage forbids; these few examples run outside it.
+            if stem in UNCAGED:
+                cage = []
             # A `-tests` example is a test suite: its report is the output.
             tests = ["-t"] if stem.endswith("-tests") else []
             p = subprocess.run(cage + [OKKAMA, "run", *tests, *flag, name], cwd=examples,

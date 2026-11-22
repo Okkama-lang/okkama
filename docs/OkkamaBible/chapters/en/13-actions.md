@@ -67,6 +67,30 @@ An action that returns its own receiver says so: `touch() is Cash { self; }`.
 That is the only way to return `self`, and it needs both the explicit
 result and the explicit `self`.
 
+### Recursion
+
+An action may call itself, or another action of its object, through
+`self.`. Okkama has no special form for it and no limit on its depth other
+than the memory of the run (`--max-memory` bounds it, Section 10.13).
+
+{{example:13-recursion}}
+
+- **Direct and mutual recursion are ordinary calls.** `factorial` calls
+  itself, and `even` and `odd` call each other.
+- **A self tail call runs in constant stack.** When the call is the last
+  thing an action does, as in `counted`, nothing is kept for the return, and
+  a million levels need no more stack than one.
+- **Recursion that cannot end is a compile error.** An action whose every
+  path calls itself before it can finish never returns, and the compiler
+  says so before the program runs:
+
+{{example:13-recursion-rejected}}
+
+The check looks for an action with no way out; it does not try to prove that
+a recursion with a base case reaches it. Anonymous actions cannot call
+themselves by name at all (Section 18.11): recursion is a property of a named
+action of an object, where the reader can find both the call and the exit.
+
 ## 13.2 Parameters and calls
 
 {{example:13-actions}}
@@ -358,7 +382,8 @@ A cell is a fenced exception to immutability:
 
 - It has three operations: `Cell(value: initial)`, `value()` and
   `replace(value)`. The values it holds are ordinary immutable values.
-  Cells compare by identity, not by content.
+  Two cells are meant to compare by identity, but today `==` on any two
+  cells is `true` (issue #956), so a program should not compare them.
 - It stays in synchronous code. An async action cannot create, receive or
   use one. A synchronous action that uses a cell may still be called from
   async code. Synchronous code has no suspension point, so no task can see
@@ -406,6 +431,7 @@ hidden values() is @int {
 
 The first successful evaluation is remembered for that object; later calls reuse it (#491). Several actions can share a result by calling one hidden action. The following restrictions apply:
 
+- A `once let` stands only in an object's action, as a statement of the action's body itself, not inside a nested block or branch: there is one remembered value per action and object, and a branch would make it depend on which way the first call went.
 - A `once let` reads fields, `self`, constants and earlier `once let`s, never a call parameter.
 - It must be free of effects: no clock, file, network, process, randomness, `Cell`, async object, `await` or `spawn`. Calls through roles rely on their contracts.
 - Its value must not retain a resource. A closure or role value is allowed only when it cannot retain a resource in this program (issue #520).

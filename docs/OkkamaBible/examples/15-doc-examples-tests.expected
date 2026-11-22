@@ -1,0 +1,5 @@
+=== RUN   Price :: shown
+--- PASS: Price :: shown
+PASS
+ok - doctest 15-doc-examples-tests.ok:7 (compile)
+ok - doctest 15-doc-examples-tests.ok:13 (run)

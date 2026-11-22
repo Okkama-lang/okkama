@@ -129,11 +129,15 @@ Cash(digit is int, cents is int) {
 ```
 
 - A field bind is legal only inside a constructor body and its nested
-  blocks. It is not an assignment: each field is bound once, and there is
-  no other kind of assignment in the language.
+  blocks, while the object is being built. A later bind of the same field
+  replaces an earlier one, and once the constructor returns the field never
+  changes. Outside constructors the only `name = value;` is the rebinding of
+  a local to its successor (Section 13.7).
 - Every field must be bound or defaulted by the end of the constructor.
   Otherwise the compiler reports `Object "Cash" field "cents" was not
   initialized`.
+- Parameters may have defaults, as an action's may (Section 13.2):
+  `Cash(digit is int, cents is int = 0)` is called as `Cash(3)`.
 - The call uses positional or named arguments, never a mix:
   `Cash(3, 25)` or `Cash(digit: 3, cents: 25)`. Positional arguments bind to
   the constructor's *parameters*, not to the order of the fields.
@@ -151,8 +155,9 @@ Cash(:digit, :currency);
 name and type and binds it. The list is a closed allow-list:
 
 - **Named arguments only.** `Cash(digit: 2, currency: "EUR")` works, and
-  `Member(7)` is rejected with `No constructor of "Member" accepts (int)`
-  before any argument is evaluated.
+  `Member(7)` is rejected with `Constructor of "Member" takes named
+  arguments only: write Member(id: …, name: …)` before any argument is
+  evaluated. A listed field that has a default may be left out of the call.
 - **Unlisted fields cannot be supplied.** They take their defaults, or the
   constructor's body must bind them.
 - **A bodyless shorthand must complete the object.** If an unlisted field has
@@ -210,8 +215,9 @@ complete (Chapter 11, §11.7).
 How much work belongs in a constructor? The standard library keeps
 constructors cheap: bind, normalise, check. Expensive or effectful work —
 reading a file, parsing a document, opening a connection — happens in an
-action, often the first one called. `ParsedIni(text)` stores the text and
-checks its limits. Parsing happens in `value()`, so constructing a
+action, often the first one called. `ParsedIni(text)` stores the text, and
+the variant that takes explicit limits checks them. Parsing happens in
+`document()`, so constructing a
 `ParsedIni` never fails for a syntax error in the document. This keeps
 construction predictable: it validates what it was given and does nothing
 else.

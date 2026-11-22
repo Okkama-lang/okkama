@@ -1,0 +1,1 @@
+13-recursion-rejected.ok:5:5: semantic error: Infinite recursion: "Clock.ticks" cannot complete without calling itself

@@ -1,0 +1,10 @@
+module bible/recursion_rejected v1.0.0;
+
+object Clock {
+    Clock() { }
+    ticks() is int { self.ticks() + 1; }
+}
+
+main() is int {
+    Clock().ticks();
+}

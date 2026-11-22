@@ -284,7 +284,8 @@ What bounds cannot do is as deliberate as what they can:
 
 ## 17.5 Parameters used as map keys
 
-A map key must be a scalar, an enum, a string or a value object (Chapter 8).
+A map key must be a scalar, an enum without payloads, a string or a value
+object (Chapter 8).
 When a generic object uses its parameter as a key, as `%T:V` in a field, a
 signature or a body, or as the key of a map literal, every specialization has
 to respect that:
@@ -414,8 +415,8 @@ each other".
 
 ## 17.9 Generics in the standard library
 
-The standard library is the largest user of generics: 195 generic object
-declarations and 17 generic roles. Most of them fall into four groups.
+The standard library is the largest user of generics: 185 generic object
+declarations and 18 generic roles. Most of them fall into four groups.
 
 - **Collection views and cursors.** `Taken<T>`, `Sliced<T>`, `Zipped<A, B>`,
   `Sorted<T: Comparing<T>>`, `SortedBy<T, K: Comparing<K>>` and their cursors
@@ -425,9 +426,8 @@ declarations and 17 generic roles. Most of them fall into four groups.
   `Channel<T>` (Chapter 20).
 - **Contracts.** `Comparing<T>`, the operator roles `Adding<T, R>` and its
   siblings, `Iterating<T>`, `Cursor<T>`, `List<T>`, `Set<T>`.
-- **Settlements and cleanups** of asynchronous natives
-  (`HttpProxySettlement<T>`), where the type parameter carries the result of
-  a native call through the scheduler.
+- **Settlements** of asynchronous steps (`FormSettlement<T>`,
+  `RobotsSettlement<T>`), which hold the outcome of a step whatever its type.
 
 {{example:17-library}}
 

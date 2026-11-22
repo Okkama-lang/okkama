@@ -292,10 +292,10 @@ can join without touching `orders`. The cycle was a symptom: two modules
 that knew each other's objects instead of each other's contracts.
 
 The standard library is layered the same way at its bottom.
-- `compare` declares `Order` and `Comparing`, imports nothing, and 88 of the
+- `compare` declares `Order` and `Comparing`, imports nothing, and 83 of the
   library's modules import it.
 - `collections/iteration` declares `Cursor` and `Iterating`, also imports
-  nothing, and 40 modules import it.
+  nothing, and 41 modules import it.
 
 A contract module is cheap: a few roles, no state, no imports. It turns a
 tangle into layers.
@@ -481,6 +481,7 @@ version = "1.0.0"
 
 [build]
 entry = "src/main.ok"
+output = "target/demo.spb"
 
 [run]
 args = []

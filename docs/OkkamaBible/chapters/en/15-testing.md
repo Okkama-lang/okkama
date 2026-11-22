@@ -46,14 +46,14 @@ PASS
   them. Test-only code cannot affect a production program, and it costs
   nothing there.
 
-Tests run in the same process.
+Without `--workers`, tests run in the runner's own process (Section 15.9).
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
 may stand anywhere among an object's members, between hidden actions too;
 it is still a test of the object. The standard library can
 render a test report as human text, TAP, JSON or JUnit (`testing/report`),
-but the command line offers no report formats, seeds or parallel workers
-yet. They are planned with the rewritten standard library (#339).
+and the command line writes human text, JSON or JUnit with `--report`
+(Section 15.9).
 
 ## 15.2 The `test` binding
 
@@ -107,9 +107,7 @@ not an outcome to assert (Chapter 10), and nothing catches it.
 
 The binding follows the whole dynamic extent of the test, so a helper
 object in another module can call `test.is` on behalf of the test that
-called it. The bundled `test/more` module builds on that: its
-`Assertions()` object chains `ok`, `is` and `isnt` and records them in the
-running case.
+called it. The checks of `testing/check` build on that (Section 15.9).
 
 ## 15.3 Why a fake and not a mock
 
@@ -236,7 +234,7 @@ input to a minimal one before reporting it [@claessen2000].
 
 {{example:15-property-tests}}
 
-`Property(generation, seed, cases, maximum_size, shrink_limit, condition)`:
+`Property(origin, seed, cases, maximum_size, shrink_limit, condition)`:
 
 - `IntegerGeneration(-100000, 100001)` produces integers from −100000 up
   to, but not including, 100001.
@@ -324,8 +322,7 @@ moves it. That is `ManualClock` from `testing/time`, and Section 20.11
 uses it to time out a courier after thirty seconds that never pass.
 
 A failed comparison of two `Duration`s reports both values by their
-fields, `expected Duration(origin: 2), got Duration(origin: 1)`, on both
-engines. Before 0.6.0 it printed heap identities (#756).
+fields, `expected Duration(origin: 2), got Duration(origin: 1)`. Before 0.6.0 it printed heap identities (#756).
 
 ## 15.9 The rest of the toolbox
 
@@ -381,6 +378,22 @@ The runner itself has three more switches:
 - **`--workers N`** runs every test in a process of its own and captures
   what it prints. **`--test-timeout SECONDS`** then stops a test that passes
   its deadline and reports it as timed out.
+
+### Examples in documentation are tests too
+
+A doc comment (Section 22.12) may show code in fenced examples, and
+`okkama run -t` checks them with the tests:
+
+{{example:15-doc-examples-tests}}
+
+- A fence marked `okkama` must compile, with the module's own declarations
+  in scope, so an example cannot quietly rot when an action is renamed.
+- A fence marked `okkama,run` runs in a process of its own, and the
+  `output` fence right after it is its exact standard output. Change
+  `2.50` to `2.51` and the run fails with `expected stdout "2.51\n", got
+  "2.50\n"`.
+- A fence marked `okkama,ignore`, and an indented or other-language block,
+  only illustrates: it is shown, never compiled.
 
 ## 15.10 Okkama among other languages
 

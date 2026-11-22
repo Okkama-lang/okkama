@@ -1,0 +1,39 @@
+module bible/doc_examples v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A price in whole cents.
+//
+// ```okkama
+// let price = Price(250);
+// ```
+//
+// Run, and its output checked:
+//
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// Stdout().writeln(Price(250).shown());
+// ```
+// ```output
+// 2.50
+// ```
+//
+// Shown, never compiled:
+//
+// ```okkama,ignore
+// let price = Price("2.50");   // a sketch: Price takes cents, not text
+// ```
+object Price {
+    has cents is int;
+    Price(cents is int) { self.cents = cents; }
+    shown() is string {
+        let rest = cents % 100;
+        (cents / 100).int().string() + "." + (if rest < 10 { "0"; } else { ""; }) + rest.string();
+    }
+    test "shown" { test.is(Price(305).shown(), "3.05"); }
+}
+
+main() is int {
+    Stdout().writeln(Price(1999).shown());
+    0;
+}

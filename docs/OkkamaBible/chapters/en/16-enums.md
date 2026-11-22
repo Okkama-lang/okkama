@@ -46,7 +46,8 @@ What an Okkama enum value *does not* have is as important as what it has:
 
 - **No actions.** An enum value is not an object. `Priority.low.string()` is
   an error, `Can only call actions on objects`, and there is no `values()` that
-  lists the cases.
+  lists the cases. The one exception is an error enum, whose values answer
+  `text()` (Chapter 10).
 - **No mixing.** Two cases are equal only if they belong to the same enum and
   are the same case. `Status.ready == Other.ready` is not `false`, it is a
   compile error, `Cannot compare Status and Other`, like any comparison across
@@ -236,9 +237,11 @@ let flag = match priority { case Priority.urgent: "!"; case _: " "; };
 let label = match reading { case Reading.single(value): value.string(); case _: "no single value"; };
 ```
 
-- A compact case is a pattern, a colon, the value and a semicolon. Block cases
-  and compact cases mix in one `match`.
-- `case _` covers the cases not named; it is another spelling of `else`.
+- A compact case is a pattern, a colon, the value and a semicolon. The value
+  may also be a `throw`: `case Reading.none: throw Missing.reading;`. Block
+  cases and compact cases mix in one `match`.
+- `case _` covers the cases not named; it is another spelling of `else`, and
+  it takes either form, while `else` always takes a block.
 - Patterns are written in full (`Priority.urgent`), as in any `match`, and the
   rules are the same: coverage, repeated cases, one result type.
 

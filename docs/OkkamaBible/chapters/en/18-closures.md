@@ -274,7 +274,7 @@ receiver `retail`, so calling it later uses that object's rate.
   #322).
 - **Equality is identity.** `pick == retail.of` is `false`. Each `.of`
   makes a new value, and two action values are equal only when they are
-  the same value (Section 18.11).
+  the same value (Section 18.3).
 - **An async action binds the same way.** `endpoint.fetch` of an `async`
   action is a value of type `async (int) is string`. Section 20.11 passes
   one to a retry policy.
@@ -317,8 +317,10 @@ action value. The most common is a sort key.
   and the sort call stays one line.
 - **A `Cell` gathers the names.** `Listing.names` walks any `Iterating<Job>`
   and appends to a `Cell`, the mutable value of synchronous code. A `for`
-  block is not a closure, so it may update the cell. A `Cell` cannot be
-  captured into an action value that outlives the call (Section 18.2).
+  block is not a closure, so it may update the cell. An anonymous action may
+  capture a `Cell` too, and today nothing stops such an action from reaching
+  async code, where a cell must not go (issue #957); keep cells in the
+  synchronous code that made them.
 
 The same shape recurs across the library: keys in `SortedBy`, mappings
 and conditions in the lazy views of `collections/views`, and the condition
@@ -493,7 +495,9 @@ signature, and nothing converts it to a role or to a wider function type.
   compiler's check for recursion that cannot end.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
-  variadic anonymous parameters, no defaults.
+  variadic anonymous parameters, no defaults. A default is not rejected yet,
+  only ignored: `(n is int = 1) is int { n; }` compiles and `f()` still fails
+  for want of an argument (issue #958).
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
