@@ -783,3 +783,27 @@ fn once_let_refuses_values_that_reach_effects() {
     );
     assert!(trusted.is_empty(), "{trusted:?}");
 }
+
+/// #999 (#520): a once let whose value reaches a resource through a role
+/// would outlive the scope that releases it.
+#[test]
+fn once_let_refuses_a_resource_behind_a_role() {
+    let found = std_messages(
+        "role Named { name() is string; } \
+         object File does Named { has n is string; File(:n); name() is string { n; } destroy { } } \
+         object Holder { Holder(); named() is Named { once let kept is Named = File(n: \"a\"); kept; } } \
+         main() is int { Holder().named(); 0; }",
+    );
+    assert!(
+        found.iter().any(|m| m.contains("once let cannot keep a resource") && m.contains("Holder keeps Named")),
+        "{found:?}"
+    );
+    // A plain object behind the same role is kept.
+    let plain = std_messages(
+        "role Named { name() is string; } \
+         object Tag does Named { has n is string; Tag(:n); name() is string { n; } } \
+         object Holder { Holder(); named() is Named { once let kept is Named = Tag(n: \"a\"); kept; } } \
+         main() is int { Holder().named(); 0; }",
+    );
+    assert!(plain.is_empty(), "{plain:?}");
+}

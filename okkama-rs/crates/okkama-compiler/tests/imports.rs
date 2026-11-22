@@ -94,3 +94,59 @@ fn inspecting_a_parsed_file_matches_inspecting_its_text() {
         assert_eq!(own.diagnostics.is_empty(), text.contains("Shared(n: 1)"), "{text}: {:?}", own.diagnostics);
     }
 }
+
+/// Every message of checking `root` against `modules`, whichever stage
+/// refused it.
+fn link_messages(modules: &[(&str, &str)], root: &str) -> Vec<String> {
+    let mut loader = Counting {
+        modules: modules.iter().map(|(path, text)| (path.to_string(), text.to_string())).collect(),
+        parsed: HashMap::new(),
+        resolves: true,
+    };
+    let source = SourceFile::new("/app/main.ok", root.to_string()).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    match lowering::check_linked_files(&[RootFile { program: &program, source: &source }], &mut loader) {
+        Ok(found) => found.into_iter().map(|e| e.error.message).collect(),
+        Err(Ok(found)) => found.into_iter().map(|e| e.error.message).collect(),
+        Err(Err(message)) => vec![message],
+    }
+}
+
+/// #999: two files that declare one module cannot meet in a program.
+#[test]
+fn one_module_from_two_files_is_refused() {
+    let module = "module same v1.0.0;\nobject S {\n    S();\n}\n";
+    let found = link_messages(
+        &[("a", module), ("b", module)],
+        "module app v1.0.0;\nimport \"a\";\nimport \"b\";\nmain() is int { 0; }\n",
+    );
+    assert!(
+        found.iter().any(|m| m.contains("Module \"same\" is loaded from two files: /lib/a.ok and /lib/b.ok")),
+        "{found:?}"
+    );
+}
+
+/// #999: a std path that names no module says so, with its std. spelling.
+#[test]
+fn a_missing_standard_module_is_named() {
+    let found = link_messages(&[], "module app v1.0.0;\nmain() is int {\n    std.nosuch.Thing().go();\n    0;\n}\n");
+    assert!(
+        found.iter().any(|m| m == "Standard library module \"nosuch\" not found (std.nosuch)"),
+        "{found:?}"
+    );
+}
+
+/// #999: past MODULE_COUNT modules the import is refused with the limit.
+#[test]
+fn a_program_past_the_module_limit_is_refused() {
+    let (loader, root) = graph(lowering::MODULE_COUNT, true);
+    let modules: Vec<(String, String)> = loader.modules.into_iter().collect();
+    let modules: Vec<(&str, &str)> = modules.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let found = link_messages(&modules, &root);
+    let limit = format!("exceeds the program limit of {} modules", lowering::MODULE_COUNT);
+    assert!(found.iter().any(|m| m.contains(&limit)), "{found:?}");
+    let (loader, root) = graph(64, true);
+    let modules: Vec<(String, String)> = loader.modules.into_iter().collect();
+    let modules: Vec<(&str, &str)> = modules.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    assert!(link_messages(&modules, &root).is_empty());
+}

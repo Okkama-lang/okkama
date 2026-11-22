@@ -15,7 +15,7 @@ pub(crate) mod intrinsics;
 mod modules;
 pub mod std_paths;
 
-pub use modules::{LoadedModule, ModuleLoader};
+pub use modules::{LoadedModule, MODULE_COUNT, ModuleLoader};
 
 use std::fmt;
 
