@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. #943 fixed JUnit wire format (performance task).**
+  Serialize its constant XML vocabulary directly in testing/report instead
+  of constructing and repeatedly validating an XML tree. Keep user text
+  escaping in the existing JUnitReportText/EscapedXml mechanisms and escape
+  the shared suite/classname once per render. Keep the public API, exact
+  output (including xmlns on each element), and document size bound.
+  Verified by 2100 differential reports and eight killed test mutations.
+
 - **2026-11-22. #940 finding 1: cancellation during timeout timer cleanup.**
   For a directly selected origin, `Collection.winner` with `consumed[0]`
   preserves the irreversible receive commit until the wrapper publishes its

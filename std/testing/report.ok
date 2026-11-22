@@ -8,15 +8,15 @@ module testing/report v1.0.0;
 //     JUnitTestReport(origin: report, suite: "std").string();
 
 import "testing/result" take TestReport, TestResult, TestFailure, TestFailureText, TestCounts,
-    TestStatus, InvalidTestResult;
+    TestStatus, InvalidTestResult, TestOutput, TestPosition;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/hex" take HexEncoded;
 import "encoding/base64" take Base64Encoded;
 import "json" take Json, JsonField;
 import "time/clock" take Instant;
 import "time/duration" take Duration, DurationUnit;
-import "xml/name" take XmlName;
-import "xml/node" take XmlNode, XmlText, XmlAttribute, XmlElement, XmlDocument;
+import "xml/name" take InvalidXml;
+import "xml/write" take EscapedXml;
 
 hidden object TestStatusName {
     has origin is TestStatus;
@@ -350,42 +350,42 @@ object JUnitTestReport {
                 0;
             });
         };
-        let properties = XmlElement(name: XmlName("properties"), children: [
-            self.property("seed", origin.seed().string()),
-            self.property("start_unix_ns", origin.start().unix_duration().nanoseconds().string()),
-            self.property("captured-output-encoding", "base64")
-        ]);
-        let children is @XmlNode = (0..results.size() + 1).map() -> index {
-            if index == 0 {
-                properties;
-            }
-            else {
-                self.result(results.item(index - 1));
-            }
+
+        // The vocabulary and shape are fixed. Building an XML tree here used
+        // to validate every constant name with a Unicode regex and traverse
+        // the tree again for namespaces, depths and serialization.
+        let classname = self.attribute(suite);
+        let children is @string = (0..results.size()).map() -> index {
+            self.result(results.item(index), classname);
         };
-        XmlDocument(XmlElement(
-            name: XmlName("testsuite"),
-            attributes: [
-                XmlAttribute(XmlName("name"), JUnitReportText(suite).string()),
-                XmlAttribute(XmlName("tests"), counts.total().string()),
-                XmlAttribute(XmlName("failures"), failed.string()),
-                XmlAttribute(XmlName("errors"), (counts::Counts::failures - failed).string()),
-                XmlAttribute(XmlName("skipped"), counts::Counts::skips.string()),
-                XmlAttribute(XmlName("time"), JUnitSeconds(origin.duration()).string())
-            ],
-            children: children
-        )).xml();
+        let body = "<testsuite xmlns=\"\" name=\"" + classname +
+            "\" tests=\"" + counts.total().string() +
+            "\" failures=\"" + failed.string() +
+            "\" errors=\"" + (counts::Counts::failures - failed).string() +
+            "\" skipped=\"" + counts::Counts::skips.string() +
+            "\" time=\"" + JUnitSeconds(origin.duration()).string() + "\">" +
+            "<properties xmlns=\"\">" +
+            self.property("seed", origin.seed().string()) +
+            self.property("start_unix_ns", origin.start().unix_duration().nanoseconds().string()) +
+            self.property("captured-output-encoding", "base64") +
+            "</properties>" + children.join("") + "</testsuite>";
+        // Retain XmlDocument's output budget. All descendants are smaller;
+        // the fixed shape also stays within XML depth/attribute/child limits.
+        confirm body.length() + 38 <= 33554432
+            else throw InvalidXml.located(0, "XML document exceeds 32 Mi scalars");
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + body;
     }
 
-    hidden property(name is string, value is string) is XmlElement {
-        XmlElement(
-            name: XmlName("property"),
-            attributes: [XmlAttribute(XmlName("name"), name), XmlAttribute(XmlName("value"), value)],
-            children: []
-        );
+    // Only fixed names and numeric/base64/boolean values reach this helper.
+    hidden property(name is string, value is string) is string {
+        "<property xmlns=\"\" name=\"" + name + "\" value=\"" + value + "\"/>";
     }
 
-    hidden result(result is TestResult) is XmlElement {
+    hidden attribute(text is string) is string {
+        EscapedXml(origin: JUnitReportText(text).string(), attribute: true).string();
+    }
+
+    hidden result(result is TestResult, classname is string) is string {
         let status = result::Outcome::status;
         let failures = result.failures();
         let messages is @string = (0..failures.size()).map() -> index {
@@ -398,23 +398,13 @@ object JUnitTestReport {
                 "";
             }) + JUnitReportText(TestFailureText(failure).string()).string();
         };
-        let terminal is @XmlNode = if status == TestStatus.passed {
-            [];
+
+        let terminal = if status == TestStatus.passed {
+            "";
         }
         else {
             if status == TestStatus.skipped {
-                [
-                    XmlElement(
-                        name: XmlName("skipped"),
-                        attributes: [
-                            XmlAttribute(
-                                XmlName("message"),
-                                JUnitReportText(result::Outcome::skip_reason).string()
-                            )
-                        ],
-                        children: []
-                    )
-                ];
+                "<skipped xmlns=\"\" message=\"" + self.attribute(result::Outcome::skip_reason) + "\"/>";
             }
             else {
                 let label = TestStatusName(status).string();
@@ -424,52 +414,33 @@ object JUnitTestReport {
                 else {
                     "error";
                 };
-                [
-                    XmlElement(
-                        name: XmlName(tag),
-                        attributes: [XmlAttribute(XmlName("type"), label)],
-                        children: [XmlText(if messages.size() == 0 {
+                "<" + tag + " xmlns=\"\" type=\"" + label + "\">" +
+                    EscapedXml(
+                        origin: if messages.size() == 0 {
                             label;
                         }
                         else {
                             messages.join("\n");
-                        })]
-                    )
-                ];
+                        },
+                        attribute: false
+                    ).string() +
+                    "</" + tag + ">";
             }
         };
         let output = result.output();
-        let capture is @XmlNode = [
-            XmlElement(
-                name: XmlName("properties"),
-                children: [
-                    self.property("captured-output-truncated", if output::Captured::truncated {
-                        "true";
-                    }
-                    else {
-                        "false";
-                    })
-                ]
-            ),
-            XmlElement(
-                name: XmlName("system-out"),
-                children: [XmlText(Base64Encoded(output::Captured::output).string())]
-            ),
-            XmlElement(
-                name: XmlName("system-err"),
-                children: [XmlText(Base64Encoded(output::Captured::errors).string())]
-            )
-        ];
-        let children is @XmlNode = terminal + capture;
-        XmlElement(
-            name: XmlName("testcase"),
-            attributes: [
-                XmlAttribute(XmlName("name"), JUnitReportText(result::Outcome::name).string()),
-                XmlAttribute(XmlName("classname"), JUnitReportText(suite).string()),
-                XmlAttribute(XmlName("time"), JUnitSeconds(result.duration()).string())
-            ],
-            children: children
-        );
+        "<testcase xmlns=\"\" name=\"" + self.attribute(result::Outcome::name) +
+            "\" classname=\"" + classname +
+            "\" time=\"" + JUnitSeconds(result.duration()).string() + "\">" +
+            terminal + "<properties xmlns=\"\">" +
+            self.property("captured-output-truncated", if output::Captured::truncated {
+                "true";
+            }
+            else {
+                "false";
+            }) +
+            "</properties><system-out xmlns=\"\">" + Base64Encoded(output::Captured::output).string() +
+            "</system-out><system-err xmlns=\"\">" + Base64Encoded(output::Captured::errors).string() +
+            "</system-err></testcase>";
     }
 }
 
@@ -522,4 +493,109 @@ test "empty TAP report carries an explicit skipped plan" {
         ).string(),
         "TAP version 13\n1..0 # SKIP empty report\n# seed=0\n"
     );
+}
+
+test "JUnit empty suite preserves declaration attributes and properties" {
+    let zero = Duration(seconds: 0);
+    test.is(
+        JUnitTestReport(
+            origin: TestReport(start: Instant(zero), duration: zero, seed: 42, results: []),
+            suite: "s"
+        ).string(),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuite xmlns=\"\" name=\"s\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0.000000000\"><properties xmlns=\"\"><property xmlns=\"\" name=\"seed\" value=\"42\"/><property xmlns=\"\" name=\"start_unix_ns\" value=\"0\"/><property xmlns=\"\" name=\"captured-output-encoding\" value=\"base64\"/></properties></testsuite>"
+    );
+}
+
+test "JUnit separates failures errors skips and escapes attributes and text" {
+    let duration = Duration(value: 1234567890.rat(), unit: DurationUnit.nanosecond);
+    let statuses = [
+        TestStatus.passed,
+        TestStatus.failed,
+        TestStatus.skipped,
+        TestStatus.timed_out,
+        TestStatus.crashed
+    ];
+    let results is @TestResult = statuses.map() -> status {
+        TestResult(
+            name: "n&<>\"'é",
+            status: status,
+            duration: duration,
+            failures: if status == TestStatus.failed {
+                [
+                    TestFailure(
+                        message: "m&<>\"'中文\n",
+                        position: TestPosition(source: "a&.ok", line: 2, column: 3)
+                    )
+                ];
+            }
+            else {
+                [];
+            },
+            output: TestOutput(output: [byte(0), byte(255)], errors: [byte(38)], truncated: true),
+            skip_reason: if status == TestStatus.skipped {
+                "&<>\"'é";
+            }
+            else {
+                "";
+            }
+        );
+    };
+    let xml = JUnitTestReport(
+        origin: TestReport(start: Instant(duration), duration: duration, seed: 7, results: results),
+        suite: "s&<>\"'é"
+    ).string();
+    test.ok(
+        xml.contains(
+            "name=\"s&amp;&lt;&gt;&quot;'é\" tests=\"5\" failures=\"1\" errors=\"2\" skipped=\"1\" time=\"1.234567890\""
+        )
+    );
+    test.ok(
+        xml.contains(
+            "<testcase xmlns=\"\" name=\"n&amp;&lt;&gt;&quot;'é\" classname=\"s&amp;&lt;&gt;&quot;'é\" time=\"1.234567890\">"
+        )
+    );
+    test.ok(
+        xml.contains(
+            "<failure xmlns=\"\" type=\"failed\">a&amp;.ok:2:3: m&amp;&lt;&gt;\"'中文\\n</failure>"
+        )
+    );
+    test.ok(xml.contains("<skipped xmlns=\"\" message=\"&amp;&lt;&gt;&quot;'é\"/>"));
+    test.ok(xml.contains("<error xmlns=\"\" type=\"timed_out\">timed_out</error>"));
+    test.ok(xml.contains("<error xmlns=\"\" type=\"crashed\">crashed</error>"));
+    test.ok(
+        xml.contains("<property xmlns=\"\" name=\"captured-output-truncated\" value=\"true\"/>")
+    );
+    test.ok(
+        xml.contains(
+            "<system-out xmlns=\"\">AP8=</system-out><system-err xmlns=\"\">Jg==</system-err>"
+        )
+    );
+}
+
+test "JUnit report text keeps controls and forbidden XML scalars printable" {
+    test.is(
+        JUnitReportText("\\\n\r\t\u{0}\u{7F}\u{85}\u{2028}\u{2029}\u{FFFE}\u{FFFF}😀").string(),
+        "\\\\\\n\\r\\t\\x00\\x7f\\xc285\\xe280a8\\xe280a9\\uFFFE\\uFFFF😀"
+    );
+}
+
+test "JUnit passed case keeps empty capture elements and false truncation" {
+    let zero = Duration(seconds: 0);
+    let result = TestResult(
+        name: "pass",
+        status: TestStatus.passed,
+        duration: Duration(value: 1.rat(), unit: DurationUnit.nanosecond),
+        failures: [],
+        output: TestOutput(output: [], errors: [], truncated: false)
+    );
+    let report = TestReport(start: Instant(zero), duration: zero, seed: 0, results: [result]);
+    let xml = JUnitTestReport(origin: report, suite: "s").string();
+    test.ok(
+        xml.contains(
+            "<testcase xmlns=\"\" name=\"pass\" classname=\"s\" time=\"0.000000001\"><properties xmlns=\"\"><property xmlns=\"\" name=\"captured-output-truncated\" value=\"false\"/></properties><system-out xmlns=\"\"></system-out><system-err xmlns=\"\"></system-err></testcase>"
+        )
+    );
+    test.throws(InvalidTestResult) {
+        JUnitTestReport(origin: report, suite: "");
+    };
 }

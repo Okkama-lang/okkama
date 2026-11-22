@@ -6334,7 +6334,7 @@ test "integer bounds" {
 Contracts, result models and TAP/JSON reports (okkama-docs `docs/std/testing.md`).
 
 
-`JUnitTestReport(report,suite).string()` строит XML-объекты, сохраняя точную
+`JUnitTestReport(report,suite).string()` пишет JUnit XML, сохраняя точную
 длительность в наносекундах, порядок тестов, seed и байты вывода (Base64).
 Таймаут и авария дают error, падение assertion — failure. Профиль JUnit (okkama-docs `docs/std/testing.md`)
 использует свойства набора и теста. XML-объекты (okkama-docs `docs/std/xml-values.md`) сохраняют

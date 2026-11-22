@@ -5959,7 +5959,7 @@ only when requested; use `Property<Sequencing<T>>` for sequence invariants.
 Contracts, result models and TAP/JSON reports (okkama-docs `docs/std/testing.md`).
 
 
-`JUnitTestReport(report,suite).string()` builds XML values and preserves exact
+`JUnitTestReport(report,suite).string()` writes JUnit XML and preserves exact
 nanosecond durations, case order, seed and byte captures (Base64). Timeout/crash
 are errors; failed assertions are failures. The documented JUnit dialect (okkama-docs `docs/std/testing.md`)
 uses suite/case properties. XML values (okkama-docs `docs/std/xml-values.md`) also preserve mixed
