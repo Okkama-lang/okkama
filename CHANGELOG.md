@@ -161,7 +161,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. Locale tags no longer
   rebuild the IANA alias tables or change case through string splitting per call (`Locale("ru")` 7.1 → 1.3 µs,
   `LikelyLocale` 47 → 5.6 µs, `LocaleFallbacks` 29 → 6.7 µs, `LocalizedDate` 73 → 33 µs); gettext tokenizes
-  plural formulas without regex (`GettextCatalog` 131 → 83 µs in the benchmark); regex match cursors ask the
+  plural formulas and lexes PO strings and directives without regex (`ParsedPo` 47 → 10 µs per entry,
+  `GettextCatalog` 131 → 48 µs in the benchmark); regex match cursors ask the
   runtime once per match; one-shot DEFLATE, zlib and gzip reuse pooled miniz engines and small buffers (round
   trip of 8 bytes 26 → 8 µs); tar pads and checks zero blocks in bulk (round trip 78 → 62 µs).
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
