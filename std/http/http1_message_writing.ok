@@ -13,11 +13,14 @@ import "http/http1_body_writing" take Http1BodyWriting;
 import "http/http1_body_check" take Http1BodyCheck;
 import "http/header" take Headers;
 import "http/method" take Method;
-import "http/body" take BodyOpening, EmptyBody;
-import "io/stream" take AsyncWriting;
+import "http/body" take BodyOpening, EmptyBody, TextBody;
+import "io/stream" take AsyncWriting, ByteSource;
 import "async/scope" take FutureScope, Supervising;
 import "net/unix" take UnixPaired;
 import "http/http1_reading" take Http1RequestHeadReading;
+import "http/status" take Status;
+import "io/buffer" take ByteBuffer;
+import "encoding/utf" take Utf8Decoded;
 
 // Writes a request.
 object Http1RequestWriting {
@@ -228,4 +231,37 @@ async test "complete empty request round-trips over a borrowed stream" {
     let parsed = await Http1RequestHeadReading(input.input()).head();
     test.is(parsed.head().target().string(), "/");
     test.ok(!output.closed());
+}
+
+// Captures the complete wire response without a network connection.
+hidden object ResponseWireCapture does AsyncWriting {
+    has buffer is ByteBuffer;
+
+    ResponseWireCapture(buffer is ByteBuffer) {
+        self.buffer = buffer;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        await self.write(source.bytes());
+    }
+
+    async write(bytes is @byte) is AsyncWriting {
+        buffer.writing().write(bytes);
+        self;
+    }
+}
+
+async test "a content response writes one length and the unchanged UTF-8 body (#942)" {
+    let buffer = ByteBuffer();
+    defer buffer.closing().close();
+    let response = Response(status: Status.ok, content: TextBody(text: "hé"));
+    await Http1ResponseWriting(
+        origin: ResponseWireCapture(buffer),
+        response: response,
+        method: Method.get
+    ).output();
+    test.is(
+        Utf8Decoded(buffer.content().bytes()).string(),
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 3\r\n\r\nhé"
+    );
 }

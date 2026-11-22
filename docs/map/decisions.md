@@ -15,6 +15,12 @@ the session's memory; older rulings live in the commits and tickets named.
   precedence for ordinary futures. Deterministic Rust regressions cover both
   `Within` and `Before`, with an ordinary-future control and a mutation check.
 
+- **2026-11-22. Response content fields (#942, owner task).** Both content
+  overloads use the existing ContentFields policy, preserving compatible media
+  types and explicit framing and deriving known byte lengths. Open content once
+  and reuse the opening. Public signatures and raw-body overloads stay unchanged.
+  A supplied application/json field requires JsonBody, not a plain TextBody.
+
 - **2026-11-22. Format native #13, diff (measured implementation decision).**
   Under the owner's one-module instruction, keep the existing public API and
   retain `runtime/diff::diff_script` (ID 141). A behavior-equivalent pure Okkama

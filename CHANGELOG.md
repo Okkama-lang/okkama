@@ -149,6 +149,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **`LookedUpLocale` follows RFC 4647 Lookup (#941).** A truncated range now has to equal an available tag;
   before, any tag extending it matched and won even over an exact one (`en` chose `en-US` where only the
   fallback is right, `de` chose `de-DE` although `de` was available). `FilteredLocales` still matches by prefix.
+- **`Response(status:, content:)` frames its content like the other content overloads (#942).** It now adds
+  the known Content-Length and refuses a Content-Type that contradicts the content (`ConflictingContentType`),
+  as the documentation says and as `Response(head:, content:)` and `Request` already did; fields that frame the
+  body themselves are kept.
 
 ### Changed
 
