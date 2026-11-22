@@ -27,6 +27,10 @@ TARGETS=(lex parse analyze ir_verify spb exec)
 # Keep every build/check/metadata invocation on the checked-in graph.
 export OKKAMA_FUZZ_CARGO="$(command -v cargo)"
 export PATH="$ROOT/tools/fuzz/locked-cargo:$PATH"
+# cargo-fuzz builds for the triple it was itself built for unless told; a
+# prebuilt musl cargo-fuzz (CI's install-action) then asks for a static libc
+# that the sanitizers refuse. Build for the nightly host instead.
+HOST="$(rustc +nightly -vV | sed -n 's/^host: //p')"
 cd "$FUZZ"
 
 # Seeds: every Okkama source of the repository for the source targets.
@@ -49,8 +53,8 @@ done
 # several gigabytes on its own, so a failed parallel build is retried with one
 # job, continuing from the crates already built.
 mkdir -p logs
-if ! CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo +nightly fuzz build >logs/build.log 2>&1 &&
-    ! CARGO_BUILD_JOBS=1 cargo +nightly fuzz build >>logs/build.log 2>&1; then
+if ! CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo +nightly fuzz build --target "$HOST" >logs/build.log 2>&1 &&
+    ! CARGO_BUILD_JOBS=1 cargo +nightly fuzz build --target "$HOST" >>logs/build.log 2>&1; then
     grep -E "^error|SIGKILL|could not compile" logs/build.log | head -10
     echo "BUILD FAILED (okkama-rs/fuzz/logs/build.log)"
     exit 2
@@ -60,7 +64,7 @@ found=()
 for target in "${TARGETS[@]}"; do
     echo "==> $target (${TIME}s)"
     mkdir -p "artifacts/$target"
-    if ! cargo +nightly fuzz run "$target" "corpus/$target" -- \
+    if ! cargo +nightly fuzz run --target "$HOST" "$target" "corpus/$target" -- \
         -max_total_time="$TIME" -rss_limit_mb=2048 -timeout=30 -max_len=65536 -print_final_stats=1 \
         >"logs/$target.log" 2>&1; then
         found+=("$target")
@@ -69,8 +73,8 @@ for target in "${TARGETS[@]}"; do
     grep -E "^Done|stat::(number_of_executed_units|new_units_added|peak_rss_mb)" "logs/$target.log"
     if [[ $COVERAGE -eq 1 ]]; then
         mkdir -p coverage
-        if cargo +nightly fuzz coverage "$target" "corpus/$target" >/dev/null 2>&1; then
-            llvm="$(rustc +nightly --print sysroot)/lib/rustlib/$(rustc +nightly -vV | sed -n 's/^host: //p')/bin"
+        if cargo +nightly fuzz coverage --target "$HOST" "$target" "corpus/$target" >/dev/null 2>&1; then
+            llvm="$(rustc +nightly --print sysroot)/lib/rustlib/$HOST/bin"
             binary="$(find target -path "*/coverage/*/release/$target" -type f | head -1)"
             "$llvm/llvm-cov" report "$binary" -instr-profile="coverage/$target/coverage.profdata" \
                 -ignore-filename-regex='(\.cargo|rustc)/' >"coverage/$target.txt" 2>&1 || true
