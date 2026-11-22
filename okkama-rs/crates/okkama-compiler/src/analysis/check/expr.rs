@@ -898,23 +898,22 @@ impl Checker<'_, '_> {
             return Self::diverged(ExprKind::Loop(block), span);
         }
         let ty = if want && !frame.exits.is_empty() && !frame.plain_exit {
-            let first = frame.exits[0].clone();
-            if let Some(other) = frame
-                .exits
-                .iter()
-                .find(|ty| **ty != first && !ty.is_error())
-            {
-                if !first.is_error() {
-                    let message = format!(
-                        "Branches produce different types: {} and {}",
-                        self.type_name(&first),
-                        self.type_name(other)
-                    );
-                    self.error(span, message);
-                }
+            // The `last` values meet like branch values (#994): an untagged
+            // `[]`/`[:]` takes the type of a tagged one at any depth (#297),
+            // and lowering retags it when it joins the exits.
+            if frame.exits.iter().any(Ty::is_error) {
                 Some(Ty::Error)
+            } else if let Some(joined) = Ty::unify_all(&frame.exits) {
+                Some(joined)
             } else {
-                Some(first)
+                let (joined, other) = conflict(&frame.exits);
+                let message = format!(
+                    "Branches produce different types: {} and {}",
+                    self.type_name(&joined),
+                    self.type_name(&other)
+                );
+                self.error(span, message);
+                Some(Ty::Error)
             }
         } else {
             None

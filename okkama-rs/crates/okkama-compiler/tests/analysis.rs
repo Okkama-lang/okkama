@@ -1337,6 +1337,37 @@ fn branches_after_an_untagged_literal_are_checked_against_each_other() {
 }
 
 #[test]
+fn loop_exits_meet_like_branch_values() {
+    // #994: the `last` values of a `loop` take the untagged retagging of #297,
+    // and conflict the way branches do (#982).
+    for body in [
+        "let a = true; let v = loop { if a { last [[]]; } last [[1]]; }; let n is @@int = v;",
+        "let a = true; let v = loop { if a { last [[1]]; } last [[]]; }; let n is @@int = v;",
+        "let a = true; let v = loop { if a { last [:]; } last [\"k\": [1]]; }; let n is %string:@int = v;",
+        "let a = true; let b = false; let v = loop { if a { last [[[]]]; } if b { last [[[3]]]; } last [[]]; }; let n is @@@int = v;",
+        "let v = loop { last 7; }; let n is int = v;",
+    ] {
+        let found = messages(&format!("main() is int {{ {body} 0; }}"));
+        assert!(found.is_empty(), "{body}: {found:?}");
+    }
+    for (body, expected) in [
+        (
+            "let a = true; let b = false; let v = loop { if a { last [[]]; } if b { last [[1]]; } last [[\"x\"]]; };",
+            "Branches produce different types: @@int and @@string",
+        ),
+        (
+            "let a = true; let v = loop { if a { last [[]]; } last 1; };",
+            "Branches produce different types: @[] and int",
+        ),
+        (
+            "let a = true; let v = loop { if a { last 1; } last \"s\"; };",
+            "Branches produce different types: int and string",
+        ),
+    ] {
+        assert_eq!(messages(&format!("main() is int {{ {body} 0; }}")), [expected], "{body}");
+    }
+}
+#[test]
 fn generic_cases_do_not_impose_an_uninferred_parameter_on_their_payloads() {
     // #304: loop/last, else and reduce need an expected type; an uninferred T is none.
     let decls = "enum Slot<T> = (vacant, full(item is T)); enum Two<T> = (empty, both(a is T, b is T));";

@@ -198,6 +198,25 @@ fn map_literals_and_lookups_have_their_own_instructions() {
     );
 }
 
+/// #994: an untagged `last` value is retagged to the loop's joined type, as a
+/// branch value is, and the IR verifies.
+#[test]
+fn loop_exits_retag_untagged_last_values() {
+    for (body, retag) in [
+        (
+            "let a = true; let v = loop { if a { last [[]]; } last [[1]]; }; v.size();",
+            "array<array<int>> = array.retag %",
+        ),
+        (
+            "let a = true; let v = loop { if a { last [:]; } last [\"k\": 1]; }; v.size();",
+            "map<str,int> = map.retag %",
+        ),
+    ] {
+        let main = main_listing(body);
+        assert!(main.contains(retag), "{body}\n{main}");
+    }
+}
+
 #[test]
 fn constants_outside_loops_stay_in_their_branch() {
     let listing = main_listing("let n = 7; if n > 3 { 40 + n; } else { 50; }");
