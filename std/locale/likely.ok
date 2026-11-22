@@ -95,40 +95,32 @@ object LikelyLocale {
         for requests -> key {
             let found = table.lookup(key);
             if found != "" {
-                let inferred = LocaleFromLanguageTag(found).locale();
+                // The result is assembled and parsed once.
+                let inferred = LikelyValue(found);
                 let extlangs = origin.extlangs();
                 let extended is @string = (0..extlangs.size()).map() -> index {
-                    extlangs.item(index);
+                    "-" + extlangs.item(index);
                 };
-                let expanded = Locale(
-                    language: if language == "und" {
-                        inferred.language();
-                    }
-                    else {
-                        language;
-                    },
-                    script: if script == "" {
-                        inferred.script();
-                    }
-                    else {
-                        script;
-                    },
-                    region: if region == "" {
-                        inferred.region();
-                    }
-                    else {
-                        region;
-                    },
-                    variants: origin.variants()
-                );
-                let base = expanded.string();
-                let primary = expanded.language();
-                let retained = primary + (if extended.size() == 0 {
-                    "";
+                let variants = origin.variants();
+                let marked is @string = (0..variants.size()).map() -> index {
+                    "-" + variants.item(index);
+                };
+                let retained = (if language == "und" {
+                    inferred.language();
                 }
                 else {
-                    "-" + extended.join("-");
-                }) + base.slice(primary.length(), base.length());
+                    language;
+                }) + extended.join("") + "-" + (if script == "" {
+                    inferred.script();
+                }
+                else {
+                    script;
+                }) + "-" + (if region == "" {
+                    inferred.region();
+                }
+                else {
+                    region;
+                }) + marked.join("");
                 return LocaleFromLanguageTag(retained + origin.suffix()).locale();
             }
         }
@@ -136,6 +128,56 @@ object LikelyLocale {
     }
 }
 
+// A CLDR likely value: language-Script-REGION, already canonical, read by
+// its fields; anything else is parsed.
+hidden object LikelyValue {
+    has origin is string;
+
+    LikelyValue(origin is string) {
+        self.origin = origin;
+    }
+
+    language() is string {
+        self.field(0) else LocaleFromLanguageTag(origin).locale().language();
+    }
+
+    script() is string {
+        self.field(1) else LocaleFromLanguageTag(origin).locale().script();
+    }
+
+    region() is string {
+        self.field(2) else LocaleFromLanguageTag(origin).locale().region();
+    }
+
+    hidden field(index is int) is Maybe<string> {
+        let fields = origin.split("-");
+        if fields.size() == 3 {
+            Maybe.some(fields[index]);
+        }
+        else {
+            Maybe.none;
+        }
+    }
+}
+
 test "likely expansion is explicit and keeps supplied region" {
     test.is(LikelyLocale(Locale(language: "zh", region: "TW")).locale().string(), "zh-Hant-TW");
+}
+
+test "likely subtags fill script and region and keep variants and extensions" {
+    let cases = [
+        ["ru", "ru-Cyrl-RU"],
+        ["und", "en-Latn-US"],
+        ["sr-ME", "sr-Latn-ME"],
+        ["en-GB", "en-Latn-GB"],
+        ["und-Cyrl", "ru-Cyrl-RU"],
+        ["und-JP", "ja-Jpan-JP"],
+        ["de-CH-1996", "de-Latn-CH-1996"],
+        ["ja-u-ca-japanese", "ja-Jpan-JP-u-ca-japanese"],
+        ["zh-Hant", "zh-Hant-TW"],
+        ["x-private", "x-private"],
+    ];
+    for cases -> pair {
+        test.is(LikelyLocale(Locale(pair[0])).locale().string(), pair[1]);
+    }
 }

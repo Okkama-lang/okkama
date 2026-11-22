@@ -307,17 +307,17 @@ hidden object RegexMatchCursor does Cursor<RegexMatching> {
     }
 
     available() is bool {
-        !exhausted && observation.found();
+        !exhausted && self.present();
     }
 
     item() is RegexMatching {
         confirm self.available() else throw IterationEnded.ended;
-        observation.match();
+        self.current();
     }
 
     successor() is Cursor<RegexMatching> {
         confirm self.available() else throw IterationEnded.ended;
-        let range = observation.match().range();
+        let range = self.current().range();
         let empty = range::Bounds::start == range::Bounds::end;
         RegexMatchCursor(
             origin: source,
@@ -336,6 +336,18 @@ hidden object RegexMatchCursor does Cursor<RegexMatching> {
             end: limit,
             exhausted: empty && range::Bounds::end == limit,
         );
+    }
+
+    // A walk asks a position several times: its answer and its match are
+    // fetched from the runtime once (#943).
+    hidden present() is bool {
+        once let answer is bool = observation.found();
+        answer;
+    }
+
+    hidden current() is RegexMatching {
+        once let matched is RegexMatching = observation.match();
+        matched;
     }
 }
 
