@@ -20,7 +20,7 @@ fn untaken_panic_is_lazy_and_bytecode_message_must_be_a_string() {
     let module = lower("if false { Worker().fail(\"unused\"); } else { 42; }");
 
     support::assert_value(&module, "42");
-    // Проверка SPB 9 типизирована: не строка в `panic` отвергается до
+    // Проверка SPB типизирована: не строка в `panic` отвергается до
     // исполнения (#16).
     let module = lower("panic \"stop\";");
     let mut invalid = codegen::sparrow::generate(&module).unwrap();

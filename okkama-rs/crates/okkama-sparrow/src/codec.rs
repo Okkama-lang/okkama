@@ -1,4 +1,4 @@
-//! SPB 9: магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
+//! SPB (версия формата — [`VERSION`]): магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
 //! Числа — беззнаковый LEB128, строки — длина и UTF-8, инструкции — код
 //! операции и операнды в порядке полей; никакой сериализации layout Rust.
 use crate::operand::Operand;
@@ -15,7 +15,7 @@ pub const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
 /// in-memory size before vectors are allocated, so a small file cannot
 /// expand into a large `Program` (each encoded element is at least a byte).
 pub const MAX_DECODED_BYTES: usize = 512 * 1024 * 1024;
-/// Версия формата. 14: `arr.replace` (#250), `arr.remove` (#251).
+/// Версия формата; меняется с каждым несовместимым изменением кодировки или набора инструкций.
 pub const VERSION: u16 = 16;
 const MAGIC: &[u8; 4] = b"SPRW";
 

@@ -12,7 +12,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOCATOR: okkama_allocation_counter::Counting = okkama_allocation_counter::Counting;
 
-const HELP: &str = "Sparrow runtime
+const HELP_BODY: &str = "Sparrow runtime
 
 USAGE:
     sparrow [--stats] <FILE.spb> [ARGS...]
@@ -48,9 +48,16 @@ check        Verify bytecode (types, calls, intrinsic contracts) without
 --disassemble  Print bytecode as Sparrow assembly (stdout without -o).
 --native-capabilities  List natives (JSON) and whether this runtime has them.
 
-SPB 9 is supported. Source files, the Okkama compiler and Java are not
-required. Format/runtime errors exit 1, usage errors 2, I/O errors 3.
 ";
+
+/// The help text; the bytecode version comes from the codec, so it cannot go stale (#973).
+fn help() -> String {
+    format!(
+        "{HELP_BODY}\nSPB {} is supported. Source files and the Okkama compiler are not\n\
+         required. Format/runtime errors exit 1, usage errors 2, I/O errors 3.\n",
+        okkama_sparrow::VERSION
+    )
+}
 
 type Failure = (u8, String);
 
@@ -160,7 +167,7 @@ fn capabilities() -> u8 {
 
 fn run() -> Result<u8, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = || (2, HELP.to_string());
+    let usage = || (2, help());
     let worker = args.first().is_some_and(|a| a == "--worker");
     if std::env::var_os("SPARROW_INTERNAL_WORKER").is_some() && !worker {
         return Err((2, "worker launch rejected: --worker must precede FILE.spb; refusing to run main".into()));
@@ -170,7 +177,7 @@ fn run() -> Result<u8, Failure> {
     };
     match first.as_str() {
         "--help" | "-h" | "help" => {
-            print!("{HELP}");
+            print!("{}", help());
             Ok(0)
         }
         "--version" | "-V" => {
@@ -232,7 +239,7 @@ fn run() -> Result<u8, Failure> {
                 return Err(usage());
             };
             if path == "--help" || path == "-h" {
-                print!("{HELP}");
+                print!("{}", help());
                 return Ok(0);
             }
             match first.as_str() {
@@ -254,10 +261,10 @@ fn run() -> Result<u8, Failure> {
             Some((path, arguments)) => execute(Path::new(path), arguments, false, Default::default()),
             None => Err(usage()),
         },
-        option if option.starts_with('-') => Err((2, format!("unknown option `{option}`\n{HELP}"))),
+        option if option.starts_with('-') => Err((2, format!("unknown option `{option}`\n{}", help()))),
         path => {
             if !Path::new(path).exists() && !path.ends_with(".spb") {
-                return Err((2, format!("unknown command `{path}`\n{HELP}")));
+                return Err((2, format!("unknown command `{path}`\n{}", help())));
             }
             execute(Path::new(path), rest, false, Default::default())
         }

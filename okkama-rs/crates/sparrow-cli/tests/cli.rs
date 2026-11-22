@@ -151,6 +151,15 @@ fn help_version_and_usage_are_explicit() {
     }
 }
 
+/// The help names the bytecode version the codec writes and no engine that no longer exists (#973).
+#[test]
+fn help_names_the_current_bytecode_version() {
+    let result = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("--help").output().unwrap();
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(text.contains(&format!("SPB {} is supported.", okkama_sparrow::VERSION)), "{text}");
+    assert!(!text.contains("Java"), "{text}");
+}
+
 #[test]
 fn assembly_round_trips_through_the_command_line() {
     let file = File::new(&value("42"));

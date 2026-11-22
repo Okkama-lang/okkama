@@ -1,4 +1,4 @@
-//! Небольшие программы SPB 9 для тестов модели.
+//! Небольшие программы SPB для тестов модели.
 #![allow(dead_code)]
 use okkama_sparrow::{
     Constant, Dst, FuncRef, Function, Handler, Instruction as I, Program, Register as R, Target, Type, TypeRef,
@@ -46,7 +46,7 @@ pub fn program(functions: Vec<Function>) -> Program {
     }
 }
 
-/// `main`: factorial(10) рекурсией и цикл с обменом на обратном ребре.
+/// `main`: factorial(10) рекурсией.
 pub fn sample() -> Program {
     let main = function(
         "main",

@@ -1,6 +1,6 @@
-//! Программа Sparrow — регистровый байткод Okkama (SPB 9), независимый от
-//! компилятора. Генератор переводит OIR-1 в эту модель ,
-//! VM исполняет её над общим рантаймом `okkama-runtime-core`.
+//! Программа Sparrow — регистровый байткод Okkama (SPB, [`VERSION`]), независимый от
+//! компилятора. Кодоген переводит OIR-2 в эту модель, машина Sparrow
+//! (`sparrow-core`) исполняет её.
 //!
 //! Функция — плоский массив инструкций над регистрами кадра; переходы — по
 //! индексам инструкций с параллельными присваиваниями регистров
@@ -173,7 +173,7 @@ macro_rules! instructions {
                 match self { $( Instruction::$name { .. } => $mnemonic, )* }
             }
 
-            /// Все мнемоники в порядке кодов операций.
+            /// Все мнемоники в порядке объявления (не в порядке кодов операций).
             pub const MNEMONICS: &'static [&'static str] = &[$($mnemonic),*];
 
             pub(crate) fn encode_operands(&self, writer: &mut codec::Writer) {
@@ -292,7 +292,7 @@ instructions! {
     RatNeg = 66, "rat.neg" { dst: Dst, operand: Register }
     RatAbs = 67, "rat.abs" { dst: Dst, operand: Register }
     RatCmp = 68, "rat.cmp" { op: Cmp, dst: Dst, left: Register, right: Register }
-    /// Числитель или знаменатель (`denominator`) дроби как `str`.
+    /// Числитель или знаменатель (`denominator`) дроби как `int`.
     RatPart = 69, "rat.part" { dst: Dst, value: Register, denominator: bool }
 
     StrConcat = 70, "str.concat" { dst: Dst, left: Register, right: Register }

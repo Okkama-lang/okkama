@@ -244,7 +244,7 @@ The pipeline is source -> AST -> module IR -> Sparrow bytecode -> output file.
 Several FILE paths form one module (spec §5.1). A generation error leaves
 output intact.
 
-Sparrow writes a verified SPB 9 file (register bytecode with the program's
+Sparrow writes a verified SPB file (register bytecode with the program's
 type, object, role and function tables), runnable with `okkama exec FILE.spb`
 or the standalone `sparrow FILE.spb`. With -t it holds the test profile, run by
 `okkama exec` or `sparrow test`. `sparrow --disassemble` prints its assembly.

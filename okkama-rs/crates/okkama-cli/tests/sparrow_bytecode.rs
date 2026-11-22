@@ -3,7 +3,7 @@ mod support;
 use okkama_compiler::{SourceFile, codegen, ir, lowering, syntax};
 use okkama_sparrow::{Constant, Dst, FuncRef, Function, Instruction::*, Program, Register as R, Type, TypeRef};
 
-/// Программа SPB 9 из одного `main` над `registers` регистрами `int`.
+/// Программа SPB из одного `main` над `registers` регистрами `int`.
 fn handmade(registers: usize, code: Vec<okkama_sparrow::Instruction>) -> Program {
     Program {
         module: "app".into(),
