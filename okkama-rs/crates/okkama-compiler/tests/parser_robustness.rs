@@ -509,3 +509,23 @@ fn optional_and_choice_nodes_drop_without_recursion() {
         drop(expr);
     });
 }
+
+/// `return if` inside the anonymous actions of a `return if` condition, twelve levels deep
+/// (266 KB): each level decided "value or bare condition" by re-parsing its condition, and the
+/// enclosing level re-parsed it again, so the time doubled per level (9.7 s in a 0.6.3 release
+/// build). Each position decides once now (#978). The bound is generous for a debug build.
+#[test]
+fn nested_return_if_values_parse_in_linear_time() {
+    let mut body = String::from("0;");
+    for _ in 0..12 {
+        let action = format!("() is int {{ {body} }}");
+        body = format!("return if f({action}, {action}) {{ 1; }} else {{ 2; }};");
+    }
+    let text = format!("module app v1.0.0;\nmain() is int {{\n    {body}\n}}\n");
+    assert!(text.len() > 260_000);
+    let started = std::time::Instant::now();
+    let program = on_small_stack(move || parse_in(&text, ParseMode::Full).map(|_| ()));
+    let elapsed = started.elapsed();
+    assert!(program.is_ok(), "{program:?}");
+    assert!(elapsed < std::time::Duration::from_secs(20), "parsing took {elapsed:?}");
+}

@@ -157,7 +157,7 @@ impl Parser<'_> {
         if self.check(TokenKind::Semicolon) {
             return Ok((None, None));
         }
-        if self.check(TokenKind::If) {
+        if self.check(TokenKind::If) && !self.if_values.contains(&self.pos) {
             let (pos, errors, damaged) = (self.pos, self.errors.len(), self.damaged);
             self.advance();
             let condition = self.expression()?;
@@ -167,6 +167,7 @@ impl Parser<'_> {
             self.pos = pos;
             self.errors.truncate(errors);
             self.damaged = damaged;
+            self.if_values.insert(pos);
         }
         let value = self.expression()?;
         let condition = if self.eat(TokenKind::If) {

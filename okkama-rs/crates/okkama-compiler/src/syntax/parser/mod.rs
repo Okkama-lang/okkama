@@ -116,6 +116,11 @@ pub(crate) struct Parser<'s> {
     errors: Vec<Diagnostic>,
     /// The declaration being parsed had a statement error: leave it out.
     damaged: bool,
+    /// `return if …` / `throw if …` positions already decided to be an `if` expression value, not
+    /// the bare form with a condition (#978). The decision re-parses the condition; remembering it
+    /// keeps a value that is re-parsed by an enclosing decision from deciding again, which made
+    /// nested anonymous actions exponential.
+    if_values: std::collections::HashSet<usize>,
 }
 
 impl<'s> Parser<'s> {
@@ -137,6 +142,7 @@ impl<'s> Parser<'s> {
             recovering: false,
             errors: Vec::new(),
             damaged: false,
+            if_values: std::collections::HashSet::new(),
         }
     }
 
