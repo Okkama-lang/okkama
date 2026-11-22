@@ -19,7 +19,7 @@ checker cannot prove that a program is right, but it can prove cheaply that
 certain mistakes cannot happen — adding a string to a number, calling an
 action an object does not have, forgetting that a value may be absent.
 
-Okkama uses its type system for three jobs:
+Okkama uses its type system for two jobs:
 
 - **To reject meaningless programs** before they run — the examples of Chapter 3
   were all rejected this way.
@@ -183,8 +183,9 @@ meaningful, and the compiler says so:
 
 Order is narrower than equality. `<`, `<=`, `>` and `>=` apply to numbers and
 to objects that perform the standard role `Comparing<T>`, whose
-`order(other)` they call (Chapter 14). Text has no operators: `order(other)`
-and `less(other)` compare strings by code point, so `"Zebra"` comes before
+`order(other)` they call (Chapter 14). Text has no operators: `less(other)` and
+`order(other)` (which returns the `Order` of the std module `compare`, so the
+program imports it) compare strings by code point, so `"Zebra"` comes before
 `"apple"`, which is what a program that sorts identifiers wants and what a
 program that sorts names for people does not; a locale-aware order is a
 library's job, not an operator's (Chapter 6). Booleans, characters, arrays
