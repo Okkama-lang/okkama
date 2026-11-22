@@ -389,3 +389,51 @@ fn an_escaping_self_is_pending_until_its_constructor_returns() {
         }
     }
 }
+
+/// #970: a spread is not converted, so it fits a `...string` tail only as an
+/// `@string`. A sole constructor of the right shape used to take a `...any` or
+/// `...int` spread anyway and lowering built invalid IR; now the checker
+/// reports it at the spread.
+const JOINED: &str = "
+object Joined {
+    has parts is @string;
+    Joined(values is ...string) { self.parts = values...; }
+    count() is int { parts.size(); }
+}
+";
+
+#[test]
+fn a_spread_of_another_element_type_is_rejected_at_the_spread() {
+    for (tail, element) in [("...any", "@any"), ("...int", "@int")] {
+        let text = format!(
+            "module app v1.0.0; {JOINED} object F {{ F(); make(values is {tail}) is int {{ Joined(values...).count(); }} }} \
+             main() is int {{ 0; }}"
+        );
+        let error = lower(&text).unwrap_err();
+        assert!(matches!(error, LoweringError::Invalid { .. }), "{tail}: {error:?}");
+        assert_eq!(
+            error.message(),
+            format!("Constructor \"Joined\" takes ...string; a spread of {element} is not converted, so its elements must already be string"),
+            "{tail}"
+        );
+        let at = text.rfind("Joined(values...)").unwrap() + "Joined(".len();
+        assert_eq!((error.span().start as usize, error.span().end as usize), (at, at + "values...".len()), "{tail}");
+    }
+}
+
+#[test]
+fn a_string_spread_still_forwards_into_a_string_tail() {
+    for make in [
+        "make(values is ...string) is int { Joined(values...).count(); }",
+        "make(values is ...string) is int { Joined(\"first\", values...).count(); }",
+        "make(values is ...string) is int { let xs is @string = [\"a\", \"b\"]; Joined(xs...).count() + Joined(values...).count(); }",
+        "make(values is ...string) is int { Joined([]...).count(); }",
+    ] {
+        let text = format!(
+            "module app v1.0.0; {JOINED} object F {{ F(); {make} }} \
+             main() is int {{ F().make(\"x\", \"y\"); }}"
+        );
+        let module = lower(&text).unwrap_or_else(|error| panic!("{make}: {error}"));
+        ir::verify(&module).unwrap_or_else(|error| panic!("{make}: {error}"));
+    }
+}

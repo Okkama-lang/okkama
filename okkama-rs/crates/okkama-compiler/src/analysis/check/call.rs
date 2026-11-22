@@ -577,7 +577,29 @@ impl Checker<'_, '_> {
                 };
                 items.push(self.coerce(value, &element, arg.span, &format!("{what} argument")));
             }
-            let spread = call.spread.map(|(array, _)| Box::new(array));
+            // A spread is not converted (§18.4): its elements must already be
+            // the tail's element type. Overload fitting checks this, but a
+            // sole constructor of the right shape reaches here after fitting
+            // failed (#970), so the rule is stated where the Pack is built.
+            let spread = match call.spread {
+                Some((array, array_span)) => {
+                    let fits = match Self::ty_of(&array).taken() {
+                        Ty::Array(item) => *item == element || *item == Ty::Never || item.is_error(),
+                        Ty::Error => true,
+                        _ => element.is_error(),
+                    };
+                    if !fits && !element.is_error() && !array.diverges {
+                        let message = format!(
+                            "{what} takes ...{element}; a spread of {array} is not converted, so its elements must already be {element}",
+                            element = self.type_name(&element),
+                            array = self.type_name(&Self::ty_of(&array).taken()),
+                        );
+                        self.error(array_span, message);
+                    }
+                    Some(Box::new(array))
+                }
+                None => None,
+            };
             args.push(Self::typed(
                 ExprKind::Pack { items, spread },
                 Ty::array(element),
