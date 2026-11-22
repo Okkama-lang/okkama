@@ -1008,7 +1008,7 @@ fn each_stmt_expr<'e>(stmt: &'e Stmt, visit: &mut dyn FnMut(&'e Expr)) {
     }
 }
 
-fn each_source_expr<'e>(source: &'e Source, visit: &mut dyn FnMut(&'e Expr)) {
+pub(crate) fn each_source_expr<'e>(source: &'e Source, visit: &mut dyn FnMut(&'e Expr)) {
     match source {
         Source::Range { start, end, .. } => {
             visit(start);

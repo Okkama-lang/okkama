@@ -452,3 +452,42 @@ fn inferred_fields_lower_like_written_ones() {
     let written = lower(&program("has value is int = 1; has label is string = \"ab\";")).expect("written form");
     assert_eq!(inferred.to_string(), written.to_string());
 }
+
+/// The value `main` returns, compiled and run on Sparrow.
+fn run(main: &str) -> i64 {
+    let module = module(main);
+    let program = okkama_compiler::codegen::sparrow::generate(&module).expect("codegen");
+    sparrow_core::run(okkama_sparrow::encode(&program).expect("encode")).unwrap_or_else(|error| panic!("{main}: {error}"))
+}
+
+/// A rebind inside a block that stands in an operand, an argument, a match subject or a `try` body
+/// is carried out of the loop or into the `catch` like one that stands directly in a statement
+/// (#1001; it was lost: the variable kept its value from before the loop).
+#[test]
+fn rebinds_nested_in_expressions_are_carried() {
+    let direct = run("let c = C(); for 1..=3 -> i { if i > 1 { c = c.inc(); } } c.value();");
+    assert_eq!(direct, 2010);
+    for nested in [
+        "let c = C(); for 1..=3 -> i { let y = 1 + (if i > 1 { c = c.inc(); 1; } else { 0; }); } c.value();",
+        "let c = C(); for 1..=3 -> i { let y = [i][0] + match i { case 1 { 0; } else { c = c.inc(); 1; } }; } c.value();",
+        "let c = C(); for 1..=3 -> i { let y = c.add(if i > 1 { c = c.inc(); 1; } else { 0; }); } c.value();",
+        "let c = C(); for 1..=9 -> k { last if k > 3; let y = (if k > 1 { c = c.inc(); 1; } else { 0; }) * 2; } c.value();",
+    ] {
+        assert_eq!(run(nested), direct, "{nested}");
+    }
+}
+
+/// The `catch` of a `try` sees a rebind nested in an expression of the try body (#1001).
+#[test]
+fn a_catch_sees_rebinds_nested_in_the_try_body() {
+    let text = format!(
+        "module app v1.0.0;{COUNTER} enum Fault is Error = (bad); \
+         main() is int {{ let c = C(); \
+         let r = try {{ let y = 1 + (if true {{ c = c.inc(); 1; }} else {{ 0; }}); throw Fault.bad; 0; }} \
+         catch error is Fault {{ c.value(); }}; r; }}"
+    );
+    let module = lower(&text).unwrap_or_else(|error| panic!("{error}"));
+    ir::verify(&module).expect("lowering output verifies");
+    let program = okkama_compiler::codegen::sparrow::generate(&module).expect("codegen");
+    assert_eq!(sparrow_core::run(okkama_sparrow::encode(&program).expect("encode")).expect("run"), 1000);
+}

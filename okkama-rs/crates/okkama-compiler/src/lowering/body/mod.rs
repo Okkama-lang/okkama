@@ -3395,10 +3395,17 @@ fn assigned_in_stmt(stmt: &thir::Stmt, locals: &mut Vec<LocalId>, fields: &mut V
     }
 }
 
+/// Every sub-expression is searched (#1001): a rebinding block can stand in an operand, an argument,
+/// a match subject or an index fallback, not only directly in a statement. Blocks are walked by their
+/// statements, which `thir::each_child` (expressions only) would miss; an anonymous action's body is
+/// a function of its own.
 fn assigned_in_expr(expr: &thir::Expr, locals: &mut Vec<LocalId>, fields: &mut Vec<usize>) {
     match &expr.kind {
         ExprKind::Block(block) | ExprKind::Loop(block) => assigned_in_block(block, locals, fields),
-        ExprKind::For { body, .. } => assigned_in_block(body, locals, fields),
+        ExprKind::For { source, body, .. } => {
+            thir::each_source_expr(source, &mut |child| assigned_in_expr(child, locals, fields));
+            assigned_in_block(body, locals, fields);
+        }
         ExprKind::If {
             condition,
             then_block,
@@ -3411,6 +3418,7 @@ fn assigned_in_expr(expr: &thir::Expr, locals: &mut Vec<LocalId>, fields: &mut V
             }
         }
         ExprKind::Match(body) => {
+            assigned_in_expr(&body.subject, locals, fields);
             for (_, block) in &body.cases {
                 assigned_in_block(block, locals, fields);
             }
@@ -3424,9 +3432,16 @@ fn assigned_in_expr(expr: &thir::Expr, locals: &mut Vec<LocalId>, fields: &mut V
                 assigned_in_block(&catch.body, locals, fields);
             }
         }
-        ExprKind::Functional(functional) => assigned_in_block(&functional.body, locals, fields),
+        ExprKind::Functional(functional) => {
+            thir::each_source_expr(&functional.source, &mut |child| assigned_in_expr(child, locals, fields));
+            if let Some(initial) = &functional.initial {
+                assigned_in_expr(initial, locals, fields);
+            }
+            assigned_in_block(&functional.body, locals, fields);
+        }
         // Тело анонимного действия — отдельная функция.
-        _ => {}
+        ExprKind::Closure { .. } => {}
+        _ => thir::each_child(expr, &mut |child| assigned_in_expr(child, locals, fields)),
     }
 }
 
