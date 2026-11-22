@@ -1395,3 +1395,40 @@ fn repeated_enum_cases_are_reported_in_order_at_the_repetition() {
     let wide: Vec<String> = (0..3000).map(|i| format!("c{i}")).collect();
     assert!(messages(&format!("enum W = ({}); main() is int {{ let w = W.c2999; 0; }}", wide.join(", "))).is_empty());
 }
+
+/// #954: a map literal names each key once. Keys the compiler can compute
+/// (literals, operators over them, `rat(…)`) and that are one map key are an
+/// error at the repeat, with a note at the first; computed keys are left to
+/// the run.
+#[test]
+fn a_repeated_constant_key_in_a_map_literal_is_rejected() {
+    for (body, key) in [
+        ("let m = [\"a\": 1, \"b\": 2, \"a\": 3];", "\"a\""),
+        ("let m = [10: \"x\", 10: \"y\"];", "10"),
+        ("let m = [true: 1, true: 2];", "true"),
+        ("let m = ['x': 1, 'x': 2];", "'x'"),
+        ("let m is %rat:int = [rat(1, 2): 1, 2 / 4: 2];", "1/2"),
+        ("let m = [1 + 1: 1, 2: 2];", "2"),
+    ] {
+        assert_eq!(
+            messages(&format!("main() is int {{ {body} 0; }}")),
+            [format!("Duplicate key in map literal: {key}"), format!("Map key {key} first appears here")],
+            "{body}"
+        );
+    }
+    // Three equal keys: each repeat points at the first.
+    assert_eq!(
+        messages("main() is int { let m = [1: 1, 1: 2, 1: 3]; 0; }"),
+        ["Duplicate key in map literal: 1", "Map key 1 first appears here", "Duplicate key in map literal: 1", "Map key 1 first appears here"]
+    );
+    // Distinct keys, computed keys and merges are not errors here.
+    for body in [
+        "let m = [\"a\": 1, \"b\": 2];",
+        "let k = \"a\"; let m = [k: 1, \"a\": 2];",
+        "let m = [rat(1, 2): 1, rat(1, 3): 2];",
+        "let m = [\"a\": 1] + [\"a\": 2];",
+        "let m is %string:int = [:];",
+    ] {
+        assert!(messages(&format!("main() is int {{ {body} 0; }}")).is_empty(), "{body}");
+    }
+}

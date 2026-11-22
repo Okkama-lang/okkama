@@ -1418,3 +1418,7 @@ fn drain(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, receiver: Word) -> S
 #[cfg(test)]
 #[path = "selection_tests.rs"]
 mod selection_tests;
+
+#[cfg(test)]
+#[path = "maps_954_tests.rs"]
+mod maps_954_tests;

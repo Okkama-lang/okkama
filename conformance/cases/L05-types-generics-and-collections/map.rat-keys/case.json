@@ -39,7 +39,7 @@
   },
   "provenance": {
     "origin": "authored for #296 from the owner's decision and the spec text",
-    "expected_basis": "spec 8.8 (#296): rat is a key type; a rat is reduced, so rat(1, 2), rat(2, 4) and 2 / 4 are one key; keys() is sorted by value; a later literal entry and the right operand of + replace an equal key's value, as for int keys (printed beside them); an object key compares its rat field by value."
+    "expected_basis": "spec 8.8 (#296): rat is a key type; a rat is reduced, so rat(1, 2), rat(2, 4) and 2 / 4 are one key; keys() is sorted by value; a later literal entry and the right operand of + replace an equal key's value, as for int keys (printed beside them); an object key compares its rat field by value. Equal keys meet through explicit + merges: a literal names each key once (#954)."
   },
   "status": "mandatory"
 }

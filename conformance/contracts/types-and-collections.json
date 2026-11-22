@@ -230,7 +230,7 @@
         "invalid": "required",
         "interaction": "required"
       },
-      "notes": "Int keys sort by numeric value (D-037). rat keys (#296): a reduced value is the key, so equal fractions are one key.",
+      "notes": "Int keys sort by numeric value (D-037). rat keys (#296): a reduced value is the key, so equal fractions are one key. A literal names each key once (#954): equal constant keys are rejected at compile time, equal computed keys fail the literal at run time; + merges still replace.",
       "family": "Types, generics and collections"
     },
     {

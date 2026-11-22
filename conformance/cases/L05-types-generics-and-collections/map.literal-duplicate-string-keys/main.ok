@@ -1,0 +1,9 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let m = ["a": 1, "b": 2, "a": 3];
+    Stdout().writeln("unreachable");
+    0;
+}

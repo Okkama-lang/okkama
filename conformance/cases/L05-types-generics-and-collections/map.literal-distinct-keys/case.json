@@ -1,0 +1,43 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L05.map.literal-distinct-keys",
+  "title": "Distinct keys build a map; + still replaces",
+  "purpose": "Literals with distinct keys, one entry or none build normally; an explicit + merge still replaces a key.",
+  "level": "L05",
+  "contracts": [
+    {
+      "contract": "COLL.MAP",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "3 0 1 10\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#8.8"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #954 (owner decision, 2026-11-22)",
+    "expected_basis": "#954: only repeated keys inside one literal fail; merges keep replacing."
+  },
+  "status": "mandatory"
+}

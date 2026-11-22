@@ -1,0 +1,14 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let a = "a";
+    let m = [a: 1, "b": 2, rat(1, 2).string(): 3];
+    let empty is %string:int = [:];
+    let one = ["x": 1];
+    let merged = m + ["a": 10];
+    out.writeln(m.size().string() + " " + empty.size().string() + " " + one.size().string() + " " + merged["a"].string());
+    0;
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L05.map.literal-equivalent-rat-keys",
+  "title": "Equal rational keys in a map literal are rejected",
+  "purpose": "The literal does not compile; no entry is silently overwritten.",
+  "level": "L05",
+  "contracts": [
+    {
+      "contract": "COLL.MAP",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "reject",
+    "rejection": {
+      "stages": [
+        "check"
+      ],
+      "categories": [
+        "semantic"
+      ]
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#8.8"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #954 (owner decision, 2026-11-22)",
+    "expected_basis": "#954: a map literal names each key once; keys the compiler can compute and that are one map key are a compile-time error."
+  },
+  "status": "mandatory"
+}

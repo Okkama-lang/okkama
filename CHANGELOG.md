@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Changed
+- **A map literal names each key once (#954, owner decision).** Keys the compiler can compute (literals,
+  operators over them, `rat(…)`, constants) that are one map key are a compile-time error at the repeat, with a
+  note at the first: `["a": 1, "a": 2]`, `[rat(1, 2): 1, 2 / 4: 2]`. Other keys are checked when the literal is
+  built, after every key and value was evaluated once, left to right: equal keys (by the map's key equality,
+  so `0.0` and `-0.0` or two equal value objects) fail with "Duplicate key in map literal". The later entry no
+  longer silently wins. `m + [k: v]` still replaces. The runtime's key text for an object key no longer reads
+  the object as an integer (it crashed "Map key not found" for object keys).
+
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the

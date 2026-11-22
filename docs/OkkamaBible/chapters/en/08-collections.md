@@ -125,6 +125,17 @@ in version 3.7 for the same reason — predictability — and many test suites
 in languages with unordered maps contain workarounds for nondeterministic
 output.
 
+A literal names each key once. Two keys the compiler can compute and that
+are one key — `["a": 1, "a": 2]`, `[rat(1, 2): 1, 2 / 4: 2]`, `[1 + 1: 1, 2:
+2]` — are a compile-time error that points at the repeat and at the first.
+Keys known only at run time are checked when the literal is built: every key
+and value is evaluated once, left to right, and if two keys are equal by the
+map's own key equality the literal fails with "Duplicate key in map literal"
+instead of keeping one of them. Many languages let the later entry win;
+Okkama treats a repeated key in a literal as the mistake it nearly always is
+(issue #954). Replacing an entry is written as what it is, `prices + ["fig":
+95]`.
+
 A lookup of a missing key is a runtime failure unless it has a fallback:
 `stock["kiwi"] else 0`. `has(key)` asks without looking up, and a `Maybe` is
 one `if` away when an action wants to return absence (Chapter 7).

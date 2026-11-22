@@ -1434,13 +1434,22 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             // not walk the keys again to charge them (#325).
             let mut owned = 0;
             // Uses in visit order: each entry's key, then its value.
+            // A literal names each key once (#954): a key equal to an earlier
+            // one, by the map's own key order, fails the literal. Every key
+            // and value was evaluated before, once, left to right; the map is
+            // not published, so no partial map escapes.
             for (index, (key, item)) in entries.iter().enumerate() {
                 let (key, item) = (operands.nth(2 * index, key), operands.nth(2 * index + 1, item));
                 let k = runtime.checked_key(key, key_kind, key_type)?;
                 let bytes = MAP_ENTRY_BYTES + k.owned_bytes();
-                if map.entries.upsert(k, (key, item)) {
-                    owned += bytes;
+                if !map.entries.upsert(k, (key, item)) {
+                    return Err(format!(
+                        "Duplicate key in map literal: {} (entry {} repeats an earlier key)",
+                        key_text(runtime, key, key_kind, key_type),
+                        index + 1
+                    ));
                 }
+                owned += bytes;
             }
             map.owned.set(Some(owned));
             Ok(runtime.heap.allocate_payload(Box::new(map)))
@@ -1685,6 +1694,13 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
         (_, Some(Type::Char)) => format!("\"{}\"", char::from_u32(word as u32).unwrap_or('?')),
         (_, Some(Type::Bool)) => if word != 0 { "true" } else { "false" }.to_string(),
         (_, Some(Type::Rat)) => runtime.rational(word).to_string(),
+        // An object key is named by its type, not printed (#954): its fields
+        // need not have a text.
+        (_, Some(Type::Object(_))) => {
+            let descriptor = heap::payload(runtime.heap.header_of(word)) as usize;
+            let name = runtime.loaded.program.objects.get(descriptor).map_or("?", |object| object.name.as_str());
+            format!("a {name} key")
+        }
         (Kind::Float, _) => crate::scalar::float_text(f64::from_bits(word)),
         (Kind::Raw | Kind::Byte, _) => word.to_string(),
         _ => runtime.big_value(word).to_string(),
