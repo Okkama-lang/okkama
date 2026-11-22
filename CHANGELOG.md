@@ -166,8 +166,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   created and ending in one scope of an async action, is now destroyed directly at the scope's exits, awaited
   shielded as before, without a cleanup region: 2 million guarded calls take 0.186 s instead of 0.333 s, against
   0.181 s for `defer await guard.close()`. Cancellation, failure linking and destroys that suspend behave as
-  before; guards that share a scope keep the region.
-  A region holding a single async-destroy object also closes on a faster path.
+  before; guards that share a scope keep the region. Nine cleanup guards of the HTTP client and server, HTTP/1
+  bodies and sessions, HTTP/2 serving and TCP connection attempts now use `async destroy` instead of a deferred
+  close (throughput unchanged within 1%); the TCP race guard keeps its deferred close, since it reaches the
+  connection its action returns. A region holding a single async-destroy object also closes on a faster path.
 - **Slow std actions found by the benchmarks, sped up (#943).** ECDSA verifies on aws-lc and signs from the
   secret scalar alone, still with RFC 6979 deterministic nonces: a P-256 signature plus two verifications takes
   178 µs instead of 550 µs, and verifying a certificate chain 178 µs instead of 503 µs. Locale tags no longer

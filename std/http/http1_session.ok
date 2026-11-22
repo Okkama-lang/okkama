@@ -515,7 +515,6 @@ hidden object Http1SessionReading does BodyReading {
             complete: complete,
             busy: busy
         );
-        defer await cleanup.close();
         lease.reads().replace([group]);
         let pending = origin.bytes(limit);
         group.start(pending);
@@ -575,7 +574,7 @@ hidden object Http1SessionReadCleanup {
         self.busy = busy;
     }
 
-    async close() is void {
+    async destroy {
         let release = Http1SessionReadRelease(groups: lease.reads(), busy: busy);
         defer release.close();
         if !complete.ready() {

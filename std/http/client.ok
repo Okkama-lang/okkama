@@ -1029,7 +1029,6 @@ hidden object HttpClientOperation does Closing {
 
     async settle() is void {
         let retention = HttpClientTransportSettlement(transports.value());
-        defer await retention.close();
         let permit_cleanup = HttpAcquisitionCleanup(
             group: permit_group,
             pending: permit_pending,
@@ -1176,7 +1175,7 @@ hidden object HttpClientTransportSettlement {
         self.origins = origins;
     }
 
-    async close() is void {
+    async destroy {
         for origins -> origin {
             await origin.settle();
         }
@@ -1358,7 +1357,6 @@ hidden object HttpClientReading does BodyReading {
             successful: successful,
             reads: reads
         );
-        defer await cleanup.close();
         let bounded is HttpDeadline<@byte> = HttpDeadline(
             origin: origin.bytes(amount),
             limit: limit,
@@ -1400,7 +1398,7 @@ hidden object HttpClientReadCleanup {
         self.reads = reads;
     }
 
-    async close() is void {
+    async destroy {
         if !successful.ready() {
             defer await operation.settle();
             defer operation.close();

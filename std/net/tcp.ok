@@ -711,7 +711,6 @@ hidden object TcpRaceAttempt {
 
     async result() is TcpRaceWin {
         let cleanup = TcpRaceAttemptCleanup(waiting: waiting, connecting: connecting);
-        defer await cleanup.close();
         try {
             if position > 0 {
                 if !prior_started.ready() {
@@ -813,7 +812,7 @@ hidden object TcpRaceAttemptCleanup {
         self.connecting = connecting;
     }
 
-    async close() is void {
+    async destroy {
         if waiting.active() > 0 {
             waiting.cancel();
             defer await waiting.wait();

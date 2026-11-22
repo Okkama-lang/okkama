@@ -215,3 +215,25 @@ updated), release build, 14 interleaved runs, median:
 The remaining 2.5 ns per call is the guard's identity (an object with a destroy is registered once). The
 precondition of the ticket holds; the guard conversions follow.
 
+## Step 5 (2026-11-22): guard conversions
+
+Nine of the ten hidden candidates become `async destroy` guards: `HttpClientReadCleanup`,
+`HttpClientTransportSettlement`, `Http1BodyOperationCleanup`, `Http1BodyWriteCleanup`,
+`Http1SessionReadCleanup`, `Http2ServerCleanup`, `HttpServerCleanup`, `HttpServerDrainCleanup`,
+`TcpRaceAttemptCleanup`. Each was converted alone first; the module tests of http/server, http/client, web/app,
+http/proxy, http/cache, mail/smtp_session and http/websocket_client pass for each (with
+`OKKAMA_VERIFY_OWNERSHIP=1`), and the web examples match.
+
+Kept on a deferred close:
+
+- `TcpRaceCleanup`: as an identity, the guard reaches the attempts and through them the winning connection
+  that `TcpRace` returns; its scope keeps that value, so the region treats the guard as part of the kept graph
+  and the connection is closed under the caller (every HTTP module test fails). The 0.6.0 ownership model makes
+  it unsafe; the #264 classification predates it.
+- `WebSocketOpeningCleanup`: a public object of `http/internal/websocket_upgrade` with a public `close()`;
+  nothing leaves the std.
+
+Load (examples/web/hello.ok, `ab` with 8 clients, release, the same binary, std before and after, three
+interleaved rounds, medians): keep-alive 18 956 → 18 803 requests/s (−0.8%), a new connection per request
+8 059 → 8 084 (+0.3%): within the 2% budget and the noise.
+

@@ -198,7 +198,6 @@ hidden object Http1BodyInput does AsyncReading {
         let group is FutureGroup<@byte> = FutureGroup();
         let complete = Event();
         let cleanup = Http1BodyOperationCleanup(group: group, complete: complete);
-        defer await cleanup.close();
         let pending = self.read_step(group, limit);
         group.start(pending);
         let result = await pending;
@@ -414,7 +413,7 @@ hidden object Http1BodyOperationCleanup {
         self.complete = complete;
     }
 
-    async close() is void {
+    async destroy {
         let pending = group.active() > 0;
         if !complete.ready() {
             group.cancel();

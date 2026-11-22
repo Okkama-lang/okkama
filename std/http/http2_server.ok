@@ -267,7 +267,6 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
             else throw InvalidState.because("H2 server session is single-use");
         started.set();
         let cleanup = Http2ServerCleanup(state: self, owner: owner, finished: finished);
-        defer await cleanup.close();
         let opening_cleanup = Http2ServerSettlement(openings);
         defer await opening_cleanup.close();
         let preface = Http2ServerPreface(input: input, output: output_origin, settings: local).settings();
@@ -1310,7 +1309,7 @@ hidden object Http2ServerCleanup {
         self.finished = finished;
     }
 
-    async close() is void {
+    async destroy {
         defer finished.set();
         defer owner.close();
         await state.cleanup();

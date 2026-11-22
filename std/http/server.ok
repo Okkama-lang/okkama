@@ -427,7 +427,6 @@ hidden object HttpServerState {
             else throw BadRequest.because("server is closed or already serving");
         started.set();
         let cleanup = HttpServerCleanup(self);
-        defer await cleanup.close();
         loop {
             await self.reap();
             if self.closed() {
@@ -474,7 +473,7 @@ hidden object HttpServerCleanup {
         self.owner = owner;
     }
 
-    async close() is void {
+    async destroy {
         owner.close();
         await owner.settled();
     }
@@ -1343,7 +1342,6 @@ object ServerDrain {
     // Stops accepting, waits for requests in flight up to limit, then closes.
     async drain() is ServerDrain {
         let cleanup = HttpServerDrainCleanup(server);
-        defer await cleanup.close();
         server.stop_accepting();
         let bounded is Within<bool> = Within(origin: server.drained(), limit: limit, clock: clock);
         let waiting = bounded.outcome();
@@ -1359,7 +1357,7 @@ hidden object HttpServerDrainCleanup {
         self.server = server;
     }
 
-    async close() is void {
+    async destroy {
         server.close();
         await server.settled();
     }

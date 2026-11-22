@@ -113,7 +113,6 @@ hidden object Http1BodyWriteOperation {
             return destination.value();
         }
         let cleanup = Http1BodyWriteCleanup(reads: reads, writes: writes);
-        defer await cleanup.close();
         let known is @int = try {
             [body.length()];
         }
@@ -236,7 +235,7 @@ hidden object Http1BodyWriteCleanup {
         self.writes = writes;
     }
 
-    async close() is void {
+    async destroy {
         let reading is @FutureGroup<@byte> = reads.value().filter() -> group {
             group.active() > 0;
         };
