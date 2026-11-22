@@ -195,9 +195,9 @@ hidden object ImapDataParsing {
         let name = origin.name();
         confirm name != "OK" && name != "NO" && name != "BAD" && name != "BYE" && name != "PREAUTH"
             else throw InvalidImapData.because("status text is not structured data");
-        let tokens = ImapDataTokens(limits);
         let parts = origin.parts();
-        for (0..parts.size()) -> index {
+        // Each part adds its tokens to those gathered before it (#984).
+        let tokens = (0..parts.size()).reduce(ImapDataTokens(limits)) -> gathered, index {
             let part = parts.item(index);
             if part.kind() == ImapResponsePartKind.text {
                 let text = Utf8Decoded(part.bytes()).string();
@@ -228,7 +228,7 @@ hidden object ImapDataParsing {
                             end = end.following(end.index() - 1);
                         }
                     }
-                tokens = ImapDataLexing(origin: text.slice(0, end.index()), initial: tokens).tokens();
+                ImapDataLexing(origin: text.slice(0, end.index()), initial: gathered).tokens();
             }
             else {
                 let kind = if part.kind() == ImapResponsePartKind.literal {
@@ -237,9 +237,9 @@ hidden object ImapDataParsing {
                 else {
                     ImapTokenKind.literal8;
                 };
-                tokens = tokens.following(ImapDataToken(kind: kind, bytes: part.bytes()));
-            }
-        }
+                gathered.following(ImapDataToken(kind: kind, bytes: part.bytes()));
+            };
+        };
         let flat = tokens.entries();
         let values is MimeItems<ImapValue> = MimeItems();
         let position = MimePosition(0);

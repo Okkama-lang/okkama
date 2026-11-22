@@ -2,7 +2,7 @@
 //! `throw`, `next`/`last`, `defer`, постфиксное условие.
 
 use super::{Checker, Kind};
-use crate::analysis::thir::{Expr, ExprKind, Fallback, LocalId, Stmt, StmtKind};
+use crate::analysis::thir::{Callee, Coercion, Expr, ExprKind, Fallback, LocalId, Stmt, StmtKind};
 use crate::analysis::ty::Ty;
 use crate::source::Span;
 use crate::syntax::ast;
@@ -382,6 +382,26 @@ impl Checker<'_, '_> {
         }
         let checked = self.value(value, Some(&current));
         let diverges = checked.diverges;
+        // A rebind only takes a successor of the bound object itself (#592,
+        // owner's ruling on #984): `p = p.move()`, `p = await p.next()`. A
+        // fresh object or another binding's value is a new identity.
+        let settled = diverges || Self::ty_of(&checked).is_error() || current.is_error();
+        if !settled && !self.successor_of(&checked, local) {
+            let example = match &current {
+                Ty::Object(object, _) => self.reg.objects[object.0]
+                    .methods
+                    .iter()
+                    .find(|method| method.successor)
+                    .map_or_else(|| "move".to_string(), |method| method.name.clone()),
+                _ => "move".to_string(),
+            };
+            let message = format!(
+                "Cannot rebind variable \"{0}\" to a new value: a rebind takes a successor of the same object ({0} = {0}.{1}(…))",
+                name.text, example
+            );
+            self.error(name.span, message);
+            return (StmtKind::Expr(Self::poisoned(name.span)), Flow::unit());
+        }
         let checked = self.coerce(
             checked,
             &current,
@@ -399,6 +419,44 @@ impl Checker<'_, '_> {
                 Flow::unit()
             },
         )
+    }
+
+    /// Is `value` the result of a successor action of the object bound to
+    /// `local`: a successor call whose receiver is `local` itself or, along a
+    /// chain (`p.move().move()`), such a call; async ones under `await`.
+    fn successor_of(&self, value: &Expr, local: LocalId) -> bool {
+        match &value.kind {
+            ExprKind::Coerce {
+                coercion: Coercion::Take,
+                value,
+            }
+            | ExprKind::Await(value) => self.successor_of(value, local),
+            ExprKind::Call {
+                callee:
+                    Callee::Method {
+                        receiver,
+                        object,
+                        method,
+                    },
+                ..
+            } if self.reg.objects[object.0].methods[*method].successor => {
+                self.object_of(receiver, local)
+            }
+            _ => false,
+        }
+    }
+
+    /// Is the receiver `expr` the object bound to `local`: the local itself
+    /// (a `^C` local is read through `Take`) or one of its successors.
+    fn object_of(&self, expr: &Expr, local: LocalId) -> bool {
+        match &expr.kind {
+            ExprKind::Local(own) => *own == local,
+            ExprKind::Coerce {
+                coercion: Coercion::Take,
+                value,
+            } => self.object_of(value, local),
+            _ => self.successor_of(expr, local),
+        }
     }
 
     /// `stmt if condition`; литеральное условие известно заранее.

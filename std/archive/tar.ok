@@ -1131,6 +1131,15 @@ hidden object TarAttributes {
         ^records = records.prefix(TarAttribute(name: name, text: text));
     }
 
+    // These attributes with the PAX records of payload applied (#984).
+    applied(payload is @byte) is ^TarAttributes {
+        ^records = TarPaxPayload(payload).applied(self).recorded();
+    }
+
+    recorded() is List<TarAttribute> {
+        records;
+    }
+
     lookup(name is string, fallback is string) is string {
         for records -> record {
             if record.name() == name {
@@ -1792,8 +1801,7 @@ hidden object TarStreamInput {
                 let payload = source.bytes(size, false);
                 self.padding(size);
                 if flag == "g" {
-                    let revised = TarPaxPayload(payload).applied(global);
-                    global = revised;
+                    global = global.applied(payload);
                     globals.writing() <- payload;
                 }
                 else {

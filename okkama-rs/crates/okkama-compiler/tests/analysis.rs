@@ -730,6 +730,53 @@ fn captured_bindings_cannot_be_rebound() {
     }
 }
 
+/// A rebind takes only a successor of the bound object itself (#592; owner's
+/// ruling on #984): a fresh object or another binding's value is refused even
+/// when the type has successor actions.
+#[test]
+fn a_rebind_takes_a_successor_of_the_same_object() {
+    let objects = "object C { has n is int = 0; C(); inc() is ^C { ^n = n + 1; } copy() is C { C(); } value() is int { n; } }";
+    let refused = "Cannot rebind variable \"c\" to a new value: a rebind takes a successor of the same object (c = c.inc(…))";
+    for body in [
+        "let c = C(); c = C(); c.value();",
+        "let c = C(); let d = C(); c = d; c.value();",
+        "let c = C(); let d = C(); c = d.inc(); c.value();",
+        "let c = C(); let d = C(); c = d.inc().inc(); c.value();",
+        "let c = C(); { let d = C(); c = d.inc(); } c.value();",
+        // A plain action returning the type is not a successor.
+        "let c = C(); c = c.copy(); c.value();",
+        // Neither is a choice between successors: rebind in each branch instead.
+        "let c = C(); c = if c.value() > 0 { c.inc(); } else { c.inc(); }; c.value();",
+    ] {
+        assert_eq!(
+            messages(&format!("{objects} main() is int {{ {body} }}")),
+            [refused],
+            "{body}"
+        );
+    }
+    for body in [
+        "let c = C(); c = c.inc(); c.value();",
+        "let c = C(); c = (c.inc()); c.value();",
+        "let c = C(); c = c.inc().inc(); c.value();",
+        // A local holding a successor is read through `Take`.
+        "let c = C(); let d = c.inc(); d = d.inc(); d.value();",
+        // A rebind in a nested block or a loop updates the original binding.
+        "let c = C(); { c = c.inc(); } c.value();",
+        "let c = C(); for 1..=2 -> i { c = c.inc(); } c.value();",
+        "let c = C(); if c.value() > 0 { c = c.inc(); } else { c = c.inc().inc(); } c.value();",
+    ] {
+        let found = messages(&format!("{objects} main() is int {{ {body} }}"));
+        assert!(found.is_empty(), "{body}: {found:?}");
+    }
+    // An async successor is awaited into the rebind.
+    let found = messages(&format!("{ASYNC_COUNTER} async main() is int {{ let c = C(); c = await c.inc(); c.value(); }}"));
+    assert!(found.is_empty(), "{found:?}");
+    assert_eq!(
+        messages(&format!("{ASYNC_COUNTER} async main() is int {{ let c = C(); let d = C(); c = await d.inc(); c.value(); }}")),
+        [refused]
+    );
+}
+
 #[test]
 fn constructor_fields_are_checked_before_lowering() {
     for (object, expected) in [

@@ -1001,6 +1001,15 @@ hidden object MimePendingHeader {
         parts = parts.following(text);
         ^fragments = parts;
     }
+
+    // The next header in the section takes the place of this one (#984).
+    started(name is string, value is string) is ^MimePendingHeader {
+        let parts is MimeItems<string> = MimeItems();
+        parts = parts.following(value);
+        ^name = name;
+        ^fragments = parts;
+        ^supplied = true;
+    }
 }
 
 hidden object MimeHeaderParsing {
@@ -1066,10 +1075,9 @@ hidden object MimeHeaderParsing {
                     last if char != " " && char != "\t";
                     from = from.following(index + 1);
                 }
-                pending = MimePendingHeader(
+                pending = pending.started(
                     name: name.string(),
-                    value: text.slice(from.index(), text.length()),
-                    present: true
+                    value: text.slice(from.index(), text.length())
                 );
             }
         }
