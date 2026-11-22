@@ -66,8 +66,13 @@ fn zone_name_valid(name: &str) -> bool {
     name.split('/').all(part) && !name.split('/').any(|part| part == "..")
 }
 
+/// The TZif data of zone `name`. Only TZif files are zones (#990): the bundle also carries
+/// metadata entries (`LICENSE`, version files), which are not.
 fn zone_file(name: &str) -> Option<&'static Vec<u8>> {
-    zone_name_valid(name).then(|| files().get(name)).flatten()
+    zone_name_valid(name)
+        .then(|| files().get(name))
+        .flatten()
+        .filter(|bytes| bytes.starts_with(b"TZif"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -470,5 +475,23 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::{files, zone_file};
+
+    /// #990: only TZif files of the bundle are zones; its metadata entries are not.
+    #[test]
+    fn metadata_entries_of_the_bundle_are_not_zones() {
+        let metadata: Vec<&String> = files().iter().filter(|(_, bytes)| !bytes.starts_with(b"TZif")).map(|(name, _)| name).collect();
+        assert!(!metadata.is_empty(), "the bundle is expected to carry metadata entries");
+        for name in metadata {
+            assert!(zone_file(name).is_none(), "{name}");
+        }
+        assert!(zone_file("LICENSE").is_none());
+        assert!(zone_file("Europe/Berlin").is_some());
+        assert!(zone_file("America/New_York").is_some());
     }
 }
