@@ -10725,8 +10725,8 @@ A cell is a fenced exception to immutability:
 
 - It has three operations: `Cell(value: initial)`, `value()` and
   `replace(value)`. The values it holds are ordinary immutable values.
-  Two cells are meant to compare by identity, but today `==` on any two
-  cells is `true` (issue #956), so a program should not compare them.
+  Cells compare by identity, not by content: two cells are equal only when
+  they are the same cell (issue #956).
 - It stays in synchronous code. An async action cannot create, receive or
   use one. A synchronous action that uses a cell may still be called from
   async code. Synchronous code has no suspension point, so no task can see

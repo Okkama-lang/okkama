@@ -15,6 +15,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   future or another value it does not format, alone or inside an array or a map, failed with a bare "Native
   invocation … failed". It now fails with a `core.debug`/`unsupported_type` native failure that names the
   kind and the type and points to `debug/dumper`'s `Dumper`. Supported values print as before.
+- **An object the runtime holds compares by identity (#956).** `==` on two `Atomic`s, two channels or
+  channel ends, two events, locks or other async primitives was always `true`: their state lives in the
+  runtime, not in fields, so structural equality compared nothing. They are now equal only to themselves,
+  and so is a `Cell`, which holds an `Atomic`. Such an object cannot key a map any more ("is held by the
+  runtime and compares by identity").
 
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,

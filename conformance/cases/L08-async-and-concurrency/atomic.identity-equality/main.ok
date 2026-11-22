@@ -1,0 +1,22 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+import "async/channel" take Channel;
+import "cell" take Cell;
+
+// An object whose state the runtime holds is equal only to itself (#956).
+main() is int {
+    let out = Stdout();
+    let a = Atomic(1);
+    let b = Atomic(1);
+    let same = a;
+    out.writeln("atomic " + (a == b).string() + " " + (a == same).string());
+    let first is Channel<int> = Channel(capacity: 1);
+    let second is Channel<int> = Channel(capacity: 1);
+    out.writeln("channel " + (first == second).string() + " " + (first == first).string());
+    let x = Cell(1);
+    let y = Cell(1);
+    out.writeln("cell " + (x == y).string() + " " + (x == x).string());
+    0;
+}
