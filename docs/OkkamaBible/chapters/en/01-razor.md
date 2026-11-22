@@ -232,7 +232,7 @@ chapter that argues the case.
 | Ambient authority of native code | natives behind declared groups and budgets | 21 |
 
 Some of these words are not merely absent but *removed*: `null`, `nil`,
-`isa`, `super`, `abstract`, `protected`, `var` and a few others are reserved
+`none`, `isa`, `super`, `abstract`, `protected`, `with` and `finally` are reserved
 so that a program using them fails to parse with a message instead of meaning
 something else. The language does not just leave the door open with nothing
 behind it; it bricks the door up and puts a sign on it.

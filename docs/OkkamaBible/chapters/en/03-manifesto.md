@@ -128,7 +128,7 @@ later.
 
 ## 3.5 Rule five: conditions are booleans
 
-`if`, `match` guards, `confirm`, `&&`, `||` and `!` accept exactly `bool`.
+`if`, `confirm`, `&&`, `||` and `!` accept exactly `bool`.
 There is no truthiness: zero, the empty string and the empty array are
 present values, not "false".
 
@@ -272,8 +272,9 @@ messages [@hoare1978].
 **Cost.** Sharing memory between parallel workers is impossible by design, so
 parallel algorithms must be expressed as messages; and the async standard
 library needs more structure — groups, settlements, deadlines — than a
-fire-and-forget API (issue #147 discusses how much of it the language should
-absorb).
+fire-and-forget API. Part of it is in the language already: an `await`
+carries cancellation to the work it awaits and waits for that work to settle
+(issue #147, Chapter 20).
 
 ## 3.12 Eleven rules in one program
 
