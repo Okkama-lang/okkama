@@ -851,7 +851,7 @@ impl<'a> Registry<'a> {
                 ast::Item::Object(decl) => {
                     let name = &decl.name.text;
                     if name == "Error" {
-                        self.error(decl.name.span, "\"Error\" is the name of the system role");
+                        self.error(decl.name.span, reserved_type_name(name).expect("Error is reserved"));
                         continue;
                     }
                     match self.own_type(module, name) {
@@ -898,9 +898,11 @@ impl<'a> Registry<'a> {
                 }
                 ast::Item::Role(decl) => {
                     let name = &decl.name.text;
-                    if matches!(name.as_str(), "Error" | "Maybe" | "Presence")
-                        || self.own_type(module, name).is_some()
-                    {
+                    if let Some(message) = reserved_type_name(name) {
+                        self.error(decl.name.span, message);
+                        continue;
+                    }
+                    if self.own_type(module, name).is_some() {
                         self.error(
                             decl.name.span,
                             format!("Role \"{name}\" is already declared"),
@@ -923,9 +925,11 @@ impl<'a> Registry<'a> {
                 }
                 ast::Item::Enum(decl) => {
                     let name = &decl.name.text;
-                    if matches!(name.as_str(), "Error" | "Maybe" | "Presence")
-                        || self.own_type(module, name).is_some()
-                    {
+                    if let Some(message) = reserved_type_name(name) {
+                        self.error(decl.name.span, message);
+                        continue;
+                    }
+                    if self.own_type(module, name).is_some() {
                         self.error(
                             decl.name.span,
                             format!("Enum \"{name}\" is already declared"),
@@ -2331,13 +2335,19 @@ impl<'a> Registry<'a> {
         let mut ctors: Vec<CtorInfo<'a>> = Vec::new();
         for ctor in &ctor_decls {
             if ctor.name.text != decl.name.text {
-                self.error(
-                    ctor.name.span,
-                    format!(
+                // A fake's constructor is generated (#276), and its name
+                // cannot be written: say what to do instead (#987).
+                let message = match name.strip_suffix("$fake") {
+                    Some(role) => format!(
+                        "The fake of role \"{role}\" cannot declare a constructor: it is made from its field defaults; remove \"{}\"",
+                        ctor.name.text
+                    ),
+                    None => format!(
                         "Constructor \"{}\" must be named \"{}\"",
                         ctor.name.text, decl.name.text
                     ),
-                );
+                };
+                self.error(ctor.name.span, message);
                 continue;
             }
             let shape = match &ctor.form {
@@ -2496,12 +2506,7 @@ impl<'a> Registry<'a> {
                 decl: Some(action),
             };
             if let Some(message) = overload_conflict(&methods, &candidate, &name) {
-                let span = if message.starts_with("Overloads") {
-                    action.result.span()
-                } else {
-                    action.name.span
-                };
-                self.error(span, message);
+                self.error(action.name.span, message);
                 continue;
             }
             methods.push(candidate);
@@ -2671,21 +2676,27 @@ impl<'a> Registry<'a> {
                                 }
                                 _ => self.type_name(ty),
                             };
-                            Some(match mismatch {
-                                Some((position, ((_, actual), expected))) => format!(
+                            // A type that already failed was reported where it
+                            // is written: no cascade from it (#987).
+                            match mismatch {
+                                Some((_, ((_, actual), expected)))
+                                    if actual.is_error() || expected.is_error() => None,
+                                Some((position, ((_, actual), expected))) => Some(format!(
                                     "Action \"{}\" parameter {} {on} must be {}{for_role}, got {}",
                                     method.name,
                                     position + 1,
                                     shown(expected, method.variadic, position),
                                     shown(actual, candidate.variadic, position)
-                                ),
-                                None => format!(
+                                )),
+                                None if candidate.result.as_ref().is_some_and(Ty::is_error)
+                                    || result.as_ref().is_some_and(Ty::is_error) => None,
+                                None => Some(format!(
                                     "Action \"{}\" {on} must return {}{for_role}, got {}",
                                     method.name,
                                     self.result_name(&result),
                                     self.result_name(&candidate.result)
-                                ),
-                            })
+                                )),
+                            }
                         }
                     }
                 } else if fake {
@@ -3291,8 +3302,10 @@ impl<'a> Registry<'a> {
 }
 
 /// Перегрузки одного имени: одинаковые сигнатуры неразличимы (у variadic
-/// имена не различают — их вызов позиционный), у одной арности — один
-/// результат. Арность — число параметров, variadic-хвост — один параметр.
+/// имена не различают — их вызов позиционный). Перегрузки одной арности
+/// с разными типами или именами параметров могут иметь разные результаты
+/// (Библия 13.3, п. 6; #987). Арность — число параметров, variadic-хвост —
+/// один параметр.
 fn overload_conflict(
     methods: &[MethodInfo<'_>],
     method: &MethodInfo<'_>,
@@ -3322,12 +3335,17 @@ fn overload_conflict(
     None
 }
 
+/// Does a value of `ty` hold an action value anywhere: also under the type
+/// arguments of an enum or a cap and inside a Future (#987).
 fn contains_action(ty: &Ty) -> bool {
     match ty {
         Ty::Action(_) => true,
         Ty::Array(inner) | Ty::Successor(inner) | Ty::Varargs(inner) => contains_action(inner),
+        Ty::Future(Some(inner)) => contains_action(inner),
         Ty::Map(key, value) => contains_action(key) || contains_action(value),
-        Ty::Object(_, args) | Ty::Role(_, args) => args.iter().any(contains_action),
+        Ty::Object(_, args) | Ty::Role(_, args) | Ty::Variant(_, args) | Ty::Cap(_, args, _) => {
+            args.iter().any(contains_action)
+        }
         _ => false,
     }
 }
@@ -3361,4 +3379,15 @@ fn hidden_names(program: &ast::Program) -> HashSet<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The system type a declaration cannot take the name of (#987): the role
+/// `Error` and the enums `Maybe` and `Presence` are declared by the
+/// language, not by the program.
+fn reserved_type_name(name: &str) -> Option<String> {
+    match name {
+        "Error" => Some("\"Error\" is the name of the system role".to_string()),
+        "Maybe" | "Presence" => Some(format!("\"{name}\" is the name of a system enum")),
+        _ => None,
+    }
 }

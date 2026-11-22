@@ -1080,6 +1080,91 @@ fn fake_errors_name_the_role_and_point_at_the_fake() {
     );
 }
 
+/// #987: a constructor written in a fake gets advice that can be followed:
+/// the fake's constructor is generated, so it is removed, not renamed.
+#[test]
+fn a_constructor_in_a_fake_is_removed_not_renamed() {
+    let role = |ctor: &str| format!("role Counter {{\n count() is int;\n fake {{\n has value is int = 0;\n {ctor}\n count() is int {{ value; }}\n }}\n}}\n");
+    for ctor in ["Fake();", "Counter();", "Counter(:value);"] {
+        let name = ctor.split('(').next().unwrap();
+        assert_eq!(
+            test_mode_located(&role(ctor)),
+            [(
+                name.to_string(),
+                format!("The fake of role \"Counter\" cannot declare a constructor: it is made from its field defaults; remove \"{name}\"")
+            )],
+            "{ctor}"
+        );
+    }
+}
+
+/// #987: a role whose action already has a failed type reports that type
+/// once, where it is written, and no conformance cascade with `<error>`.
+#[test]
+fn conformance_is_silent_about_types_that_already_failed() {
+    for (body, expected) in [
+        ("role Shape { grow() is ^Shape; } object Sq does Shape { Sq(); grow() is ^Missing { } }", "Type \"Missing\" is not declared"),
+        ("role Shape { area(k is int) is int; } object Sq does Shape { Sq(); area(k is Missing) is int { 0; } }", "Type \"Missing\" is not declared"),
+        ("role Shape { area() is int; } object Sq does Shape { Sq(); area() is Missing { 0; } }", "Type \"Missing\" is not declared"),
+    ] {
+        assert_eq!(messages(&format!("{body} main() is int {{ 0; }}")), [expected], "{body}");
+    }
+    // A real mismatch is still reported.
+    assert_eq!(
+        messages("role Shape { area() is int; } object Sq does Shape { Sq(); area() is string { \"0\"; } } main() is int { 0; }"),
+        ["Action \"area\" on object \"Sq\" must return int for role \"Shape\", got string"]
+    );
+}
+
+/// #987: `Error`, `Maybe` and `Presence` are system types: a role or enum
+/// of that name is told so, not that it is declared twice.
+#[test]
+fn system_type_names_are_reserved() {
+    for (decl, expected) in [
+        ("role Error { go() is int; }", "\"Error\" is the name of the system role"),
+        ("role Maybe { go() is int; }", "\"Maybe\" is the name of a system enum"),
+        ("role Presence { go() is int; }", "\"Presence\" is the name of a system enum"),
+        ("enum Error = (a);", "\"Error\" is the name of the system role"),
+        ("enum Maybe = (a, b);", "\"Maybe\" is the name of a system enum"),
+        ("enum Presence = (a, b);", "\"Presence\" is the name of a system enum"),
+        ("object Error { Error(); }", "\"Error\" is the name of the system role"),
+    ] {
+        assert_eq!(messages(&format!("{decl} main() is int {{ 0; }}")), [expected], "{decl}");
+    }
+    // A real second declaration keeps its message.
+    assert_eq!(
+        messages("role Shape { go() is int; } enum Shape = (a); main() is int { 0; }"),
+        ["Enum \"Shape\" is already declared"]
+    );
+}
+
+/// #987: `return` in a constant initializer is refused the same way with or
+/// without a value: the initializer is an expression, not an action.
+#[test]
+fn return_is_refused_in_a_constant_initializer() {
+    for value in ["return 5;", "return;"] {
+        assert_eq!(
+            messages(&format!("const X is int = if true {{ {value} }} else {{ 1; }}; main() is int {{ X; }}")),
+            ["`return` is not allowed in a constant initializer"],
+            "{value}"
+        );
+    }
+}
+
+/// #987: a native takes no action values, also inside an enum, a cap or a
+/// Future type argument.
+#[test]
+fn natives_take_no_action_values_at_any_depth() {
+    for param in ["() is int", "@() is int", "Maybe<() is int>", "Maybe<@() is int>"] {
+        assert_eq!(
+            messages(&format!("native f(x is {param}) is int; main() is int {{ 0; }}")),
+            ["Native declaration \"f\" cannot accept action values"],
+            "{param}"
+        );
+    }
+    assert!(messages("native f(x is Maybe<int>) is int; main() is int { 0; }").is_empty());
+}
+
 /// Exponent literals are floats (#57); one that cannot be a finite float, or
 /// that is not zero but would round to 0.0, is an error.
 #[test]

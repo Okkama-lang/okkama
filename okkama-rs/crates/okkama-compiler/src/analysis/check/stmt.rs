@@ -506,7 +506,13 @@ impl Checker<'_, '_> {
                 self.error(span, "return is only allowed inside an action");
                 return (StmtKind::Return(None), Flow::diverged());
             }
-            Kind::Entry | Kind::Method | Kind::Default | Kind::CapField | Kind::Closure | Kind::Const => {}
+            // A constant initializer is an expression, not an action: with or
+            // without a value, `return` has nowhere to go (#987).
+            Kind::Const => {
+                self.error(span, "`return` is not allowed in a constant initializer");
+                return (StmtKind::Return(None), Flow::diverged());
+            }
+            Kind::Entry | Kind::Method | Kind::Default | Kind::CapField | Kind::Closure => {}
         }
         let result = self.result.clone();
         let checked = match (value, &result) {
