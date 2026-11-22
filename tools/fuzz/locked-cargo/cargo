@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# cargo-fuzz invokes cargo by name, including when run/coverage rebuild targets.
+# Put --locked right after the subcommand, before any `--` passthrough.
+set -eu
+: "${OKKAMA_FUZZ_CARGO:?set by tools/fuzz/run.sh}"
+args=("$@")
+at=0
+[[ "${args[0]:-}" == +* ]] && at=1
+case "${args[$at]:-}" in
+    build|check|metadata)
+        exec "$OKKAMA_FUZZ_CARGO" "${args[@]:0:$((at + 1))}" --locked "${args[@]:$((at + 1))}" ;;
+    *) exec "$OKKAMA_FUZZ_CARGO" "${args[@]}" ;;
+esac

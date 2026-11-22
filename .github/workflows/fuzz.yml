@@ -41,6 +41,10 @@ jobs:
           path: okkama-rs/fuzz/corpus
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: fuzz-corpus-
+      - name: Verify locked fuzz dependencies
+        working-directory: okkama-rs/fuzz
+        run: cargo metadata --locked --format-version 1 >/dev/null
+      # run.sh keeps --locked on builds, runs and coverage.
       - name: Fuzz
         run: tools/fuzz/run.sh "${{ inputs.seconds || '600' }}" --coverage
       - name: Keep corpus, findings and coverage

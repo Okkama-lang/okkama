@@ -1,4 +1,4 @@
-# RustSec advisories against okkama-rs/Cargo.lock: on every change and weekly,
+# RustSec advisories against both workspace lockfiles: on every change and weekly,
 # since new advisories appear without changes here. Exceptions with reasons:
 # okkama-rs/.cargo/audit.toml.
 name: Audit
@@ -13,7 +13,11 @@ on:
 
 jobs:
   advisories:
-    name: RustSec advisories
+    name: RustSec advisories (${{ matrix.lockfile }})
+    strategy:
+      fail-fast: false
+      matrix:
+        lockfile: [Cargo.lock, fuzz/Cargo.lock]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -22,4 +26,4 @@ jobs:
           tool: cargo-audit
       - name: cargo audit
         working-directory: okkama-rs
-        run: cargo audit --deny warnings
+        run: cargo audit --deny warnings --file "${{ matrix.lockfile }}"
