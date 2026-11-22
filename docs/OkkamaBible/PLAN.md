@@ -168,6 +168,18 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
 
 ## Progress
 
+- 2026-11-22 (owner: "finish the Bible, highest priority; the source code is the only truth; every defect or
+  doubt is a ticket"): every chapter, 1–27, checked claim by claim against the 0.6.2 source and the installed
+  toolchain, not the specification. About 60 book fixes, mostly stale "not yet" items closed in 0.6.2 (#131,
+  #260, #261, #329, #339, #509) and rules the checker does not have. New: 13.1 recursion (`13-recursion`,
+  `-rejected`), 15.9 doc examples as tests (`15-doc-examples-tests`, run outside the cage), 20.6
+  `SelectedReceiving` (`20-select`), constructor defaults, `once let` placement. Appendices A (grammar from
+  the parser), B (builtin actions from the checker's table), C (std index, `build.py --std-index` from
+  `okkama man`), D (glossary, 77 terms), E (references). PDF in both languages (`build.py --pdf`, pandoc and
+  WeasyPrint in the `pdf/` container, listings coloured from `okkama tokens`): 662 pages EN, 703 RU.
+  Findings filed in the milestone "Bible findings": #952–#959, #964–#968. 246 examples pass on 0.6.2. The
+  book moves into the main repository (owner, 2026-11-22).
+
 - 2026-11-20: 11.5 gains "A role can hide a resource" (`11-role-resource`): a role-typed field holds a
   resource or a plain value, and ownership follows the value; the records' array moves with its vaults to the
   caller. Checked on 0.5.8 and tree Tomato with Tweed's #905. `build.py --check` passes `--engine sparrow`
