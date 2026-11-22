@@ -60,3 +60,26 @@ fn a_changed_published_item_is_an_error() {
     let error = extend(&published, &program(&field)).unwrap_err();
     assert!(error.0.contains("changes the published object A"), "{}", error.0);
 }
+
+/// Two equal new names in one recompiled session are refused by the merge that brings them, with the table, the
+/// name and both entries; they never get two indices that only the next merge notices (#975).
+#[test]
+fn a_repeated_new_name_is_refused_by_the_merge_that_brings_it() {
+    let published = program(PUBLISHED);
+    let handles = format!("{FRESH}handle \"h\"\nhandle \"h\"\n");
+    let error = extend(&published, &program(&handles)).unwrap_err();
+    assert_eq!(error.0, "the session program repeats the handle name \"h\" (entries 0 and 1)");
+    let objects = format!("{FRESH}object obj2 \"B\" {{\n field \"a\" t1\n}}\n");
+    let error = extend(&published, &program(&objects)).unwrap_err();
+    assert_eq!(error.0, "the session program repeats the object name \"B\" (entries 0 and 2)");
+    // A published name repeated by the fresh program is refused the same way.
+    let again = format!("{FRESH}object obj2 \"A\" {{\n field \"n\" t2\n}}\n");
+    let error = extend(&published, &program(&again)).unwrap_err();
+    assert_eq!(error.0, "the session program repeats the object name \"A\" (entries 1 and 2)");
+    // One new handle merges, and merging the same program again adds nothing.
+    let single = program(&format!("{FRESH}handle \"h\"\n"));
+    let once = extend(&published, &single).unwrap();
+    once.verify().unwrap();
+    assert_eq!(once.handles, ["h"]);
+    assert_eq!(extend(&once, &single).unwrap(), once);
+}

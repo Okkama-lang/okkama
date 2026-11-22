@@ -44,14 +44,22 @@ struct Maps {
 }
 
 /// Map each fresh item to the published one with the same key, or to a new index after the published ones.
-fn by_key<T, K: std::hash::Hash + Eq>(published: &[T], fresh: &[T], key: impl Fn(&T) -> K) -> Result<Vec<u32>, SessionError> {
+/// A key the fresh program repeats is an error, also when it is new (#975): a new key is known from its first
+/// occurrence on, so two equal new names never get two indices.
+fn by_key<T, K: std::hash::Hash + Eq + std::fmt::Debug>(
+    published: &[T],
+    fresh: &[T],
+    kind: &str,
+    key: impl Fn(&T) -> K,
+) -> Result<Vec<u32>, SessionError> {
     let mut known: HashMap<K, u32> = HashMap::new();
     for (index, item) in published.iter().enumerate() {
         known.entry(key(item)).or_insert(index as u32);
     }
     let mut next = published.len() as u32;
-    let mut seen = std::collections::HashSet::new();
-    fresh.iter().map(|item| {
+    // Result index → the fresh entry that took it.
+    let mut seen: HashMap<u32, usize> = HashMap::new();
+    fresh.iter().enumerate().map(|(position, item)| {
         let k = key(item);
         let index = match known.get(&k) {
             Some(&index) => index,
@@ -61,9 +69,12 @@ fn by_key<T, K: std::hash::Hash + Eq>(published: &[T], fresh: &[T], key: impl Fn
                 index
             }
         };
-        if !seen.insert(index) {
-            return Err(SessionError("the session program repeats a name".into()));
+        if let Some(first) = seen.insert(index, position) {
+            return Err(SessionError(format!(
+                "the session program repeats the {kind} name {k:?} (entries {first} and {position})"
+            )));
         }
+        known.entry(k).or_insert(index);
         Ok(index)
     }).collect()
 }
@@ -81,21 +92,21 @@ fn function_keys(functions: &[Function]) -> Vec<(String, usize)> {
 /// Extend `published` with what `fresh` adds, in `published`'s numbering.
 pub fn extend(published: &Program, fresh: &Program) -> Result<Program, SessionError> {
     let mut maps = Maps {
-        objects: by_key(&published.objects, &fresh.objects, |o| o.name.clone())?,
-        roles: by_key(&published.roles, &fresh.roles, |r| r.name.clone())?,
-        enums: by_key(&published.enums, &fresh.enums, |e| e.name.clone())?,
-        variants: by_key(&published.variants, &fresh.variants, |v| v.name.clone())?,
-        caps: by_key(&published.caps, &fresh.caps, |c| c.name.clone())?,
-        handles: by_key(&published.handles, &fresh.handles, Clone::clone)?,
+        objects: by_key(&published.objects, &fresh.objects, "object", |o| o.name.clone())?,
+        roles: by_key(&published.roles, &fresh.roles, "role", |r| r.name.clone())?,
+        enums: by_key(&published.enums, &fresh.enums, "enum", |e| e.name.clone())?,
+        variants: by_key(&published.variants, &fresh.variants, "variant", |v| v.name.clone())?,
+        caps: by_key(&published.caps, &fresh.caps, "cap", |c| c.name.clone())?,
+        handles: by_key(&published.handles, &fresh.handles, "handle", Clone::clone)?,
         ..Maps::default()
     };
     let published_keys = function_keys(&published.functions);
     let fresh_keys = function_keys(&fresh.functions);
-    maps.functions = by_key(&published_keys, &fresh_keys, Clone::clone)?;
+    maps.functions = by_key(&published_keys, &fresh_keys, "function", Clone::clone)?;
     let symbol = |program: &Program, global: &GlobalDecl| program.functions[global.init.0 as usize].symbol.clone();
     let published_globals: Vec<String> = published.globals.iter().map(|g| symbol(published, g)).collect();
     let fresh_globals: Vec<String> = fresh.globals.iter().map(|g| symbol(fresh, g)).collect();
-    maps.globals = by_key(&published_globals, &fresh_globals, Clone::clone)?;
+    maps.globals = by_key(&published_globals, &fresh_globals, "constant", Clone::clone)?;
 
     let mut out = published.clone();
     // Types by structure, after their parts: a type's components are other types, objects, roles, enums,
