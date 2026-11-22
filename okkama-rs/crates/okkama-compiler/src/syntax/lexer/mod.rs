@@ -354,6 +354,10 @@ impl Lexer<'_> {
     // ----- numbers ----------------------------------------------------------
 
     fn number(&mut self, first: u8) {
+        if first == b'0' && matches!(self.peek(), b'o' | b'O') {
+            self.octal_number();
+            return;
+        }
         if first == b'0' && matches!(self.peek(), b'b' | b'B' | b'x' | b'X') {
             self.based_number();
             return;
@@ -479,6 +483,42 @@ impl Lexer<'_> {
             );
         }
         self.add_value(TokenKind::Int, TokenValue::Int(literal));
+    }
+
+    /// `0o17`: there are no octal literals (only `0b` and `0x`), but a reader
+    /// may expect one, so the whole run is one bad literal at its own place,
+    /// as `0b102` is, and the message gives the value in a form that exists
+    /// (#968), instead of `0` followed by the identifier `o17`.
+    fn octal_number(&mut self) {
+        self.pos += 1;
+        while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
+            self.pos += 1;
+        }
+        let text = self.text[self.start..self.pos].to_string();
+        let body = &text[2..];
+        let well_formed = !body.is_empty()
+            && body
+                .split('_')
+                .all(|group| !group.is_empty() && group.bytes().all(|b| (b'0'..=b'7').contains(&b)));
+        let digits: String = body.chars().filter(|&c| c != '_').collect();
+        let value = well_formed
+            .then(|| i64::from_str_radix(&digits, 8).ok())
+            .flatten();
+        let span = self.span_from(self.start);
+        let message = match value {
+            Some(value) => format!(
+                "Invalid integer literal {text}: octal literals are not supported; write {value} or 0x{value:X}."
+            ),
+            None => format!("Invalid integer literal {text}: octal literals are not supported."),
+        };
+        self.error(message, span);
+        self.add_value(
+            TokenKind::Int,
+            TokenValue::Int(IntLiteral {
+                radix: Radix::Decimal,
+                digits: value.unwrap_or(0).to_string(),
+            }),
+        );
     }
 
     // ----- strings and chars -------------------------------------------------

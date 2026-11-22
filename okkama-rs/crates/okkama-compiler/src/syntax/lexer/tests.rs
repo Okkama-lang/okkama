@@ -761,3 +761,42 @@ fn lexer_terminates_on_arbitrary_bytes() {
 fn a_token_stays_within_seven_words() {
     assert!(std::mem::size_of::<Token>() <= 56, "{}", std::mem::size_of::<Token>());
 }
+
+/// #968: there are no octal literals, but `0o…` is one bad literal over its
+/// whole run, like `0b102`, and the message writes the value as a literal
+/// that exists; other numbers and identifiers starting with `o` are unchanged.
+#[test]
+fn octal_looking_literals_are_one_error_with_the_written_value() {
+    let render = |text: &str| -> Vec<String> {
+        let output = lex(text);
+        if output.diagnostics.is_empty() {
+            return output
+                .tokens
+                .iter()
+                .filter(|token| token.kind != TokenKind::Eof)
+                .map(|token| format!("{} {}", token.kind.name(), &text[token.span.range()]))
+                .collect();
+        }
+        output
+            .diagnostics
+            .iter()
+            .map(|d| format!("error {} {:?}: {}", &text[d.span.range()], d.span.range(), d.message))
+            .collect()
+    };
+    let table: &[(&str, &[&str])] = &[
+        ("0o17", &["error 0o17 0..4: Invalid integer literal 0o17: octal literals are not supported; write 15 or 0xF."]),
+        ("x = 0O7_7 + 1", &["error 0O7_7 4..9: Invalid integer literal 0O7_7: octal literals are not supported; write 63 or 0x3F."]),
+        ("0o", &["error 0o 0..2: Invalid integer literal 0o: octal literals are not supported."]),
+        ("0o19", &["error 0o19 0..4: Invalid integer literal 0o19: octal literals are not supported."]),
+        ("0o1__2", &["error 0o1__2 0..6: Invalid integer literal 0o1__2: octal literals are not supported."]),
+        // Unchanged: decimal with a leading zero, based literals, `o` after other digits.
+        ("017", &["INT 017"]),
+        ("0x1F", &["INT 0x1F"]),
+        ("0b11", &["INT 0b11"]),
+        ("10o7", &["INT 10", "IDENTIFIER o7"]),
+        ("o17", &["IDENTIFIER o17"]),
+    ];
+    for (text, expected) in table {
+        assert_eq!(render(text), *expected, "{text}");
+    }
+}
