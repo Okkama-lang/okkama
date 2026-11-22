@@ -217,6 +217,26 @@ fn loop_exits_retag_untagged_last_values() {
     }
 }
 
+/// #1002: `any`, `all` and `find` over an untagged `[]` have no item to
+/// decide, so they give their defaults (`false`, `true`, `Maybe.none`), as
+/// map and filter give `[]`; the IR verifies.
+#[test]
+fn early_exits_over_an_untagged_empty_array_give_their_defaults() {
+    for (body, default) in [
+        ("let a = [].any() -> x { true; }; if a { 1; } else { 0; }", "bool = const false"),
+        ("let a = [].all() -> x { false; }; if a { 1; } else { 0; }", "bool = const true"),
+        ("let e = []; let a = e.any() -> x { true; }; if a { 1; } else { 0; }", "bool = const false"),
+        (
+            "let k is Maybe<@int> = [].find() -> x { true; }; match k { case Maybe.some(v) { 1; } case Maybe.none { 0; } }",
+            "= variant.new 1 ()",
+        ),
+    ] {
+        let main = main_listing(body);
+        assert!(main.contains(default), "{body}\n{main}");
+        assert!(!main.contains("array.len"), "no loop over the empty source: {body}\n{main}");
+    }
+}
+
 #[test]
 fn constants_outside_loops_stay_in_their_branch() {
     let listing = main_listing("let n = 7; if n > 3 { 40 + n; } else { 50; }");

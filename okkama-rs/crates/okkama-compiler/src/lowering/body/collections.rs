@@ -1317,6 +1317,11 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Some(default) = self.value(initial)? else {
             return Ok(Out::Diverged);
         };
+        // An untagged `[]` has no item to decide: the value is the default
+        // (`false`, `true`, `Maybe.none`), as map and filter give `[]` (#1002).
+        if source.untagged() {
+            return Ok(Out::Value(default));
+        }
         let ran = self.constant(Constant::Bool(true), span);
         let decides = functional.op != FunctionalOp::All;
         let bindings = &functional.bindings;
