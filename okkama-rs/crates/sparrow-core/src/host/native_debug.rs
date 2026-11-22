@@ -84,14 +84,33 @@ impl Heap {
     /// The origin value of an `any` box (`slot` holds the box).
     pub(crate) fn any_to_origin(&self, slot: Slot) -> Result<Value, Error> {
         let any = self.core().payload::<AnyBox>(slot.bits).ok_or_else(|| Error("expected any".into()))?;
-        self.value_to_origin(any.value, any.ty, 0)
+        self.value_to_origin(any.value, any.ty, 0, false)
     }
 
-    fn value_to_origin(&self, word: Word, ty: TypeRef, depth: usize) -> Result<Value, Error> {
+    /// data_dump needs only an unsupported value's category and type, never its fields.
+    pub(crate) fn dump_to_origin(&self, slot: Slot) -> Result<Value, Error> {
+        let any = self.core().payload::<AnyBox>(slot.bits).ok_or_else(|| Error("expected any".into()))?;
+        self.value_to_origin(any.value, any.ty, 0, true)
+    }
+
+    fn value_to_origin(&self, word: Word, ty: TypeRef, depth: usize, dumping: bool) -> Result<Value, Error> {
         if depth > DEPTH {
             return Ok(Value::Handle(Rc::new(())));
         }
         let program = self.program();
+        if dumping {
+            match program.ty(ty) {
+                Some(T::Any) => {
+                    if let Some(any) = self.core().payload::<AnyBox>(word) {
+                        return self.value_to_origin(any.value, any.ty, depth, true);
+                    }
+                }
+                // Category-only stand-ins; no future is started or failure payload inspected.
+                Some(T::Future(_)) => return Ok(Value::Future(okkama_runtime_core::sched::resolved(Ok(Value::Undef)))),
+                Some(T::Failure) => return Ok(Value::Failure(okkama_runtime_core::sched::cancelled_failure())),
+                _ => {}
+            }
+        }
         Ok(match self.node(word, ty) {
             Node::Scalar(word, shape) => {
                 let abi = match shape {
@@ -112,19 +131,22 @@ impl Heap {
             Node::Enum(declaration, case) => Value::Enum { declaration: declaration as usize, case: case as usize },
             Node::Array(word, element) => {
                 let items = self.core().elements(word).to_vec();
-                ArrayHeap.allocate(items.into_iter().map(|w| self.value_to_origin(w, element, depth + 1)).collect::<Result<_, _>>()?)
+                ArrayHeap.allocate(items.into_iter().map(|w| self.value_to_origin(w, element, depth + 1, dumping)).collect::<Result<_, _>>()?)
             }
             Node::Map(word, key, item) => {
                 let map = self.core().payload::<MapValue>(word).ok_or_else(|| Error("expected map".into()))?;
                 let mut entries = std::collections::BTreeMap::new();
                 for &(k, v) in map.entries.values() {
-                    let k = self.value_to_origin(k, key, depth + 1)?;
+                    let k = self.value_to_origin(k, key, depth + 1, dumping)?;
                     let k = MapKey::from_value(&k).map_err(|e| Error(e.message))?;
-                    entries.insert(k, self.value_to_origin(v, item, depth + 1)?);
+                    entries.insert(k, self.value_to_origin(v, item, depth + 1, dumping)?);
                 }
                 Value::Map(Rc::new(Map::new(entries)))
             }
             Node::Object(word, descriptor) => {
+                if dumping {
+                    return Ok(ObjectHeap.allocate(descriptor as usize, Vec::new()));
+                }
                 let fields = &program.objects[descriptor as usize].fields;
                 let mut values = Vec::with_capacity(fields.len());
                 for (index, (_, field)) in fields.iter().enumerate() {
@@ -132,7 +154,7 @@ impl Heap {
                     values.push(if value == UNBOUND && Kind::of(program, *field) == Kind::Ref {
                         Value::Undef
                     } else {
-                        self.value_to_origin(value, *field, depth + 1)?
+                        self.value_to_origin(value, *field, depth + 1, dumping)?
                     });
                 }
                 ObjectHeap.allocate(descriptor as usize, values)
@@ -173,5 +195,118 @@ impl Heap {
             boxed.push(Slot { bits: value, tag: OBJECT });
         }
         self.allocate_array(boxed)
+    }
+}
+
+#[cfg(test)]
+mod data_dump_tests {
+    use crate::ops::AnyBox;
+    use crate::program::Loaded;
+    use crate::runtime::Runtime;
+    use crate::word::Repr;
+    use okkama_sparrow::TypeRef;
+
+    fn runtime() -> Box<Runtime> {
+        let program = okkama_sparrow::assemble(r#"sparrow 16
+module "data-dump-965" "1.0.0"
+type t0 int
+type t1 str
+type t2 any
+type t3 object obj0
+type t4 array t3
+type t5 array t0
+type t6 future t0
+type t7 failure
+type t8 handle 0
+type t9 fn [] -> t0
+type t10 map t0 t3
+type t11 map t3 t0
+handle "TestHandle"
+object obj0 "O" { field "n" t0 }
+object obj1 "NativeFailure" builtin {
+ field "domain" t1
+ field "code" t1
+ field "operation" t1
+ field "message" t1
+}
+function f0 "data_dump" native "runtime/debug@1::data_dump/1" {
+ registers [t2]
+ params [r0]
+ result t1
+}
+function f1 "dump" {
+ registers [t2, t1]
+ params [r0]
+ result t1
+ 0: call r1, f0, [r0]
+ 1: ret r1
+}
+"#).unwrap();
+        Box::new(Runtime::new(Loaded::new(program)).unwrap())
+    }
+
+    fn boxed(runtime: &mut Runtime, value: u64, ty: u32) -> u64 {
+        runtime.heap.allocate_payload(Box::new(AnyBox { value, ty: TypeRef(ty), repr: Repr::Ref }))
+    }
+
+    #[test]
+    fn data_dump_object_diagnostic_reaches_runtime_error() {
+        for nesting in 0..4 {
+            let mut runtime = runtime();
+            let three = runtime.heap.int(3);
+            let object = runtime.heap.object_new(0, &[three]);
+            let (value, ty) = match nesting {
+                0 => (object, 3),
+                1 => (runtime.heap.allocate_array(Repr::Ref, &[object]), 4),
+                _ => {
+                    use crate::ops::{Key, MapValue};
+                    let (key, words, key_repr, value_repr, ty) = if nesting == 2 {
+                        (Key::Small(3), (three, object), Repr::Int, Repr::Ref, 10)
+                    } else {
+                        (Key::Object(0, vec![Key::Small(3)].into()), (object, three), Repr::Ref, Repr::Int, 11)
+                    };
+                    let map = MapValue {
+                        key: key_repr, value: value_repr,
+                        entries: crate::maps::Entries::BTree([(key, words)].into()),
+                        owned: std::cell::Cell::new(None),
+                    };
+                    (runtime.heap.allocate_payload(Box::new(map)), ty)
+                }
+            };
+            let argument = boxed(&mut runtime, value, ty);
+            let error = runtime.run_function_with(1, &[argument], crate::STACK_BYTES).unwrap_err().to_string();
+            assert!(error.contains("data_dump does not support object values (O)"), "{error}");
+            assert!(error.contains("debug/dumper::Dumper"), "{error}");
+            assert!(error.contains("domain: core.debug"), "{error}");
+            assert!(error.contains("code: unsupported_type"), "{error}");
+            assert!(error.contains("operation: runtime/debug@1::data_dump/1"), "{error}");
+            assert!(runtime.uncaught.as_ref().unwrap().message.contains("debug/dumper::Dumper"));
+        }
+    }
+
+    #[test]
+    fn data_dump_supported_array_survives_bridge() {
+        let mut runtime = runtime();
+        let one = runtime.heap.int(1);
+        let two = runtime.heap.int(2);
+        let array = runtime.heap.allocate_array(Repr::Int, &[one, two]);
+        let argument = boxed(&mut runtime, array, 5);
+        let result = runtime.run_function_with(1, &[argument], crate::STACK_BYTES).unwrap();
+        assert_eq!(runtime.heap.text(result), "[1, 2]");
+    }
+
+    #[test]
+    fn data_dump_bridge_preserves_unsupported_categories() {
+        // The bridge must classify these by type without dereferencing or running them.
+        for (ty, kind) in [(6, "future"), (7, "failure"), (8, "native"), (9, "action")] {
+            let mut runtime = runtime();
+            let argument = boxed(&mut runtime, crate::word::UNBOUND, ty);
+            let crate::host::Result2::Raise(failure) = crate::host::call(
+                &mut runtime, okkama_runtime_abi::Native::DebugDataDump, &[argument],
+            ) else { panic!("expected structured native failure for {kind}") };
+            let message = runtime.describe(std::ptr::null_mut(), failure);
+            assert!(message.contains(&format!("does not support {kind} values")), "{message}");
+            assert!(message.contains("debug/dumper::Dumper"));
+        }
     }
 }

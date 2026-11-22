@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Fixed
+- **`data_dump` says what it cannot dump (#965).** `runtime/debug`'s `data_dump` of an object, an action, a
+  future or another value it does not format, alone or inside an array or a map, failed with a bare "Native
+  invocation … failed". It now fails with a `core.debug`/`unsupported_type` native failure that names the
+  kind and the type and points to `debug/dumper`'s `Dumper`. Supported values print as before.
+
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the

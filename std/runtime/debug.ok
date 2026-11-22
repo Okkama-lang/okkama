@@ -5,7 +5,10 @@ module runtime/debug v1.0.0;
 // declarations may change with the runtime.
 
 // Diagnostic boundary of core.debug and debug/dumper: values are described,
-// never changed. Formatting above one value belongs to Okkama code.
+// never changed. data_dump formats scalars, enums, arrays and maps recursively.
+// Objects, actions, futures, native handles and failures (including nested ones)
+// fail with an unsupported kind/type diagnostic. For structured inspection use
+// import "debug/dumper" take Dumper; then Dumper(value).all().
 native data_dump(value is any) is string;
 
 // Value category: int, float, rat, bool, byte, char, string, enum, array, map,

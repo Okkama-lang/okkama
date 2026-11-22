@@ -245,3 +245,13 @@ implementation instruction of 2026-11-22:
   stays dynamic. Guard benchmark (2M calls, mode hoisted out of the loop): destroy 0.333 → 0.186 s against a
   deferred close of 0.181 s.
 
+
+## data_dump unsupported values (#965, owner decision, 2026-11-22)
+
+Keep data_dump primitive: no object dumper, reflection or user-defined actions.
+Use the existing NativeFailure contract (core.debug / unsupported_type, native
+symbol as operation); reuse data_kind/data_type metadata and point to
+`debug/dumper::Dumper`. Sparrow already retains NativeFailure.message in its
+report and uncaught metadata. Only the dump argument bridge gets category-only
+future/failure values and fieldless object metadata; other inspection behavior
+is unchanged. The current Bible example uses an enum and remains valid.
