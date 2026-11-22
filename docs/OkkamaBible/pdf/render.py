@@ -84,16 +84,18 @@ def structure(fragment, language):
     fragment = re.sub(r"<h1([^>]*)>(.*?)</h1>", h1, fragment, flags=re.S)
     tails = drolleries()
     if tails:
-        count = [0]
+        state = {"previous": None, "used": 0}
 
         def tail(match):
-            count[0] += 1
-            if count[0] == 1:
+            kind, previous = match.group(1), state["previous"]
+            state["previous"] = kind
+            if previous not in ("chapter", "appendix"):
                 return match.group(0)
-            name = tails[(count[0] - 2) % len(tails)]
+            name = tails[state["used"] % len(tails)]
+            state["used"] += 1
             return f'<div class="tailpiece">{ornament(name, "drollery")}</div>' + match.group(0)
 
-        fragment = re.sub(r'<h1 class="(?:chapter|appendix|part)"', tail, fragment)
+        fragment = re.sub(r'<h1 class="(chapter|appendix|part|other)"', tail, fragment)
 
     def h2(match):
         attrs, inner = match.group(1), match.group(2)
@@ -118,7 +120,7 @@ def structure(fragment, language):
         head, between, letter, rest = match.groups()
         return f'{head}{between}<p class="opening"><span class="initial">{letter}</span>{rest}'
 
-    fragment = re.sub(r'(<h1 class="chapter"[^>]*>.*?</h1>)((?:(?!<p>|<h).)*?)<p>([A-Za-zА-Яа-яЁё])([^<]*)',
+    fragment = re.sub(r'(<h1 class="chapter"[^>]*>.*?</h1>)((?:(?!<p>|<h).)*?)<p>((?:[«"“]|&quot;)?[A-Za-zА-Яа-яЁё])([^<]*)',
                       initial, fragment, flags=re.S)
     return fragment, heads
 
@@ -131,7 +133,7 @@ def title_page(title, subtitle, edition):
 
 def print_edition(fragment, heads, language, title, subtitle, edition):
     """For WeasyPrint: the contents list after the title already carries page numbers."""
-    body = re.sub(r'<h1 class="other" id="[^"]*">' + re.escape(title) + r"</h1>",
+    body = re.sub(r'<h1 class="other"[^>]*>' + re.escape(title) + r"</h1>",
                   title_page(title, subtitle, edition), fragment, count=1)
     return (f'<!doctype html><html lang="{language}"><head><meta charset="utf-8"><title>{html.escape(title)}</title>'
             f'<link rel="stylesheet" href="pdf/book.css"><link rel="stylesheet" href="pdf/print.css"></head>'
@@ -141,7 +143,7 @@ def print_edition(fragment, heads, language, title, subtitle, edition):
 def web_edition(fragment, heads, language, title, subtitle, edition):
     """One file: a sidebar of contents, light and dark themes, fonts from Google Fonts."""
     w = WORDS[language]
-    body = re.sub(r'<h1 class="other" id="[^"]*">' + re.escape(title) + r"</h1>",
+    body = re.sub(r'<h1 class="other"[^>]*>' + re.escape(title) + r"</h1>",
                   title_page(title, subtitle, edition), fragment, count=1)
     # The Markdown's own contents list is for print; the sidebar replaces it.
     body = re.sub(r'<h2 id="(contents|содержание)">.*?</h2>\s*<ul>.*?</ul>\s*(?=<h1)', "", body, count=1, flags=re.S)
