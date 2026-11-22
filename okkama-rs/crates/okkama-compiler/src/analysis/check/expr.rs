@@ -974,7 +974,7 @@ impl Checker<'_, '_> {
             arms.push(out.clone());
             cases.push((patterns, self.block_of(out)));
         }
-        let covered = self.covers(&subject_ty, &body.cases);
+        let covered = self.covers(&subject_ty, &cases);
         let exhaustive = body.else_block.is_none() && covered;
         // #286: an `else` after cases that cover every value can never run.
         if covered && let Some(block) = &body.else_block {
@@ -1011,34 +1011,29 @@ impl Checker<'_, '_> {
     }
 
     /// Образцы-константы покрывают все значения типа субъекта.
-    fn covers(&mut self, ty: &Ty, cases: &[ast::MatchCase]) -> bool {
-        let patterns: Vec<&ast::Expr> = cases.iter().flat_map(|case| &case.patterns).collect();
+    /// Do the checked patterns cover every value of `ty`? Read from the patterns as checked, so a
+    /// module constant holding an enum case counts like the case itself (#992), as the message
+    /// naming missing cases (`uncovered_message`) already reads them.
+    fn covers(&self, ty: &Ty, cases: &[(Vec<Expr>, crate::analysis::thir::Block)]) -> bool {
+        let patterns = cases.iter().flat_map(|(patterns, _)| patterns);
         match ty {
             Ty::Enum(id) => {
-                let total = self.reg.enums[id.0].cases.len();
-                let mut seen = vec![false; total];
+                let mut seen = vec![false; self.reg.enums[id.0].cases.len()];
                 for pattern in patterns {
-                    if let ast::ExprKind::Get { object, name } = &strip_grouping(pattern).kind
-                        && let ast::ExprKind::Name(enum_name) = &strip_grouping(object).kind
-                            && self.local(&enum_name.text).is_none()
-                                && self.enum_named(&enum_name.text) == Some(*id)
-                                && let Some(case) = self.reg.enums[id.0]
-                                    .cases
-                                    .iter()
-                                    .position(|case| *case == name.text)
-                                {
-                                    seen[case] = true;
-                                }
+                    if let ExprKind::EnumCase { ty, case } = &pattern.kind
+                        && ty == id
+                        && let Some(slot) = seen.get_mut(*case)
+                    {
+                        *slot = true;
+                    }
                 }
                 seen.iter().all(|seen| *seen)
             }
             Ty::Bool => {
                 let mut seen = [false; 2];
                 for pattern in patterns {
-                    if let ast::ExprKind::Literal(ast::Literal::Bool(value)) =
-                        strip_grouping(pattern).kind
-                    {
-                        seen[usize::from(value)] = true;
+                    if let ExprKind::Constant(Constant::Bool(value)) = &pattern.kind {
+                        seen[usize::from(*value)] = true;
                     }
                 }
                 seen[0] && seen[1]

@@ -392,7 +392,24 @@ impl Checker<'_, '_> {
         if fitting.is_empty() {
             fitting = fitting_with(true);
         }
-        Self::fixed_first(fitting, |index| shapes[index].variadic)
+        let fitting = Self::fixed_first(fitting, |index| shapes[index].variadic);
+        Self::no_defaults_first(fitting, |index| {
+            !shapes[index].variadic && shapes[index].params.len() > call.values.len()
+        })
+    }
+
+    /// A candidate that takes the call's arguments without filling defaults beats one that needs
+    /// its trailing defaults (#993, decided 2026-11-22): `f(a)` is chosen over `f(a, b = 1)` for
+    /// `f(1)`, as C# and Kotlin choose. Among candidates of the same kind ranks decide as before.
+    pub(super) fn no_defaults_first(
+        fitting: Vec<(usize, Vec<u8>)>,
+        needs_defaults: impl Fn(usize) -> bool,
+    ) -> Vec<(usize, Vec<u8>)> {
+        if fitting.iter().any(|(index, _)| !needs_defaults(*index)) {
+            fitting.into_iter().filter(|(index, _)| !needs_defaults(*index)).collect()
+        } else {
+            fitting
+        }
     }
 
     /// `Ambiguous call of … with (int, int): joined(int, any) and
@@ -1039,6 +1056,9 @@ impl Checker<'_, '_> {
         }
         let variadic = |index: usize| shapes[index].0.variadic;
         let typed = Self::fixed_first(typed, variadic);
+        let typed = Self::no_defaults_first(typed, |index| {
+            !shapes[index].0.variadic && shapes[index].0.params.len() > call.values.len()
+        });
         let mut by_shape: Vec<(usize, Vec<u8>)> = by_shape
             .into_iter()
             .map(|index| (index, Vec::new()))

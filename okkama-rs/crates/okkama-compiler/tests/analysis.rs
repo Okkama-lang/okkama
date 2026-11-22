@@ -1666,3 +1666,49 @@ fn a_plain_enum_case_in_catch_is_not_an_error_enum() {
         .is_empty()
     );
 }
+
+/// A module constant holding an enum case covers that case in a value `match` (#992): the
+/// exhaustiveness check reads the patterns as checked, as the missing-cases message does.
+#[test]
+fn constant_enum_patterns_count_toward_exhaustiveness() {
+    let decls = "enum Color = (red, green, blue); const RED = Color.red;";
+    assert!(
+        messages(&format!(
+            "{decls} main() is int {{ let c = Color.green; \
+             let a = match c {{ case RED {{ 1; }} case Color.green {{ 2; }} case Color.blue {{ 3; }} }}; a; }}"
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        messages(&format!(
+            "{decls} main() is int {{ let c = Color.green; let a = match c {{ case RED {{ 1; }} case Color.green {{ 2; }} }}; a; }}"
+        )),
+        ["match over enum `Color` does not cover blue, so it has no value here; add the cases or an `else` branch"]
+    );
+}
+
+/// An overload or constructor that takes the call without filling defaults wins over one that
+/// needs its trailing defaults (#993, decided 2026-11-22, as in C# and Kotlin).
+#[test]
+fn an_overload_without_defaults_beats_one_that_needs_them() {
+    assert!(
+        messages(
+            "object P { P(); f(a is int) is int { a; } f(a is int, b is int = 1) is int { a + b; } } \
+             main() is int { P().f(1) + P().f(1, 2); }"
+        )
+        .is_empty()
+    );
+    assert!(
+        messages(
+            "object Q { has a is int; has b is int = 0; Q(:a); Q(a is int, c is int = 7) { a = a; b = c; } } \
+             main() is int { let q = Q(a: 5); 0; }"
+        )
+        .is_empty()
+    );
+    // Two candidates that both need defaults still tie.
+    let found = messages(
+        "object P { P(); f(a is int, b is int = 1) is int { a; } f(a is int, c is string = \"x\") is int { a; } } \
+         main() is int { P().f(1); }",
+    );
+    assert!(found.len() == 1 && found[0].starts_with("Ambiguous call"), "{found:?}");
+}

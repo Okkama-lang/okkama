@@ -289,3 +289,21 @@ symbol as operation); reuse data_kind/data_type metadata and point to
 report and uncaught metadata. Only the dump argument bridge gets category-only
 future/failure values and fieldless object metadata; other inspection behavior
 is unchanged. The current Bible example uses an enum and remains valid.
+
+
+## Overloads with defaults (#993, lead decision, 2026-11-22)
+
+A candidate that takes the call's arguments without filling trailing defaults
+beats one that needs them: `f(a)` is chosen over `f(a, b = 1)` for `f(1)`, and a
+shorthand constructor over a full one with defaulted trailing parameters for
+`Q(a: 5)`. This is the C# and Kotlin rule. Two candidates that both need
+defaults still tie. Before 0.6.4 every such pair was a call-site ambiguity, so
+no valid program changes meaning. Enforced in `analysis/check/call.rs`
+(`no_defaults_first`, next to `fixed_first` for variadics).
+
+## A rebind is a successor of the same object (#984, owner ruling, 2026-11-22)
+
+«Successor должен быть от объекта, а не от конструктора… Правило важнее.» A
+rebind `p = …` is valid only when the value is a successor of the object bound
+to `p` (`p = p.move()`). A fresh object, another local or any other value is
+refused, whether or not the type has successor actions.
