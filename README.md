@@ -11,10 +11,12 @@ is enforced by the runtime — not by code review.**
 [![Conformance](https://img.shields.io/badge/conformance-1035%2F1035%20×%203%20engines-brightgreen)](conformance/)
 [![License](https://img.shields.io/github/license/Okkama-lang/okkama)](LICENSE)
 
+[Website](https://okkama-lang.github.io/) ·
 [Install](#install) ·
 [Quick start](#quick-start) ·
 [The Book](docs/OkkamaBook.md) ·
 [Книга](docs/OkkamaBook-RU.md) ·
+[Std reference](https://okkama-lang.github.io/man/) ·
 [Guide for LLM agents](docs/LLM-GUIDE.md)
 
 </div>
