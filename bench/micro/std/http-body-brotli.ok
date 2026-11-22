@@ -1,0 +1,37 @@
+// #244: http-body-brotli; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/body" take ByteBody, BodyReading;
+import "http/body_coding" take BrotliEncodedBody, BrotliDecodedBody;
+object Parts { has values is @byte; Parts(:values); add(part is @byte) is ^Parts { ^values = values + part; } bytes() is @byte { values; } } object Drain { Drain(); async bytes(reading is BodyReading) is @byte { let result = Parts(values: []); loop { let part = await reading.bytes(128); last if part.size()==0; result = result.add(part); } reading.close(); result.bytes(); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let encoded = BrotliEncodedBody(ByteBody([v.byte(),(v+1).byte()]));
+            let compressed = encoded.reading();
+            let packed = await Drain().bytes(compressed);
+            let decoded = BrotliDecodedBody(ByteBody(packed),128);
+            let reading = decoded.reading();
+            let unpacked = await Drain().bytes(reading);
+            let contribution = unpacked.reduce(0) -> s,b { s+b.int(); };
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

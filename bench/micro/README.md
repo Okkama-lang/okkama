@@ -1,6 +1,6 @@
 # Micro-benchmarks (protocol v2)
 
-The suite contains **64 language programs** and **348 std/builtin programs**.
+The suite contains **64 language programs** and **477 std/builtin programs**.
 `manifest.json` is the machine-readable inventory. `coverage.py` reports declared
 measurement targets, not incidental imports or whole-module API coverage.
 
@@ -237,3 +237,10 @@ to check parsing, visibility, constructors, overloads, typed signatures,
 determinism, stale checks, manifest errors and scaffold/oracle shape.
 
 The #244 http/web/mail addition is documented in [review-244-http/REPORT.txt](review-244-http/REPORT.txt): 121 new workloads, independent checksums, direct timings and explicit resource-dependent exclusions.
+
+The #244 work-action expansion adds 129 programs and covers the remaining reachable
+http/web/mail work targets. See [review-244-work/REPORT.txt](review-244-work/REPORT.txt)
+for independent-oracle validation, exclusions, the HTTP/2 EOF repro and N=2000
+host observations. File fixtures create private temporary directories in the writable current working
+directory: the program directory under `check.py`, or `/work` under `run.py`.
+They remove the directories on destruction.

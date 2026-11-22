@@ -1,0 +1,47 @@
+// #244: mail-maildir-files; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "mail/message" take MailMessage, ParsedMail, DeliveredMail, MailDate, ParsedMailDate;
+import "mail/mailbox" take StoredMail, MailFlags, SystemFlag, SystemMailFlag, KeywordFlag, Maildir, MaildirLimits, ChangedMaildirFlags;
+import "mail/mbox" take MboxArchive, MboxRecord, MboxSeparator, ParsedMbox, MboxLimits;
+import "mail/mbox_store" take Mbox;
+import "mime/part" take MimeLimits;
+import "compare" take Order;
+import "encoding/utf" take Utf8Encoded;import "fs/path" take Path;
+import "fs/directory" take Directory;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+import "fs/root" take FileRoot;
+
+object Bench {
+    has temporary is TemporaryDirectory;
+Bench() { let scratch=TemporaryDirectory(parent:Directory(Path(".")),prefix:"work244-"); self.temporary=scratch; }
+destroy { temporary.close(); }
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let path = temporary.path().child("box");
+        let limits = MaildirLimits(8,4096,MimeLimits());
+        let box = Maildir(path,limits).created();
+        let file = File(path.child("new").child("id"+x),FileMode.writing);
+        file.binary().write(Utf8Encoded("Subject: "+x+"\r\n\r\nhello\r\n").bytes());
+        file.close();
+        let messages = box.messages();
+        let changed = ChangedMaildirFlags(box,"id"+x,MailFlags(SystemFlag(SystemMailFlag.seen))).mail();
+        box.remove("id"+x);
+        let contribution = messages.size()+changed.flags().size()+changed.message().headers().first("Subject").length();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

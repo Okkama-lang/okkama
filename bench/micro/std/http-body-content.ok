@@ -1,0 +1,39 @@
+// #244: http-body-content; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/body" take EmptyBody, JsonBody, FormBody;
+import "json" take Json, JsonField;
+import "url/query" take QueryParameters, QueryParameter;
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let empty = EmptyBody();
+            let contained = empty.contained() else [v.byte()];
+            let reading = empty.reading();
+            let bytes = await reading.bytes(1);
+            reading.close();
+            let json = JsonBody(Json(JsonField("n",v))).opening();
+            let form = FormBody(QueryParameters(QueryParameter("n",x))).opening();
+            let contribution = contained.size()+bytes.size()+json.length()+form.length();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

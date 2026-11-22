@@ -6468,5 +6468,2399 @@
       "db/value:DbInteger.new",
       "db/value:DbText.new"
     ]
+  },
+  "web-json-readers": {
+    "path": "std/web-json-readers.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/request"
+    ],
+    "actions": [
+      "web/request:RequestJson.at",
+      "web/request:RequestJson.boolean",
+      "web/request:RequestJson.get",
+      "web/request:RequestJson.has",
+      "web/request:RequestJson.int",
+      "web/request:RequestJson.integer",
+      "web/request:RequestJson.items",
+      "web/request:RequestJson.list",
+      "web/request:RequestJson.names",
+      "web/request:RequestJson.number",
+      "web/request:RequestJson.size",
+      "web/request:RequestJson.text"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-json-optionals": {
+    "path": "std/web-json-optionals.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/request"
+    ],
+    "actions": [
+      "web/request:RequestJson.optional",
+      "web/request:RequestJsonOptional.boolean",
+      "web/request:RequestJsonOptional.int",
+      "web/request:RequestJsonOptional.items",
+      "web/request:RequestJsonOptional.node",
+      "web/request:RequestJsonOptional.number",
+      "web/request:RequestJsonOptional.text"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-request-values": {
+    "path": "std/web-request-values.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/request"
+    ],
+    "actions": [
+      "web/request:RequestMaybeValue.boolean",
+      "web/request:RequestMaybeValue.int",
+      "web/request:WebRequest.cookies",
+      "web/request:WebRequest.header",
+      "web/request:WebRequest.link",
+      "web/request:WebRequest.method",
+      "web/request:WebRequest.new",
+      "web/request:WebRequest.parameters",
+      "web/request:WebRequest.path",
+      "web/request:WebRequest.query"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-request-bodies": {
+    "path": "std/web-request-bodies.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/message",
+      "web/request"
+    ],
+    "actions": [
+      "http/message:Request.bytes",
+      "http/message:Request.text",
+      "web/request:WebRequest.bytes",
+      "web/request:WebRequest.form",
+      "web/request:WebRequest.json",
+      "web/request:WebRequest.text"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-html": {
+    "path": "std/web-reply-html.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:HtmlReply.new",
+      "web/reply:HtmlReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-json": {
+    "path": "std/web-reply-json.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:JsonReply.new",
+      "web/reply:JsonReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-created": {
+    "path": "std/web-reply-created.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:CreatedReply.new",
+      "web/reply:CreatedReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-bytes": {
+    "path": "std/web-reply-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:BytesReply.new",
+      "web/reply:BytesReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-stream": {
+    "path": "std/web-reply-stream.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:StreamReply.new",
+      "web/reply:StreamReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-empty": {
+    "path": "std/web-reply-empty.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply"
+    ],
+    "actions": [
+      "web/reply:NoContentReply.response",
+      "web/reply:RedirectReply.new",
+      "web/reply:RedirectReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-reply-fields": {
+    "path": "std/web-reply-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/internal/reply"
+    ],
+    "actions": [
+      "web/internal/reply:BodyStatus.new",
+      "web/internal/reply:EmptyReplyResponse.response",
+      "web/internal/reply:OpenedReplyFields.fields",
+      "web/internal/reply:OpenedReplyResponse.new",
+      "web/internal/reply:OpenedReplyResponse.response",
+      "web/internal/reply:ReplyMediaType.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-routing-methods": {
+    "path": "std/web-routing-methods.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/routing"
+    ],
+    "actions": [
+      "web/routing:Delete.new",
+      "web/routing:Patch.new",
+      "web/routing:Post.new",
+      "web/routing:Put.new",
+      "web/routing:Resource.new",
+      "web/routing:Resource.routes",
+      "web/routing:Route.new",
+      "web/routing:Scope.new",
+      "web/routing:Scope.routes"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-testing-methods": {
+    "path": "std/web-testing-methods.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/testing"
+    ],
+    "actions": [
+      "web/testing:WebTestClient.delete",
+      "web/testing:WebTestClient.head",
+      "web/testing:WebTestClient.options",
+      "web/testing:WebTestClient.patch",
+      "web/testing:WebTestClient.post",
+      "web/testing:WebTestClient.put",
+      "web/testing:WebTestClient.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-body-stream": {
+    "path": "std/http-body-stream.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body"
+    ],
+    "actions": [
+      "http/body:ByteBodyInput.bytes",
+      "http/body:OneShotBody.new",
+      "http/body:OneShotBody.reading",
+      "http/body:StreamBodyReading.abort",
+      "http/body:StreamBodyReading.bytes",
+      "http/body:StreamBodyReading.close",
+      "http/body:StreamBodyReading.new",
+      "http/body:StreamBodyReading.trailers"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-body-content": {
+    "path": "std/http-body-content.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body"
+    ],
+    "actions": [
+      "http/body:EmptyBody.contained",
+      "http/body:EmptyBody.reading",
+      "http/body:FormBody.opening",
+      "http/body:JsonBody.opening"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-body-gzip": {
+    "path": "std/http-body-gzip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body_coding"
+    ],
+    "actions": [
+      "http/body_coding:GzipDecodedBody.new",
+      "http/body_coding:GzipDecodedBody.reading",
+      "http/body_coding:GzipEncodedBody.new",
+      "http/body_coding:GzipEncodedBody.reading"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-body-brotli": {
+    "path": "std/http-body-brotli.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body_coding"
+    ],
+    "actions": [
+      "http/body_coding:BrotliDecodedBody.new",
+      "http/body_coding:BrotliDecodedBody.reading",
+      "http/body_coding:BrotliEncodedBody.new",
+      "http/body_coding:BrotliEncodedBody.reading"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-body-brotli-contained": {
+    "path": "std/http-body-brotli-contained.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body_coding"
+    ],
+    "actions": [
+      "http/body_coding:BrotliEncodedBody.contained"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cache-entry": {
+    "path": "std/http-cache-entry.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_freshness",
+      "http/cache_memory"
+    ],
+    "actions": [
+      "http/cache_freshness:CacheFreshness.fresh",
+      "http/cache_memory:CachedHttpEntry.cost",
+      "http/cache_memory:CachedHttpEntry.dated",
+      "http/cache_memory:CachedHttpEntry.key",
+      "http/cache_memory:CachedHttpEntry.matches",
+      "http/cache_memory:CachedHttpEntry.response",
+      "http/cache_memory:CachedHttpEntry.same",
+      "http/cache_memory:CachedHttpEntry.storable"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cache-storage": {
+    "path": "std/http-cache-storage.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_memory"
+    ],
+    "actions": [
+      "http/cache_memory:MemoryHttpCache.conditional_store",
+      "http/cache_memory:MemoryHttpCache.entry",
+      "http/cache_memory:MemoryHttpCache.invalidate",
+      "http/cache_memory:MemoryHttpCache.response",
+      "http/cache_memory:MemoryHttpCache.size",
+      "http/cache_memory:MemoryHttpCache.store"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cache-revalidate": {
+    "path": "std/http-cache-revalidate.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_validation"
+    ],
+    "actions": [
+      "http/cache_validation:CacheRequestFreshness.usable",
+      "http/cache_validation:CacheValidation.conditional",
+      "http/cache_validation:CacheValidation.refreshed"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cache-admissions": {
+    "path": "std/http-cache-admissions.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_admission"
+    ],
+    "actions": [
+      "http/cache_admission:CacheAdmissionAnchor.close",
+      "http/cache_admission:CacheAdmissionBooking.close",
+      "http/cache_admission:CacheAdmissionBooking.guard",
+      "http/cache_admission:CacheAdmissionBooking.new",
+      "http/cache_admission:CacheAdmissionLease.close",
+      "http/cache_admission:CacheAdmissionLease.new",
+      "http/cache_admission:CacheAdmissionSlot.following",
+      "http/cache_admission:CacheAdmissionSlot.guard",
+      "http/cache_admission:CacheAdmissionSlot.leave",
+      "http/cache_admission:CacheAdmissionSlot.publish",
+      "http/cache_admission:CacheAdmissionSlot.retire",
+      "http/cache_admission:CacheAdmissions.booking",
+      "http/cache_admission:CacheAdmissions.new",
+      "http/cache_admission:CacheAdmissions.released",
+      "http/cache_admission:CacheAdmissions.size"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-conditional-tags": {
+    "path": "std/http-conditional-tags.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/conditional"
+    ],
+    "actions": [
+      "http/conditional:ConditionalItems.new",
+      "http/conditional:ConditionalItems.values",
+      "http/conditional:ConditionalLimits.new",
+      "http/conditional:EntityTag.new",
+      "http/conditional:EntityTag.string",
+      "http/conditional:EntityTag.strong_matches",
+      "http/conditional:EntityTag.weak_matches",
+      "http/conditional:EntityTags.new",
+      "http/conditional:EntityTags.string"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-conditional-ranges": {
+    "path": "std/http-conditional-ranges.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/conditional"
+    ],
+    "actions": [
+      "http/conditional:ByteRange.new",
+      "http/conditional:ByteRange.string",
+      "http/conditional:ByteRanges.new",
+      "http/conditional:ByteRanges.ranges",
+      "http/conditional:ByteRanges.satisfiable",
+      "http/conditional:ByteRanges.string"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-header-queries": {
+    "path": "std/http-header-queries.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/header"
+    ],
+    "actions": [
+      "http/header:HeaderLimits.new",
+      "http/header:HeaderMaybeReader.int",
+      "http/header:HeaderName.new",
+      "http/header:HeaderName.order",
+      "http/header:Headers.addition",
+      "http/header:Headers.first",
+      "http/header:Headers.list",
+      "http/header:Headers.maybe",
+      "http/header:Headers.membership",
+      "http/header:Headers.values",
+      "http/header:HttpAsciiLowercase.string"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-header-transforms": {
+    "path": "std/http-header-transforms.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/header"
+    ],
+    "actions": [
+      "http/header:HeadersWithout.headers",
+      "http/header:HeadersWithout.new",
+      "http/header:Http2Headers.headers",
+      "http/header:ReplacedHeader.headers"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-media-parameters": {
+    "path": "std/http-media-parameters.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/media_type"
+    ],
+    "actions": [
+      "http/media_type:HttpMediaFields.new",
+      "http/media_type:HttpMediaParameter.new",
+      "http/media_type:HttpMediaParameter.order",
+      "http/media_type:HttpMediaParameter.string",
+      "http/media_type:HttpMediaParameters.membership",
+      "http/media_type:HttpMediaParameters.new",
+      "http/media_type:HttpMediaParameters.string",
+      "http/media_type:HttpMediaWireParameter.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-media-scanning": {
+    "path": "std/http-media-scanning.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/media_type"
+    ],
+    "actions": [
+      "http/media_type:HttpMediaItems.new",
+      "http/media_type:HttpMediaItems.values",
+      "http/media_type:HttpMediaLimits.new",
+      "http/media_type:HttpMediaOctet.new",
+      "http/media_type:HttpMediaPosition.new",
+      "http/media_type:HttpMediaScanned.new",
+      "http/media_type:HttpMediaScanning.media_type",
+      "http/media_type:HttpMediaScanning.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-negotiation-quality": {
+    "path": "std/http-negotiation-quality.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/negotiation"
+    ],
+    "actions": [
+      "http/negotiation:CharsetName.new",
+      "http/negotiation:CharsetName.order",
+      "http/negotiation:NegotiationLimits.new",
+      "http/negotiation:Quality.new",
+      "http/negotiation:Quality.order",
+      "http/negotiation:Quality.string",
+      "http/negotiation:WeightedLanguageRange.new",
+      "http/negotiation:WeightedLanguageRange.string",
+      "http/negotiation:WeightedValue.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-negotiation-codings": {
+    "path": "std/http-negotiation-codings.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/negotiation"
+    ],
+    "actions": [
+      "http/negotiation:AcceptedContentCodings.new",
+      "http/negotiation:AcceptedContentCodings.preference",
+      "http/negotiation:AcceptedContentCodings.quality",
+      "http/negotiation:AcceptedContentCodings.string",
+      "http/negotiation:AcceptedContentCodings.values"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-negotiation-charsets": {
+    "path": "std/http-negotiation-charsets.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/negotiation"
+    ],
+    "actions": [
+      "http/negotiation:AcceptedCharsets.new",
+      "http/negotiation:AcceptedCharsets.preference",
+      "http/negotiation:AcceptedCharsets.quality",
+      "http/negotiation:AcceptedCharsets.string",
+      "http/negotiation:AcceptedCharsets.values"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-negotiation-languages": {
+    "path": "std/http-negotiation-languages.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/negotiation"
+    ],
+    "actions": [
+      "http/negotiation:AcceptedLanguages.new",
+      "http/negotiation:AcceptedLanguages.preference",
+      "http/negotiation:AcceptedLanguages.quality",
+      "http/negotiation:AcceptedLanguages.string",
+      "http/negotiation:AcceptedLanguages.values"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-negotiation-media": {
+    "path": "std/http-negotiation-media.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/negotiation"
+    ],
+    "actions": [
+      "http/negotiation:AcceptedMediaTypes.new",
+      "http/negotiation:AcceptedMediaTypes.preference",
+      "http/negotiation:AcceptedMediaTypes.quality",
+      "http/negotiation:AcceptedMediaTypes.string",
+      "http/negotiation:MediaMatch.following",
+      "http/negotiation:MediaMatch.new",
+      "http/negotiation:MediaMatch.quality",
+      "http/negotiation:MediaMatch.specificity",
+      "http/negotiation:MediaNegotiationLimits.new",
+      "http/negotiation:MediaRange.matches",
+      "http/negotiation:MediaRange.new",
+      "http/negotiation:MediaRange.string",
+      "http/negotiation:MediaSpecificity.new",
+      "http/negotiation:MediaSpecificity.order"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-auth-challenge-fields": {
+    "path": "std/http-auth-challenge-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/auth_challenge"
+    ],
+    "actions": [
+      "http/auth_challenge:AuthenticationChallenge.new",
+      "http/auth_challenge:AuthenticationChallenge.present",
+      "http/auth_challenge:AuthenticationChallenge.quoted",
+      "http/auth_challenge:AuthenticationParameter.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-auth-scoped": {
+    "path": "std/http-auth-scoped.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/auth"
+    ],
+    "actions": [
+      "http/auth:AuthenticationScope.matches",
+      "http/auth:AuthenticationScope.new",
+      "http/auth:BasicExchanging.new",
+      "http/auth:BasicExchanging.response",
+      "http/auth:BearerAuthorization.header",
+      "http/auth:BearerAuthorization.new",
+      "http/auth:BearerExchanging.response",
+      "http/auth:ScopedAuthorization.new",
+      "http/auth:ScopedAuthorization.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cookie-render": {
+    "path": "std/http-cookie-render.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie"
+    ],
+    "actions": [
+      "http/cookie:Cookie.string",
+      "http/cookie:CookieAttributes.flags",
+      "http/cookie:CookieAttributes.string",
+      "http/cookie:CookieExpiry.instant",
+      "http/cookie:ExpiredCookie.header",
+      "http/cookie:ExpiredCookie.new",
+      "http/cookie:SetCookie.header"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cookie-read": {
+    "path": "std/http-cookie-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie"
+    ],
+    "actions": [
+      "http/cookie:CookieMaybeReader.int",
+      "http/cookie:RequestCookies.int",
+      "http/cookie:RequestCookies.list",
+      "http/cookie:RequestCookies.maybe",
+      "http/cookie:RequestCookies.text"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cookie-storage": {
+    "path": "std/http-cookie-storage.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_jar",
+      "http/cookie_policy"
+    ],
+    "actions": [
+      "http/cookie_jar:CookieLimits.new",
+      "http/cookie_jar:MemoryCookieJar.clear",
+      "http/cookie_jar:MemoryCookieJar.persisted_text",
+      "http/cookie_jar:MemoryCookieJar.restored",
+      "http/cookie_jar:MemoryCookieJar.size",
+      "http/cookie_policy:CookieDomainMatch.matches",
+      "http/cookie_policy:CookieOrigin.new",
+      "http/cookie_policy:ParsedSetCookie.cookie"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-target-forms": {
+    "path": "std/http-target-forms.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/target"
+    ],
+    "actions": [
+      "http/target:AbsoluteTarget.new",
+      "http/target:AbsoluteTarget.path",
+      "http/target:AbsoluteTarget.query",
+      "http/target:AuthorityTarget.new",
+      "http/target:OriginTarget.new",
+      "http/target:OriginTarget.string",
+      "http/target:RequestTargetMethod.valid",
+      "http/target:RequestTargetSnapshot.target"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-target-kind-errors": {
+    "path": "std/http-target-kind-errors.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/target"
+    ],
+    "actions": [
+      "http/target:AbsoluteTarget.authority",
+      "http/target:AsteriskTarget.authority",
+      "http/target:AsteriskTarget.path",
+      "http/target:AsteriskTarget.query",
+      "http/target:AsteriskTarget.url",
+      "http/target:AuthorityTarget.path",
+      "http/target:AuthorityTarget.query",
+      "http/target:AuthorityTarget.url",
+      "http/target:OriginTarget.authority",
+      "http/target:OriginTarget.url"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-session-memory": {
+    "path": "std/web-session-memory.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/session"
+    ],
+    "actions": [
+      "web/session:MemorySessions.new",
+      "web/session:MemorySessions.save",
+      "web/session:MemorySessions.values",
+      "web/session:Session.maybe"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-session-lifecycle": {
+    "path": "std/web-session-lifecycle.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/session"
+    ],
+    "actions": [
+      "web/session:CsrfProtection.around",
+      "web/session:Sessions.ended",
+      "web/session:Sessions.found",
+      "web/session:Sessions.new",
+      "web/session:Sessions.session",
+      "web/session:Sessions.started"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-around-auth": {
+    "path": "std/web-around-auth.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/around"
+    ],
+    "actions": [
+      "web/around:BearerAuth.around",
+      "web/around:BearerAuth.new",
+      "web/around:Compression.around",
+      "web/around:Compression.new",
+      "web/around:Cors.around"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-uid-scope": {
+    "path": "std/imap-uid-scope.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_uid"
+    ],
+    "actions": [
+      "mail/imap_uid:ImapSequence.new",
+      "mail/imap_uid:ImapSequence.order",
+      "mail/imap_uid:ImapUid.order",
+      "mail/imap_uid:ImapUidSet.empty",
+      "mail/imap_uid:ImapUidValidity.new",
+      "mail/imap_uid:ImapUidValidity.order",
+      "mail/imap_uid:MailboxUids.checked",
+      "mail/imap_uid:MailboxUids.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-search-operators": {
+    "path": "std/imap-search-operators.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_search"
+    ],
+    "actions": [
+      "mail/imap_search:AllMail.key",
+      "mail/imap_search:AndMail.new",
+      "mail/imap_search:ImapSearchKey.bytes",
+      "mail/imap_search:ImapSearchKey.new",
+      "mail/imap_search:ImapSearchLimits.new",
+      "mail/imap_search:NotMail.new",
+      "mail/imap_search:OrMail.new",
+      "mail/imap_search:UnseenMail.key"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-data-values": {
+    "path": "std/imap-data-values.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_data"
+    ],
+    "actions": [
+      "mail/imap_data:ImapDataTokens.following",
+      "mail/imap_data:ImapDataTree.item",
+      "mail/imap_data:ImapDataUpper.string",
+      "mail/imap_data:ImapValue.absent",
+      "mail/imap_data:ImapValue.bytes",
+      "mail/imap_data:ImapValue.entries",
+      "mail/imap_data:ImapValue.new",
+      "mail/imap_data:ImapValue.string",
+      "mail/imap_data:ParsedImapData.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-response-decoder": {
+    "path": "std/imap-response-decoder.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_response"
+    ],
+    "actions": [
+      "mail/imap_response:ImapResponseDecoder.fed",
+      "mail/imap_response:ImapResponseDecoder.finish",
+      "mail/imap_response:ImapResponseDecoder.new",
+      "mail/imap_response:ImapResponseDecoder.remainder",
+      "mail/imap_response:ImapResponseDecoder.response",
+      "mail/imap_response:ImapResponseHeader.new",
+      "mail/imap_response:ImapResponseLimits.new",
+      "mail/imap_response:ImapResponseQuote.accepted"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-response-progress": {
+    "path": "std/imap-response-progress.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_response"
+    ],
+    "actions": [
+      "mail/imap_response:ImapResponse.new",
+      "mail/imap_response:ImapResponseProgress.accepted",
+      "mail/imap_response:ImapResponseProgress.literal_fragment",
+      "mail/imap_response:ImapResponseProgress.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-command-input": {
+    "path": "std/imap-command-input.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_command_reading"
+    ],
+    "actions": [
+      "mail/imap_command_reading:ImapCommandInput.new",
+      "mail/imap_command_reading:ImapCommandInput.read",
+      "mail/imap_command_reading:ImapCommandRead.require_success",
+      "mail/imap_command_reading:ImapReplyMode.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-capabilities-construct": {
+    "path": "std/imap-capabilities-construct.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap"
+    ],
+    "actions": [
+      "mail/imap:ImapCapabilities.new",
+      "mail/imap:ImapCapabilityLimits.new",
+      "mail/imap:ParsedImapCapabilities.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-status-metadata": {
+    "path": "std/imap-status-metadata.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_metadata"
+    ],
+    "actions": [
+      "mail/imap_metadata:ImapMailbox.delimiter",
+      "mail/imap_metadata:ImapMailbox.new",
+      "mail/imap_metadata:ImapSearchResult.new",
+      "mail/imap_metadata:ImapStatusCode.arguments",
+      "mail/imap_metadata:ImapStatusCode.name",
+      "mail/imap_metadata:ImapStatusCode.new",
+      "mail/imap_metadata:ImapUnsigned.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "pop3-reply-decoder": {
+    "path": "std/pop3-reply-decoder.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_reply"
+    ],
+    "actions": [
+      "mail/pop3_reply:PopReply.new",
+      "mail/pop3_reply:PopReplyDecoder.fed",
+      "mail/pop3_reply:PopReplyDecoder.finish",
+      "mail/pop3_reply:PopReplyDecoder.new",
+      "mail/pop3_reply:PopReplyDecoder.remainder",
+      "mail/pop3_reply:PopReplyDecoder.reply",
+      "mail/pop3_reply:PopReplyLimits.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "smtp-reply-tail": {
+    "path": "std/smtp-reply-tail.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_reply"
+    ],
+    "actions": [
+      "mail/smtp_reply:SmtpReplyDecoder.remainder",
+      "mail/smtp_reply:SmtpReplyDecoder.reply",
+      "mail/smtp_reply:SmtpReplyLimits.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "mail-reply-snapshots": {
+    "path": "std/mail-reply-snapshots.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_reading",
+      "mail/pop3_reading",
+      "mail/smtp_reading"
+    ],
+    "actions": [
+      "mail/imap_reading:ImapResponseRead.new",
+      "mail/pop3_reading:PopReplyRead.new",
+      "mail/smtp_reading:SmtpReplyRead.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-name-decoded": {
+    "path": "std/imap-name-decoded.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_name"
+    ],
+    "actions": [
+      "mail/imap_name:ImapNameLimits.new",
+      "mail/imap_name:ImapUtf7Decoded.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "pop3-listing": {
+    "path": "std/pop3-listing.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3"
+    ],
+    "actions": [
+      "mail/pop3:PopCapabilities.new",
+      "mail/pop3:PopIdentifier.new",
+      "mail/pop3:PopListing.new",
+      "mail/pop3:PopMessage.identifier",
+      "mail/pop3:PopMessage.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-fetch-fields": {
+    "path": "std/imap-fetch-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_message",
+      "mail/imap_metadata"
+    ],
+    "actions": [
+      "mail/imap_message:ImapFetch.attribute",
+      "mail/imap_message:ImapFetch.body",
+      "mail/imap_message:ImapFetch.contains",
+      "mail/imap_message:ImapFetch.flags",
+      "mail/imap_message:ImapFetch.has_body",
+      "mail/imap_message:ImapFetch.has_headers",
+      "mail/imap_message:ImapFetch.has_message",
+      "mail/imap_message:ImapFetch.headers",
+      "mail/imap_message:ImapFetch.message",
+      "mail/imap_message:ImapMessage.new",
+      "mail/imap_metadata:ImapFlagsValue.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-flow-windows": {
+    "path": "std/http2-flow-windows.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_flow"
+    ],
+    "actions": [
+      "http/internal/http2_flow:Http2FlowWindow.adjusted",
+      "http/internal/http2_flow:Http2FlowWindow.available",
+      "http/internal/http2_flow:Http2FlowWindow.credited",
+      "http/internal/http2_flow:Http2FlowWindow.new",
+      "http/internal/http2_flow:Http2FlowWindow.received",
+      "http/internal/http2_flow:Http2SendCredit.available",
+      "http/internal/http2_flow:Http2SendCredit.new",
+      "http/internal/http2_flow:Http2SendCredit.spent"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-flow-payloads": {
+    "path": "std/http2-flow-payloads.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_flow"
+    ],
+    "actions": [
+      "http/internal/http2_flow:Http2DataPayload.bytes",
+      "http/internal/http2_flow:Http2DataPayload.end_stream",
+      "http/internal/http2_flow:Http2DataPayload.flow_bytes",
+      "http/internal/http2_flow:Http2DataPayload.new",
+      "http/internal/http2_flow:Http2DataPayload.stream",
+      "http/internal/http2_flow:Http2WindowFrame.frame",
+      "http/internal/http2_flow:Http2WindowFrame.new",
+      "http/internal/http2_flow:Http2WindowIncrement.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-stream-life": {
+    "path": "std/http2-stream-life.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_life"
+    ],
+    "actions": [
+      "http/internal/http2_life:Http2ClientStreamIds.highest",
+      "http/internal/http2_life:Http2ClientStreamIds.new",
+      "http/internal/http2_life:Http2StreamLife.local_data",
+      "http/internal/http2_life:Http2StreamLife.local_headers",
+      "http/internal/http2_life:Http2StreamLife.local_reset",
+      "http/internal/http2_life:Http2StreamLife.new",
+      "http/internal/http2_life:Http2StreamLife.remote_data",
+      "http/internal/http2_life:Http2StreamLife.remote_headers",
+      "http/internal/http2_life:Http2StreamLife.remote_reset"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-body-reading": {
+    "path": "std/http2-body-reading.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_body"
+    ],
+    "actions": [
+      "http/internal/http2_body:Http2BodyBuffer.bytes",
+      "http/internal/http2_body:Http2BodyBuffer.check",
+      "http/internal/http2_body:Http2BodyBuffer.close",
+      "http/internal/http2_body:Http2BodyBuffer.configure",
+      "http/internal/http2_body:Http2BodyBuffer.credit",
+      "http/internal/http2_body:Http2BodyBuffer.data",
+      "http/internal/http2_body:Http2BodyBuffer.ending",
+      "http/internal/http2_body:Http2BodyBuffer.exact",
+      "http/internal/http2_body:Http2BodyBuffer.new",
+      "http/internal/http2_body:Http2BodyBuffer.release",
+      "http/internal/http2_body:Http2BodyBuffer.remaining",
+      "http/internal/http2_body:Http2BodyBuffer.trailers",
+      "http/internal/http2_body:Http2BodyBuffer.wake",
+      "http/internal/http2_body:Http2IncomingBody.length",
+      "http/internal/http2_body:Http2IncomingBody.new",
+      "http/internal/http2_body:Http2IncomingBody.reading"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-body-failure": {
+    "path": "std/http2-body-failure.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_body"
+    ],
+    "actions": [
+      "http/internal/http2_body:Http2BodyBuffer.fail",
+      "http/internal/http2_body:Http2Trailers.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-output-delivery": {
+    "path": "std/http2-output-delivery.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_output"
+    ],
+    "actions": [
+      "http/internal/http2_output:Http2ConnectionOutput.finish",
+      "http/internal/http2_output:Http2ConnectionOutput.frame",
+      "http/internal/http2_output:Http2ConnectionOutput.run",
+      "http/internal/http2_output:Http2OutputTicket.begin",
+      "http/internal/http2_output:Http2OutputTicket.cancel",
+      "http/internal/http2_output:Http2OutputTicket.delivered",
+      "http/internal/http2_output:Http2OutputTicket.failed",
+      "http/internal/http2_output:Http2OutputTicket.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-output-release": {
+    "path": "std/http2-output-release.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_output"
+    ],
+    "actions": [
+      "http/internal/http2_output:Http2ConnectionOutput.released"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-receive-ledger": {
+    "path": "std/http2-receive-ledger.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_receiving"
+    ],
+    "actions": [
+      "http/internal/http2_receiving:Http2ReceiveFlow.active",
+      "http/internal/http2_receiving:Http2ReceiveFlow.attach",
+      "http/internal/http2_receiving:Http2ReceiveFlow.cancel",
+      "http/internal/http2_receiving:Http2ReceiveFlow.credit",
+      "http/internal/http2_receiving:Http2ReceiveFlow.data",
+      "http/internal/http2_receiving:Http2ReceiveFlow.discard",
+      "http/internal/http2_receiving:Http2ReceiveFlow.failed",
+      "http/internal/http2_receiving:Http2ReceiveFlow.matching",
+      "http/internal/http2_receiving:Http2ReceiveFlow.new",
+      "http/internal/http2_receiving:Http2ReceiveFlow.observed_closed",
+      "http/internal/http2_receiving:Http2ReceiveFlow.open",
+      "http/internal/http2_receiving:Http2ReceiveFlow.register",
+      "http/internal/http2_receiving:Http2ReceiveFlow.remaining",
+      "http/internal/http2_receiving:Http2ReceiveFlow.retire",
+      "http/internal/http2_receiving:Http2ReceiveFlow.return_credit",
+      "http/internal/http2_receiving:Http2ReceiveFlow.stop",
+      "http/internal/http2_receiving:Http2ReceivingSlot.attach"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-control-frames": {
+    "path": "std/http2-control-frames.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_controls"
+    ],
+    "actions": [
+      "http/internal/http2_controls:Http2GoAway.new",
+      "http/internal/http2_controls:Http2GoAwayFrame.frame",
+      "http/internal/http2_controls:Http2GoAwayFrame.new",
+      "http/internal/http2_controls:Http2GoAwayProgress.received",
+      "http/internal/http2_controls:Http2PingReply.frames",
+      "http/internal/http2_controls:Http2PingReply.new",
+      "http/internal/http2_controls:Http2Reset.new",
+      "http/internal/http2_controls:Http2ResetFrame.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-frame-validation": {
+    "path": "std/http2-frame-validation.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_frame"
+    ],
+    "actions": [
+      "http/internal/http2_frame:Http2FaultView.code",
+      "http/internal/http2_frame:Http2FaultView.reason",
+      "http/internal/http2_frame:Http2FaultView.scope",
+      "http/internal/http2_frame:Http2FaultView.stream",
+      "http/internal/http2_frame:Http2Frame.new",
+      "http/internal/http2_frame:Http2FrameHeader.bytes",
+      "http/internal/http2_frame:Http2FrameHeader.new",
+      "http/internal/http2_frame:Http2FrameRules.check",
+      "http/internal/http2_frame:Http2HeaderRules.check",
+      "http/internal/http2_frame:ParsedHttp2FrameHeader.header",
+      "http/internal/http2_frame:ParsedHttp2FrameHeader.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "hpack-primitives-parse": {
+    "path": "std/hpack-primitives-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack_primitives"
+    ],
+    "actions": [
+      "http/internal/hpack_primitives:HpackHuffman.bytes",
+      "http/internal/hpack_primitives:HpackHuffman.new",
+      "http/internal/hpack_primitives:HpackInteger.new",
+      "http/internal/hpack_primitives:HpackString.bytes",
+      "http/internal/hpack_primitives:HpackString.new",
+      "http/internal/hpack_primitives:ParsedHpackInteger.new",
+      "http/internal/hpack_primitives:ParsedHpackString.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "hpack-table-lookup": {
+    "path": "std/hpack-table-lookup.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack_tables"
+    ],
+    "actions": [
+      "http/internal/hpack_tables:HpackDynamicTable.field",
+      "http/internal/hpack_tables:HpackDynamicTable.new",
+      "http/internal/hpack_tables:HpackDynamicTable.resized",
+      "http/internal/hpack_tables:HpackField.size",
+      "http/internal/hpack_tables:HpackLookup.new",
+      "http/internal/hpack_tables:HpackStaticTable.exact",
+      "http/internal/hpack_tables:HpackStaticTable.field",
+      "http/internal/hpack_tables:HpackStaticTable.named",
+      "http/internal/hpack_tables:HpackStaticTable.new",
+      "http/internal/hpack_tables:HpackTableBound.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-field-sections": {
+    "path": "std/http2-field-sections.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_fields"
+    ],
+    "actions": [
+      "http/internal/http2_fields:Http2FieldSection.new",
+      "http/internal/http2_fields:Http2OrdinaryFields.new",
+      "http/internal/http2_fields:Http2PseudoFields.contains",
+      "http/internal/http2_fields:Http2PseudoFields.value",
+      "http/internal/http2_fields:Http2ResponseFields.new",
+      "http/internal/http2_fields:ParsedHttp2Request.new",
+      "http/internal/http2_fields:ParsedHttp2Request.request",
+      "http/internal/http2_fields:ParsedHttp2Response.new",
+      "http/internal/http2_fields:ParsedHttp2Response.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-send-reservations": {
+    "path": "std/http2-send-reservations.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_sending"
+    ],
+    "actions": [
+      "http/internal/http2_sending:Http2DataGrant.cancel",
+      "http/internal/http2_sending:Http2DataGrant.new",
+      "http/internal/http2_sending:Http2DataGrant.start",
+      "http/internal/http2_sending:Http2DataScheduler.close",
+      "http/internal/http2_sending:Http2DataScheduler.commit",
+      "http/internal/http2_sending:Http2DataScheduler.connection_remaining",
+      "http/internal/http2_sending:Http2DataScheduler.new",
+      "http/internal/http2_sending:Http2DataScheduler.open",
+      "http/internal/http2_sending:Http2DataScheduler.release",
+      "http/internal/http2_sending:Http2DataScheduler.reserve",
+      "http/internal/http2_sending:Http2DataScheduler.settings",
+      "http/internal/http2_sending:Http2DataScheduler.slot",
+      "http/internal/http2_sending:Http2DataScheduler.stop",
+      "http/internal/http2_sending:Http2DataScheduler.stream_remaining",
+      "http/internal/http2_sending:Http2DataScheduler.wake",
+      "http/internal/http2_sending:Http2DataScheduler.window"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-send-data": {
+    "path": "std/http2-send-data.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_sending"
+    ],
+    "actions": [
+      "http/internal/http2_sending:Http2DataScheduler.data"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-framing-fields": {
+    "path": "std/http1-framing-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_framing",
+      "http/http1_head"
+    ],
+    "actions": [
+      "http/http1_framing:Http1BodyPlan.length",
+      "http/http1_framing:Http1BodyPlan.new",
+      "http/http1_framing:Http1FramingFields.codings",
+      "http/http1_framing:Http1FramingFields.fixed",
+      "http/http1_framing:Http1FramingFields.length",
+      "http/http1_framing:Http1FramingFields.list",
+      "http/http1_framing:Http1FramingFields.new",
+      "http/http1_framing:Http1FramingFields.reusable",
+      "http/http1_framing:Http1FramingFields.supported",
+      "http/http1_framing:Http1ResponseFraming.new",
+      "http/http1_framing:Http1ResponseFraming.plan",
+      "http/http1_head:Http1Limits.new",
+      "http/http1_head:Http1ResponseHead.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-head-objects": {
+    "path": "std/http1-head-objects.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_head"
+    ],
+    "actions": [
+      "http/http1_head:Http1RequestHead.host",
+      "http/http1_head:Http1RequestHead.new",
+      "http/http1_head:Http1RequestHead.request",
+      "http/http1_head:Http1ResponseHead.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-trailer-parse": {
+    "path": "std/http1-trailer-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_chunk"
+    ],
+    "actions": [
+      "http/http1_chunk:ParsedHttp1ChunkLine.new",
+      "http/http1_chunk:ParsedHttp1Trailers.new",
+      "http/http1_chunk:ParsedHttp1Trailers.trailers"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-body-remainder": {
+    "path": "std/http1-body-remainder.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_body"
+    ],
+    "actions": [
+      "http/http1_body:Http1BodyReading.remainder",
+      "http/http1_body:Http1BodyReading.trailers",
+      "http/http1_body:Http1IncomingBody.new",
+      "http/http1_body:Http1IncomingBody.reading"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-wire-plans": {
+    "path": "std/http1-wire-plans.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_message_writing",
+      "http/http1_writing"
+    ],
+    "actions": [
+      "http/http1_message_writing:Http1ResponseWriting.plan",
+      "http/http1_writing:Http1RequestHeadWire.plan",
+      "http/http1_writing:Http1RequestHeadWriting.new",
+      "http/http1_writing:Http1ResponseHeadWire.bytes",
+      "http/http1_writing:Http1ResponseHeadWire.plan",
+      "http/http1_writing:Http1ResponseHeadWriting.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-session-memory": {
+    "path": "std/http1-session-memory.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/conversation",
+      "http/http1_session"
+    ],
+    "actions": [
+      "http/conversation:Http1Conversation.exchange",
+      "http/http1_session:Http1Session.close",
+      "http/http1_session:Http1Session.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cache-directives": {
+    "path": "std/http-cache-directives.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_control",
+      "http/date"
+    ],
+    "actions": [
+      "http/cache_control:CacheControl.arguments",
+      "http/cache_control:CacheControl.count",
+      "http/cache_control:CacheDeltaSeconds.seconds",
+      "http/date:HttpDate.order"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-policy-protocols": {
+    "path": "std/http-policy-protocols.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/client_policy",
+      "http/client_protocols",
+      "http/server_policy"
+    ],
+    "actions": [
+      "http/client_policy:ClientTimeouts.new",
+      "http/client_policy:Http1ClientProtocols.new",
+      "http/client_protocols:HttpClientProtocols.clear",
+      "http/server_policy:ServerPolicy.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-endpoint-selection": {
+    "path": "std/http-endpoint-selection.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/endpoint"
+    ],
+    "actions": [
+      "http/endpoint:HttpEndpointSelection.endpoints",
+      "http/endpoint:HttpEndpointSelection.new",
+      "http/endpoint:ListedNetworks.allowed",
+      "http/endpoint:ListedNetworks.new",
+      "http/endpoint:PublicEndpoints.allowed"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-exchange-body": {
+    "path": "std/http-exchange-body.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/exchange",
+      "http/message"
+    ],
+    "actions": [
+      "http/exchange:ClientResponse.bytes",
+      "http/exchange:ClientResponse.json",
+      "http/exchange:ClientResponse.reading",
+      "http/exchange:ExchangeDetails.tls",
+      "http/message:RequestCoordinates.new",
+      "http/message:RequestHead.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-form-read": {
+    "path": "std/http-form-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/form"
+    ],
+    "actions": [
+      "http/form:FormText.new",
+      "http/form:FormText.text",
+      "http/form:ParsedMultipartForm.new",
+      "http/form:ParsedUrlEncodedForm.read"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-robots-fetch": {
+    "path": "std/http-robots-fetch.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/robots"
+    ],
+    "actions": [
+      "http/robots:FetchedRobots.fetch",
+      "http/robots:FetchedRobots.new",
+      "http/robots:FetchedRobots.policy",
+      "http/robots:RobotsPolicy.delay",
+      "http/robots:RobotsPolicy.selected"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-exchange-decorators": {
+    "path": "std/http-exchange-decorators.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_client",
+      "http/redirect",
+      "http/retry"
+    ],
+    "actions": [
+      "http/cookie_client:CookieExchanging.response",
+      "http/redirect:RedirectResponseCleanup.close",
+      "http/redirect:RedirectResponseCleanup.new",
+      "http/retry:Retrying.once"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-digest-fields": {
+    "path": "std/http-digest-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/digest"
+    ],
+    "actions": [
+      "http/digest:DigestAuthorization.header",
+      "http/digest:DigestAuthorization.new",
+      "http/digest:DigestAuthorization.proof",
+      "http/digest:DigestChallenge.realm_bytes",
+      "http/digest:DigestChallenge.session",
+      "http/digest:DigestCredentials.identity",
+      "http/digest:DigestServerProof.verify"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-digest-exchange": {
+    "path": "std/http-digest-exchange.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/digest"
+    ],
+    "actions": [
+      "http/digest:DigestExchanging.new",
+      "http/digest:DigestExchanging.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-sse-read": {
+    "path": "std/http-sse-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/sse"
+    ],
+    "actions": [
+      "http/sse:ServerEvents.close",
+      "http/sse:ServerEvents.closed",
+      "http/sse:ServerEvents.event",
+      "http/sse:ServerEvents.line",
+      "http/sse:ServerEvents.new",
+      "http/sse:ServerEvents.read",
+      "http/sse:ServerEvents.settled"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-sse-body": {
+    "path": "std/http-sse-body.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/sse",
+      "web/reply"
+    ],
+    "actions": [
+      "http/sse:EventBody.new",
+      "http/sse:EventBody.reading",
+      "http/sse:EventStreamHeaders.headers",
+      "web/reply:EventsReply.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-xmlrpc-containers": {
+    "path": "std/http-xmlrpc-containers.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/xmlrpc"
+    ],
+    "actions": [
+      "http/xmlrpc:XmlRpcArray.item",
+      "http/xmlrpc:XmlRpcArray.new",
+      "http/xmlrpc:XmlRpcDateTime.new",
+      "http/xmlrpc:XmlRpcDouble.new",
+      "http/xmlrpc:XmlRpcFault.new",
+      "http/xmlrpc:XmlRpcFloat.decimal",
+      "http/xmlrpc:XmlRpcLimits.wire_bytes",
+      "http/xmlrpc:XmlRpcStruct.member",
+      "http/xmlrpc:XmlRpcStruct.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-xmlrpc-exchange": {
+    "path": "std/http-xmlrpc-exchange.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/xmlrpc"
+    ],
+    "actions": [
+      "http/xmlrpc:XmlRpcClient.new",
+      "http/xmlrpc:XmlRpcClient.result",
+      "http/xmlrpc:XmlRpcHandling.handling",
+      "http/xmlrpc:XmlRpcHandling.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "pop3-session-list": {
+    "path": "std/pop3-session-list.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_session"
+    ],
+    "actions": [
+      "mail/pop3_session:PopCommand.mode",
+      "mail/pop3_session:PopDeleteReset.reset",
+      "mail/pop3_session:PopMailbox.messages",
+      "mail/pop3_session:PopMailbox.state",
+      "mail/pop3_session:PopSession.abort",
+      "mail/pop3_session:PopSession.messages",
+      "mail/pop3_session:PopSession.new",
+      "mail/pop3_session:PopSession.quit",
+      "mail/pop3_session:PopSession.reset",
+      "mail/pop3_session:PopSession.run",
+      "mail/pop3_session:PopSession.state"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "pop3-session-mail": {
+    "path": "std/pop3-session-mail.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_session"
+    ],
+    "actions": [
+      "mail/pop3_session:PopMailbox.bytes",
+      "mail/pop3_session:PopMailbox.delete",
+      "mail/pop3_session:PopMailbox.message",
+      "mail/pop3_session:PopMailbox.preview",
+      "mail/pop3_session:PreviewedPopMail.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "smtp-session-submit": {
+    "path": "std/smtp-session-submit.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_session"
+    ],
+    "actions": [
+      "mail/smtp_session:SmtpSession.new",
+      "mail/smtp_session:SmtpSession.quit",
+      "mail/smtp_session:SmtpSession.submission"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "smtp-client-settings": {
+    "path": "std/smtp-client-settings.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp",
+      "mail/smtp_data",
+      "mail/smtp_session"
+    ],
+    "actions": [
+      "mail/smtp:SmtpExtension.new",
+      "mail/smtp_data:SmtpDataLimits.new",
+      "mail/smtp_session:SmtpConnecting.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-select": {
+    "path": "std/imap-session-select.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_exchange",
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_exchange:ImapCommandChannel.abort",
+      "mail/imap_exchange:ImapCommandChannel.closed",
+      "mail/imap_session:ImapSession.abort",
+      "mail/imap_session:ImapSession.close",
+      "mail/imap_session:ImapSession.entry",
+      "mail/imap_session:ImapSession.event_capacity",
+      "mail/imap_session:ImapSession.mailbox",
+      "mail/imap_session:ImapSession.mailboxes",
+      "mail/imap_session:ImapSession.new",
+      "mail/imap_session:ImapSession.observation",
+      "mail/imap_session:ImapSession.run",
+      "mail/imap_session:ImapSessionReply.state",
+      "mail/imap_session:SelectedMailbox.closed",
+      "mail/imap_session:SelectedMailbox.state"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-examine": {
+    "path": "std/imap-session-examine.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_session:ImapSession.examine",
+      "mail/imap_session:ImapSession.select"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-mailboxes": {
+    "path": "std/imap-session-mailboxes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_session:CreatedImapMailbox.new",
+      "mail/imap_session:ImapMailboxDeletion.new",
+      "mail/imap_session:ImapSession.created",
+      "mail/imap_session:ImapSession.deleted",
+      "mail/imap_session:ImapSession.renamed",
+      "mail/imap_session:ImapSubscription.new",
+      "mail/imap_session:RenamedImapMailbox.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-search": {
+    "path": "std/imap-session-search.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_command",
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_command:ImapCommand.name",
+      "mail/imap_command:ImapCommand.uid_operation",
+      "mail/imap_session:ChangedMailFlags.new",
+      "mail/imap_session:FetchedMail.new",
+      "mail/imap_session:SearchedMail.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-copy": {
+    "path": "std/imap-session-copy.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_session:CopiedMail.new",
+      "mail/imap_session:ExpungedMail.new",
+      "mail/imap_session:ImapAssignedUids.uids",
+      "mail/imap_session:MovedMail.new",
+      "mail/imap_session:SelectedMailbox.copied",
+      "mail/imap_session:SelectedMailbox.expunged",
+      "mail/imap_session:SelectedMailbox.moved"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-append": {
+    "path": "std/imap-session-append.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_command",
+      "mail/imap_exchange",
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_command:ImapCommand.literal_bytes",
+      "mail/imap_exchange:ImapLiteralWriting.write",
+      "mail/imap_session:AppendedMail.new",
+      "mail/imap_session:ImapSession.appended"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-session-events": {
+    "path": "std/imap-session-events.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session",
+      "mail/imap_state"
+    ],
+    "actions": [
+      "mail/imap_session:ImapEventObservation.new",
+      "mail/imap_session:ImapEventObservation.observed",
+      "mail/imap_session:ImapSelectedState.observed",
+      "mail/imap_session:MailboxEvent.flags",
+      "mail/imap_session:MailboxEvent.kind",
+      "mail/imap_session:MailboxEvent.sequence",
+      "mail/imap_session:MailboxEvent.uid",
+      "mail/imap_state:ImapMailboxState.observed"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-idle-cancellation": {
+    "path": "std/imap-idle-cancellation.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_exchange",
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_exchange:ImapCommandChannel.idle",
+      "mail/imap_exchange:ImapIdleContinuation.write",
+      "mail/imap_session:ImapIdleTask.new",
+      "mail/imap_session:ImapIdleTask.start",
+      "mail/imap_session:ImapSession.activate_idle",
+      "mail/imap_session:ImapSession.idle_run",
+      "mail/imap_session:MailboxEvents.close",
+      "mail/imap_session:MailboxEvents.closed",
+      "mail/imap_session:MailboxEvents.event",
+      "mail/imap_session:MailboxEvents.new",
+      "mail/imap_session:MailboxEvents.next"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "mail-message-values": {
+    "path": "std/mail-message-values.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/message"
+    ],
+    "actions": [
+      "mail/message:DeliveredMail.bytes",
+      "mail/message:MailDate.new",
+      "mail/message:MailMessage.new",
+      "mail/message:MailMessage.string",
+      "mail/message:ParsedMailDate.date_time",
+      "mail/message:ParsedMailDate.new",
+      "mail/message:ParsedMailDate.offset_known"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "mail-flags-stored": {
+    "path": "std/mail-flags-stored.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/mailbox"
+    ],
+    "actions": [
+      "mail/mailbox:KeywordFlag.order",
+      "mail/mailbox:MailFlags.addition",
+      "mail/mailbox:MailFlags.difference",
+      "mail/mailbox:StoredMail.new",
+      "mail/mailbox:SystemFlag.order",
+      "mail/mailbox:SystemFlag.string"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "mail-mbox-roundtrip": {
+    "path": "std/mail-mbox-roundtrip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/mbox",
+      "mail/mbox_store"
+    ],
+    "actions": [
+      "mail/mbox:MboxArchive.bytes",
+      "mail/mbox:MboxArchive.new",
+      "mail/mbox:MboxLimits.new",
+      "mail/mbox:ParsedMbox.new",
+      "mail/mbox:ParsedMbox.records",
+      "mail/mbox_store:Mbox.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "mail-maildir-files": {
+    "path": "std/mail-maildir-files.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/mailbox"
+    ],
+    "actions": [
+      "mail/mailbox:ChangedMaildirFlags.mail",
+      "mail/mailbox:ChangedMaildirFlags.new",
+      "mail/mailbox:Maildir.created",
+      "mail/mailbox:Maildir.messages",
+      "mail/mailbox:Maildir.new",
+      "mail/mailbox:Maildir.remove",
+      "mail/mailbox:MaildirLimits.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-cookie-files": {
+    "path": "std/http-cookie-files.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_jar"
+    ],
+    "actions": [
+      "http/cookie_jar:LoadedCookieJar.jar",
+      "http/cookie_jar:SavedCookieJar.file"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-static-files": {
+    "path": "std/http-static-files.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/static",
+      "web/routing"
+    ],
+    "actions": [
+      "http/static:StaticFiles.companions",
+      "http/static:StaticFiles.file_response",
+      "http/static:StaticFiles.handling",
+      "http/static:StaticFiles.index",
+      "http/static:StaticFiles.listing",
+      "http/static:StaticFiles.new",
+      "web/routing:Files.new",
+      "web/routing:Files.routes"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-frame-headers": {
+    "path": "std/websocket-frame-headers.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_frame",
+      "http/internal/websocket_messages",
+      "http/websocket"
+    ],
+    "actions": [
+      "http/internal/websocket_frame:ParsedWebSocketFrameHeader.header",
+      "http/internal/websocket_frame:ParsedWebSocketFrameHeader.new",
+      "http/internal/websocket_frame:WebSocketFrameHeader.bytes",
+      "http/internal/websocket_frame:WebSocketFrameHeader.new",
+      "http/internal/websocket_frame:WebSocketHeaderPrefix.checked",
+      "http/internal/websocket_messages:ParsedWebSocketClose.closure",
+      "http/internal/websocket_messages:WebSocketMessageAssembly.closed",
+      "http/websocket:TextWebSocketMessage.json",
+      "http/websocket:WebSocketClose.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-output-frames": {
+    "path": "std/websocket-output-frames.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_output"
+    ],
+    "actions": [
+      "http/internal/websocket_output:WebSocketOutput.closing",
+      "http/internal/websocket_output:WebSocketOutput.control",
+      "http/internal/websocket_output:WebSocketOutput.emit",
+      "http/internal/websocket_output:WebSocketOutput.finish",
+      "http/internal/websocket_output:WebSocketOutput.frame",
+      "http/internal/websocket_output:WebSocketOutput.release",
+      "http/internal/websocket_output:WebSocketOutput.submit",
+      "http/internal/websocket_output:WebSocketOutput.take",
+      "http/internal/websocket_output:WebSocketOutputTicket.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-output-tickets": {
+    "path": "std/websocket-output-tickets.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_output"
+    ],
+    "actions": [
+      "http/internal/websocket_output:WebSocketOutput.run",
+      "http/internal/websocket_output:WebSocketOutputSettlement.close",
+      "http/internal/websocket_output:WebSocketOutputTicket.cancel",
+      "http/internal/websocket_output:WebSocketOutputTicket.delivered",
+      "http/internal/websocket_output:WebSocketOutputTicket.failed",
+      "http/internal/websocket_output:WebSocketOutputTicket.waiting"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-session-memory": {
+    "path": "std/websocket-session-memory.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_upgrade",
+      "http/websocket_session"
+    ],
+    "actions": [
+      "http/internal/websocket_upgrade:WebSocketOpeningCleanup.close",
+      "http/websocket_session:WebSocketSession.close",
+      "http/websocket_session:WebSocketSession.message",
+      "http/websocket_session:WebSocketSession.next",
+      "http/websocket_session:WebSocketSession.ping",
+      "http/websocket_session:WebSocketSession.send",
+      "http/websocket_session:WebSocketSession.send_bytes",
+      "http/websocket_session:WebSocketSession.send_json",
+      "http/websocket_session:WebSocketSession.send_text",
+      "http/websocket_session:WebSocketSession.settled",
+      "http/websocket_session:WebSocketSession.started"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-handshake-pair": {
+    "path": "std/websocket-handshake-pair.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_client",
+      "http/websocket_handshake"
+    ],
+    "actions": [
+      "http/websocket_client:WebSocketConnecting.new",
+      "http/websocket_handshake:WebSocketClientHandshake.new",
+      "http/websocket_handshake:WebSocketClientHandshake.selected",
+      "http/websocket_handshake:WebSocketServerHandshake.new",
+      "http/websocket_handshake:WebSocketServerHandshake.response"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-server-memory": {
+    "path": "std/websocket-server-memory.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_server"
+    ],
+    "actions": [
+      "http/websocket_server:WebSocketAccepting.connection",
+      "http/websocket_server:WebSocketAccepting.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "websocket-client-upgrade": {
+    "path": "std/websocket-client-upgrade.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_client"
+    ],
+    "actions": [
+      "http/websocket_client:WebSocketOpening.upgrade"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-routing-dispatch": {
+    "path": "std/http-routing-dispatch.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/routing"
+    ],
+    "actions": [
+      "http/routing:Route.method",
+      "http/routing:Route.method_token",
+      "http/routing:Route.new",
+      "http/routing:RoutePattern.matches",
+      "http/routing:RoutePattern.matching",
+      "http/routing:RoutePattern.overlaps",
+      "http/routing:RouteSegment.new",
+      "http/routing:Routes.handling",
+      "http/routing:Routes.invoke",
+      "http/routing:Routes.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "web-routing-dispatch": {
+    "path": "std/web-routing-dispatch.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/status",
+      "web/around",
+      "web/exception",
+      "web/routing"
+    ],
+    "actions": [
+      "http/status:StatusCode.class",
+      "web/around:AccessLog.around",
+      "web/exception:ProblemReply.title",
+      "web/routing:WebRoutes.handling",
+      "web/routing:WebSocket.new",
+      "web/routing:WebSocket.routes"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-request-progress": {
+    "path": "std/http1-request-progress.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_continue",
+      "http/http1_head",
+      "http/http1_message_writing",
+      "http/http1_reading"
+    ],
+    "actions": [
+      "http/http1_continue:Http1ContinueState.reading",
+      "http/http1_continue:Http1RequestStart.new",
+      "http/http1_head:ParsedHttp1ResponseHead.head",
+      "http/http1_head:ParsedHttp1ResponseHead.new",
+      "http/http1_message_writing:Http1RequestWriting.new",
+      "http/http1_reading:Http1ResponseHeadReading.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http1-direct-exchange": {
+    "path": "std/http1-direct-exchange.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/connection",
+      "http/conversation",
+      "http/http1_session"
+    ],
+    "actions": [
+      "http/connection:Http1Acquisition.begin",
+      "http/conversation:HttpConversationAcquisitionDisposal.release",
+      "http/http1_session:Http1Session.closed",
+      "http/http1_session:Http1Session.exchange"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-connection-policies": {
+    "path": "std/http-connection-policies.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/connection",
+      "http/http2_connection",
+      "http/proxy",
+      "http/proxy_connection",
+      "http/proxy_policy",
+      "http/proxy_request",
+      "http/selected_connection"
+    ],
+    "actions": [
+      "http/connection:Http1Connecting.new",
+      "http/http2_connection:Http2Connecting.new",
+      "http/proxy:Proxied.new",
+      "http/proxy_connection:HttpProxyRouting.allowed",
+      "http/proxy_connection:HttpProxyRouting.new",
+      "http/proxy_policy:ProxyPolicy.credentials",
+      "http/proxy_request:HttpForwardRequest.new",
+      "http/selected_connection:HttpSelectedConnecting.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http-acquisition-cleanup": {
+    "path": "std/http-acquisition-cleanup.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/connection"
+    ],
+    "actions": [
+      "http/connection:HttpAcquisitionCleanup.close"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "xmlrpc-float-print": {
+    "path": "std/xmlrpc-float-print.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/xmlrpc"
+    ],
+    "actions": [
+      "http/xmlrpc:XmlRpcFloat.print"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-header-blocks": {
+    "path": "std/http2-header-blocks.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack",
+      "http/internal/http2_headers",
+      "http/internal/http2_output"
+    ],
+    "actions": [
+      "http/internal/hpack:HpackDecoder.allowed",
+      "http/internal/http2_headers:Http2HeaderBlockReading.block",
+      "http/internal/http2_headers:Http2HeaderBlockReading.new",
+      "http/internal/http2_headers:Http2HeaderBlockWriting.new",
+      "http/internal/http2_headers:Http2HeaderBlockWriting.output",
+      "http/internal/http2_output:Http2ConnectionOutput.headers"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-server-preface": {
+    "path": "std/http2-server-preface.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_preface",
+      "http/internal/http2_settings"
+    ],
+    "actions": [
+      "http/internal/http2_preface:Http2ServerPreface.new",
+      "http/internal/http2_preface:Http2ServerPreface.settings",
+      "http/internal/http2_settings:ReceivedHttp2Settings.settings"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-session-exchange": {
+    "path": "std/http2-session-exchange.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http2_session"
+    ],
+    "actions": [
+      "http/http2_session:Http2Exchange.close",
+      "http/http2_session:Http2Exchange.closed",
+      "http/http2_session:Http2Session.exchange",
+      "http/http2_session:Http2Session.settled"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-conversation-exchange": {
+    "path": "std/http2-conversation-exchange.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/conversation"
+    ],
+    "actions": [
+      "http/conversation:Http2Conversation.exchange",
+      "http/conversation:Http2Conversation.settled"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "http2-server-lifecycle": {
+    "path": "std/http2-server-lifecycle.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http2_server"
+    ],
+    "actions": [
+      "http/http2_server:Http2ServerSession.drained",
+      "http/http2_server:Http2ServerSession.new",
+      "http/http2_server:Http2ServerSession.serve",
+      "http/http2_server:Http2ServerSession.settled"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
+  },
+  "imap-copy-mapping": {
+    "path": "std/imap-copy-mapping.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session"
+    ],
+    "actions": [
+      "mail/imap_session:ImapCopiedUids.new"
+    ],
+    "interpretation": "Optimized composite iteration including construction, dispatch, checksum and loop; not isolated call latency."
   }
 }

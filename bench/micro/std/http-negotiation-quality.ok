@@ -1,0 +1,33 @@
+// #244: http-negotiation-quality; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/negotiation" take Quality, WeightedValue, CharsetName, NegotiationLimits, WeightedLanguageRange;
+import "locale/match" take BasicLanguageRange;
+import "compare" take Order;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let quality = Quality(v.rat()/1000.rat());
+        let value = WeightedValue("gzip",quality);
+        let charset = CharsetName("UTF-8");
+        let range = WeightedLanguageRange(BasicLanguageRange("en"),quality);
+        let bounds = NegotiationLimits(bytes:128,entries:4,available:4);
+        let contribution = quality.string().length()+value.string().length()+range.string().length()+bounds::Limits::entries
+         + (if quality.order(Quality(1.rat()))==Order.less && charset.order(CharsetName("utf-8"))==Order.equal { v; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

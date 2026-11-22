@@ -1,0 +1,35 @@
+// #244: http2-field-sections; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/internal/http2_fields" take Http2ResponseFields, Http2OrdinaryFields, ParsedHttp2Request, ParsedHttp2Response, Http2FieldSection, Http2PseudoFields;
+import "http/internal/hpack_tables" take HpackField;
+import "http/header" take Headers, Header;
+import "http/message" take Response;
+import "http/status" take Status;
+import "http/body" take EmptyBody;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let ordinary = Http2OrdinaryFields(Headers(Header("X-N",x)),true,1);
+        let pseudos = Http2PseudoFields(1).added(HpackField(":method","GET"));
+        let section = Http2FieldSection([HpackField(":status","200")]+ordinary.fields(),[":status"],false,1);
+        let response = ParsedHttp2Response(Http2ResponseFields(Response(status:Status.ok,headers:Headers(Header("X-N",x))),1).fields(),1,true).response(EmptyBody());
+        let request = ParsedHttp2Request([HpackField(":method","GET"),HpackField(":scheme","http"),HpackField(":authority","example.test"),HpackField(":path","/"+x)],1).request(EmptyBody());
+        let contribution = response::Head::headers.int("x-n")+section.headers().int("x-n")+request::Head::target.path().length()+pseudos.value(":method").length()+(if pseudos.contains(":method") { 1; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

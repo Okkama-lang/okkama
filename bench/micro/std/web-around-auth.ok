@@ -1,0 +1,49 @@
+// #244: web-around-auth; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/request_context" take HttpRequestContext;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+import "web/around" take BearerAuth, Cors, Compression;
+import "web/request" take WebRequest;
+import "web/reply" take TextReply;
+import "http/message" take Request, Responding;
+import "http/header" take Headers, Header;
+object Context { Context(); value() is HttpRequestContext {
+    let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(local:IpEndpoint(IpAddress("127.0.0.1"),80),remote:IpEndpoint(IpAddress("127.0.0.1"),50000));
+    HttpRequestContext(details:ExchangeDetails(endpoints:ends,version:HttpVersion.http_1_1),cancellation:Cancellation().cancelling());
+} }
+object Endpoint { Endpoint(); async answer(request is WebRequest) is Responding { TextReply("ok"); } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let request = WebRequest(Request(url:"http://example.test/",headers:Headers(Header("Authorization","Bearer t"+x))),Context().value());
+            let auth = await BearerAuth("t"+x).around(request,Endpoint().answer);
+            let plain = await Compression(minimum:v).around(request,Endpoint().answer);
+            let cors = Cors("*").around();
+            let contribution = auth.response()::Head::code+plain.response()::Head::code+(match cors { case Maybe.some(value) { v; } else { 0; } });
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,64 @@
+// #244: http2-receive-ledger; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader, Http2Fault, Http2FaultScope;
+import "http/internal/http2_flow" take Http2FlowWindow, Http2SendCredit, Http2DataPayload, Http2WindowFrame, Http2WindowIncrement;
+import "http/internal/http2_body" take Http2BodyBuffer, Http2BodyEvents, Http2IncomingBody, Http2BodyLength, Http2Trailers;
+import "http/header" take Headers, Header;
+import "http/internal/hpack_tables" take HpackField;
+import "io/stream" take AsyncWriting, ByteSource;
+import "async/atomic" take Atomic;
+import "http/internal/http2_output" take Http2ConnectionOutput, Http2OutputTicket, Http2OutputStarting, Http2OutputStopped;
+import "http/internal/http2_receiving" take Http2ReceiveFlow, Http2ReceivingSlot;
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }
+object Events does Http2BodyEvents { Events(); credit(stream is int,amount is int,stream_update is bool) is void {} discard(stream is int,amount is int,cancel is bool) is void {} }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let output = Http2ConnectionOutput(Sink(),32,4096);
+            let flow = Http2ReceiveFlow(output,8);
+            let body = Http2BodyBuffer(1,1024,128,flow,[],false);
+            flow.register(1);
+            flow.attach(1,body);
+            let slot = Http2ReceivingSlot(3);
+            let extra = Http2BodyBuffer(3,1024,128,Events(),[],false);
+            slot.attach(extra);
+            flow.data(Http2DataPayload(Http2Frame(Http2FrameHeader(0.byte(),1.byte(),1,1),[v.byte()])));
+            let bytes = await body.bytes(128);
+            let end = await body.bytes(128);
+            flow.observed_closed(3);
+            let other = Http2BodyBuffer(5,1024,128,flow,[],false);
+            flow.open(5,other);
+            let count = flow.active()+flow.matching(5).size();
+            flow.cancel(5);
+            flow.return_credit(1);
+            flow.credit(1,1,false);
+            flow.discard(3,0,false);
+            flow.retire(3);
+            let failed = flow.failed(Http2Fault.detailed(Http2FaultScope.stream,8,7,"absent"));
+            flow.stop(Http2Fault.detailed(Http2FaultScope.connection,8,0,"stop"));
+            let contribution = bytes[0].int()+count+flow.remaining()+(if failed { 1; } else { 0; });
+            body.close();
+            extra.close();
+            output.abort();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

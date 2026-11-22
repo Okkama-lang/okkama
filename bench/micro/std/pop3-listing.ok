@@ -1,0 +1,32 @@
+// #244: pop3-listing; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "encoding/utf" take Utf8Encoded;
+import "mail/pop3" take PopCapabilities, PopIdentifier, PopListing, PopListingLimits, PopMessage, PopNumber;
+import "mail/pop3_reply" take PopReply;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let reply = PopReply(true,"list",Utf8Encoded("1 "+x+"\r\n").bytes(),1,true);
+        let ids = PopReply(true,"ids",Utf8Encoded("1 id"+x+"\r\n").bytes(),1,true);
+        let listing = PopListing(reply,[ids],PopListingLimits());
+        let message = PopMessage(PopNumber(1),v,[PopIdentifier("id"+x)]);
+        let caps = PopCapabilities(PopReply(true,"caps",Utf8Encoded("UIDL\r\nTOP\r\n").bytes(),2,true));
+        let contribution = listing.messages().item(0).size()+message.identifier().string().length()+caps.names().size();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

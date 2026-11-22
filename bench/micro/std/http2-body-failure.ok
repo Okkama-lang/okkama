@@ -1,0 +1,32 @@
+// #244: http2-body-failure; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader, Http2Fault, Http2FaultScope;
+import "http/internal/http2_flow" take Http2FlowWindow, Http2SendCredit, Http2DataPayload, Http2WindowFrame, Http2WindowIncrement;
+import "http/internal/http2_body" take Http2BodyBuffer, Http2BodyEvents, Http2IncomingBody, Http2BodyLength, Http2Trailers;
+import "http/header" take Headers, Header;
+import "http/internal/hpack_tables" take HpackField;
+object Events does Http2BodyEvents { Events(); credit(stream is int,amount is int,stream_update is bool) is void {} discard(stream is int,amount is int,cancel is bool) is void {} }
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let body = Http2BodyBuffer(1,1024,128,Events(),[],false);
+        body.fail(Http2Fault.detailed(Http2FaultScope.stream,8,1,"cancelled"));
+        let trailers = Http2Trailers([HpackField("x-end",x)],1);
+        let contribution = trailers.headers().int("X-End")+(if body.closed() { 1; } else { 0; });
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,61 @@
+// #244: web-routing-dispatch; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "http/request_context" take HttpRequestContext;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+import "http/handler" take Handling, HandlingResult, ResponseHandling;
+import "http/message" take Request, Response, Responding;
+import "http/status" take Status, StatusCode, StatusClass;
+import "http/method" take Method;import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "web/routing" take WebRoutes, Get, WebSocket;
+import "web/request" take WebRequest;
+import "web/reply" take TextReply;
+import "web/around" take AccessLog;
+import "web/exception" take ProblemReply;
+import "http/handler" take WebSocketHandling;
+import "http/websocket" take WebSocketConnection;
+import "io/stream" take WritingText;
+import "async/atomic" take Atomic;
+object Context { Context(); value() is HttpRequestContext {
+    let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(local:IpEndpoint(IpAddress("127.0.0.1"),80),remote:IpEndpoint(IpAddress("127.0.0.1"),50000));
+    HttpRequestContext(details:ExchangeDetails(endpoints:ends,version:HttpVersion.http_1_1),cancellation:Cancellation().cancelling());
+} }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }object Endpoint { Endpoint(); async answer(request is WebRequest) is Responding { TextReply("ok"); } }object Log does WritingText { has count is Atomic<int>; Log() { count=Atomic(0); } write(values is ...string) is void { let strings is @string=values...; count.replace(count.value()+strings.reduce(0) -> s,x { s+x.length(); }); } writeln(values is ...string) is void { self.write(values...); count.replace(count.value()+1); } size() is int { count.value(); } }object SocketApp does WebSocketHandling { SocketApp(); async handle(connection is WebSocketConnection,request is Request,context is HttpRequestContext) is WebSocketHandling { self; } }
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let routes = WebRoutes(Get("/"+x,Endpoint().answer));
+            let request = Request(url:"http://example.test/"+x);
+            let context = Context().value();
+            let result = await routes.handling(request,context);
+            let log = Log();
+            let reply = await AccessLog(log,FixedClock()).around(WebRequest(request,context),Endpoint().answer);
+            let socket = WebSocket("/ws"+x,SocketApp()).routes("",[]);
+            let problem = ProblemReply(Status.other(499),x);
+            let contribution = result.response()::Head::code+reply.response()::Head::code+log.size()+socket.size()+problem.title().length()+(if StatusCode(Status.ok).class()==StatusClass.successful { 1; } else { 0; });
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

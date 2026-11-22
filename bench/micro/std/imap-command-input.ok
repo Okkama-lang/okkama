@@ -1,0 +1,37 @@
+// #244: imap-command-input; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "encoding/utf" take Utf8Encoded;
+import "mail/imap_command_reading" take ImapCommandInput, ImapTag, ImapCommandLimits, ImapReplyMode;
+import "http/body" take ByteBodyInput;
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let input = ByteBodyInput(Utf8Encoded("A"+x+" OK done\r\n").bytes());
+            let mode = ImapReplyMode();
+            let reading = ImapCommandInput(input,ImapTag("A"+x),[],ImapCommandLimits(),mode);
+            let result = (await reading.read()).require_success();
+            let contribution = result.completion().tag().length()+result.consumed();
+            input.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

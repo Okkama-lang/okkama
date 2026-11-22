@@ -1,0 +1,38 @@
+// #244: mail-mbox-roundtrip; independent checksum in oracles.py.
+module bench/micro v1.0.0;
+import "../support/harness" take Measurement;
+import "mail/message" take MailMessage, ParsedMail, DeliveredMail, MailDate, ParsedMailDate;
+import "mail/mailbox" take StoredMail, MailFlags, SystemFlag, SystemMailFlag, KeywordFlag, Maildir, MaildirLimits, ChangedMaildirFlags;
+import "mail/mbox" take MboxArchive, MboxRecord, MboxSeparator, ParsedMbox, MboxLimits;
+import "mail/mbox_store" take Mbox;
+import "mime/part" take MimeLimits;
+import "compare" take Order;
+import "encoding/utf" take Utf8Encoded;
+import "fs/path" take Path;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let message = ParsedMail(Utf8Encoded("Subject: "+x+"\r\n\r\nFrom sender\r\n").bytes()).message();
+        let limits = MboxLimits(4,4096,MimeLimits());
+        let archive = MboxArchive([MboxRecord(MboxSeparator("From a@example.test fixed"),message)],limits);
+        let bytes = archive.bytes();
+        let parsed = ParsedMbox(bytes,limits).records();
+        let store = Mbox(Path("archive"+x),limits);
+        let contribution = parsed.item(0).message().headers().first("Subject").length()+bytes.size()+store.path().string().length();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
