@@ -759,7 +759,7 @@ fn native_declarations() {
         ),
         (
             "native collect(values is ...int) is int;",
-            "Variadic native declarations are not supported in Phase 01.",
+            "Native parameters cannot be variadic.",
         ),
         (
             "native clock(unit is string = \"ns\") is int;",
@@ -945,4 +945,18 @@ fn async_destroy_parses() {
         })
         .collect();
     assert_eq!(destroys, [true, false]);
+}
+
+/// #964: a variadic native parameter is rejected at its name in the words a
+/// user knows, like a native default value; an array parameter is fine.
+#[test]
+fn native_parameters_cannot_be_variadic() {
+    for text in [
+        "module app v1.0.0;\nnative collect(values is ...int) is int;",
+        "module app v1.0.0;\nnative collect(first is int, values is ...string) is int;",
+    ] {
+        let (message, found, line) = common::parse_in(text, ParseMode::Full).expect_err(text);
+        assert_eq!((message.as_str(), found.as_str(), line), ("Native parameters cannot be variadic.", "values", 2), "{text}");
+    }
+    common::parse_ok("module app v1.0.0;\nnative collect(values is @int) is int;\nmain() is int { 0; }");
 }
