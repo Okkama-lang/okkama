@@ -30,7 +30,7 @@ Summary: 4 deferred, 43 resolved.
 | [D-017](#d-017) | Detection stage of a missing entry point | resolved |
 | [D-018](#d-018) | Anonymous action parameter annotations | resolved |
 | [D-019](#d-019) | `probe` fixture shorthand | resolved |
-| [D-020](#d-020) | Untyped `has` declarations | resolved (runtime typing of untyped fields not asserted) |
+| [D-020](#d-020) | Untyped `has` declarations | resolved (#967: type inferred from the initializer) |
 | [D-021](#d-021) | Residual mentions of the removed `allow` declaration | resolved |
 | [D-022](#d-022) | Experimental effects and export checking | resolved (excluded) |
 | [D-023](#d-023) | Explicit runtime import directories | resolved |
@@ -301,12 +301,12 @@ Summary: 4 deferred, 43 resolved.
 
 - Sources: `docs/okkama-grammar-1.0.ebnf (`has_decl = "has" attr_name_list has_type? has_default? ";"`)`; `docs/okkama-spec-11072026.md section 11.2`
 - Observed: okkama-pl (Perl) at git f1ad6d43: `has count = 0;` parses.
-- Intended contract: The grammar allows omitting the type; the specification does not define the field's runtime type.
-- Authority: Grammar only.
-- Conformance expectation: Only syntactic acceptance is mandatory (GRAM.HAS-DECL boundary); shorthand rejects untyped fields (spec 11.3).
-- Resolution: **resolved (runtime typing of untyped fields not asserted)**
+- Intended contract: A has field's type is inferred from its initializer (#967); without an initializer the type is mandatory.
+- Authority: Owner decision on #967 (2026-11-22).
+- Conformance expectation: An inferred field behaves as a typed field, shorthand included (L04.shorthand.inferred-field); a field with neither type nor initializer is rejected (L04.shorthand.untyped-field).
+- Resolution: **resolved (#967: type inferred from the initializer)**
 - Contracts: `GRAM.HAS-DECL`
-- Cases: `L01.gram.has.untyped-with-default`, `L04.shorthand.untyped-field`
+- Cases: `L01.gram.has.untyped-with-default`, `L04.shorthand.untyped-field`, `L04.shorthand.inferred-field`
 
 ## D-021
 

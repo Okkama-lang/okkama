@@ -1,7 +1,7 @@
 {
   "schema": "ocs-case/2",
   "id": "L04.shorthand.untyped-field",
-  "title": "shorthand fields must be explicitly typed",
+  "title": "a shorthand field with neither a type nor an initializer is rejected",
   "purpose": "The construct is invalid and must not complete.",
   "level": "L04",
   "contracts": [
@@ -27,15 +27,13 @@
     "failure": {
       "stages": [
         "parse",
-        "check",
-        "runtime"
+        "check"
       ],
       "categories": [
         "syntax",
-        "semantic",
-        "runtime"
+        "semantic"
       ],
-      "justification": "A declaration-level rule: the grammar lists it as a context-sensitive restriction checked after parsing, and an implementation may also detect it at registration/runtime. The program must not complete."
+      "justification": "A declaration-level rule: a has field without an initializer must declare its type (#967). It is static, so the program is rejected before it runs."
     },
     "stdout": {
       "text": ""
@@ -49,7 +47,7 @@
   },
   "provenance": {
     "origin": "authored for OCS 0.1.0 from the cited contract text",
-    "expected_basis": "spec 11.3: each :field must refer to a has field with an explicit type."
+    "expected_basis": "#967 (owner decision 2026-11-22): a field's type is inferred from its initializer; with no initializer an explicit type stays mandatory, and shorthand applies the normal field rules."
   },
   "status": "mandatory"
 }

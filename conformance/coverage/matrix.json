@@ -8426,9 +8426,11 @@
     },
     "normal": {
      "cases": [
+      "L04.shorthand.inferred-field",
       "L04.shorthand.named-only"
      ],
      "mandatory_cases": [
+      "L04.shorthand.inferred-field",
       "L04.shorthand.named-only"
      ],
      "requirement": "required"
@@ -9076,10 +9078,12 @@
     },
     "normal": {
      "cases": [
-      "L08.atomic.compare-and-replace"
+      "L08.atomic.compare-and-replace",
+      "L08.atomic.identity-equality"
      ],
      "mandatory_cases": [
-      "L08.atomic.compare-and-replace"
+      "L08.atomic.compare-and-replace",
+      "L08.atomic.identity-equality"
      ],
      "requirement": "required"
     }
@@ -9173,11 +9177,13 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L08.channel.atomic-selection",
       "L08.channel.close-semantics",
       "L08.channel.rendezvous",
       "L08.intrinsic.retained-arguments"
      ],
      "mandatory_cases": [
+      "L08.channel.atomic-selection",
       "L08.channel.close-semantics",
       "L08.channel.rendezvous",
       "L08.intrinsic.retained-arguments"
@@ -9217,7 +9223,7 @@
     "std/async/channel.ok"
    ],
    "status": "mandatory",
-   "title": "std async/channel public contract (Channel, ChannelClosed, InvalidChannelCapacity, Receiving, Sending)"
+   "title": "std async/channel public contract (Channel, ChannelClosed, ConcurrentChannelSelection, DuplicateChannelReceiver, EmptyChannelSelection, InvalidChannelCapacity, Receiving, SelectedItem, SelectedReceiving, Sending)"
   },
   {
    "aspects": {
@@ -13877,7 +13883,7 @@
     "std/http/body.ok"
    ],
    "status": "mandatory",
-   "title": "std http/body public contract (BodyAlreadyOpened, BodyClosed, BodyOpening, BodyReading, ByteBody, ByteBodyInput, BytesBody, Content, EmptyBody, JsonBody, OneShotBody, StreamBodyReading, TextBody, TrailersUnavailable, UnknownBodyLength)"
+   "title": "std http/body public contract (BodyAlreadyOpened, BodyClosed, BodyOpening, BodyReading, ByteBody, ByteBodyInput, BytesBody, Content, EmptyBody, FormBody, JsonBody, OneShotBody, StreamBodyReading, TextBody, TrailersUnavailable, UnknownBodyLength)"
   },
   {
    "aspects": {
@@ -16362,7 +16368,7 @@
     "std/http/message.ok"
    ],
    "status": "mandatory",
-   "title": "std http/message public contract (BodyLimitExceeded, InvalidHttpMessage, Request, RequestCoordinates, Responding, Response)"
+   "title": "std http/message public contract (BodyLimitExceeded, ConflictingContentType, InvalidHttpMessage, Request, RequestCoordinates, RequestHead, Responding, Response, ResponseHead)"
   },
   {
    "aspects": {
@@ -17412,7 +17418,7 @@
     "std/http/xmlrpc.ok"
    ],
    "status": "mandatory",
-   "title": "std http/xmlrpc public contract (InvalidXmlRpc, ParsedXmlRpcCall, WrongXmlRpcResult, XmlRpcArray, XmlRpcBinary, XmlRpcBoolean, XmlRpcCall, XmlRpcCallWire, XmlRpcCalling, XmlRpcClient, XmlRpcDateTime, XmlRpcDouble, XmlRpcFailure, XmlRpcFault, XmlRpcFloat, XmlRpcHandling, XmlRpcHttpFailed, XmlRpcInteger, XmlRpcKind, XmlRpcLimitExceeded, XmlRpcLimits, XmlRpcMember, XmlRpcNil, XmlRpcResult, XmlRpcResultKind, XmlRpcStruct, XmlRpcSucce)"
+   "title": "std http/xmlrpc public contract (InvalidXmlRpc, ParsedXmlRpcCall, WrongXmlRpcResult, WrongXmlRpcValue, XmlRpcArray, XmlRpcBinary, XmlRpcBoolean, XmlRpcCall, XmlRpcCallWire, XmlRpcCalling, XmlRpcClient, XmlRpcDateTime, XmlRpcDouble, XmlRpcFailure, XmlRpcFault, XmlRpcFloat, XmlRpcHandling, XmlRpcHttpFailed, XmlRpcInteger, XmlRpcKind, XmlRpcLimitExceeded, XmlRpcLimits, XmlRpcMember, XmlRpcNil, XmlRpcResult, XmlRpcResultKind, XmlRpcS)"
   },
   {
    "aspects": {
@@ -17622,7 +17628,7 @@
     "std/io/decorators.ok"
    ],
    "status": "mandatory",
-   "title": "std io/decorators public contract (BufferedReading, ByteSnapshot, ChainedReading, ClosedReading, Discarding, InvalidReading, LimitedReading, TeeWriting)"
+   "title": "std io/decorators public contract (BrokenAsyncWriting, BufferedAsyncWriting, BufferedReading, ByteSnapshot, ChainedReading, ClosedReading, CountingAsyncReading, Discarding, InvalidReading, LimitedAsyncReading, LimitedReading, TeeWriting, TimedAsyncReading)"
   },
   {
    "aspects": {
@@ -17935,6 +17941,41 @@
    ],
    "status": "mandatory",
    "title": "std json public contract (Json, JsonError, JsonField, JsonItems, JsonKind, JsonKindName, JsonLines, JsonLocation, JsonMaybeReader, JsonPointerToken, JsonPresenceReader, ParsedJson)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.LOCALE.CASE",
+   "discrepancies": [],
+   "family": "Standard library: locale",
+   "spec_refs": [
+    "std/locale/case.ok"
+   ],
+   "status": "mandatory",
+   "title": "std locale/case public contract (LocalizedCase)"
   },
   {
    "aspects": {
@@ -20144,6 +20185,41 @@
   {
    "aspects": {
     "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.MAIL.SMTP_SESSION",
+   "discrepancies": [],
+   "family": "Standard library: mail",
+   "spec_refs": [
+    "std/mail/smtp_session.ok"
+   ],
+   "status": "mandatory",
+   "title": "std mail/smtp_session public contract (InvalidSmtpEnvelope, SmtpConnecting, SmtpCredentials, SmtpFailure, SmtpRefusal, SmtpSecurity, SmtpSession, SmtpStep, SmtpSubmission)"
+  },
+  {
+   "aspects": {
+    "boundary": {
      "cases": [
       "L09.math.aggregates"
      ],
@@ -21101,7 +21177,7 @@
     "std/numbers/bigint.ok"
    ],
    "status": "mandatory",
-   "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)"
+   "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, BoundedPower, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)"
   },
   {
    "aspects": {
@@ -21562,6 +21638,41 @@
    ],
    "status": "mandatory",
    "title": "std os/run public contract (CommandFailed, Run)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.OS.SIGNAL",
+   "discrepancies": [],
+   "family": "Standard library: os",
+   "spec_refs": [
+    "std/os/signal.ok"
+   ],
+   "status": "mandatory",
+   "title": "std os/signal public contract (CaughtSignal, Interrupted, Interruption, ProcessSignals, Signaling)"
   },
   {
    "aspects": {
@@ -22587,38 +22698,6 @@
      "requirement": "required"
     }
    },
-   "contract": "STD.RUNTIME.CSV_STATE",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/csv_state.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/csv_state public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
    "contract": "STD.RUNTIME.DATABASE",
    "discrepancies": [],
    "family": "Standard library: runtime",
@@ -22979,38 +23058,6 @@
    ],
    "status": "informative",
    "title": "std runtime/hpack public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
-   "contract": "STD.RUNTIME.HTML",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/html.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/html public contract (no public declarations)"
   },
   {
    "aspects": {
@@ -23963,38 +24010,6 @@
      "requirement": "required"
     }
    },
-   "contract": "STD.RUNTIME.TIME_FORMAT",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/time_format.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/time_format public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
    "contract": "STD.RUNTIME.TIME_ZONE",
    "discrepancies": [],
    "family": "Standard library: runtime",
@@ -24059,38 +24074,6 @@
      "requirement": "required"
     }
    },
-   "contract": "STD.RUNTIME.TOML",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/toml.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/toml public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
    "contract": "STD.RUNTIME.UNICODE_CHARACTER",
    "discrepancies": [],
    "family": "Standard library: runtime",
@@ -24131,38 +24114,6 @@
    ],
    "status": "informative",
    "title": "std runtime/unicode_normalization public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
-   "contract": "STD.RUNTIME.URL_TEXT",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/url_text.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/url_text public contract (no public declarations)"
   },
   {
    "aspects": {
@@ -24259,38 +24210,6 @@
    ],
    "status": "informative",
    "title": "std runtime/x509 public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
-   "contract": "STD.RUNTIME.XML",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/xml.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/xml public contract (no public declarations)"
   },
   {
    "aspects": {
@@ -24563,6 +24482,41 @@
    ],
    "status": "mandatory",
    "title": "std template/compile public contract (InvalidTemplateLimits, TemplateFailure, TemplateInstruction, TemplateOutputLimitExceeded, TemplateProgram, TextTemplate)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.TEMPLATE.ENGINE",
+   "discrepancies": [],
+   "family": "Standard library: template",
+   "spec_refs": [
+    "std/template/engine.ok"
+   ],
+   "status": "mandatory",
+   "title": "std template/engine public contract (Template, TemplateError, TemplateEscaping, TemplateLimits, TemplatePartials)"
   },
   {
    "aspects": {
@@ -25500,6 +25454,41 @@
      "requirement": "required"
     }
    },
+   "contract": "STD.TESTING.SIGNAL",
+   "discrepancies": [],
+   "family": "Standard library: testing",
+   "spec_refs": [
+    "std/testing/signal.ok"
+   ],
+   "status": "mandatory",
+   "title": "std testing/signal public contract (ManualSignals)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
    "contract": "STD.TESTING.SNAPSHOT",
    "discrepancies": [],
    "family": "Standard library: testing",
@@ -25620,7 +25609,7 @@
     "std/time/clock.ok"
    ],
    "status": "mandatory",
-   "title": "std time/clock public contract (IncompatibleClock, Instant, InvalidWait, MonotonicInstant, SystemClock, Timing)"
+   "title": "std time/clock public contract (IncompatibleClock, Instant, InvalidWait, MonotonicInstant, Now, SystemClock, Timing)"
   },
   {
    "aspects": {
@@ -25944,7 +25933,7 @@
     "std/time/zone.ok"
    ],
    "status": "mandatory",
-   "title": "std time/zone public contract (FixedZone, Fold, InvalidTimeZone, MissingLocalTime, TimeZone, TimeZoneDatabaseVersion, UnknownTimeZone, Zone, ZoneObservation, Zoned, ZonedDateTime)"
+   "title": "std time/zone public contract (FixedZone, Fold, InvalidTimeZone, MissingLocalTime, TimeZone, TimeZoneDatabaseVersion, Today, UnknownTimeZone, Zone, ZoneObservation, Zoned, ZonedDateTime)"
   },
   {
    "aspects": {
@@ -26664,6 +26653,41 @@
    ],
    "status": "mandatory",
    "title": "std web/testing public contract (WebTestClient)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [],
+     "gap": true,
+     "mandatory_cases": [],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.XML.INTERNAL.EVENTS",
+   "discrepancies": [],
+   "family": "Standard library: xml",
+   "spec_refs": [
+    "std/xml/internal/events.ok"
+   ],
+   "status": "mandatory",
+   "title": "std xml/internal/events public contract (XmlEvent, XmlEvents, XmlTokens)"
   },
   {
    "aspects": {
@@ -30430,6 +30454,9 @@
    "STD.IO.TRANSFER [normal]",
    "STD.IO.TRANSFER [boundary]",
    "STD.IO.TRANSFER [invalid]",
+   "STD.LOCALE.CASE [normal]",
+   "STD.LOCALE.CASE [boundary]",
+   "STD.LOCALE.CASE [invalid]",
    "STD.LOCALE.COLLATION [normal]",
    "STD.LOCALE.COLLATION [boundary]",
    "STD.LOCALE.COLLATION [invalid]",
@@ -30619,6 +30646,9 @@
    "STD.MAIL.SMTP_REPLY [normal]",
    "STD.MAIL.SMTP_REPLY [boundary]",
    "STD.MAIL.SMTP_REPLY [invalid]",
+   "STD.MAIL.SMTP_SESSION [normal]",
+   "STD.MAIL.SMTP_SESSION [boundary]",
+   "STD.MAIL.SMTP_SESSION [invalid]",
    "STD.MATH.CONSTANTS [normal]",
    "STD.MATH.ROUNDING [normal]",
    "STD.MATH.ROUNDING [boundary]",
@@ -30705,6 +30735,9 @@
    "STD.OS.RUN [normal]",
    "STD.OS.RUN [boundary]",
    "STD.OS.RUN [invalid]",
+   "STD.OS.SIGNAL [normal]",
+   "STD.OS.SIGNAL [boundary]",
+   "STD.OS.SIGNAL [invalid]",
    "STD.OS.STORAGE [normal]",
    "STD.OS.STORAGE [boundary]",
    "STD.OS.STORAGE [invalid]",
@@ -30750,6 +30783,9 @@
    "STD.TEMPLATE.COMPILE [normal]",
    "STD.TEMPLATE.COMPILE [boundary]",
    "STD.TEMPLATE.COMPILE [invalid]",
+   "STD.TEMPLATE.ENGINE [normal]",
+   "STD.TEMPLATE.ENGINE [boundary]",
+   "STD.TEMPLATE.ENGINE [invalid]",
    "STD.TEMPLATE.HTML [normal]",
    "STD.TEMPLATE.HTML [boundary]",
    "STD.TEMPLATE.HTML [invalid]",
@@ -30828,6 +30864,9 @@
    "STD.TESTING.RUNNER [normal]",
    "STD.TESTING.RUNNER [boundary]",
    "STD.TESTING.RUNNER [invalid]",
+   "STD.TESTING.SIGNAL [normal]",
+   "STD.TESTING.SIGNAL [boundary]",
+   "STD.TESTING.SIGNAL [invalid]",
    "STD.TESTING.SNAPSHOT [normal]",
    "STD.TESTING.SNAPSHOT [boundary]",
    "STD.TESTING.SNAPSHOT [invalid]",
@@ -30887,6 +30926,9 @@
    "STD.WEB.TESTING [normal]",
    "STD.WEB.TESTING [boundary]",
    "STD.WEB.TESTING [invalid]",
+   "STD.XML.INTERNAL.EVENTS [normal]",
+   "STD.XML.INTERNAL.EVENTS [boundary]",
+   "STD.XML.INTERNAL.EVENTS [invalid]",
    "STD.XML.NAME [normal]",
    "STD.XML.NAME [boundary]",
    "STD.XML.NAME [invalid]",
@@ -31102,6 +31144,7 @@
    "STD.IO.STREAM",
    "STD.IO.TEXT",
    "STD.IO.TRANSFER",
+   "STD.LOCALE.CASE",
    "STD.LOCALE.COLLATION",
    "STD.LOCALE.CURRENCY",
    "STD.LOCALE.DATA",
@@ -31165,6 +31208,7 @@
    "STD.MAIL.SMTP_DATA",
    "STD.MAIL.SMTP_READING",
    "STD.MAIL.SMTP_REPLY",
+   "STD.MAIL.SMTP_SESSION",
    "STD.MATH.CONSTANTS",
    "STD.MATH.ROUNDING",
    "STD.MESSAGE.HEADER",
@@ -31190,6 +31234,7 @@
    "STD.OS.PIPELINE_CAPTURE",
    "STD.OS.PLATFORM",
    "STD.OS.RUN",
+   "STD.OS.SIGNAL",
    "STD.OS.STORAGE",
    "STD.PARALLEL.MAP",
    "STD.PLIST.PARSE",
@@ -31203,6 +31248,7 @@
    "STD.STRINGS.BUFFER",
    "STD.STRINGS.JOIN",
    "STD.TEMPLATE.COMPILE",
+   "STD.TEMPLATE.ENGINE",
    "STD.TEMPLATE.HTML",
    "STD.TEMPLATE.HTML_LIBRARY",
    "STD.TEMPLATE.JSON",
@@ -31229,6 +31275,7 @@
    "STD.TESTING.REPORT",
    "STD.TESTING.RESULT",
    "STD.TESTING.RUNNER",
+   "STD.TESTING.SIGNAL",
    "STD.TESTING.SNAPSHOT",
    "STD.TESTING.TIME",
    "STD.TEXT.LAYOUT",
@@ -31247,6 +31294,7 @@
    "STD.WEB.ROUTING",
    "STD.WEB.SESSION",
    "STD.WEB.TESTING",
+   "STD.XML.INTERNAL.EVENTS",
    "STD.XML.NAME",
    "STD.XML.NODE",
    "STD.XML.PARSE",
@@ -31256,5 +31304,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "5b525ac966f2016a326f912b74c2f53b31243467b3824bab3ada4c2a037b1ba7"
+ "suite_tree_sha256": "e98792c17920fd11995c194a828c5fd996729f7ef029997cf886291ca984bce0"
 }
