@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-compiler"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "okkama-devtrace",
  "okkama-runtime-core",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-devtrace"
-version = "0.6.3"
+version = "0.6.4"
 
 [[package]]
 name = "okkama-fuzz"
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-native"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1152,15 +1152,15 @@ dependencies = [
 
 [[package]]
 name = "okkama-persistent"
-version = "0.6.3"
+version = "0.6.4"
 
 [[package]]
 name = "okkama-runtime-abi"
-version = "0.6.3"
+version = "0.6.4"
 
 [[package]]
 name = "okkama-runtime-core"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "aliasable",
  "brotli",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-sparrow"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "okkama-runtime-abi",
 ]
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "sparrow-core"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "aliasable",
  "cranelift-codegen",
