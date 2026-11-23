@@ -324,6 +324,32 @@ scopes first and, within a scope, in reverse registration order, each once.
 check (`analysis/flow.rs`, `run_defers_from`) reports a defer's own error once
 however many exits run it.
 
+## SQLite refusals, Unicode versions, process refusals (#1006, owner decisions, 2026-11-23)
+
+- **SQLite: text + precise kind.** A refusal's DbFailure message is SQLite's
+  own (`sqlite3_errmsg`; the provider's own refusals keep "SQLite operation
+  rejected"), the code stays `SQLITE_<extended code>`. Plain SQLITE_ERROR (1)
+  is classified by that message, following PostgreSQL's classes for the same
+  failure: a statement that does not compile (syntax error, unknown or
+  duplicate name, wrong argument count; PG class 42, including 42P01
+  undefined_table) is `syntax`; a limit (PG 54) `resource`; integer overflow
+  (22003) `data`; the rest (`SQL logic error`, transaction state) `unexpected`.
+  Extended codes: MISSING_COLLSEQ `syntax`, FULL and IOERR_NOMEM `resource`,
+  NOLFS `unsupported`. Messages may quote the token a statement failed at and
+  schema names, never bound values or the path (`std/db/error.ok`).
+- **Unicode versions per surface** (std docs state each, tests pin each):
+  character properties 16.0.0 (`unicode.dat`), normalization 18.0.0, display
+  clusters 17.0.0 with widths from the 16.0.0 properties (not unicode-width,
+  which only rustyline uses), regex properties 16.0.0, CLDR/ICU/UCA as in
+  `std/locale`.
+- **Async refusals.** An async native's refusal is a Future that has already
+  failed, decided by `signature().is_async` (process, unix, network, TLS,
+  UDP alike); no hand-kept list.
+- **Child pipes** rely on Tokio's `into_owned_fd` clearing O_NONBLOCK (tokio
+  1.54.1, `convert_to_blocking_file`), pinned by a test.
+- Dead natives `random_sample_accepted`, `random_integer_from_sample`,
+  `random_float_from_sample`, `signal_wait` removed (IDs 386–388, 632 retired).
+
 ## Name< in an expression (#1004, lead decision, 2026-11-23)
 
 `Name<` opens type arguments only when what follows parses as type arguments

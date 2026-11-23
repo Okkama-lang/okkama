@@ -33,7 +33,7 @@
   from one macro; unread AST fields dropped; constant uses recorded in
   `Registry::const_uses` for IDE hover/definition; codegen errors placed through
   `DebugInfo`; a `dce` pass drops unread constants after fold/hoist.
-- [ ] Runtime part (SQLite text and kind, Unicode versions, async natives, blocking,
+- [x] Runtime part (SQLite text and kind, Unicode versions, async natives, blocking,
   dead natives) with an agent; formatter header comments, width, std fmt-clean + gate.
 
 ## #1018 one Duration constructor (2026-11-23, feature/1018-duration, part of #1005)
@@ -54,6 +54,26 @@
   `L09.time.durations` stdout differs (rewritten case); micro check 773 programs match
   oracles on both; Bible `--check` 249 examples.
 - [ ] Next: #1005 enforcement (lead) finds no name-only constructor overloads in std.
+
+## #1006 runtime leftovers (2026-11-23, feature/1006-runtime)
+
+- [x] SQLite refusals carry `sqlite3_errmsg`; plain SQLITE_ERROR classified by
+  message (syntax / resource / data / unexpected, as PostgreSQL's classes);
+  extended codes FULL, IOERR_NOMEM, NOLFS, MISSING_COLLSEQ mapped.
+- [x] Unicode versions documented per surface (properties 16.0.0,
+  normalization 18.0.0, clusters 17.0.0, widths from 16.0.0 properties), std
+  tests pin them; Bible 6 and the Book follow.
+- [x] Async process natives refuse with a failed Future by
+  `signature().is_async`; `blocking()` dropped (Tokio 1.54.1 `into_owned_fd`
+  clears O_NONBLOCK, pinned by a test).
+- [x] Dead natives removed: `random_sample_accepted`,
+  `random_integer_from_sample`, `random_float_from_sample`, `signal_wait`
+  (IDs 386–388, 632 retired; 569 natives).
+- [ ] Open: a lone mark newer than 16.0.0 (U+1ADD) gets width 1, since widths
+  read 16.0.0 properties while clusters are 17.0.0. Other natives without a std
+  caller (fs `chown`/`opendir`/`readdir`/`rewinddir`/`closedir`/locks,
+  `environment_*`, `pg_page_rows`, `file_state_create`, besides the kept legacy
+  SQLite/db_capture ones) are not checked yet.
 
 ## #1011, #1012 Sparrow host net, test reports and data (2026-11-23, feature/1011-host-net)
 

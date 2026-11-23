@@ -7,7 +7,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (112)
+## Tags in one layer (116)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -79,6 +79,8 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - SPARROW_INTERNAL_WORKER_POOL — sparrow: `lib.rs`, `worker_process.rs`
 - SPARROW_TRACE_DESTROY — ownership-runtime: `failures.rs`
 - SPARROW_WORKER_OUTPUT_LIMIT_BYTES — sparrow: `worker_process.rs`
+- SQLITE_2067 — sparrow: `host/native_sqlite.rs`
+- SQLITE_257 — sparrow: `host/native_sqlite.rs`
 - SQLITE_787 — sparrow: `host/native_sqlite.rs`
 - SQLITE_BACKUP_ACTIVE — sparrow: `host/native_sqlite.rs`
 - SQLITE_BACKUP_PAGES — sparrow: `host/native_sqlite.rs`
@@ -100,6 +102,8 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - SQLITE_FOREIGN_KEYS — sparrow: `host/native_sqlite.rs`
 - SQLITE_IDENTIFIER — sparrow: `host/native_sqlite.rs`
 - SQLITE_INTEGER_RANGE — sparrow: `host/native_sqlite.rs`
+- SQLITE_IOERR — sparrow: `host/native_sqlite.rs`
+- SQLITE_IOERR_NOMEM — sparrow: `host/native_sqlite.rs`
 - SQLITE_JOURNAL — sparrow: `host/native_sqlite.rs`
 - SQLITE_MULTIPLE_STATEMENTS — sparrow: `host/native_sqlite.rs`
 - SQLITE_PREPARED_LIMIT — sparrow: `host/native_sqlite.rs`
