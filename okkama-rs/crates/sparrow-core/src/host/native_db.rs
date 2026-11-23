@@ -105,6 +105,9 @@ impl Heap {
     }
     fn db_execute(&mut self, n: Native, a: &[Slot]) -> Result<Slot, ProviderError> {
         use Native::*;
+        // The `db_capture*` natives have no std caller since 42f88cd21
+        // (`std/db/value.ok` keeps its own capture on `Atomic` flags); they
+        // stay as declared in `runtime/db`, which loses nothing (#1012).
         if n == DbCapture {
             let kind = self
                 .int64(a[0])?

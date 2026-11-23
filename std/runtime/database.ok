@@ -26,7 +26,10 @@ native sqlite_create(
 // Opens the connection; the reply says how it went.
 native async sqlite_connect(state is SqliteState) is SqliteReplyState;
 
-// Runs sql with values of kinds; the reply says how it went.
+// Runs sql with values of kinds; the reply says how it went. The kind-code
+// path: kinds 0..6 are null, boolean, integer, floating, decimal, text,
+// bytes, and values are their text (bytes as is); std binds with the
+// *_cells natives below.
 native async sqlite_execution(state is SqliteState, sql is @byte, kinds is @int, values is @@byte) is SqliteReplyState;
 
 // Runs sql with values and starts a cursor; the reply says how it went.
@@ -62,7 +65,9 @@ native sqlite_reply_names(reply is SqliteReplyState) is @string;
 // The declared column types.
 native sqlite_reply_declarations(reply is SqliteReplyState) is @string;
 
-// The kind code of a cell.
+// The kind code of a cell: 0 null, 1 integer, 2 floating, 3 text, 4 bytes.
+// These are this native's own codes, not the db cell codes of
+// sqlite_reply_kinds.
 native sqlite_reply_kind(reply is SqliteReplyState, row is int, column is int) is int;
 
 // A cell as text.

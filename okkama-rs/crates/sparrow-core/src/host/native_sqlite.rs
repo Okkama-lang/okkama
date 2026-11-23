@@ -1,7 +1,9 @@
 //! `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
-//! connection owns one worker thread that creates and exclusively uses its
-//! Engine; requests cross as owned Send data and replies return through Tokio
-//! oneshot channels into native I/O Futures. Rows reach the program as DB cells
+//! open connection has one worker thread to itself, which creates and
+//! exclusively uses its Engine; a closed connection's worker parks in a pool
+//! (`Pool`, #943) and serves the next connection with a fresh Engine. Requests
+//! cross as owned Send data and replies return through Tokio oneshot channels
+//! into native I/O Futures. Rows reach the program as DB cells
 //! (Rust data), never as intermediate VM objects.
 //!
 //! The second unsafe boundary of the engine (after jit.rs): a cursor borrows its
@@ -250,7 +252,6 @@ struct Engine {
 
 #[derive(Default)]
 struct Authorization {
-    tail_guard: std::cell::Cell<bool>,
     control: std::cell::Cell<bool>,
     configuration: std::cell::Cell<bool>,
     dml_seen: std::cell::Cell<bool>,
@@ -268,9 +269,6 @@ unsafe extern "C" fn authorize(
     // SAFETY: this separately allocated policy lives until the connection
     // closes. Reentrant authorization never aliases a mutable Engine borrow.
     let policy = unsafe { &*(user as *const Authorization) };
-    if policy.tail_guard.get() {
-        return 1;
-    }
     if (action == 22 || action == 32) && !policy.control.get() {
         return 1;
     }
@@ -505,7 +503,12 @@ impl Engine {
                 ("floating", value) => {
                     let value = match value {
                         Param::Floating(v) => *v,
-                        Param::Text(v) => v.trim().parse::<f64>().unwrap_or(0.0),
+                        // The text of the kind-code path: a number, or refused
+                        // as the integer kind refuses its own (#1012), never 0.0.
+                        Param::Text(v) => v
+                            .trim()
+                            .parse::<f64>()
+                            .map_err(|_| self.raise("data", "SQLITE_FLOAT_RANGE"))?,
                         _ => return Err(Stop::Unexpected),
                     };
                     if !value.is_finite() {
@@ -733,20 +736,20 @@ impl Engine {
                     }
                     (float_width(value), Cell::Floating(value))
                 }
-                ValueRef::Text(value) | ValueRef::Blob(value) => {
-                    if value.len() > 8_388_608 - used.min(8_388_608) {
+                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+                    if bytes.len() > 8_388_608 - used.min(8_388_608) {
                         return Err(self.raise("resource", "SQLITE_ROW_LIMIT"));
                     }
-                    let cell = if matches!(row.get_ref(index), Ok(ValueRef::Text(_))) {
+                    let cell = if matches!(value, ValueRef::Text(_)) {
                         Cell::Text(
-                            std::str::from_utf8(value)
+                            std::str::from_utf8(bytes)
                                 .map_err(|_| self.raise("data", "SQLITE_UTF8"))?
                                 .to_owned(),
                         )
                     } else {
-                        Cell::Bytes(value.to_vec())
+                        Cell::Bytes(bytes.to_vec())
                     };
-                    (value.len(), cell)
+                    (bytes.len(), cell)
                 }
             };
             used += width;
@@ -1092,6 +1095,8 @@ impl Engine {
         if pointer.is_null() {
             // SAFETY: the target connection opened above.
             let code = unsafe { ffi::sqlite3_extended_errcode(target) };
+            // SAFETY: the target opened above has no backup or statement, and
+            // is closed here once; nothing keeps the pointer afterwards.
             unsafe { ffi::sqlite3_close(target) };
             return Err(self.error(code));
         }
@@ -1119,7 +1124,9 @@ impl Engine {
         if !matches!(rc, 0 | 101 | 5 | 6) {
             return Err(self.error(rc));
         }
+        // SAFETY: the same open backup, after its step; both only read it.
         let total = unsafe { ffi::sqlite3_backup_pagecount(pointer) };
+        // SAFETY: as above.
         let remaining = unsafe { ffi::sqlite3_backup_remaining(pointer) };
         Ok(Data {
             done: rc == 101,
@@ -1137,6 +1144,8 @@ impl Engine {
         self.backup = None;
         // SAFETY: the backup and its target are finished/closed exactly once.
         let rc = unsafe { ffi::sqlite3_backup_finish(pointer) };
+        // SAFETY: the target's only user, the backup, finished just above;
+        // `self.backup` no longer holds the pointer.
         let closed = unsafe { ffi::sqlite3_close(target) };
         self.check(rc)?;
         self.check(closed)?;
@@ -1792,6 +1801,9 @@ impl Heap {
         Ok(path.to_string_lossy().into_owned())
     }
 
+    /// The kind-code parameters of `sqlite_execution`, `sqlite_rows` and their
+    /// prepared twins. No std module calls these since 42f88cd21 (std binds
+    /// with `*_cells`); they stay as declared in `runtime/database` (#1012).
     fn sqlite_params(
         &self,
         n: Native,
@@ -2550,6 +2562,8 @@ impl Heap {
                     rows[row][column].clone()
                 };
                 match n {
+                    // This native's own codes (`runtime/database`), not the db
+                    // cell codes of `sqlite_reply_kinds`.
                     DatabaseSqliteReplyKind => Ok(Slot::small(match cell {
                         Cell::Null => 0,
                         Cell::Integer(_) => 1,
@@ -2709,6 +2723,31 @@ mod pool_tests {
 
     fn kind(data: &Data) -> &str {
         data.kind.as_deref().unwrap_or("")
+    }
+
+    /// #1012: the kind-code parameter path (`sqlite_execution` and the
+    /// like) refuses floating text that is not a number instead of storing
+    /// 0.0, as the integer kind refuses its own.
+    #[test]
+    fn sqlite_floating_text_must_be_a_number() {
+        let pool = pool(4, Duration::from_secs(5));
+        let session = Session::open(pool, options(":memory:", true));
+        session.run(|engine| engine.execution("CREATE TABLE t(x REAL)", &[], false).map(|_| ()).map_err(|_| ()).expect("create"));
+        for text in ["abc", "", "1.5x"] {
+            let refused = session.run(move |engine| {
+                match engine.execution("INSERT INTO t VALUES (?)", &[("floating", Param::Text(text.into()))], false) {
+                    Err(Stop::Sqlite { kind, code, .. }) => Some((kind, code)),
+                    _ => None,
+                }
+            });
+            assert_eq!(refused, Some(("data", "SQLITE_FLOAT_RANGE".to_owned())), "{text:?}");
+        }
+        let stored = session.run(|engine| {
+            engine.execution("INSERT INTO t VALUES (?)", &[("floating", Param::Text(" 2.5 ".into()))], false).is_ok()
+        });
+        assert!(stored);
+        assert_eq!(session.count("SELECT count(*) FROM t"), 1, "only the number was stored");
+        session.close();
     }
 
     #[test]
