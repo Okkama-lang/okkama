@@ -63,6 +63,30 @@ few that need a decision or are refactors are filed (#1005, #1006).
   followed; no conformance cascade from a type that already failed; natives refuse action values at any depth.
 - **SPB verifier (#974).** Out-of-range global types, non-finite float constants, ordered `val.cmp`, sync
   `resource.settle` and destroys with a result are errors.
+- **Breaking: dead natives removed (#1006, #1020).** `random_sample_accepted`, `random_integer_from_sample`,
+  `random_float_from_sample`, `signal_wait`, fs `chown`, directory streams, `FileHandle` locks,
+  `file_state_create`, `environment_get/set/remove/all` and `pg_page_rows` had no caller; their declarations,
+  providers and ABI entries are gone (555 natives).
+- **runtime-core keeps no provider twins (#1016, owner decision).** `native::execute` serves exactly the natives
+  routed to ORIGIN; the copies Sparrow never reached (about 15 000 lines) are removed, and a test keeps the routes
+  and the providers equal.
+- **Unicode 17.0 behind every text surface (#1019).** Character properties come from ICU4C 78 (Unicode 17.0), so
+  grapheme clusters and terminal widths agree; normalization follows Unicode 18.0. Each surface states its version,
+  and tests pin it.
+- **SQLite refusals carry SQLite's message and a precise kind (#1006).** A plain `SQLITE_ERROR` is `syntax`,
+  `resource`, `data` or `unexpected` by what failed, as PostgreSQL's classes; the provider's own refusals keep
+  their text.
+- **CLI (#1017).** Budgets bound tests under `run -t`, in workers and for `exec` of a test SPB (`--timeout` with
+  `--workers` is refused); a syntax error under `run -t` exits 4, `check --format` 2, an unreadable `fmt -` 3;
+  `help` covers every command; `run --stdlib` is gone. The REPL carries variables of imported types, knows raw
+  strings and block comments, takes `const` and `hidden` declarations; the LSP keeps an open file's own
+  diagnostics; `okkama man` wraps to the window.
+- **okkama fmt (#1006).** A comment between a declaration header and `{` stays on the header line (`//` opens the
+  body); lines over 100 columns break at lists, operator and call chains, roles and case patterns; a body under a
+  broken header keeps the statement's indent. std is formatted, and `okkama fmt --check` over std runs in the gate,
+  Wave and CI; the generators of std files emit formatted text.
+- **IR (#1006).** A switchable `dce` pass after `fold` and `hoist` drops the constants nobody reads (`1 + 1` is one
+  `const 2`); one dominator implementation; `operands` and `operands_mut` come from one match.
 
 ### Performance
 - **fmt measures each list item's one-line width once (#979)**; `confirm` no longer recounts the whole output
@@ -80,6 +104,28 @@ few that need a decision or are refactors are filed (#1005, #1006).
   are checked; devtrace prints its summary and warns about unknown categories; ABI handles are unambiguous.
 - **fmt keeps comments inside empty role, cap, object and fake bodies (#988)** and a version written with a space
   inside (#980).
+- **Sparrow core (#1009).** The REPL runs on the VM's stack, so deep recursion is a stack-overflow failure, not an
+  abort; a panic inside `rt_exec` stops the run, not the process; `repeat` and `replace_first` are measured before
+  they are built; a failure trace keeps a million activations and says how many it omitted.
+- **Sparrow host (#1010, #1011, #1012).** File locks belong to the open file description and a refused lock leaves
+  the table as it was; appending files use `O_APPEND`; a cancelled process stream read or write gives the stream
+  back; TLS abort wakes every pending operation; the TCP listen queue takes the program's backlog; IPv6 sockets
+  are dual stack only when asked; DNS tells temporary failures from unknown names; test workers write stdout
+  through, so a test that `--test-timeout` kills keeps what it printed; JUnit counts crashed workers as errors;
+  legacy SQLite floating text is refused instead of becoming 0.0; `Regex.all` and JSON member lookup are linear.
+- **runtime-core system (#1013).** Group members are read unaligned (undefined behaviour before); closing a
+  terminal stops its reader first and input after a cancelled read stays in the terminal; a cancelled resize wait
+  leaves its thread; `unwatch` under a waiting arrival refuses it; `NUMBER_OF_PROCESSORS` no longer overrides the
+  CPU count; `read_line` is linear.
+- **X.509 and crypto (#1014, #1015).** The snapshot reader bounds its nesting; NameConstraints compare URIs by
+  host; HKDF checks its length before allocating; `argon2-verify` bounds the stored cost; secrets are zeroed after
+  use; the unsound persistent `Frontier` prototype is removed.
+- **OCS (#1017).** A high surrogate pairs only with a low one; an unpaired one no longer panics.
+- **Compiler (#1007, #1008).** A lookup's found value and a catch value never share a register with the
+  terminator's operands; the IR verifier checks role results and the types inside fn and future values; IDE
+  rename refuses reserved words and keeps closures' captured locals one symbol; same-named types keep their
+  members in completion; a module constant hovers with its type and docs; codegen errors name their file, line
+  and column (#1006).
 - **Smaller fixes**: `sparrow help` names the current SPB format (#973); `OKKAMA_IR_PASSES` warns about unknown
   names (#999); stale documentation and dead code across the compiler, Sparrow and runtime-core (#989, #1003);
   tests for four untested lowering diagnostics (#999).
