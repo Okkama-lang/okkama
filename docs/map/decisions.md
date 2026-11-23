@@ -368,3 +368,16 @@ every declaration is open (#1005, owner decision).
   std caller but are declared in `runtime/database` and `runtime/db`; std loses
   nothing (owner rule), so they are kept and documented, and the floating text
   of the old path is refused (`SQLITE_FLOAT_RANGE`) instead of becoming 0.0.
+
+## One Duration constructor (#1018, owner decision on #1005, 2026-11-23)
+
+- `Duration(seconds is rat)` is the only constructor of `time/duration`
+  Duration: exact seconds, a whole number of nanoseconds or `InvalidDuration`,
+  no rounding, no implicit int → rat. `Duration(value:, unit:)`, the seven unit
+  constructors and `DurationUnit` are gone; do not bring back unit factories or
+  wrapper objects (owner). Other units are arithmetic at the call site:
+  `(5 * 60).rat()`, `rat(250, 1000)`, `30.rat()`.
+- Migration wrote units out as that arithmetic, keeping the unit visible
+  (`(15 * 60).rat()`, not `900.rat()`); `value * rat(1, 1000)` where the value
+  was already a rat. The printed form `Duration(origin: 2)` (test failure text)
+  is the field, not a constructor call, and stays.

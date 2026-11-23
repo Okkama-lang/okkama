@@ -25,6 +25,12 @@ few that need a decision or are refactors are filed (#1005, #1006).
   noise band (−10.3% … +2.2% among reliable pairs); the new checks cost nothing measurable.
 
 ### Changed
+- **Breaking (std): one `Duration` constructor, `Duration(seconds is rat)` (#1018, part of #1005).** The value
+  is exact seconds and must be a whole number of nanoseconds, otherwise `InvalidDuration`; nothing is rounded
+  and an int is not converted. `Duration(value:, unit:)`, the seven unit constructors (`days:` … `nanoseconds:`)
+  and `DurationUnit` are removed: other units are arithmetic at the call site, `Duration(seconds: (5 *
+  60).rat())`, `Duration(seconds: rat(250, 1000))`, `Duration(seconds: 30.rat())`. std, t/, examples,
+  conformance, the Bible and bench/micro follow.
 - **A rebind takes only a successor of the bound object itself (#984, owner decision).** `x = C().inc();` where
   `x` holds another `C` is a compile-time error; std's MIME part, tar archive and IMAP data code follow the rule.
 - **`defer` counts on every exit that runs it (#997).** `return`, `next` and `last` run the defers of the scopes

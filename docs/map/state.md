@@ -16,6 +16,25 @@
   net, text, misc, formats, host cut to their live parts), ~14.9k lines; `native::execute` refuses
   unrouted natives; a sparrow-core test keeps the ORIGIN routes and runtime-core providers equal.
 
+## #1018 one Duration constructor (2026-11-23, feature/1018-duration, part of #1005)
+
+- [x] `std/time/duration.ok`: only `Duration(seconds is rat)` (whole nanoseconds or
+  `InvalidDuration`, no rounding, no int → rat); `Duration(value:, unit:)`, the seven
+  unit constructors and `DurationUnit` removed; module docs around the one constructor
+  with an `okkama,run` example; inline tests: whole/fractional/1 ns, negative and zero,
+  arithmetic and order, scaling, `DurationString` round trip, sub-nanosecond rejected.
+- [x] Every call migrated (units written out: `(5 * 60).rat()`, `rat(250, 1000)`):
+  std 63 files, examples, conformance (time.durations rewritten; two new reject
+  cases `L09.time.duration-unit-constructor`, `L09.time.duration-int-seconds`),
+  bench/micro (86 programs), Bible chapters and examples (EN, RU), OkkamaBook,
+  okkama-cli/okkama-compiler test fixtures. Inventory, STD-ACTIONS, coverage regenerated.
+- Blast radius, base `release/064` vs branch (debug): std `run -t` 499 modules, only
+  time/duration differs (new tests); t/ 142 files 50972 checks pass on both; examples
+  75/75 on both; conformance full-release 1071/1071 → 1073/1073, only
+  `L09.time.durations` stdout differs (rewritten case); micro check 773 programs match
+  oracles on both; Bible `--check` 249 examples.
+- [ ] Next: #1005 enforcement (lead) finds no name-only constructor overloads in std.
+
 ## #1011, #1012 Sparrow host net, test reports and data (2026-11-23, feature/1011-host-net)
 
 - [x] #1011: TLS `abort` wakes pending operations (no hang after a cancelled
