@@ -13,7 +13,9 @@
 #   2. conformance на Sparrow, Sparrow без IR-проходов
 #      (OKKAMA_IR_PASSES=none) и Sparrow со стресс-GC
 #      (SPARROW_CORE_GC_STRESS=1);
-#   3. актуальный перечень std в conformance; std в форме `okkama fmt`
+#   3. актуальный перечень std в conformance; таблица ABI совпадает с
+#      std/runtime, и у каждого натива есть вызывающий (#976, #1022);
+#      std в форме `okkama fmt`
 #      (fmt --check, #1006); встроенные тесты std на Sparrow;
 #   4. t/ на sparrow, sparrow-passes-off, sparrow-gc-stress;
 #      TAP-потоки конфигураций обязаны совпадать.
@@ -181,6 +183,19 @@ else
     record "std inventory" fail $((SECONDS - started))
     tail -3 "$LOGS/std-inventory.log"
     fail "std inventory"
+fi
+
+# The native ABI table matches the declarations of std/runtime (#976), and
+# every native there has a caller in std or the runtime crates (#1022).
+step "natives"
+started=$SECONDS
+if { python3 "$ROOT/okkama-rs/tools/engines/gen-abi.py" --check \
+        && python3 "$ROOT/okkama-rs/tools/engines/native-callers.py"; } >"$LOGS/natives.log" 2>&1; then
+    record "natives" pass $((SECONDS - started))
+else
+    record "natives" fail $((SECONDS - started))
+    tail -5 "$LOGS/natives.log"
+    fail "natives"
 fi
 
 # Every std file is in the shape `okkama fmt` gives it (#1006), generated ones included: their

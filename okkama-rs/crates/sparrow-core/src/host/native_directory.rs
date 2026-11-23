@@ -21,7 +21,6 @@ pub(crate) fn handles(n: Native) -> bool {
     matches!(
         n,
         FsCwd
-            | FsChdir
             | FsMkdir
             | FsMkdirAll
             | FsRmdir
@@ -76,20 +75,6 @@ impl Heap {
         }
         let path = self.fs_path(n, a[0])?;
         match n {
-            FsChdir => {
-                let real = fs::canonicalize(path).map_err(|e| host(n, e))?;
-                if !real.is_dir() {
-                    return Err(fail(
-                        n,
-                        "invalid_input",
-                        "Working directory must be a directory",
-                    ));
-                }
-                #[cfg(unix)]
-                nix::unistd::access(&real, nix::unistd::AccessFlags::X_OK)
-                    .map_err(|e| host(n, e.into()))?;
-                okkama_runtime_core::host::set_cwd(real);
-            }
             FsMkdir | FsMkdirAll | FsChmod => {
                 let mode = self
                     .int64(a[1])?

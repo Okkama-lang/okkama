@@ -369,6 +369,24 @@ however many exits run it.
   555 natives). Programs cannot change the environment: os/environment is a
   snapshot, so host::set_environment went too. The legacy SQLite and
   db_capture natives stay.
+  #1022: fs `chdir`, `read`, `seek`, `truncate` removed (IDs 161, 163, 165,
+  211 retired; 551 natives). Programs have no `chdir`: the run's cwd starts
+  as the process's and only a worker's directory (`host::set_cwd`) changes
+  it, inside the run's session. A native must have a caller in std or, by
+  symbol outside tests, in sparrow-core, okkama-runtime-core or okkama-cli;
+  `tools/engines/native-callers.py` checks it (gate, Wave) and its `KEPT`
+  list names the 13 legacy SQLite/db_capture natives kept without one.
+
+## A failed TLS handshake is the peer's (#1000, #1021, 2026-11-23)
+
+The HTTP server's handshake deadline races `HttpServerHandshake.secured()`,
+never the handshake itself: secured() turns a failed handshake into "no
+connection", so a handshake that fails just as a drain cancels it cannot
+become a secondary cleanup failure of the drain's cancellation (the runtime
+keeps a failure that settled before the cancellation arrived, #663, and a
+cancelled `Within` reports its origin's failure). Fixed in std, not in the
+runtime: a cancelled operation that fails is a real cleanup failure in
+general; only the server knows a failed handshake is nobody's failure.
 
 ## Name< in an expression (#1004, lead decision, 2026-11-23)
 

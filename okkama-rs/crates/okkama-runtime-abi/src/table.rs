@@ -138,11 +138,8 @@ natives! {
     FsPathEncode = 158, "runtime/fs@1::path_encode/1", "(string) -> @byte";
     FsPathDecode = 159, "runtime/fs@1::path_decode/1", "(@byte) -> string";
     FsOpen = 160, "runtime/fs@1::open/3", "(@byte, int, int) -> FileHandle";
-    FsRead = 161, "runtime/fs@1::read/2", "(FileHandle, int) -> @byte";
     FsWrite = 162, "runtime/fs@1::write/2", "(FileHandle, @byte) -> int";
-    FsSeek = 163, "runtime/fs@1::seek/3", "(FileHandle, int, int) -> int";
     FsFlush = 164, "runtime/fs@1::flush/1", "(FileHandle) -> bool";
-    FsTruncate = 165, "runtime/fs@1::truncate/2", "(FileHandle, int) -> bool";
     FsSync = 166, "runtime/fs@1::sync/1", "(FileHandle) -> bool";
     FsClose = 170, "runtime/fs@1::close/1", "(FileHandle) -> bool";
     FsFileStateReadText = 172, "runtime/fs@1::file_state_read_text/1", "(FileState) -> string";
@@ -184,7 +181,6 @@ natives! {
     FsSymlink = 208, "runtime/fs@1::symlink/2", "(@byte, @byte) -> bool";
     FsReadlink = 209, "runtime/fs@1::readlink/1", "(@byte) -> @byte";
     FsCwd = 210, "runtime/fs@1::cwd/0", "() -> @byte";
-    FsChdir = 211, "runtime/fs@1::chdir/1", "(@byte) -> bool";
     FsChmod = 212, "runtime/fs@1::chmod/2", "(@byte, int) -> bool";
     FsRootFileRootOpen = 218, "runtime/fs_root@1::file_root_open/1", "(@byte) -> FileRootState";
     FsRootFileRootEntry = 219, "runtime/fs_root@1::file_root_entry/2", "(FileRootState, @string) -> RootedEntryState";
@@ -557,4 +553,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 149, 150, 151, 152, 167, 168, 169, 171, 213, 214, 215, 216, 217, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 386, 387, 388, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 616, 632, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 149, 150, 151, 152, 161, 163, 165, 167, 168, 169, 171, 211, 213, 214, 215, 216, 217, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 386, 387, 388, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 616, 632, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668

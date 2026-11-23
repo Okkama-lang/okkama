@@ -1,11 +1,10 @@
 //! Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 use crate::host::native_fs::{fail, host, host_as};
 use crate::host::{Error, handle::Handle, ProviderError, *};
-use num_traits::ToPrimitive;
 use okkama_runtime_abi::Native;
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Seek, SeekFrom, Write},
     path::PathBuf,
 };
 #[derive(Debug)]
@@ -13,7 +12,6 @@ pub(crate) struct RawFile {
     pub(crate) file: Option<File>,
     #[cfg(unix)]
     pub(crate) lock: Option<crate::host::file_lock::Lock>,
-    readable: bool,
     writable: bool,
     append: bool,
 }
@@ -57,7 +55,6 @@ impl RawFile {
             file: Some(file),
             #[cfg(unix)]
             lock: None,
-            readable,
             writable,
             append: flags & 16 != 0,
         })
@@ -92,12 +89,9 @@ pub(crate) fn handles(n: Native) -> bool {
     matches!(
         n,
         FsOpen
-            | FsRead
             | FsWrite
-            | FsSeek
             | FsFlush
             | FsSync
-            | FsTruncate
             | FsClose
     )
 }
@@ -152,22 +146,6 @@ impl Heap {
                 self.raw_file(a[0])?.close(n)?;
                 Ok(yes)
             }
-            FsRead => {
-                let limit = self.bigint(a[1])?.into_owned();
-                if limit.sign() == num_bigint::Sign::Minus {
-                    return Err(fail(n, "invalid_input", "Invalid read size"));
-                }
-                let limit = limit.to_i64().unwrap_or(i64::MAX);
-                let file = self.raw_file(a[0])?;
-                file.open(n)?;
-                if !file.readable {
-                    return Err(fail(n, "invalid_input", "File is not readable"));
-                }
-                let mut bytes = vec![0; limit.min(64 * 1024 * 1024) as usize];
-                let size = file.open(n)?.read(&mut bytes).map_err(|e| host(n, e))?;
-                bytes.truncate(size);
-                Ok(self.native_byte_array(bytes)?)
-            }
             FsWrite => {
                 let bytes = self.native_bytes(a[1])?;
                 let state = self.raw_file(a[0])?;
@@ -189,36 +167,6 @@ impl Heap {
                     .sync_all()
                     .map_err(|e| host(n, e))?;
                 Ok(yes)
-            }
-            FsTruncate => {
-                let size = self.bigint(a[1])?.into_owned();
-                if size.sign() == num_bigint::Sign::Minus {
-                    return Err(fail(n, "invalid_input", "Negative file size"));
-                }
-                self.raw_file(a[0])?
-                    .writable(n)?
-                    .set_len(size.to_i64().unwrap_or(i64::MAX) as u64)
-                    .map_err(|e| host(n, e))?;
-                Ok(yes)
-            }
-            FsSeek => {
-                let offset = self.bigint(a[1])?.into_owned();
-                let origin = self.int64(a[2])?;
-                let file = self.raw_file(a[0])?.open(n)?;
-                let base = match origin {
-                    Some(0) => 0,
-                    Some(1) => file.stream_position().map_err(|e| host(n, e))?,
-                    Some(2) => file.metadata().map_err(|e| host(n, e))?.len(),
-                    _ => return Err(fail(n, "invalid_input", "Invalid seek origin")),
-                };
-                use num_traits::ToPrimitive;
-                let target = (num_bigint::BigInt::from(base) + offset)
-                    .to_i64()
-                    .filter(|n| *n >= 0)
-                    .ok_or_else(|| fail(n, "invalid_input", "Invalid seek target"))?;
-                file.seek(SeekFrom::Start(target as u64))
-                    .map_err(|e| host(n, e))?;
-                Ok(Slot::small(target))
             }
             _ => Err(Error("unsupported raw file native".into()).into()),
         }

@@ -1,6 +1,9 @@
-//! Host state belongs to one run (#40): a second program on the same thread
-//! does not see the working directory the first one changed. Programs read the
-//! environment as an immutable snapshot (os/environment) and cannot change it.
+//! Host state belongs to one run (#40). A program reads the working directory
+//! of its run, which starts as the process's, and has no way to change it:
+//! `chdir` went with #1022, as nothing in std called it. The run's host
+//! session, where a worker's directory lives, is tested in
+//! okkama-runtime-core (`host::tests`). Programs read the environment as an
+//! immutable snapshot (os/environment) and cannot change it.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};
@@ -21,14 +24,14 @@ fn run(module: &ir::Module) -> Option<String> {
 }
 
 #[test]
-fn a_working_directory_change_does_not_outlive_its_run() {
+fn a_run_reads_the_process_working_directory_and_cannot_change_it() {
     let process = std::env::current_dir().unwrap().as_os_str().len().to_string();
     assert_ne!(process, "1");
-    let chdir = lower("runtime/fs", FS, "if chdir([47.byte()]) { cwd().size(); } else { 0; }");
     let cwd = lower("runtime/fs", FS, "cwd().size();");
+    let chdir = lower("runtime/fs", FS, "if chdir([47.byte()]) { cwd().size(); } else { 0; }");
     for _ in 0..2 {
-        assert_eq!(run(&chdir), Some("1".into()));
-        assert_eq!(run(&cwd), Some(process.clone()), "the next run starts in /");
+        assert_eq!(run(&cwd), Some(process.clone()));
+        assert_eq!(run(&chdir), None, "runtime/fs has no chdir provider (#1022)");
     }
     assert_eq!(std::env::current_dir().unwrap().as_os_str().len().to_string(), process);
 }

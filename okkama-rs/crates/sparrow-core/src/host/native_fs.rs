@@ -122,11 +122,11 @@ pub(crate) fn host(n: Native, e: std::io::Error) -> ProviderError {
 fn host_message(n: Native) -> Option<&'static str> {
     Some(match n.name() {
         "open" | "file_content" => "Cannot open file",
-        "read" | "file_state_read" | "file_state_read_text" | "file_state_read_line" => "Cannot read file",
+        "file_state_read" | "file_state_read_text" | "file_state_read_line" => "Cannot read file",
         "write" | "file_state_write" | "file_state_write_text" => "Cannot write file",
         "close" | "file_state_close" => "Cannot close file",
-        "seek" | "file_state_seek" => "Cannot seek file",
-        "truncate" | "file_state_truncate" => "Cannot truncate file",
+        "file_state_seek" => "Cannot seek file",
+        "file_state_truncate" => "Cannot truncate file",
         "sync" | "file_state_sync" => "Cannot synchronize file",
         "temporary_file_replace" => "Cannot replace file",
         "directory_sync" => "Cannot synchronize directory",
@@ -145,7 +145,6 @@ fn host_message(n: Native) -> Option<&'static str> {
         "stat" => "Cannot stat path",
         "lstat" => "Cannot lstat path",
         "chmod" => "Cannot change path permissions",
-        "chdir" => "Cannot change current directory",
         "temporary_file_create" => "Cannot create temporary file",
         "temporary_directory_create" => "Cannot create temporary directory",
         "file_watch_create" => "Cannot inspect watched path",

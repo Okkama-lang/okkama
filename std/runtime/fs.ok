@@ -44,21 +44,11 @@ native path_decode(path is @byte) is string;
 // Opens path with the host's flags and mode; a handle.
 native open(path is @byte, flags is int, mode is int) is FileHandle;
 
-// At most size bytes from handle; [] at the end.
-native read(handle is FileHandle, size is int) is @byte;
-
 // Writes bytes to handle; how many were written.
 native write(handle is FileHandle, bytes is @byte) is int;
 
-// Moves handle to offset from origin (0 start, 1 current, 2 end); the new
-// position.
-native seek(handle is FileHandle, offset is int, origin is int) is int;
-
 // Flushes handle's buffers.
 native flush(handle is FileHandle) is bool;
-
-// Cuts handle's file to size bytes.
-native truncate(handle is FileHandle, size is int) is bool;
 
 // Flushes handle's file to the disk.
 native sync(handle is FileHandle) is bool;
@@ -227,9 +217,6 @@ native readlink(path is @byte) is @byte;
 
 // The current directory.
 native cwd() is @byte;
-
-// Changes the current directory to path.
-native chdir(path is @byte) is bool;
 
 // Sets path's permission bits to mode.
 native chmod(path is @byte, mode is int) is bool;

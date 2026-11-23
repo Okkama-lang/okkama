@@ -85,8 +85,14 @@
   categories are all 17.0.0, normalization 18.0.0. U+1ADD alone is 0 columns,
   ORCA U+1FACD 2.
 - [x] #1020: the natives without a std caller removed (555 natives).
-- [ ] Open: fs `chdir`, `read`, `seek`, `truncate` have no std caller either
-  (found by the #1020 scan; `chdir` backs the #40 cwd test). IDNA's UTS #46
+- [x] #1022: fs `chdir`, `read`, `seek`, `truncate` removed (IDs 161, 163,
+  165, 211 retired; 551 natives); the #40 test now shows a run reads the
+  process cwd and has no `chdir`. `tools/engines/native-callers.py` (gate step
+  "natives" with gen-abi --check, Wave `maps`) fails on a native without a
+  caller; 13 legacy SQLite/db_capture natives are kept by name.
+- [x] #1000, #1021: an HTTPS drain no longer exits 1 when a handshake fails
+  just as the drain cancels it (`HttpServerHandshake` in http/server).
+- [ ] Open: IDNA's UTS #46
   table (Net::IDN::UTS46) is older than 17.0; its X status keeps refusing
   17.0 characters.
 

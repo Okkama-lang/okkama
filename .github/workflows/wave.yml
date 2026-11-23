@@ -163,3 +163,5 @@ jobs:
       - run: python3 tools/map/gen.py --check
       # The native ABI table is generated from std/runtime (#976): it must match the declarations.
       - run: python3 okkama-rs/tools/engines/gen-abi.py --check
+      # Every native of std/runtime has a caller in std or the runtime crates (#1022).
+      - run: python3 okkama-rs/tools/engines/native-callers.py
