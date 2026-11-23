@@ -48,6 +48,17 @@ impl fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
+/// A codegen error with its place, `file:line:column: …`, when the module's
+/// debug sources know the failing function's file (#1006).
+fn located(module: &ir::Module, error: &sparrow::GenerateError) -> String {
+    let place = error
+        .function
+        .filter(|_| !error.span.is_empty())
+        .and_then(|function| module.source_of(ir::FuncId(function)))
+        .map(|source| format!("{}:{}: ", source.name(), source.location(error.span.start)));
+    format!("{}{error}", place.unwrap_or_default())
+}
+
 /// Логическое имя выходного артефакта, без каталога и расширения.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -84,7 +95,7 @@ pub fn generate(
             let program =
                 sparrow::generate(module).map_err(|error| CodegenError::InvalidInput {
                     backend,
-                    message: error.to_string(),
+                    message: located(module, &error),
                 })?;
             let bytes =
                 okkama_sparrow::encode(&program).map_err(|error| CodegenError::InvalidInput {
@@ -100,4 +111,27 @@ pub fn generate(
             .map(|(name, bytes)| ArtifactFile { name, bytes })
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::{SourceFile, Span};
+    use std::sync::Arc;
+
+    /// #1006: a function's codegen error names its file, line and column; a
+    /// module-level one, or one without a known source, has no place.
+    #[test]
+    fn a_codegen_error_is_placed_through_the_debug_sources() {
+        let text = "module shop/cart v1.0.0;\n\nmain() is int { 0; }\n";
+        let source = SourceFile::new("shop/cart.ok", text).unwrap();
+        let ast = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).unwrap();
+        let mut module = crate::lowering::lower_program(&ast).unwrap();
+        module.debug.sources = vec![Some(Arc::new(source))];
+        module.debug.function_modules = vec![0];
+        let error = |function| sparrow::GenerateError { span: Span::new(26, 30), message: "bad".to_string(), function };
+        assert_eq!(located(&module, &error(Some(0))), "shop/cart.ok:3:1: Sparrow codegen: bad");
+        assert_eq!(located(&module, &error(None)), "Sparrow codegen: bad");
+        assert_eq!(located(&module, &error(Some(7))), "Sparrow codegen: bad");
+    }
 }

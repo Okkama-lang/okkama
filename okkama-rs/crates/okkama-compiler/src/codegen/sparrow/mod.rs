@@ -22,6 +22,9 @@ use std::{collections::HashMap, fmt};
 pub struct GenerateError {
     pub span: Span,
     pub message: String,
+    /// The function whose span this is (#1006): with the module's debug
+    /// sources it names the file; `None` for module-level errors.
+    pub function: Option<usize>,
 }
 
 impl fmt::Display for GenerateError {
@@ -36,6 +39,7 @@ fn error(span: Span, message: impl Into<String>) -> GenerateError {
     GenerateError {
         span,
         message: message.into(),
+        function: None,
     }
 }
 
@@ -512,6 +516,7 @@ fn function(function: &ir::Function, types: &mut Types) -> Result<Function, Gene
         check::check(function, &allocated).map_err(|message| GenerateError {
             span: function.span,
             message: format!("{}: register allocation check: {message}", function.symbol),
+            function: None,
         })?;
     }
     let function = &allocated;
@@ -749,7 +754,7 @@ pub fn generate(module: &ir::Module) -> Result<Program, GenerateError> {
         .enumerate()
         .map(|(index, item)| match stubs.get(&index) {
             Some(&global) => Ok(stub(item, global, &mut types)),
-            None => function(item, &mut types),
+            None => function(item, &mut types).map_err(|error| GenerateError { function: Some(index), ..error }),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let program = Program {
