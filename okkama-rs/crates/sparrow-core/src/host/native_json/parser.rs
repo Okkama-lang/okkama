@@ -4,6 +4,9 @@ use super::Node;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 use std::{collections::HashSet, rc::Rc};
+
+/// The deepest document the parser takes, whatever the program asks.
+const MAXIMUM_DEPTH: usize = 100_000;
 #[derive(Debug)]
 pub(super) struct ParseError {
     pub offset: usize,
@@ -248,16 +251,22 @@ pub(super) fn parse(text: &str, maximum_depth: &BigInt) -> Parsed<(Vec<Node>, u6
         position: 0,
         scratch: String::new(),
     };
+    // The program's limit, capped by the parser's own (inherited from the
+    // recursive twin); both fail alike, at the value that is too deep. Taken
+    // as a machine number once, not per value (#1012).
+    let limit = if maximum_depth.sign() == num_bigint::Sign::Minus {
+        0
+    } else {
+        maximum_depth.to_usize().unwrap_or(usize::MAX)
+    }
+    .min(MAXIMUM_DEPTH);
     let mut nodes = Vec::new();
     let mut stack = Vec::new();
     'value: loop {
         p.skip_whitespace();
         let depth = stack.len() + 1;
-        if &BigInt::from(depth) > maximum_depth {
+        if depth > limit {
             return Err(p.error("maximum JSON depth exceeded"));
-        }
-        if depth > 100_000 {
-            return Err(p.error("\u{0}overflow"));
         }
         let Some(ch) = p.at(p.position) else {
             return Err(p.error("expected JSON value"));

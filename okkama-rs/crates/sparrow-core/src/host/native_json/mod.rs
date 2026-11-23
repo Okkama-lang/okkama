@@ -49,6 +49,14 @@ impl Names {
         index.get(sought).copied()
     }
 }
+/// The first member of `node` named `name`, through the index of a big
+/// object (#352), as `get` finds it (#1012); not an object: none.
+fn member(node: &Node, name: &str) -> Option<u64> {
+    match node {
+        Node::Object(names, values) => names.position(name).map(|at| values[at]),
+        _ => None,
+    }
+}
 impl From<Vec<Rc<str>>> for Names {
     fn from(list: Vec<Rc<str>>) -> Self {
         Self { list, index: OnceCell::new() }
@@ -254,12 +262,7 @@ impl Heap {
     }
     fn json_member(&self, object: Slot, name: Slot) -> Result<Option<u64>, Error> {
         let name = self.text(name)?;
-        Ok(match self.json_node(object)? {
-            Node::Object(names, values) => {
-                names.iter().position(|n| &**n == name).map(|i| values[i])
-            }
-            _ => None,
-        })
+        Ok(member(self.json_node(object)?, name))
     }
     fn json_parsed(&mut self, value: Slot) -> Result<Rc<ParsedDocument>, Error> {
         let JsonHandle::Parse(state) = self.json_handle(value)? else {
@@ -290,18 +293,13 @@ impl Heap {
                 }
             }
             Err(error) => {
-                let overflow = error.message == "\u{0}overflow";
                 let (characters, line, column) = located(&state.source, error.offset);
                 ParsedDocument {
                     root: None,
                     offset: characters,
-                    line: if overflow { 0 } else { line },
-                    column: if overflow { 0 } else { column },
-                    message: if overflow {
-                        "maximum JSON depth exceeded".into()
-                    } else {
-                        error.message
-                    },
+                    line,
+                    column,
+                    message: error.message,
                     duplicate: error.duplicate,
                 }
             }
@@ -799,6 +797,46 @@ mod source_tests {
             _ => None,
         }).collect();
         assert_eq!(texts, ["дом 🏠", "-1.5e3"]);
+    }
+
+    /// #1012: the member fast paths (`text(name)` and the like) find the
+    /// first member of that name through a big object's index, not a scan.
+    #[test]
+    fn member_lookup_uses_the_index_of_a_big_object() {
+        use std::rc::Rc;
+        let count = super::INDEXED_OBJECT * 4;
+        let mut names: Vec<Rc<str>> = (0..count).map(|i| Rc::from(format!("k{i}"))).collect();
+        names.push(Rc::from("k3"));
+        let values: Vec<u64> = (0..=count as u64).collect();
+        let object = super::Node::Object(names.into(), values);
+        assert_eq!(super::member(&object, "k7"), Some(7));
+        assert_eq!(super::member(&object, "k3"), Some(3), "the first of two");
+        assert_eq!(super::member(&object, "none"), None);
+        let super::Node::Object(names, _) = &object else { unreachable!() };
+        assert!(names.index.get().is_some(), "looked up through the index");
+        let small = super::Node::Object(vec![Rc::from("a")].into(), vec![9]);
+        assert_eq!(super::member(&small, "a"), Some(9));
+        assert_eq!(super::member(&super::Node::Array(vec![1]), "a"), None);
+    }
+
+    /// #1012: the parser's own depth limit fails like a requested one, at
+    /// the value that is too deep, so the document reports a real line and
+    /// column; a limit of zero or below refuses the first value.
+    #[test]
+    fn the_hard_depth_limit_fails_like_a_requested_one() {
+        use num_bigint::BigInt;
+        let deep = "[".repeat(100_001);
+        let hard = super::parser::parse(&deep, &BigInt::from(1_000_000)).unwrap_err();
+        assert_eq!(hard.message, "maximum JSON depth exceeded");
+        assert_eq!(hard.offset, 100_000);
+        assert_eq!(super::located(&deep, hard.offset), (100_000, 1, 100_001));
+        let asked = super::parser::parse("[[[1]]]", &BigInt::from(2)).unwrap_err();
+        assert_eq!((asked.message.as_str(), asked.offset), ("maximum JSON depth exceeded", 2));
+        let huge = BigInt::from(u64::MAX) * BigInt::from(u64::MAX);
+        assert!(super::parser::parse("[[1]]", &huge).is_ok());
+        assert!(super::parser::parse("1", &BigInt::from(0)).is_err());
+        assert!(super::parser::parse("1", &BigInt::from(-5)).is_err());
+        assert!(super::parser::parse("1", &BigInt::from(1)).is_ok());
     }
 }
 
