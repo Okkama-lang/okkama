@@ -179,7 +179,7 @@ fn variables_of_imported_types_carry_over() {
         "import \"io/stdout\" as out;",
         "import \"time/duration\";",
         "let s = out.Stdout();",
-        "let d = [\"x\": duration.Duration(seconds: 1)];",
+        "let d = [\"x\": duration.Duration(seconds: 1.rat())];",
         "1 + 1",
         "s.writeln(\"still here\")",
         "d.size()",

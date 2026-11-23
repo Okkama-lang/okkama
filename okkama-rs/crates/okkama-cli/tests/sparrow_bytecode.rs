@@ -131,18 +131,11 @@ fn subtraction_and_negation_read_before_overwriting() {
 
 #[test]
 fn one_plus_one_lowers_to_register_code() {
-    // `fold` computes 1 + 1 at build time; the dead operands share a register.
+    // `fold` computes 1 + 1 at build time and `dce` (#1006) drops the dead
+    // operands: one constant and the return.
     let program = codegen::sparrow::generate(&lower("1 + 1;")).unwrap();
     let main = &program.functions[program.entry.unwrap().0 as usize];
-    assert_eq!(
-        main.code,
-        vec![
-            Const { dst: d(0), value: int("1") },
-            Const { dst: d(0), value: int("1") },
-            Const { dst: d(0), value: int("2") },
-            Return { value: Some(R(0)) },
-        ]
-    );
+    assert_eq!(main.code, vec![Const { dst: d(0), value: int("2") }, Return { value: Some(R(0)) }]);
 }
 
 #[test]

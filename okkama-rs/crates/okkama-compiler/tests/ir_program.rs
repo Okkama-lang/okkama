@@ -29,17 +29,23 @@ fn return_and_instruction_spans_refer_to_original_source() {
 
         assert_eq!(function.blocks.len(), 1);
         let block = &function.blocks[0];
-        assert_eq!(block.insts.len(), 3);
-        for (inst, spelling) in block.insts.iter().zip(["1", "2", "1 + 2"]) {
-            assert_eq!(&source.text()[inst.span.range()], spelling);
-        }
-        // `fold` (#56) computes the sum and keeps the span of `1 + 2`.
+        // `fold` (#56) computes the sum and keeps the span of `1 + 2`; `dce`
+        // (#1006) drops the operands nobody reads any more.
+        assert_eq!(block.insts.len(), 1);
+        assert_eq!(&source.text()[block.insts[0].span.range()], "1 + 2");
         assert_eq!(
-            block.insts[2].kind,
+            block.insts[0].kind,
             InstKind::Const(okkama_compiler::ir::Constant::Int(okkama_compiler::ir::IntValue::from_i64(3)))
         );
-        assert_eq!(block.insts[2].result, Some(ValueId(2)));
-        assert_eq!(block.term.kind, TermKind::Ret(Some(ValueId(2))));
+        // As lowered, every instruction's span is its own source.
+        let lowered = okkama_compiler::lowering::with_passes("none", || lower_program(&ast).unwrap());
+        let insts = &lowered.functions[0].blocks[0].insts;
+        assert_eq!(insts.len(), 3);
+        for (inst, spelling) in insts.iter().zip(["1", "2", "1 + 2"]) {
+            assert_eq!(&source.text()[inst.span.range()], spelling);
+        }
+        assert_eq!(block.insts[0].result, Some(ValueId(0)));
+        assert_eq!(block.term.kind, TermKind::Ret(Some(ValueId(0))));
         assert_eq!(&source.text()[block.term.span.range()], return_source);
     }
 }
