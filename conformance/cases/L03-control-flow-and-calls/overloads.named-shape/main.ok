@@ -10,8 +10,6 @@ object Resizer {
 
 main() is int {
     let out = Stdout();
-    let r = Resizer();
-    out.writeln(r.size(width: 3).string());
-    out.writeln(r.size(height: 3).string());
+    out.writeln("unreachable");
     0;
 }

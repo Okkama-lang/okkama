@@ -625,7 +625,7 @@ object Box {
     Box();
     action(name is string, zip is int) is void {}
     size(width is int) is int { width; }
-    size(height is int) is int { height; }
+    size(label is string) is int { 0; }
     many(values is ...string) is void {}
 }
 
@@ -666,8 +666,8 @@ fn signature_help_follows_argument_names() {
     assert_eq!(active_at("b.action(zip: 1, ").1, 0);
     assert_eq!(active_at("b.action(zip: 1, name: \"x\"").1, 0);
     assert_eq!(active_at("b.action(name: \"x\", zi").1, 1);
-    // Перегрузки, различимые только именами: подпись — по названному имени.
-    assert_eq!(active_at("b.size(height: ").0, "size(height is int) is int");
+    // Overloads by type (#1005): the named argument picks the signature before its value is typed.
+    assert_eq!(active_at("b.size(label: ").0, "size(label is string) is int");
     assert_eq!(active_at("b.size(width: ").0, "size(width is int) is int");
 }
 

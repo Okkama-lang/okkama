@@ -117,16 +117,24 @@ defaults.
 
 ## 13.3 Overloads
 
-An object may declare several actions with one name. They differ by the
-number of parameters, by their types, and, for named calls, by parameter
-names. `describe(int)`, `describe(string)` and `describe(any)` in the
-example are three actions. The call with `1.5` takes the `any` one, because
+An object may declare several actions with one name. An overload is its
+name, the number of its parameters, their types and whether the last one is
+variadic. Nothing else tells two overloads apart: not parameter names, not
+the result type, not `async`, `hidden` or the successor mark. Two
+declarations that agree on all four are one signature declared twice, an
+error at the later one: `Action "size" on object "Resizer" has conflicting
+overloads with signature size(int); parameter names and return types do not
+distinguish overloads`. The rule is the same for constructors (§12.5), role
+signatures and fakes (§14.1), and since 0.6.4 there are no exceptions to it.
+`describe(int)`, `describe(string)` and `describe(any)` in the example are
+three actions. The call with `1.5` takes the `any` one, because
 neither of the others accepts a float.
 
 The rules are short, and they never guess:
 
-1. Candidates with the wrong arity or the wrong names drop out. Then
-   argument types are checked against declared types.
+1. Candidates with the wrong arity drop out, and so do those without a
+   parameter of each name a named call gives. Then argument types are
+   checked against declared types.
 2. If a fixed candidate fits, variadic candidates are not considered.
 3. Exact concrete types beat role-compatible types, and both beat `any`.
 4. A candidate wins only if it is no less specific in *every* position and

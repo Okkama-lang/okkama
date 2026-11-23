@@ -25,6 +25,19 @@ few that need a decision or are refactors are filed (#1005, #1006).
   noise band (−10.3% … +2.2% among reliable pairs); the new checks cost nothing measurable.
 
 ### Changed
+- **Breaking: one overload identity (#1005, owner decision).** An overload is its name, parameter count, resolved
+  parameter types and variadic shape, for object actions, role signatures, fake actions and constructors alike;
+  a shorthand constructor's types are those of its fields. Parameter names, results, `async`, `hidden` and the
+  successor mark no longer tell two declarations apart: `size(width is int)` beside `size(height is int)`, or
+  `P(:x, :y)` beside `P(a is int, b is int)`, is an error at the later one with a note at the first. Two roles
+  whose same-typed actions differ in results could be implemented through name-only overloads and crashed the
+  role conformance check; that is now this declaration error. A constructor with an inferred field (#967) is
+  checked too. The six system type names `Error`, `Maybe`, `Presence`, `Future`, `NativeFailure` and `Cancelled`
+  are reserved for every object, role, enum, native object and type parameter; a user type named `Future` no
+  longer silently replaced the system one. Audit: over std, t/, examples, conformance and the Bible's examples
+  only `Duration`'s unit constructors broke the rule (#1018). Conformance `L03.overloads.named-shape` is now an
+  invalid case; `L04.ctor.shorthand-full-duplicate` is new. Spec §11.3/§11.8, Bible §12.5, §13.3, §14.1 and
+  appendix A.
 - **Breaking (std): one `Duration` constructor, `Duration(seconds is rat)` (#1018, part of #1005).** The value
   is exact seconds and must be a whole number of nanoseconds, otherwise `InvalidDuration`; nothing is rounded
   and an int is not converted. `Duration(value:, unit:)`, the seven unit constructors (`days:` … `nanoseconds:`)

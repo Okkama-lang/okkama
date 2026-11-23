@@ -1,0 +1,16 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Point {
+    has x is int;
+    has y is int;
+    Point(:x, :y);
+    Point(left is int, top is int) { x = left; y = top; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln("unreachable");
+    0;
+}

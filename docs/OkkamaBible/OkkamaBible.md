@@ -8984,12 +8984,17 @@ stateless object.
 
 ## 12.5 Several constructors
 
-An object may have several constructors, and they overload like actions:
-by the number of arguments, their types, and, for shorthands, by the names
-supplied. `Cash` has a full constructor taking `(int, int)` and a shorthand
-taking `digit` and `currency` by name, and each call picks the one that
-fits. Two candidates that fit equally well are an ambiguity error.
-Declaration order never breaks a tie.
+An object may have several constructors, and they overload like actions
+(Section 13.3): by the number of parameters and their types. A shorthand's
+parameter types are those of the fields it lists, in order. `Cash` has a full
+constructor taking `(int, int)` and a shorthand `Cash(:digit, :currency)`
+taking `(int, string)`, and each call picks the one that fits. Parameter
+names and the choice between the full form and a shorthand do not tell
+constructors apart: a second constructor with the same types is an error at
+its declaration, `Constructor of object "Cash" has conflicting overloads with
+signature Cash(int, int)`, and the first one is pointed at. Two candidates
+that fit a call equally well are an ambiguity error. Declaration order never
+breaks a tie.
 
 A full constructor may end with a **variadic** parameter, as `Bag(items is
 ...int)` does. Its calls are positional; inside the body the parameter is
@@ -10313,16 +10318,24 @@ defaults.
 
 ## 13.3 Overloads
 
-An object may declare several actions with one name. They differ by the
-number of parameters, by their types, and, for named calls, by parameter
-names. `describe(int)`, `describe(string)` and `describe(any)` in the
-example are three actions. The call with `1.5` takes the `any` one, because
+An object may declare several actions with one name. An overload is its
+name, the number of its parameters, their types and whether the last one is
+variadic. Nothing else tells two overloads apart: not parameter names, not
+the result type, not `async`, `hidden` or the successor mark. Two
+declarations that agree on all four are one signature declared twice, an
+error at the later one: `Action "size" on object "Resizer" has conflicting
+overloads with signature size(int); parameter names and return types do not
+distinguish overloads`. The rule is the same for constructors (§12.5), role
+signatures and fakes (§14.1), and since 0.6.4 there are no exceptions to it.
+`describe(int)`, `describe(string)` and `describe(any)` in the example are
+three actions. The call with `1.5` takes the `any` one, because
 neither of the others accepts a float.
 
 The rules are short, and they never guess:
 
-1. Candidates with the wrong arity or the wrong names drop out. Then
-   argument types are checked against declared types.
+1. Candidates with the wrong arity drop out, and so do those without a
+   parameter of each name a named call gives. Then argument types are
+   checked against declared types.
 2. If a fixed candidate fits, variadic candidates are not considered.
 3. Exact concrete types beat role-compatible types, and both beat `any`.
 4. A candidate wins only if it is no less specific in *every* position and
@@ -11127,7 +11140,8 @@ has no fields, no constructors and no bodies. (The one exception is a
 `fake` block for tests, the subject of Chapter 15.) A role may declare
 several signatures with one name, as long as their parameter types differ;
 like the overloads of an object (Section 13.3), they may declare different
-results.
+results. Parameter names alone do not make two signatures, in a role or in
+its fake.
 
 An object implements a role by saying so:
 
@@ -25533,7 +25547,14 @@ constructor = TYPE_NAME parameter_list block                      (* full *)
 The constructor's name must match the object: "Constructor name must match
 enclosing object." A shorthand cannot mix `:field` entries with typed
 parameters. `Name() {}` and `Name();` are different forms. Full constructors
-take parameter defaults like actions.
+take parameter defaults like actions. Constructors and actions share one
+overload identity, the name, the parameter count, the parameter types and the
+variadic shape; a shorthand's types are those of its fields (§12.5, §13.3).
+
+The six system type names `Error`, `Maybe`, `Presence`, `Future`,
+`NativeFailure` and `Cancelled` cannot name an object, a role, an enum, a
+native object or a type parameter: `"Maybe" is the name of a system enum`.
+They remain free as binding names.
 
 ```text
 action_decl    = [ "async" ] LOWER_NAME parameter_list "is" result block ;

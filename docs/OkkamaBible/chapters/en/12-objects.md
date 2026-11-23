@@ -183,12 +183,17 @@ stateless object.
 
 ## 12.5 Several constructors
 
-An object may have several constructors, and they overload like actions:
-by the number of arguments, their types, and, for shorthands, by the names
-supplied. `Cash` has a full constructor taking `(int, int)` and a shorthand
-taking `digit` and `currency` by name, and each call picks the one that
-fits. Two candidates that fit equally well are an ambiguity error.
-Declaration order never breaks a tie.
+An object may have several constructors, and they overload like actions
+(Section 13.3): by the number of parameters and their types. A shorthand's
+parameter types are those of the fields it lists, in order. `Cash` has a full
+constructor taking `(int, int)` and a shorthand `Cash(:digit, :currency)`
+taking `(int, string)`, and each call picks the one that fits. Parameter
+names and the choice between the full form and a shorthand do not tell
+constructors apart: a second constructor with the same types is an error at
+its declaration, `Constructor of object "Cash" has conflicting overloads with
+signature Cash(int, int)`, and the first one is pointed at. Two candidates
+that fit a call equally well are an ambiguity error. Declaration order never
+breaks a tie.
 
 A full constructor may end with a **variadic** parameter, as `Bag(items is
 ...int)` does. Its calls are positional; inside the body the parameter is

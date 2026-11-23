@@ -1,0 +1,55 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L04.ctor.shorthand-full-duplicate",
+  "title": "a shorthand constructor and a full one of the same types are the same signature",
+  "purpose": "A constructor's identity is its parameter types and variadic shape; a shorthand constructor's types are those of the fields it names, in order.",
+  "level": "L04",
+  "contracts": [
+    {
+      "contract": "OBJ.CONSTRUCTORS",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "error",
+    "failure": {
+      "stages": [
+        "parse",
+        "check",
+        "runtime"
+      ],
+      "categories": [
+        "syntax",
+        "semantic",
+        "runtime"
+      ],
+      "justification": "A declaration-level rule checked after parsing; an implementation may also detect it at registration/runtime. The program must not complete."
+    },
+    "stdout": {
+      "text": ""
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#11.3"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #1005: one overload identity for actions and constructors",
+    "expected_basis": "spec 11.3 (#1005): constructors follow the overload identity of actions; names and the shorthand form do not distinguish them."
+  },
+  "status": "mandatory"
+}

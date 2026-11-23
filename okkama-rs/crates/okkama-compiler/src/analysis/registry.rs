@@ -448,6 +448,7 @@ impl<'a> Registry<'a> {
         // Every signature is known: inferred field types (#967) come from
         // their initializers, before the checks that read field types.
         super::check::infer_field_types(&mut registry);
+        registry.check_ctor_overloads();
         registry.check_variant_recursion();
         registry.check_error_payloads();
         registry.check_hidden_leaks();
@@ -818,6 +819,11 @@ impl<'a> Registry<'a> {
         generics
             .iter()
             .map(|param| {
+                // A system type name cannot be a type parameter either (#1005);
+                // the parameter is still registered, so its uses do not cascade.
+                if let Some(message) = reserved_type_name(&param.name.text) {
+                    self.error(param.name.span, format!("{message}; it cannot name a type parameter"));
+                }
                 self.params.push(ParamInfo {
                     name: param.name.text.clone(),
                     bound: None,
@@ -850,8 +856,8 @@ impl<'a> Registry<'a> {
             match item {
                 ast::Item::Object(decl) => {
                     let name = &decl.name.text;
-                    if name == "Error" {
-                        self.error(decl.name.span, reserved_type_name(name).expect("Error is reserved"));
+                    if let Some(message) = reserved_type_name(name) {
+                        self.error(decl.name.span, message);
                         continue;
                     }
                     match self.own_type(module, name) {
@@ -1001,11 +1007,8 @@ impl<'a> Registry<'a> {
                 }
                 ast::Item::NativeObject(decl) => {
                     let name = &decl.name.text;
-                    if name == "Error" {
-                        self.error(
-                            decl.name.span,
-                            "Type name \"Error\" is reserved for the system Error role",
-                        );
+                    if let Some(message) = reserved_type_name(name) {
+                        self.error(decl.name.span, message);
                         continue;
                     }
                     if let Some(existing) = self.own_type(module, name) {
@@ -1473,7 +1476,7 @@ impl<'a> Registry<'a> {
                     }
                     return builtin;
                 }
-                if name.text == "Future" && self.find_type(module, "Future").is_none() {
+                if name.text == "Future" {
                     let [arg] = args else {
                         self.error(
                             ty.span,
@@ -2158,6 +2161,7 @@ impl<'a> Registry<'a> {
     fn collect_role(&mut self, id: RoleId, decl: &'a ast::RoleDecl) {
         let scope = self.param_scope(&self.roles[id.0].params.clone());
         let mut methods: Vec<RoleMethod> = Vec::new();
+        let mut spans: Vec<Span> = Vec::new();
         for member in &decl.members {
             let signature = match member {
                 ast::RoleMember::Signature(signature) => signature,
@@ -2178,25 +2182,25 @@ impl<'a> Registry<'a> {
             };
             let (params, variadic) = self.signature_params(&signature.params, &scope, Some("Role actions"));
             let result = self.resolve_result(&signature.result, &scope);
-            if methods.iter().any(|other| {
-                other.name == signature.name.text
-                    && other.variadic == variadic
-                    && other.params.len() == params.len()
-                    && other
-                        .params
-                        .iter()
-                        .zip(&params)
-                        .all(|((_, left), (_, right))| left == right)
-            }) {
-                self.error(
-                    signature.span,
+            let types: Vec<&Ty> = params.iter().map(|(_, ty)| ty).collect();
+            let twin = methods.iter().zip(&spans).find(|(other, _)| {
+                let others: Vec<&Ty> = other.params.iter().map(|(_, ty)| ty).collect();
+                other.name == signature.name.text && same_overload(&types, variadic, &others, other.variadic) == Some(true)
+            });
+            if let Some((_, &first)) = twin {
+                let shown = self.overload_signature(&signature.name.text, &types, variadic);
+                self.overload_error(
+                    signature.name.span,
+                    Some(first),
+                    &signature.name.text,
                     format!(
-                        "Role \"{}\" declares action \"{}\" twice with the same signature",
-                        decl.name.text, signature.name.text
+                        "Action \"{}\" of role \"{}\" has conflicting overloads with signature {shown}; parameter names and return types do not distinguish overloads",
+                        signature.name.text, decl.name.text
                     ),
                 );
                 continue;
             }
+            spans.push(signature.name.span);
             methods.push(RoleMethod {
                 name: signature.name.text.clone(),
                 params,
@@ -2434,40 +2438,6 @@ impl<'a> Registry<'a> {
                 span: ctor.span,
             });
         }
-        // Неразличимые полные конструкторы: те же типы и вариадичность; имена
-        // различают только фиксированные (именованным вызовом).
-        for (index, ctor) in ctors.iter().enumerate() {
-            let CtorShape::Full {
-                params, variadic, ..
-            } = &ctor.shape
-            else {
-                continue;
-            };
-            let twin = ctors[..index].iter().any(|other| {
-                let CtorShape::Full {
-                    params: others,
-                    variadic: other_variadic,
-                    ..
-                } = &other.shape
-                else {
-                    return false;
-                };
-                variadic == other_variadic
-                    && params.len() == others.len()
-                    && params
-                        .iter()
-                        .zip(others)
-                        .all(|((left_name, left), (right_name, right))| {
-                            left == right && (*variadic || left_name == right_name)
-                        })
-            });
-            if twin {
-                self.error(
-                    ctor.span,
-                    format!("Constructor \"{name}\" is declared twice with the same signature"),
-                );
-            }
-        }
         self.objects[id.0].ctors = ctors;
 
         let mut methods: Vec<MethodInfo<'a>> = Vec::new();
@@ -2505,13 +2475,96 @@ impl<'a> Registry<'a> {
                 is_async: action.is_async,
                 decl: Some(action),
             };
-            if let Some(message) = overload_conflict(&methods, &candidate, &name) {
-                self.error(action.name.span, message);
+            if let Some(first) = overload_twin(&methods, &candidate) {
+                let first = first.decl.map(|decl| decl.name.span);
+                let types: Vec<&Ty> = candidate.params.iter().map(|(_, ty)| ty).collect();
+                let signature = self.overload_signature(&candidate.name, &types, candidate.variadic);
+                let owner = match name.strip_suffix("$fake") {
+                    Some(role) => format!("of the fake of role \"{role}\""),
+                    None => format!("on object \"{name}\""),
+                };
+                self.overload_error(
+                    action.name.span,
+                    first,
+                    &candidate.name,
+                    format!(
+                        "Action \"{}\" {owner} has conflicting overloads with signature {signature}; parameter names and return types do not distinguish overloads",
+                        candidate.name
+                    ),
+                );
                 continue;
             }
             methods.push(candidate);
         }
         self.objects[id.0].methods = methods;
+    }
+
+    /// Constructors follow the overload identity of actions (#1005): a full
+    /// constructor is its parameter types, a shorthand one the types of the
+    /// fields it names, in order. Run once inferred field types (#967) are
+    /// known, so a shorthand naming one is checked too.
+    fn check_ctor_overloads(&mut self) {
+        let mut found: Vec<(usize, Span, Span, String)> = Vec::new();
+        for object in &self.objects {
+            let shapes: Vec<(Vec<&Ty>, bool)> = object
+                .ctors
+                .iter()
+                .map(|ctor| match &ctor.shape {
+                    CtorShape::Full { params, variadic, .. } => (params.iter().map(|(_, ty)| ty).collect(), *variadic),
+                    CtorShape::Shorthand { fields, .. } => {
+                        (fields.iter().map(|&index| &object.fields[index].ty).collect(), false)
+                    }
+                })
+                .collect();
+            for (index, (types, variadic)) in shapes.iter().enumerate() {
+                let first = shapes[..index]
+                    .iter()
+                    .position(|(others, other_variadic)| same_overload(types, *variadic, others, *other_variadic) == Some(true));
+                if let Some(first) = first {
+                    let signature = self.overload_signature(&object.name, types, *variadic);
+                    found.push((object.module, object.ctors[index].span, object.ctors[first].span, format!(
+                        "Constructor of object \"{}\" has conflicting overloads with signature {signature}; parameter names and the shorthand form do not distinguish constructors",
+                        object.name
+                    )));
+                }
+            }
+        }
+        let current = self.current;
+        for (module, span, first, message) in found {
+            self.current = module;
+            self.error(span, message);
+            self.first_declared(first, "The constructor is first declared here".to_string());
+        }
+        self.current = current;
+    }
+
+    /// `name(int, ...string)`: an overload's identity as a diagnostic shows it.
+    fn overload_signature(&self, name: &str, types: &[&Ty], variadic: bool) -> String {
+        let shown: Vec<String> = types
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| match ty {
+                Ty::Array(element) if variadic && index + 1 == types.len() => format!("...{}", self.type_name(element)),
+                other => self.type_name(other),
+            })
+            .collect();
+        format!("{name}({})", shown.join(", "))
+    }
+
+    /// One error at the later declaration, and a note at the first (#1005).
+    fn overload_error(&mut self, span: Span, first: Option<Span>, name: &str, message: String) {
+        self.error(span, message);
+        if let Some(first) = first {
+            self.first_declared(first, format!("\"{name}\" is first declared here"));
+        }
+    }
+
+    /// The note at a first declaration, once however many twins it has.
+    fn first_declared(&mut self, span: Span, message: String) {
+        let module = self.current;
+        if !self.errors.iter().any(|error| error.module == module && error.span == span && error.message == message) {
+            self.error(span, message);
+        }
     }
 
     fn collect_does(&mut self, module: usize) {
@@ -3303,38 +3356,25 @@ impl<'a> Registry<'a> {
     }
 }
 
-/// Перегрузки одного имени: одинаковые сигнатуры неразличимы (у variadic
-/// имена не различают — их вызов позиционный). Перегрузки одной арности
-/// с разными типами или именами параметров могут иметь разные результаты
-/// (Библия 13.3, п. 6; #987). Арность — число параметров, variadic-хвост —
-/// один параметр.
-fn overload_conflict(
-    methods: &[MethodInfo<'_>],
-    method: &MethodInfo<'_>,
-    object: &str,
-) -> Option<String> {
-    for other in methods.iter().filter(|other| other.name == method.name) {
-        let same_types = method.variadic == other.variadic
-            && method.params.len() == other.params.len()
-            && method
-                .params
-                .iter()
-                .zip(&other.params)
-                .all(|((_, left), (_, right))| left == right);
-        let same_names = method.variadic
-            || method
-                .params
-                .iter()
-                .zip(&other.params)
-                .all(|((left, _), (right, _))| left == right);
-        if same_types && same_names {
-            return Some(format!(
-                "Action \"{}\" on object \"{object}\" is declared twice with the same signature",
-                method.name
-            ));
-        }
+/// Overload identity (#1005, owner decision 2026-11-23): one rule for actions,
+/// role signatures, fakes and constructors — the number and resolved types of
+/// the parameters and the variadic shape. Parameter names, results, `async`,
+/// `hidden` and successor markers do not distinguish overloads. `None` when a
+/// type already failed to resolve: no duplicate is reported from it.
+fn same_overload(left: &[&Ty], left_variadic: bool, right: &[&Ty], right_variadic: bool) -> Option<bool> {
+    if left.iter().chain(right).any(|ty| ty.is_error()) {
+        return None;
     }
-    None
+    Some(left_variadic == right_variadic && left == right)
+}
+
+/// The earlier action of `methods` whose overload identity `method` repeats.
+fn overload_twin<'m, 'a>(methods: &'m [MethodInfo<'a>], method: &MethodInfo<'_>) -> Option<&'m MethodInfo<'a>> {
+    let types: Vec<&Ty> = method.params.iter().map(|(_, ty)| ty).collect();
+    methods.iter().filter(|other| other.name == method.name).find(|other| {
+        let others: Vec<&Ty> = other.params.iter().map(|(_, ty)| ty).collect();
+        same_overload(&types, method.variadic, &others, other.variadic) == Some(true)
+    })
 }
 
 /// Does a value of `ty` hold an action value anywhere: also under the type
@@ -3386,10 +3426,14 @@ fn hidden_names(program: &ast::Program) -> HashSet<String> {
 /// The system type a declaration cannot take the name of (#987): the role
 /// `Error` and the enums `Maybe` and `Presence` are declared by the
 /// language, not by the program.
+/// The system type names (#1005): no declaration of any kind, nor a type
+/// parameter, may take one.
 fn reserved_type_name(name: &str) -> Option<String> {
     match name {
         "Error" => Some("\"Error\" is the name of the system role".to_string()),
         "Maybe" | "Presence" => Some(format!("\"{name}\" is the name of a system enum")),
+        "Future" => Some("\"Future\" is the name of the system type of an async result".to_string()),
+        "NativeFailure" | "Cancelled" => Some(format!("\"{name}\" is the name of a system object")),
         _ => None,
     }
 }

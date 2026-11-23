@@ -174,7 +174,14 @@ constructor = TYPE_NAME parameter_list block                      (* full *)
 The constructor's name must match the object: "Constructor name must match
 enclosing object." A shorthand cannot mix `:field` entries with typed
 parameters. `Name() {}` and `Name();` are different forms. Full constructors
-take parameter defaults like actions.
+take parameter defaults like actions. Constructors and actions share one
+overload identity, the name, the parameter count, the parameter types and the
+variadic shape; a shorthand's types are those of its fields (§12.5, §13.3).
+
+The six system type names `Error`, `Maybe`, `Presence`, `Future`,
+`NativeFailure` and `Cancelled` cannot name an object, a role, an enum, a
+native object or a type parameter: `"Maybe" is the name of a system enum`.
+They remain free as binding names.
 
 ```text
 action_decl    = [ "async" ] LOWER_NAME parameter_list "is" result block ;

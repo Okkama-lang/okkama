@@ -1138,6 +1138,163 @@ fn system_type_names_are_reserved() {
     );
 }
 
+/// #1005: every system type name is reserved for every nominal declaration
+/// and for type parameters; the message names what the system type is.
+#[test]
+fn all_six_system_type_names_are_reserved_everywhere() {
+    let what = |name: &str| match name {
+        "Error" => "\"Error\" is the name of the system role".to_string(),
+        "Maybe" | "Presence" => format!("\"{name}\" is the name of a system enum"),
+        "Future" => "\"Future\" is the name of the system type of an async result".to_string(),
+        _ => format!("\"{name}\" is the name of a system object"),
+    };
+    for name in ["Error", "Maybe", "Presence", "Future", "NativeFailure", "Cancelled"] {
+        for decl in [
+            format!("object {name} {{ {name}(); }}"),
+            format!("role {name} {{ go() is int; }}"),
+            format!("enum {name} = (a, b);"),
+            format!("native object {name};"),
+        ] {
+            assert_eq!(messages(&format!("{decl} main() is int {{ 0; }}")), [what(name)], "{decl}");
+        }
+        for decl in [
+            format!("object Box<{name}> {{ Box(); }}"),
+            format!("role Holder<{name}> {{ go() is int; }}"),
+            format!("enum Choice<{name}> = (a, b);"),
+        ] {
+            assert_eq!(
+                messages(&format!("{decl} main() is int {{ 0; }}")),
+                [format!("{}; it cannot name a type parameter", what(name))],
+                "{decl}"
+            );
+        }
+    }
+    // The value namespace is untouched: a binding may still be called so.
+    assert!(messages("main() is int { let Maybe = 1; let Cancelled = 2; Maybe + Cancelled; }").is_empty());
+    // The system types themselves resolve as before.
+    assert!(messages(
+        "role Waits { async go() is Future<int>; } \
+         main() is int { let m is Maybe<int> = Maybe<int>.none; let p is Presence<int> = Presence<int>.missing; 0; }"
+    ).is_empty());
+}
+
+/// #1005: an overload is its name, arity, parameter types and variadic shape.
+/// Parameter names, result types, `async`, `hidden` and the successor marker
+/// do not distinguish one; the later declaration is the error, the first is
+/// pointed at.
+#[test]
+fn overloads_differing_only_in_names_results_or_markers_conflict() {
+    let conflict = |owner: &str, sig: &str| {
+        format!("Action \"f\" {owner} has conflicting overloads with signature {sig}; parameter names and return types do not distinguish overloads")
+    };
+    for (members, sig) in [
+        ("f(a is int) is int { a; } f(b is int) is int { b; }", "f(int)"),
+        ("f(a is int) is int { a; } f(a is int) is string { \"\"; }", "f(int)"),
+        ("f(a is int) is int { a; } async f(b is int) is int { b; }", "f(int)"),
+        ("f(a is int) is int { a; } hidden f(b is int) is int { b; }", "f(int)"),
+        ("f(a is int, b is string) is int { a; } f(x is int, y is string) is void { }", "f(int, string)"),
+        ("f(a is ...int) is int { 0; } f(b is ...int) is int { 1; }", "f(...int)"),
+        ("f(a is int = 1) is int { a; } f(b is int) is int { b; }", "f(int)"),
+    ] {
+        assert_eq!(
+            messages(&format!("object O {{ O(); {members} }} main() is int {{ 0; }}")),
+            [conflict("on object \"O\"", sig), "\"f\" is first declared here".to_string()],
+            "{members}"
+        );
+    }
+    // Role signatures follow the same rule.
+    assert_eq!(
+        messages("role R { f(a is int) is int; f(b is int) is string; } main() is int { 0; }"),
+        [conflict("of role \"R\"", "f(int)"), "\"f\" is first declared here".to_string()]
+    );
+    // So do the actions of a fake.
+    let fake = test_mode_located(
+        "role R { f(a is int) is int; fake { f(a is int) is int { 1; } f(b is int) is int { 2; } } }\nmain() is int { 0; }",
+    );
+    assert_eq!(fake.first().map(|(_, message)| message.clone()), Some(conflict("of the fake of role \"R\"", "f(int)")));
+}
+
+/// #1005: constructors share the identity of actions. A shorthand
+/// constructor's types are those of the fields it names, in order, including
+/// a field whose type is inferred from its initializer (#967).
+#[test]
+fn constructors_differing_only_in_names_or_form_conflict() {
+    let conflict = |sig: &str| {
+        format!("Constructor of object \"P\" has conflicting overloads with signature {sig}; parameter names and the shorthand form do not distinguish constructors")
+    };
+    for (ctors, sig) in [
+        ("P(a is int, b is int) { x = a; y = b; } P(c is int, d is int) { x = c; y = d; }", "P(int, int)"),
+        ("P(:x, :y); P(a is int, b is int) { x = a; y = b; }", "P(int, int)"),
+        ("P(:x, :y); P(:y, :x);", "P(int, int)"),
+        ("P(a is ...int) { x = 0; y = 0; } P(b is ...int) { x = 1; y = 1; }", "P(...int)"),
+        ("P(:z); P(a is int) { x = 0; y = 0; }", "P(int)"),
+    ] {
+        assert_eq!(
+            messages(&format!("object P {{ has x is int = 0; has y is int = 0; has z = 7; {ctors} }} main() is int {{ 0; }}")),
+            [conflict(sig), "The constructor is first declared here".to_string()],
+            "{ctors}"
+        );
+    }
+}
+
+/// #1005: three twins are two errors and one note at the first declaration.
+#[test]
+fn the_first_declaration_is_noted_once_however_many_twins_follow() {
+    let found = messages(
+        "object O { O(); f(a is int) is int { a; } f(b is int) is int { b; } f(c is int) is int { c; } } main() is int { 0; }",
+    );
+    assert_eq!(found.iter().filter(|message| message.contains("conflicting overloads")).count(), 2);
+    assert_eq!(found.iter().filter(|message| *message == "\"f\" is first declared here").count(), 1);
+    let found = messages("object P { has x is int = 0; P(:x); P(a is int) { x = a; } P(b is int) { x = b; } } main() is int { 0; }");
+    assert_eq!(found.iter().filter(|message| message.contains("conflicting overloads")).count(), 2);
+    assert_eq!(found.iter().filter(|message| *message == "The constructor is first declared here").count(), 1);
+}
+
+/// #1005: what does distinguish overloads — types, arity, variadic shape,
+/// generic arguments — keeps working, with defaults (#993) and named calls.
+#[test]
+fn overloads_distinct_by_types_arity_or_shape_are_accepted() {
+    for members in [
+        "f(a is int) is int { a; } f(a is string) is int { 0; }",
+        "f(a is int) is int { a; } f(a is int, b is int) is int { b; }",
+        "f(a is int) is int { a; } f(a is ...int) is int { 0; }",
+        "f(a is int, b is int = 2) is int { b; } f(a is string) is int { 0; }",
+        "f(a is Maybe<int>) is int { 0; } f(a is Maybe<string>) is int { 1; }",
+        "f(a is int, b is string) is int { 0; } f(a is string, b is int) is int { 1; }",
+    ] {
+        assert!(messages(&format!("object O {{ O(); {members} }} main() is int {{ 0; }}")).is_empty(), "{members}");
+    }
+    assert!(messages(
+        "object P { has x is int = 0; has s is string = \"\"; P(:x); P(:s); P(a is int, b is string) { x = a; s = b; } } main() is int { 0; }"
+    ).is_empty());
+}
+
+/// #1005: a parameter type that does not resolve is reported once; it does
+/// not also make an overload conflict.
+#[test]
+fn an_unknown_parameter_type_does_not_cascade_into_an_overload_conflict() {
+    assert_eq!(
+        messages("object O { O(); f(a is Nope) is int { 0; } f(b is Nope) is int { 1; } } main() is int { 0; }"),
+        ["Type \"Nope\" is not declared", "Type \"Nope\" is not declared"]
+    );
+}
+
+/// #1005: two roles whose same-typed actions differ only in results used to
+/// be implementable through name-only overloads and crashed the role
+/// conformance check; the second action is now a declaration error.
+#[test]
+fn clashing_role_results_through_name_only_overloads_are_a_declaration_error() {
+    let found = messages(
+        "role A { f(x is int) is int; } role B { f(y is int) is string; } \
+         object O does A, B { O(); f(x is int) is int { x; } f(y is int) is string { \"\"; } } \
+         main() is int { 0; }",
+    );
+    assert_eq!(
+        found.first().map(String::as_str),
+        Some("Action \"f\" on object \"O\" has conflicting overloads with signature f(int); parameter names and return types do not distinguish overloads")
+    );
+}
+
 /// #987: `return` in a constant initializer is refused the same way with or
 /// without a value: the initializer is an expression, not an action.
 #[test]

@@ -1299,13 +1299,11 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L03.overloads.named-shape",
       "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overloaded"
      ],
      "mandatory_cases": [
-      "L03.overloads.named-shape",
       "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overloaded"
@@ -1320,12 +1318,14 @@
     "invalid": {
      "cases": [
       "L03.overloads.ambiguous",
+      "L03.overloads.named-shape",
       "L03.overloads.no-candidate",
       "L03.variadic.overload-duplicate-signature",
       "L03.variadic.overload-empty-tail-ambiguous"
      ],
      "mandatory_cases": [
       "L03.overloads.ambiguous",
+      "L03.overloads.named-shape",
       "L03.overloads.no-candidate",
       "L03.variadic.overload-duplicate-signature",
       "L03.variadic.overload-empty-tail-ambiguous"
@@ -7918,12 +7918,14 @@
       "L04.ctor.ambiguous-arity",
       "L04.ctor.missing-initialization",
       "L04.ctor.no-matching-arity",
+      "L04.ctor.shorthand-full-duplicate",
       "L04.decl.missing-constructor"
      ],
      "mandatory_cases": [
       "L04.ctor.ambiguous-arity",
       "L04.ctor.missing-initialization",
       "L04.ctor.no-matching-arity",
+      "L04.ctor.shorthand-full-duplicate",
       "L04.decl.missing-constructor"
      ],
      "requirement": "required"
@@ -31347,5 +31349,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "f703ec8451b3cfb37db8359f01cd08fb623f116362557f9bc7150e906454c3a8"
+ "suite_tree_sha256": "2e859dcb34ce7b48d0728bce421a76c75e980abe4e1f2c1cc268fddbc03e5307"
 }

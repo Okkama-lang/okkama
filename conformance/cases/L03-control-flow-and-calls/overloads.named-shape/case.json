@@ -1,14 +1,14 @@
 {
   "schema": "ocs-case/2",
   "id": "L03.overloads.named-shape",
-  "title": "named calls distinguish same-type signatures",
-  "purpose": "Observe control flow and call semantics.",
+  "title": "parameter names do not distinguish same-type signatures",
+  "purpose": "An overload is its name, arity, parameter types and variadic shape; two actions differing only in parameter names are the same signature.",
   "level": "L03",
   "contracts": [
     {
       "contract": "CALL.OVERLOADS",
       "aspects": [
-        "boundary"
+        "invalid"
       ]
     }
   ],
@@ -23,10 +23,22 @@
     ]
   },
   "expect": {
-    "outcome": "success",
-    "exit_status": 0,
+    "outcome": "error",
+    "failure": {
+      "stages": [
+        "parse",
+        "check",
+        "runtime"
+      ],
+      "categories": [
+        "syntax",
+        "semantic",
+        "runtime"
+      ],
+      "justification": "A declaration-level rule checked after parsing; an implementation may also detect it at registration/runtime. The program must not complete."
+    },
     "stdout": {
-      "text": "30\n300\n"
+      "text": ""
     }
   },
   "spec_refs": [
@@ -36,8 +48,8 @@
     "timeout_s": 30
   },
   "provenance": {
-    "origin": "authored for OCS 0.1.0 from the cited contract text",
-    "expected_basis": "spec 11.8: named calls may distinguish same-type signatures by parameter names."
+    "origin": "migrated by #1005: one overload identity for actions and constructors",
+    "expected_basis": "spec 11.8 (#1005): parameter names and result types do not distinguish overloads."
   },
   "status": "mandatory"
 }
