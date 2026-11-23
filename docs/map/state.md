@@ -69,11 +69,15 @@
 - [x] Dead natives removed: `random_sample_accepted`,
   `random_integer_from_sample`, `random_float_from_sample`, `signal_wait`
   (IDs 386–388, 632 retired; 569 natives).
-- [ ] Open: a lone mark newer than 16.0.0 (U+1ADD) gets width 1, since widths
-  read 16.0.0 properties while clusters are 17.0.0. Other natives without a std
-  caller (fs `chown`/`opendir`/`readdir`/`rewinddir`/`closedir`/locks,
-  `environment_*`, `pg_page_rows`, `file_state_create`, besides the kept legacy
-  SQLite/db_capture ones) are not checked yet.
+- [x] #1019: `unicode.dat` regenerated at Unicode 17.0.0 from ICU4C 78
+  (`gen-unicode.c`); widths, clusters, character properties and regex
+  categories are all 17.0.0, normalization 18.0.0. U+1ADD alone is 0 columns,
+  ORCA U+1FACD 2.
+- [x] #1020: the natives without a std caller removed (555 natives).
+- [ ] Open: fs `chdir`, `read`, `seek`, `truncate` have no std caller either
+  (found by the #1020 scan; `chdir` backs the #40 cwd test). IDNA's UTS #46
+  table (Net::IDN::UTS46) is older than 17.0; its X status keeps refusing
+  17.0 characters.
 
 ## #1011, #1012 Sparrow host net, test reports and data (2026-11-23, feature/1011-host-net)
 

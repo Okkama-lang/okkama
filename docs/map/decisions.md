@@ -338,10 +338,15 @@ however many exits run it.
   NOLFS `unsupported`. Messages may quote the token a statement failed at and
   schema names, never bound values or the path (`std/db/error.ok`).
 - **Unicode versions per surface** (std docs state each, tests pin each):
-  character properties 16.0.0 (`unicode.dat`), normalization 18.0.0, display
-  clusters 17.0.0 with widths from the 16.0.0 properties (not unicode-width,
-  which only rustyline uses), regex properties 16.0.0, CLDR/ICU/UCA as in
-  `std/locale`.
+  character properties 17.0.0 (`unicode.dat`), normalization 18.0.0, display
+  clusters 17.0.0 with widths from the same 17.0.0 properties (not
+  unicode-width, which only rustyline uses), regex properties 17.0.0,
+  CLDR/ICU/UCA as in `std/locale`. #1019 (2026-11-23): clusters and widths
+  share one version; `unicode.dat` comes from ICU4C 78
+  (`tools/runtime-data/gen-unicode.c`, replacing the Perl 5.42 generator that
+  stopped at 16.0), names its version in a `V` line, and a runtime-core test
+  compares it with unicode-segmentation's `UNICODE_VERSION`. Name corrections
+  (NameAliases.txt) still replace the Name, as Unicode::UCD did.
 - **Async refusals.** An async native's refusal is a Future that has already
   failed, decided by `signature().is_async` (process, unix, network, TLS,
   UDP alike); no hand-kept list.
@@ -349,6 +354,13 @@ however many exits run it.
   1.54.1, `convert_to_blocking_file`), pinned by a test.
 - Dead natives `random_sample_accepted`, `random_integer_from_sample`,
   `random_float_from_sample`, `signal_wait` removed (IDs 386–388, 632 retired).
+  #1020: fs `chown`, `opendir`/`readdir`/`rewinddir`/`closedir` (and
+  `DirectoryHandle`), `lock_shared`/`lock_exclusive`/`unlock`,
+  `file_state_create`, `environment_get`/`_set`/`_remove`/`_all` and
+  `pg_page_rows` removed (IDs 149–152, 167–169, 171, 213–217, 616 retired;
+  555 natives). Programs cannot change the environment: os/environment is a
+  snapshot, so host::set_environment went too. The legacy SQLite and
+  db_capture natives stay.
 
 ## Name< in an expression (#1004, lead decision, 2026-11-23)
 

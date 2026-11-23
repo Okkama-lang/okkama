@@ -7,7 +7,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (116)
+## Tags in one layer (115)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -38,7 +38,6 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - OKKAMA_DEV — devtrace: `lib.rs`
 - OKKAMA_DEV_OUT — devtrace: `lib.rs`
 - OKKAMA_DUMP_INVALID_IR — lower: `lowering/mod.rs`
-- OKKAMA_HOST_SESSION_TEST — other: `host.rs`
 - OKKAMA_ICU_LIBDIR — cli: `main.rs`, `repl.rs`
 - OKKAMA_IMPORT_DIRS — cli: `main.rs`
 - OKKAMA_IR_PASSES — lower: `lowering/mod.rs`
