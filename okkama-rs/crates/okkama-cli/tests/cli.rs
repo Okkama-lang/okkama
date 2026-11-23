@@ -2677,3 +2677,21 @@ fn man_publishing_keeps_doctest_validation_and_missing_docs_lint_separate() {
     assert_eq!(lint.status.code(), Some(1));
     assert!(stdout(&lint).contains("warning[missing-docs]"));
 }
+
+/// #1009: a test report shows a byte as 0..255 and a char as the character,
+/// as the language prints them, not as a signed Java byte and a code point.
+#[test]
+fn test_reports_show_bytes_and_chars_as_the_language_prints_them() {
+    let source = TempFile::new(
+        "shown-values.ok",
+        "module app v1.0.0;\nmain() is int { 0; }\ntest \"bytes\" { test.is(byte(200), byte(201)); }\n\
+         test \"chars\" { test.is('Ж', 'Ы'); }\ntest \"arrays\" { test.is(@byte(200, 7), @byte(201, 7)); }\n"
+            .as_bytes(),
+    );
+    let output = run(&["run", "-t", source.path()]);
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(text.contains("expected 201, got 200"), "{text}");
+    assert!(text.contains("expected 'Ы', got 'Ж'"), "{text}");
+    assert!(text.contains("[200, 7]"), "{text}");
+    assert!(!text.contains("-56"), "{text}");
+}

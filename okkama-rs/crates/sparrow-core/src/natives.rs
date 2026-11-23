@@ -1,6 +1,6 @@
-//! Native providers. Arguments and results are words whose representation
-//! follows the native's SPB signature. The full provider set moves here in
-//! stage 4; stage 2 needs the standard output path.
+//! The natives the core serves itself, and the dispatch to the host's
+//! providers (`host`). Arguments and results are words whose representation
+//! follows the native's SPB signature.
 use crate::runtime::{FailureKind, Runtime};
 use crate::word::{Repr, Word};
 use okkama_runtime_abi::Native;

@@ -111,12 +111,13 @@ enum Node<K, V> {
     Branch { keys: Slots<K, CAP>, kids: Slots<Rc<Counted<K, V>>, CAP> },
 }
 
-/// A node, the bytes it is counted for, and the last pass that visited it.
+/// A node, the bytes it is counted for, and the last pass that visited it
+/// (64 bits: a 32-bit pass wrapped after 2^32 collections, #1009).
 #[derive(Debug)]
 struct Counted<K, V> {
     node: Node<K, V>,
     bytes: usize,
-    pass: Cell<u32>,
+    pass: Cell<u64>,
 }
 
 impl<K, V> Node<K, V> {
@@ -460,8 +461,8 @@ impl<K: NodeKey + Clone, V: Clone> PMap<K, V> {
     /// `pass` has visited yet, and mark them visited: a collector tracing
     /// every version it holds, with a new pass per collection, visits a node
     /// that versions share once. Pass 0 is never a pass.
-    pub fn for_each_unvisited(&self, pass: u32, mut visit: impl FnMut(&K, &V)) {
-        fn walk<K, V>(counted: &Counted<K, V>, pass: u32, visit: &mut impl FnMut(&K, &V)) {
+    pub fn for_each_unvisited(&self, pass: u64, mut visit: impl FnMut(&K, &V)) {
+        fn walk<K, V>(counted: &Counted<K, V>, pass: u64, visit: &mut impl FnMut(&K, &V)) {
             if counted.pass.replace(pass) == pass {
                 return;
             }

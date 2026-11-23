@@ -83,10 +83,6 @@ impl Payload for Failure {
     }
 }
 
-/// One stable invocation record per function, shared with generated static,
-/// role and async calls. Only `code` changes, after code/maps publication.
-/// Captures are a per-closure prefix, not a per-function count: the same
-/// function may be closed over different prefixes with different fn types.
 /// #588: the capacities of a session runtime: functions (the invocation table) and object descriptors (the role
 /// dispatch tables).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +91,10 @@ pub struct Capacities {
     pub objects: usize,
 }
 
+/// One stable invocation record per function, shared with generated static,
+/// role and async calls. Only `code` changes, after code/maps publication.
+/// Captures are a per-closure prefix, not a per-function count: the same
+/// function may be closed over different prefixes with different fn types.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Invocation {
@@ -163,7 +163,7 @@ pub struct Runtime {
     /// When this runtime was made: `--stats` reports the run's wall time, so
     /// machine code ≈ run − compile − collection (#55).
     created: std::time::Instant,
-    /// The command (`sparrow-next`, FILE.spb) process workers run; empty
+    /// The command (`sparrow`, FILE.spb) process workers run; empty
     /// when the embedder configured none.
     pub worker_command: Vec<std::ffi::OsString>,
     /// Budgets of the next run (`budget::Limits`); set before it starts.
@@ -941,7 +941,9 @@ impl Runtime {
         let result = self.run_function(entry, stack)?;
         match self.heap.integer(result) {
             Integer::Small(n) => Ok(n),
-            Integer::Big(n) => n.to_i64().ok_or_else(|| Error("entry result outside 0..255".into())),
+            // Past i64 the result is out of range as surely as within it: the
+            // same message the CLIs give for any result outside 0..255 (#1009).
+            Integer::Big(n) => n.to_i64().ok_or_else(|| Error(format!("main() must return an int in 0..255, got {n}"))),
         }
     }
 
@@ -980,7 +982,7 @@ impl Runtime {
             entry_frame: frame_pointer!(),
             scratch: UNBOUND,
         };
-        // A Champ async entry runs its own root Future through the same scheduler (draft 3 §3).
+        // An async entry runs its own root Future through the same scheduler (draft 3 §3).
         let result = if asynchronous {
             // The root Future, its task tree, then shutdown of spawned tasks.
             let root = self.future_new(entry, arguments);

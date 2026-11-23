@@ -15,9 +15,7 @@
 //!   step, memory and output budgets and the host's interrupt flag stop
 //!   runaway code (async cancellation still cannot stop a synchronous loop).
 //!
-//! Stages: 1 heap and values, 2 synchronous execution, 3 async, 4 natives and
-//! CLI (`sparrow-next` switches here), 5 performance and std/db, 6 removal of
-//! `sparrow-engine`.
+//! The `sparrow` binary (`sparrow-cli`) and `okkama run` drive this crate.
 
 // Runtime helpers are `extern "C"` entry points of machine code: they take
 // the context as a raw pointer and are sound for the code that calls them.

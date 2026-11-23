@@ -497,7 +497,7 @@ impl Runtime {
             if !self.is_driver(frame) && self.sole_awaiter(awaited, frame) {
                 set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
                 set(frame, FLAGS, get(frame, FLAGS) | DELIVER_NOW);
-                // Champ's await receipt (draft 3 §4.1): this waiter stays to see its own child settle.
+                // The await receipt (draft 3 §4.1): this waiter stays to see its own child settle.
                 self.cancel_running(awaited);
                 return;
             }
@@ -607,10 +607,10 @@ impl Runtime {
                 FAILURE_STATE => {
                     let reported = get(task, FLAGS) & OBSERVED == 0
                         && !matches!(self.failure(get(task, FAILURE)).map(|f| &f.kind), Some(FailureKind::Cancelled));
-                    // A detached Champ driver that failed keeps its record while its INPUTS wait for the root closer.
+                    // A detached driver that failed keeps its record while its INPUTS wait for the root closer.
                     reported
                 }
-                // Champ KL-1 (draft 3 §7.2, #699): a detached Future keeps its record while its outcome packet
+                // KL-1 (draft 3 §7.2, #699): a detached Future keeps its record while its outcome packet
                 // waits for the root closer at shutdown.
                 _ => false,
             };
@@ -673,7 +673,7 @@ impl Runtime {
 
     pub(crate) fn cancel(&mut self, ctx: *mut Ctx, future: Word) {
         let _ = ctx;
-        // A Champ Future settles by its own rows: a cold one with its emergency failure (draft 3 §4.3).
+        // A Future settles by its own rows: a cold one with its emergency failure (draft 3 §4.3).
         match get(future, STATE) {
             COLD => {
                 let failure = self.cancelled_failure();

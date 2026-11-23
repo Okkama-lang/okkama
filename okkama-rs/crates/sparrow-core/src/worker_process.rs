@@ -98,21 +98,15 @@ impl std::fmt::Debug for Request {
     }
 }
 impl Request {
-    pub fn new(
-        command: Vec<OsString>,
-        input: Vec<u8>,
-        environment: Option<std::collections::BTreeMap<String, String>>,
-    ) -> Rc<Self> {
-        Self::from_command(worker_command(command), input, environment)
+    /// A worker run of `command`. It inherits the process's environment (the
+    /// previous engine's environment override is gone, #1009).
+    pub fn new(command: Vec<OsString>, input: Vec<u8>) -> Rc<Self> {
+        Self::from_command(worker_command(command), input)
     }
-    fn from_command(
-        command: Vec<OsString>,
-        input: Vec<u8>,
-        environment: Option<std::collections::BTreeMap<String, String>>,
-    ) -> Rc<Self> {
+    fn from_command(command: Vec<OsString>, input: Vec<u8>) -> Rc<Self> {
         let (cancelled, wait) = tokio::sync::watch::channel(false);
         Rc::new(Self {
-            body: RefCell::new(Some(Box::pin(run(command, input, environment, wait)))),
+            body: RefCell::new(Some(Box::pin(run(command, input, wait)))),
             result: RefCell::new(None),
             cancelled,
         })
@@ -180,20 +174,14 @@ fn output_limit() -> Result<usize, Rc<Failure>> {
 fn failed(message: impl ToString) -> Rc<Failure> {
     Rc::new(Failure::Process(message.to_string()))
 }
-async fn run(
-    command: Vec<OsString>,
-    input: Vec<u8>,
-    environment: Option<std::collections::BTreeMap<String, String>>,
-    cancelled: tokio::sync::watch::Receiver<bool>,
-) -> Outcome {
+async fn run(command: Vec<OsString>, input: Vec<u8>, cancelled: tokio::sync::watch::Receiver<bool>) -> Outcome {
     let output_limit = output_limit()?;
-    run_with_limit(command, input, environment, cancelled, output_limit).await
+    run_with_limit(command, input, cancelled, output_limit).await
 }
 
 async fn run_with_limit(
     command: Vec<OsString>,
     input: Vec<u8>,
-    environment: Option<std::collections::BTreeMap<String, String>>,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
     output_limit: usize,
 ) -> Outcome {
@@ -204,9 +192,6 @@ async fn run_with_limit(
         .split_first()
         .ok_or_else(|| failed("empty worker command"))?;
     let mut command = tokio::process::Command::new(executable);
-    if let Some(environment) = environment {
-        command.env_clear().envs(environment);
-    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command
@@ -297,7 +282,6 @@ mod tests {
                         "head -c 65536 /dev/zero; exec sleep 5".into(),
                     ],
                     vec![],
-                    None,
                     wait,
                     4096,
                 ),
@@ -338,7 +322,6 @@ mod tests {
                     "sleep 5 & printf done".into(),
                 ],
                 vec![],
-                None,
             );
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
@@ -366,7 +349,6 @@ mod tests {
                     "printf ready; printf error >&2; exec sleep 60".into(),
                 ],
                 vec![],
-                None,
             );
             let wait = std::future::poll_fn(|cx| request.poll(cx));
             tokio::pin!(wait);
@@ -387,7 +369,6 @@ mod tests {
                     "cat; head -c 200000 /dev/zero >&2".into(),
                 ],
                 vec![b'x'; 200000],
-                None,
             );
             let output = tokio::time::timeout(
                 std::time::Duration::from_secs(3),

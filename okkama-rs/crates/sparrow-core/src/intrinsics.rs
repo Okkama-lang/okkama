@@ -268,7 +268,7 @@ pub(crate) fn thrown(runtime: &mut Runtime, function: usize, index: usize, field
 /// enum lowers to `[$tag, $<case>_<name>: array…]`; the runtime raises its
 /// first case, whose payload values go into one-element arrays.
 fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
-    // A Champ Error enum is the object of its first case: its case number, then its payload (#601 Q1).
+    // An Error enum is the object of its first case: its case number, then its payload (#601 Q1).
     let program = &runtime.loaded.program;
     let fields = &program.objects[descriptor as usize].fields;
     if fields.first().is_none_or(|(name, _)| name != "$tag") {
@@ -750,8 +750,19 @@ fn show_into(
         }
         Some(Type::Str) => out.push_str(runtime.heap.text(word)),
         Some(Type::Bool) => out.push_str(if word == 0 { "false" } else { "true" }),
-        Some(Type::Byte) => out.push_str(&(word as u8 as i8).to_string()),
-        Some(Type::Char) => out.push_str(&word.to_string()),
+        // As the language prints them (#1009): a byte is 0..255, a char is the
+        // character, quoted like a string where strings are.
+        Some(Type::Byte) => out.push_str(&(word as u8).to_string()),
+        Some(Type::Char) => {
+            let ch = char::from_u32(word as u32).unwrap_or(char::REPLACEMENT_CHARACTER);
+            if quoted {
+                out.push('\'');
+                out.push(ch);
+                out.push('\'');
+            } else {
+                out.push(ch);
+            }
+        }
         Some(Type::Int) => out.push_str(&runtime.big_value(word).to_string()),
         Some(Type::Float) => out.push_str(&crate::scalar::float_text(f64::from_bits(word))),
         Some(Type::Rat) => out.push_str(&runtime.rational(word).to_string()),
@@ -761,7 +772,7 @@ fn show_into(
         }
         Some(Type::Array(_)) if word != UNBOUND && runtime.heap.is_bytes(word) => {
             let bytes = runtime.heap.bytes(word);
-            let items = bytes.iter().map(|&byte| (byte as i8).to_string()).collect::<Vec<_>>();
+            let items = bytes.iter().map(|&byte| byte.to_string()).collect::<Vec<_>>();
             out.push_str(&format!("[{}]", items.join(", ")));
         }
         Some(Type::Array(element)) => {
@@ -954,7 +965,10 @@ pub(crate) fn global(ctx: &mut Ctx, runtime: &mut Runtime, index: usize) -> Resu
             call_function(ctx, runtime, init, &[]).ok_or("the init of a constant failed")?
         }
     };
-    runtime.constants.push((word, Repr::Ref));
+    // The root is registered with the constant's own representation: a
+    // scalar constant is not a heap reference (#1009).
+    let repr = runtime.kind_of(runtime.loaded.program.globals[index].ty).repr();
+    runtime.constants.push((word, repr));
     runtime.globals[index] = Some(word);
     Ok(word)
 }
@@ -1017,7 +1031,7 @@ pub(crate) enum NaturalOrder {
 
 /// A stable sort of scalars or text in their natural order. A long sort stops for the interrupt flag or
 /// the memory budget (#238): every few thousand comparisons look at them, and a stop leaves the sort at
-/// once (#283). Champ runs the same sort (#678).
+/// once (#283).
 pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: NaturalOrder)
     -> Result<(), crate::budget::Exhausted>
 {
@@ -1031,7 +1045,8 @@ pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: Natural
             return Err(what);
         }
         Ok(match order {
-            NaturalOrder::Int => runtime.big_value(a).cmp(&runtime.big_value(b)),
+            // Without allocating for small integers (#1009).
+            NaturalOrder::Int => integer_order(runtime, a, b),
             NaturalOrder::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
             NaturalOrder::Rat => runtime.rational(a).compare(runtime.rational(b)),
             NaturalOrder::Str => runtime.heap.text(a).cmp(runtime.heap.text(b)),
@@ -1042,7 +1057,7 @@ pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: Natural
 
 /// A stable bottom-up merge sort whose comparison says whether the left element is greater than the right
 /// one (only then is the right one taken first), or None when it failed. The first failure stops the sort:
-/// no later comparison runs. Champ runs the same merge, so the sequence of comparisons is the same (#678).
+/// no later comparison runs.
 pub(crate) fn merge_order(mut items: Vec<Word>, mut greater: impl FnMut(Word, Word) -> Option<bool>)
     -> Option<Vec<Word>>
 {

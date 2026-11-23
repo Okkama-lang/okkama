@@ -1,4 +1,5 @@
-//! Exact semantics of value instructions without an inline fast path.
+//! Exact semantics of value instructions, where machine code has no inline
+//! path or its fast path misses.
 //!
 //! Machine code stores the words used by the instruction (in `visit` order) and
 //! calls [`rt_exec`]; the helper re-reads the instruction, knows the static type
@@ -288,7 +289,7 @@ impl Runtime {
         let source = &self.loaded.program.functions[function];
         self.loaded.program.ty(source.registers[register.0 as usize])
     }
-    fn kind_of(&self, ty: TypeRef) -> Kind {
+    pub(crate) fn kind_of(&self, ty: TypeRef) -> Kind {
         Kind::of(&self.loaded.program, ty)
     }
     /// A map key (#242): a value whose type is not a key type — an array, a
@@ -470,23 +471,6 @@ pub(crate) fn shared_strings() -> bool {
     *ON.get_or_init(|| std::env::var("OKKAMA_STRINGS").map_or(true, |v| v != "flat"))
 }
 
-/// `left + right` on strings (#255): bytes the size of a new allocation,
-/// checked against the memory budget first, or `None` when it would exceed
-/// it.
-///
-/// A chain of appends writes at the high end of a text buffer when `left`
-/// ends there and there is room, a chain of prepends right before the low
-/// end when `right` starts there. A chain that outgrows its buffer moves to
-/// one twice the size (three quarters of the room in front for prepends, a
-/// quarter for a chain that has grown at both ends), but only when the part
-/// added is at most half the other: `s + s`, or a version made from an
-/// older one (a branch), is copied flat as before, and so is everything
-/// shorter than [`TEXT_CHAIN_MIN`](crate::heap::TEXT_CHAIN_MIN). A flat
-/// string made by `+` from a long part is marked
-/// [`APPENDED`](crate::heap::APPENDED) or [`PREPENDED`](crate::heap::PREPENDED):
-/// its next `+` starts a buffer, and loses the mark, so that more versions
-/// made from it (branches) copy instead of each taking a buffer twice its
-/// size (x86-64 made that +80…375%).
 /// The failure text of a `+` whose result would pass the 4 GiB a string can hold (#985).
 #[cold]
 fn concat_limit() -> String {
@@ -521,6 +505,23 @@ mod concat_limit_tests {
     }
 }
 
+/// `left + right` on strings (#255): bytes the size of a new allocation,
+/// checked against the memory budget first, or `None` when it would exceed
+/// it.
+///
+/// A chain of appends writes at the high end of a text buffer when `left`
+/// ends there and there is room, a chain of prepends right before the low
+/// end when `right` starts there. A chain that outgrows its buffer moves to
+/// one twice the size (three quarters of the room in front for prepends, a
+/// quarter for a chain that has grown at both ends), but only when the part
+/// added is at most half the other: `s + s`, or a version made from an
+/// older one (a branch), is copied flat as before, and so is everything
+/// shorter than [`TEXT_CHAIN_MIN`](crate::heap::TEXT_CHAIN_MIN). A flat
+/// string made by `+` from a long part is marked
+/// [`APPENDED`](crate::heap::APPENDED) or [`PREPENDED`](crate::heap::PREPENDED):
+/// its next `+` starts a buffer, and loses the mark, so that more versions
+/// made from it (branches) copy instead of each taking a buffer twice its
+/// size (x86-64 made that +80…375%).
 pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: impl Fn(&Runtime, usize) -> bool) -> Option<Word> {
     use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
     let (lh, rh) = (runtime.heap.header_of(left), runtime.heap.header_of(right));
@@ -661,7 +662,7 @@ fn prepend_shared(runtime: &mut Runtime, repr: Repr, words: &[Word], size: usize
     Some(runtime.heap.allocate_view(repr, buffer, room, size))
 }
 
-/// `a + b + …` on arrays, for Tomato and Champ (#826): a chain of appends
+/// `a + b + …` on arrays (#826): a chain of appends
 /// (#246) or prepends (#247) writes into a shared buffer; anything else is
 /// copied flat once, for the sum of the parts' lengths, and marked so that
 /// the next append or prepend to a long result starts a chain. A byte array
@@ -699,7 +700,7 @@ pub(crate) fn concat_arrays(runtime: &mut Runtime, repr: Repr, bytes: bool, word
     array
 }
 
-/// `array.slice(start, end)` (and `take`, `drop`), for Tomato and Champ: a
+/// `array.slice(start, end)` (and `take`, `drop`): a
 /// view of the origin's storage when it keeps at least half of it (#249),
 /// else a copy of the range.
 pub(crate) fn slice_array(runtime: &mut Runtime, array: Word, start: Word, end: Word) -> Result<Word, String> {
@@ -726,7 +727,7 @@ fn position_inside(runtime: &Runtime, array: Word, index: Word) -> Result<usize,
         .ok_or_else(|| "Array index out of bounds".to_string())
 }
 
-/// `array.removed(index)`, for Tomato and Champ: a copy without one element
+/// `array.removed(index)`: a copy without one element
 /// (#251); `array.get`'s bounds.
 pub(crate) fn remove_at(runtime: &mut Runtime, array: Word, index: Word) -> Result<Word, String> {
     let at = position_inside(runtime, array, index)?;
@@ -741,7 +742,7 @@ pub(crate) fn remove_at(runtime: &mut Runtime, array: Word, index: Word) -> Resu
     Ok(runtime.heap.allocate_array(repr, &items))
 }
 
-/// `array.replaced(index, item)`, for Tomato and Champ: a copy with one
+/// `array.replaced(index, item)`: a copy with one
 /// element replaced; a chain of replacements in a large array becomes a
 /// trie, which copies one path per replacement instead of the array (#250).
 /// `array.get`'s bounds.
@@ -1080,11 +1081,11 @@ pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word
     }
 }
 
-/// Grow a builder's items and charge the capacity its vector took on
-/// (#331): O(1), and nothing at all while the capacity holds.
 /// The most integers a range adds to a builder at once (#448).
 pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
 
+/// Grow a builder's items and charge the capacity its vector took on
+/// (#331): O(1), and nothing at all while the capacity holds.
 pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
     let grown = {
         let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
@@ -1114,8 +1115,9 @@ pub extern "C" fn rt_exec(
     let ctx = unsafe { &mut *ctx };
     let runtime = unsafe { &mut *ctx.runtime };
     let function = function as usize;
-    // SAFETY: the loaded program is never mutated while machine code runs, so
-    // the instruction stays valid while the runtime is borrowed mutably.
+    // SAFETY: the functions' code is never mutated while machine code runs
+    // (`global` swaps only `program.globals[i].data`, another Vec), so the
+    // instruction stays valid while the runtime is borrowed mutably.
     let instruction: &I = unsafe { &*(&runtime.loaded.program.functions[function].code[pc as usize] as *const I) };
     runtime.count(|_| format!("exec {}", instruction.mnemonic()));
     // Direction-specific denominators for #537. Other cvt forms still use
@@ -1596,9 +1598,9 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             let map = map_for(runtime, function, dst.0)?;
             runtime.heap.allocate_payload(Box::new(map))
         }),
-        I::MapBuilderPut { builder, key, value: item, .. } => {
-            let (builder, key, item) = (value(builder), value(key), value(item));
-            let (key_kind, key_type) = map_key(runtime, function, *builder_register(instruction));
+        I::MapBuilderPut { builder: register, key, value: item, .. } => {
+            let (key_kind, key_type) = map_key(runtime, function, *register);
+            let (builder, key, item) = (value(register), value(key), value(item));
             let k = runtime.checked_key(key, key_kind, key_type)?;
             let map = runtime.heap.payload_mut::<MapValue>(builder).expect("map builder");
             // A new entry of a standard map is Rust memory the builder took
@@ -1649,14 +1651,12 @@ pub fn map_find(runtime: &Runtime, function: usize, pc: usize, map: Word, key: W
         return None;
     };
     let (key_kind, key_type) = map_key(runtime, function, *register);
-    runtime.lookup(map, key, key_kind, key_type).ok().flatten()
-}
-
-fn builder_register(instruction: &I) -> &okkama_sparrow::Register {
-    match instruction {
-        I::MapBuilderPut { builder, .. } => builder,
-        _ => unreachable!("map builder instruction"),
-    }
+    // A key the map cannot hold is refused by the type checker before any run:
+    // `m[k] else d` has no failure path, so a refusal here would read as
+    // "absent" while `map.get` fails (#1009).
+    let found = runtime.lookup(map, key, key_kind, key_type);
+    debug_assert!(found.is_ok(), "a type-checked map key");
+    found.ok().flatten()
 }
 
 fn element_repr(runtime: &Runtime, array: Word) -> Repr {
@@ -1803,7 +1803,7 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
     convert_scalar(runtime, from, to, word)
 }
 
-/// `cvt` between scalar types on Tomato's representations; Champ's `Convert` shares it.
+/// `cvt` between scalar types.
 pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Option<Type>, word: Word) -> Outcome {
     match (from, to) {
         (Some(Type::Int), Some(Type::Str)) => Ok(int_text(runtime, word)),
@@ -1836,7 +1836,7 @@ pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Opti
             Ok(runtime.text_new(&text))
         }
         (Some(Type::Int), Some(Type::Char)) => {
-            let code = int_value(runtime, word);
+            let code = runtime.int_value(word);
             Ok(u64::from(u32::from(okkama_runtime_core::strings::character(&code)?)))
         }
         (Some(Type::Int), Some(Type::Float)) => {
@@ -1862,14 +1862,7 @@ pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Opti
 }
 
 /// An `int` word as the IR engine's integer, for the shared string contracts.
-fn int_value(runtime: &Runtime, word: Word) -> okkama_runtime_core::IntValue {
-    match runtime.small_or_big(word) {
-        Some(n) => okkama_runtime_core::IntValue::from_i64(n),
-        None => okkama_runtime_core::IntValue::parse(&runtime.big_value(word).to_string()).expect("decimal digits"),
-    }
-}
-
-// ---- scalar semantics shared by Tomato's instructions and Champ's SPB 17 helper ----
+// ---- scalar semantics of the instructions ----
 
 /// The two-operand bit operations of int and byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2123,7 +2116,7 @@ pub(crate) fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outco
             Ok(runtime.text_new(&result))
         }
         StrFn::Repeat => {
-            let count = int_value(runtime, args[1]);
+            let count = runtime.int_value(args[1]);
             let repeated = strings::repeat(runtime.heap.text(args[0]), &count)?;
             Ok(runtime.text_new(&repeated))
         }

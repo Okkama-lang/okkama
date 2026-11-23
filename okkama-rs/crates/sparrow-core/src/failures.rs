@@ -24,7 +24,8 @@ enum Owner {
     Static,
 }
 
-/// The owner word of an inline identity (#528): free, dead, or a region's address (aligned, so never 0 or 1).
+/// The owner word of an inline identity (#528): free, dead, static (#909), or a region's address (aligned to 8,
+/// so never 0, 1 or 2).
 const OWNER_FREE: u64 = 0;
 const OWNER_DEAD: u64 = 1;
 const OWNER_STATIC: u64 = 2;
@@ -2035,10 +2036,22 @@ impl Runtime {
                         // SAFETY: Error.text takes its receiver and returns a string.
                         let text = unsafe { crate::jit::invoke(code, ctx, &[object]) };
                         let ctx = unsafe { &mut *ctx };
-                        if ctx.status == OK {
-                            messages.insert(failure, self.heap.text(text).to_owned());
-                        } else {
-                            ctx.status = OK;
+                        match ctx.status {
+                            OK => {
+                                messages.insert(failure, self.heap.text(text).to_owned());
+                            }
+                            // A failure inside `text` leaves the default message.
+                            crate::runtime::FAILED => ctx.status = OK,
+                            // A budget or an engine failure inside `text` is the
+                            // run's outcome, not an "Uncaught" report (#1009).
+                            crate::runtime::EXHAUSTED => {
+                                self.roots.pop();
+                                return self.exhausted_report().0;
+                            }
+                            _ => {
+                                self.roots.pop();
+                                return self.fatal.clone().unwrap_or_else(|| "engine failure".into());
+                            }
                         }
                     }
             }

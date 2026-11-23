@@ -1,5 +1,6 @@
 //! Static facts about a loaded SPB program: the machine representation of every
-//! register and field, heap layouts and the lazily filled code table.
+//! register and field and the heap layouts. The lazily filled code table lives
+//! with the runtime (`runtime.rs`).
 use crate::heap::Layouts;
 use crate::word::Repr;
 use okkama_sparrow::{Program, Type, TypeRef};

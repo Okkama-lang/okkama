@@ -1,13 +1,12 @@
 //! Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-//! in a child `sparrow-next --worker FILE.spb`; arguments and the result cross
-//! as OKW2 transfer values (the previous engine's wire format).
+//! in a child `sparrow --worker FILE.spb`; arguments and the result cross as
+//! OKW2 transfer values (the version after the previous engine's OKW1, #586).
 //!
 //! Core words carry no tags, so values are encoded and decoded by the static
 //! types of the entry function's parameters and result. Only primitives and
 //! arrays and maps of them cross; traversal uses work buffers, never Rust
 //! recursion. The Future of a spawn is a driver frame of a synthetic async
 //! intrinsic (`program::WORKER`) whose driver polls the child process.
-#![allow(unsafe_code)]
 
 use crate::drivers::Step;
 use crate::heap::{Integer, Payload};
@@ -428,7 +427,7 @@ pub fn spawn(runtime: &mut Runtime, ctx: *mut Ctx, entry: Word, arguments: &[Wor
     let future = runtime.future_new(driver, &[]);
     let request = match pool {
         Some(pool) => Request::pooled(pool, runtime.worker_command.clone(), request),
-        None => Request::new(runtime.worker_command.clone(), request, None),
+        None => Request::new(runtime.worker_command.clone(), request),
     };
     let object = runtime.heap.allocate_payload(Box::new(Call { request, result }));
     let slot = runtime.driver_slot(future);
@@ -480,7 +479,12 @@ pub fn drive(runtime: &mut Runtime, frame: Word, deliver: bool) -> Step {
 fn settle(runtime: &mut Runtime, output: &Output, result: Option<TypeRef>) -> Result<Word, String> {
     if !output.success {
         return Err(if output.stderr.is_empty() {
-            format!("spawn worker exited with status {}", output.code.unwrap_or(1))
+            // No exit code: a signal ended the child (SIGKILL, SIGSEGV, the OOM
+            // killer), which status 1 would hide (#1009).
+            match output.code {
+                Some(code) => format!("spawn worker exited with status {code}"),
+                None => "spawn worker was killed by a signal".into(),
+            }
         } else {
             String::from_utf8_lossy(&output.stderr).trim().into()
         });

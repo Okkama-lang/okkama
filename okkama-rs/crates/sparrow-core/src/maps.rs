@@ -47,13 +47,13 @@ pub fn node_memory() -> (usize, usize) {
 }
 
 thread_local! {
-    static PASS: Cell<u32> = const { Cell::new(0) };
+    static PASS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// A collection starts marking: nodes visited from here on are visited in a
 /// new pass ([`PMap::for_each_unvisited`]).
 pub fn begin_pass() {
-    PASS.with(|pass| pass.set(pass.get().checked_add(1).unwrap_or(1)));
+    PASS.with(|pass| pass.set(pass.get() + 1));
 }
 
 impl pmap::NodeKey for Key {

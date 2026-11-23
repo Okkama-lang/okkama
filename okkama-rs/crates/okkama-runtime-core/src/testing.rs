@@ -87,10 +87,9 @@ fn java_text(names: &Names<'_>, value: &Value) -> String {
     match value {
         Value::Int(value) => value.to_string(),
         Value::Bool(value) => value.to_string(),
-        // `java.lang.Byte` знаковый.
-        Value::Byte(value) => (*value as i8).to_string(),
-        // char — `Integer` code point.
-        Value::Char(value) => u32::from(*value).to_string(),
+        // As the language prints them, as Sparrow's report does (#1009).
+        Value::Byte(value) => value.to_string(),
+        Value::Char(value) => value.to_string(),
         Value::Str(text) => text.to_string(),
         Value::Float(value) => java_double(*value),
         Value::Rat(value) => value.to_string(),
