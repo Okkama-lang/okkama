@@ -1544,276 +1544,164 @@ impl StrOp {
     }
 }
 
+/// The operands of an instruction, once for both borrows (#1006): `$iter` is
+/// `iter` or `iter_mut`, `$m` turns a reference into the element (`*v` or `v`).
+macro_rules! instruction_operands {
+    ($kind:expr, $iter:ident, $m:ident) => {
+            match $kind {
+                InstKind::Const(_) => Vec::new(),
+                InstKind::IntBinary { left, right, .. }
+                | InstKind::IntCompare { left, right, .. }
+                | InstKind::BoolCompare { left, right, .. }
+                | InstKind::StrConcat { left, right }
+                | InstKind::StrCompare { left, right, .. } => vec![$m!(left), $m!(right)],
+                InstKind::IntUnary { operand, .. }
+                | InstKind::BoolNot(operand)
+                | InstKind::SuccTake(operand)
+                | InstKind::FutureHandoff(operand)
+                | InstKind::Cvt(operand)
+                | InstKind::RoleWrap(operand)
+                | InstKind::AnyBox(operand)
+                | InstKind::RoleNarrow { value: operand, .. }
+                | InstKind::VariantTag(operand)
+                | InstKind::VariantOf(operand)
+                | InstKind::VariantGet { value: operand, .. }
+                | InstKind::ObjGet {
+                    object: operand, ..
+                }
+                | InstKind::ObjPending {
+                    object: operand, ..
+                }
+                | InstKind::OnceLoad {
+                    object: operand, ..
+                } => vec![$m!(operand)],
+                InstKind::VariantNew { fields, .. } => fields.$iter().map(|v| $m!(v)).collect(),
+                InstKind::CallRole { receiver, args, .. } => {
+                    std::iter::once($m!(receiver)).chain(args.$iter().map(|v| $m!(v))).collect()
+                }
+                InstKind::FailCaused { new, handled } => vec![$m!(new), $m!(handled)],
+                InstKind::ArrayNew(values) => values.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ArrayLen(value)
+                | InstKind::Retag(value)
+                | InstKind::BuilderFinish(value)
+                | InstKind::IntAbs(value)
+                | InstKind::IntSign(value) => vec![$m!(value)],
+                InstKind::ArrayGet { array, index } => vec![$m!(array), $m!(index)],
+                InstKind::ArraySlice { array, start, end } => vec![$m!(array), $m!(start), $m!(end)],
+                InstKind::ArrayReplace { array, index, value } => vec![$m!(array), $m!(index), $m!(value)],
+                InstKind::ArrayRemove { array, index } => vec![$m!(array), $m!(index)],
+                InstKind::ArrayJoin { array, separator } => vec![$m!(array), $m!(separator)],
+                InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ArrayDifference { array: base, removed }
+                | InstKind::MapDifference { map: base, removed } => {
+                    std::iter::once($m!(base)).chain(removed.$iter().map(|v| $m!(v))).collect()
+                }
+                InstKind::BuilderNew => Vec::new(),
+                InstKind::BuilderPush { builder, value } => vec![$m!(builder), $m!(value)],
+                InstKind::BuilderAppend { builder, array } => vec![$m!(builder), $m!(array)],
+                InstKind::BuilderAppendRange {
+                    builder,
+                    start,
+                    end,
+                    ..
+                } => vec![$m!(builder), $m!(start), $m!(end)],
+                InstKind::Str { args, .. } => args.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ValCompare { left, right, .. } => vec![$m!(left), $m!(right)],
+                InstKind::ObjNew { fields, .. } => fields.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ObjNext { object, updates } => std::iter::once($m!(object))
+                    .chain(updates.$iter().map(|(_, value)| $m!(value)))
+                    .collect(),
+                InstKind::Call { args, .. } => args.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ByteBinary { left, right, .. }
+                | InstKind::ByteCompare { left, right, .. }
+                | InstKind::CharCompare { left, right, .. }
+                | InstKind::FloatCompare { left, right, .. }
+                | InstKind::RatCompare { left, right, .. }
+                | InstKind::EnumCompare { left, right, .. } => vec![$m!(left), $m!(right)],
+                InstKind::Float { args, .. } => args.$iter().map(|v| $m!(v)).collect(),
+                InstKind::FloatSign(value) => vec![$m!(value)],
+                InstKind::Rat { args, .. } => args.$iter().map(|v| $m!(v)).collect(),
+                InstKind::RatSign(value) | InstKind::RatPart { value, .. } => vec![$m!(value)],
+                InstKind::RangeNew { start, end, .. } => vec![$m!(start), $m!(end)],
+                InstKind::FnClosure { captures, .. } => captures.$iter().map(|v| $m!(v)).collect(),
+                InstKind::Await(future) | InstKind::AwaitTake(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
+                    vec![$m!(future)]
+                }
+                InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![$m!(owner)],
+                InstKind::ObjInit { object, value, .. } | InstKind::OnceStore { object, value, .. } => vec![$m!(object), $m!(value)],
+                InstKind::CallFn { callee, args }
+                | InstKind::WorkerSpawn {
+                    entry: callee,
+                    args,
+                    ..
+                } => std::iter::once($m!(callee)).chain(args.$iter().map(|v| $m!(v))).collect(),
+                InstKind::WorkerBind {
+                    action,
+                    entry,
+                    fields,
+                } => [$m!(action), $m!(entry)]
+                    .into_iter()
+                    .chain(fields.$iter().map(|v| $m!(v)))
+                    .collect(),
+                InstKind::RangePart { range, .. } => vec![$m!(range)],
+                InstKind::EnumCase { .. } | InstKind::Global(_) | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
+                InstKind::RegionAdopt { region, value } | InstKind::RegionTrack { region, value } => {
+                    vec![$m!(region), $m!(value)]
+                }
+                InstKind::RegionTransfer { from, to, value } => vec![$m!(from), $m!(to), $m!(value)],
+                InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
+                    std::iter::once($m!(region)).chain(keep.$iter().map(|v| $m!(v))).collect()
+                }
+                InstKind::RegionUnwind { region, failure }
+                | InstKind::RegionSettleUnwind { region, failure } => vec![$m!(region), $m!(failure)],
+                InstKind::FailSecondary { primary, cleanup } => vec![$m!(primary), $m!(cleanup)],
+                InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
+                    vec![$m!(value)]
+                }
+                InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
+                    vec![$m!(value), $m!(failure)]
+                }
+                InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![$m!(value)],
+                InstKind::Bits { value, count, .. } => {
+                    std::iter::once($m!(value)).chain(count.$iter().map(|v| $m!(v))).collect()
+                }
+                InstKind::MapNew(entries) => entries.$iter().flat_map(|(k, v)| [$m!(k), $m!(v)]).collect(),
+                InstKind::MapLen(value)
+                | InstKind::MapKeys(value)
+                | InstKind::MapValues(value)
+                | InstKind::MapRetag(value)
+                | InstKind::MapBuilderFinish(value) => vec![$m!(value)],
+                InstKind::MapHas { map, key } | InstKind::MapGet { map, key } => vec![$m!(map), $m!(key)],
+                InstKind::MapBuilderNew => Vec::new(),
+                InstKind::MapBuilderPut {
+                    builder,
+                    key,
+                    value,
+                } => vec![$m!(builder), $m!(key), $m!(value)],
+            }
+    };
+}
+
+macro_rules! copied {
+    ($value:expr) => {
+        *$value
+    };
+}
+
+macro_rules! borrowed {
+    ($value:expr) => {
+        $value
+    };
+}
+
 impl InstKind {
     /// Значения, которые читает инструкция, в порядке операндов.
     pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            InstKind::Const(_) => Vec::new(),
-            InstKind::IntBinary { left, right, .. }
-            | InstKind::IntCompare { left, right, .. }
-            | InstKind::BoolCompare { left, right, .. }
-            | InstKind::StrConcat { left, right }
-            | InstKind::StrCompare { left, right, .. } => vec![*left, *right],
-            InstKind::IntUnary { operand, .. }
-            | InstKind::BoolNot(operand)
-            | InstKind::SuccTake(operand)
-            | InstKind::FutureHandoff(operand)
-            | InstKind::Cvt(operand)
-            | InstKind::RoleWrap(operand)
-            | InstKind::AnyBox(operand)
-            | InstKind::RoleNarrow { value: operand, .. }
-            | InstKind::VariantTag(operand)
-            | InstKind::VariantOf(operand)
-            | InstKind::VariantGet { value: operand, .. }
-            | InstKind::ObjGet {
-                object: operand, ..
-            }
-            | InstKind::ObjPending {
-                object: operand, ..
-            }
-            | InstKind::OnceLoad {
-                object: operand, ..
-            } => vec![*operand],
-            InstKind::VariantNew { fields, .. } => fields.clone(),
-            InstKind::CallRole { receiver, args, .. } => std::iter::once(*receiver)
-                .chain(args.iter().copied())
-                .collect(),
-            InstKind::FailCaused { new, handled } => vec![*new, *handled],
-            InstKind::ArrayNew(values) => values.clone(),
-            InstKind::ArrayLen(value)
-            | InstKind::Retag(value)
-            | InstKind::BuilderFinish(value)
-            | InstKind::IntAbs(value)
-            | InstKind::IntSign(value) => vec![*value],
-            InstKind::ArrayGet { array, index } => vec![*array, *index],
-            InstKind::ArraySlice { array, start, end } => vec![*array, *start, *end],
-            InstKind::ArrayReplace { array, index, value } => vec![*array, *index, *value],
-            InstKind::ArrayRemove { array, index } => vec![*array, *index],
-            InstKind::ArrayJoin { array, separator } => vec![*array, *separator],
-            InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.clone(),
-            InstKind::ArrayDifference { array: base, removed }
-            | InstKind::MapDifference { map: base, removed } => {
-                std::iter::once(*base).chain(removed.iter().copied()).collect()
-            }
-            InstKind::BuilderNew => Vec::new(),
-            InstKind::BuilderPush { builder, value } => vec![*builder, *value],
-            InstKind::BuilderAppend { builder, array } => vec![*builder, *array],
-            InstKind::BuilderAppendRange {
-                builder,
-                start,
-                end,
-                ..
-            } => vec![*builder, *start, *end],
-            InstKind::Str { args, .. } => args.clone(),
-            InstKind::ValCompare { left, right, .. } => vec![*left, *right],
-            InstKind::ObjNew { fields, .. } => fields.clone(),
-            InstKind::ObjNext { object, updates } => std::iter::once(*object)
-                .chain(updates.iter().map(|(_, value)| *value))
-                .collect(),
-            InstKind::Call { args, .. } => args.clone(),
-            InstKind::ByteBinary { left, right, .. }
-            | InstKind::ByteCompare { left, right, .. }
-            | InstKind::CharCompare { left, right, .. }
-            | InstKind::FloatCompare { left, right, .. }
-            | InstKind::RatCompare { left, right, .. }
-            | InstKind::EnumCompare { left, right, .. } => vec![*left, *right],
-            InstKind::Float { args, .. } => args.clone(),
-            InstKind::FloatSign(value) => vec![*value],
-            InstKind::Rat { args, .. } => args.clone(),
-            InstKind::RatSign(value) | InstKind::RatPart { value, .. } => vec![*value],
-            InstKind::RangeNew { start, end, .. } => vec![*start, *end],
-            InstKind::FnClosure { captures, .. } => captures.clone(),
-            InstKind::Await(future) | InstKind::AwaitTake(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
-                vec![*future]
-            }
-            InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![*owner],
-            InstKind::ObjInit { object, value, .. } | InstKind::OnceStore { object, value, .. } => vec![*object, *value],
-            InstKind::CallFn { callee, args }
-            | InstKind::WorkerSpawn {
-                entry: callee,
-                args,
-                ..
-            } => std::iter::once(*callee)
-                .chain(args.iter().copied())
-                .collect(),
-            InstKind::WorkerBind {
-                action,
-                entry,
-                fields,
-            } => [*action, *entry]
-                .into_iter()
-                .chain(fields.iter().copied())
-                .collect(),
-            InstKind::RangePart { range, .. } => vec![*range],
-            InstKind::EnumCase { .. } | InstKind::Global(_) | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
-            InstKind::RegionAdopt { region, value } | InstKind::RegionTrack { region, value } => {
-                vec![*region, *value]
-            }
-            InstKind::RegionTransfer { from, to, value } => vec![*from, *to, *value],
-            InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
-                std::iter::once(*region).chain(keep.iter().copied()).collect()
-            }
-            InstKind::RegionUnwind { region, failure }
-            | InstKind::RegionSettleUnwind { region, failure } => vec![*region, *failure],
-            InstKind::FailSecondary { primary, cleanup } => vec![*primary, *cleanup],
-            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
-                vec![*value]
-            }
-            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
-                vec![*value, *failure]
-            }
-            InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![*value],
-            InstKind::Bits { value, count, .. } => std::iter::once(*value)
-                .chain(count.iter().copied())
-                .collect(),
-            InstKind::MapNew(entries) => entries.iter().flat_map(|(k, v)| [*k, *v]).collect(),
-            InstKind::MapLen(value)
-            | InstKind::MapKeys(value)
-            | InstKind::MapValues(value)
-            | InstKind::MapRetag(value)
-            | InstKind::MapBuilderFinish(value) => vec![*value],
-            InstKind::MapHas { map, key } | InstKind::MapGet { map, key } => vec![*map, *key],
-            InstKind::MapBuilderNew => Vec::new(),
-            InstKind::MapBuilderPut {
-                builder,
-                key,
-                value,
-            } => vec![*builder, *key, *value],
-        }
+        instruction_operands!(self, iter, copied)
     }
 
     pub fn operands_mut(&mut self) -> Vec<&mut ValueId> {
-        match self {
-            InstKind::Const(_) => Vec::new(),
-            InstKind::IntBinary { left, right, .. }
-            | InstKind::IntCompare { left, right, .. }
-            | InstKind::BoolCompare { left, right, .. }
-            | InstKind::StrConcat { left, right }
-            | InstKind::StrCompare { left, right, .. } => vec![left, right],
-            InstKind::IntUnary { operand, .. }
-            | InstKind::BoolNot(operand)
-            | InstKind::SuccTake(operand)
-            | InstKind::FutureHandoff(operand)
-            | InstKind::Cvt(operand)
-            | InstKind::RoleWrap(operand)
-            | InstKind::AnyBox(operand)
-            | InstKind::RoleNarrow { value: operand, .. }
-            | InstKind::VariantTag(operand)
-            | InstKind::VariantOf(operand)
-            | InstKind::VariantGet { value: operand, .. }
-            | InstKind::ObjGet {
-                object: operand, ..
-            }
-            | InstKind::ObjPending {
-                object: operand, ..
-            }
-            | InstKind::OnceLoad {
-                object: operand, ..
-            } => vec![operand],
-            InstKind::VariantNew { fields, .. } => fields.iter_mut().collect(),
-            InstKind::CallRole { receiver, args, .. } => {
-                std::iter::once(receiver).chain(args.iter_mut()).collect()
-            }
-            InstKind::FailCaused { new, handled } => vec![new, handled],
-            InstKind::ArrayNew(values) => values.iter_mut().collect(),
-            InstKind::ArrayLen(value)
-            | InstKind::Retag(value)
-            | InstKind::BuilderFinish(value)
-            | InstKind::IntAbs(value)
-            | InstKind::IntSign(value) => vec![value],
-            InstKind::ArrayGet { array, index } => vec![array, index],
-            InstKind::ArraySlice { array, start, end } => vec![array, start, end],
-            InstKind::ArrayReplace { array, index, value } => vec![array, index, value],
-            InstKind::ArrayRemove { array, index } => vec![array, index],
-            InstKind::ArrayJoin { array, separator } => vec![array, separator],
-            InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.iter_mut().collect(),
-            InstKind::ArrayDifference { array: base, removed }
-            | InstKind::MapDifference { map: base, removed } => {
-                std::iter::once(base).chain(removed.iter_mut()).collect()
-            }
-            InstKind::BuilderNew => Vec::new(),
-            InstKind::BuilderPush { builder, value } => vec![builder, value],
-            InstKind::BuilderAppend { builder, array } => vec![builder, array],
-            InstKind::BuilderAppendRange {
-                builder,
-                start,
-                end,
-                ..
-            } => vec![builder, start, end],
-            InstKind::Str { args, .. } => args.iter_mut().collect(),
-            InstKind::ValCompare { left, right, .. } => vec![left, right],
-            InstKind::ObjNew { fields, .. } => fields.iter_mut().collect(),
-            InstKind::ObjNext { object, updates } => std::iter::once(object)
-                .chain(updates.iter_mut().map(|(_, value)| value))
-                .collect(),
-            InstKind::Call { args, .. } => args.iter_mut().collect(),
-            InstKind::ByteBinary { left, right, .. }
-            | InstKind::ByteCompare { left, right, .. }
-            | InstKind::CharCompare { left, right, .. }
-            | InstKind::FloatCompare { left, right, .. }
-            | InstKind::RatCompare { left, right, .. }
-            | InstKind::EnumCompare { left, right, .. } => vec![left, right],
-            InstKind::Float { args, .. } => args.iter_mut().collect(),
-            InstKind::FloatSign(value) => vec![value],
-            InstKind::Rat { args, .. } => args.iter_mut().collect(),
-            InstKind::RatSign(value) | InstKind::RatPart { value, .. } => vec![value],
-            InstKind::RangeNew { start, end, .. } => vec![start, end],
-            InstKind::FnClosure { captures, .. } => captures.iter_mut().collect(),
-            InstKind::Await(future) | InstKind::AwaitTake(future) | InstKind::FutSpawn(future) | InstKind::Fut { future, .. } => {
-                vec![future]
-            }
-            InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![owner],
-            InstKind::ObjInit { object, value, .. } | InstKind::OnceStore { object, value, .. } => vec![object, value],
-            InstKind::CallFn { callee, args }
-            | InstKind::WorkerSpawn {
-                entry: callee,
-                args,
-                ..
-            } => std::iter::once(callee).chain(args.iter_mut()).collect(),
-            InstKind::WorkerBind {
-                action,
-                entry,
-                fields,
-            } => [action, entry]
-                .into_iter()
-                .chain(fields.iter_mut())
-                .collect(),
-            InstKind::RangePart { range, .. } => vec![range],
-            InstKind::EnumCase { .. } | InstKind::Global(_) | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
-            InstKind::RegionAdopt { region, value } | InstKind::RegionTrack { region, value } => {
-                vec![region, value]
-            }
-            InstKind::RegionTransfer { from, to, value } => vec![from, to, value],
-            InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
-                std::iter::once(region).chain(keep.iter_mut()).collect()
-            }
-            InstKind::RegionUnwind { region, failure }
-            | InstKind::RegionSettleUnwind { region, failure } => vec![region, failure],
-            InstKind::FailSecondary { primary, cleanup } => vec![primary, cleanup],
-            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } | InstKind::ResourceSettle { value } => {
-                vec![value]
-            }
-            InstKind::ResourceUnwind { value, failure } | InstKind::ResourceSettleUnwind { value, failure } => {
-                vec![value, failure]
-            }
-            InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![value],
-            InstKind::Bits { value, count, .. } => {
-                std::iter::once(value).chain(count.iter_mut()).collect()
-            }
-            InstKind::MapNew(entries) => entries.iter_mut().flat_map(|(k, v)| [k, v]).collect(),
-            InstKind::MapLen(value)
-            | InstKind::MapKeys(value)
-            | InstKind::MapValues(value)
-            | InstKind::MapRetag(value)
-            | InstKind::MapBuilderFinish(value) => vec![value],
-            InstKind::MapHas { map, key } | InstKind::MapGet { map, key } => vec![map, key],
-            InstKind::MapBuilderNew => Vec::new(),
-            InstKind::MapBuilderPut {
-                builder,
-                key,
-                value,
-            } => vec![builder, key, value],
-        }
+        instruction_operands!(self, iter_mut, borrowed)
     }
 }
 
