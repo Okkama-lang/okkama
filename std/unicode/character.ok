@@ -17,11 +17,11 @@ import "runtime/unicode_character" take character_name, category_code, character
 // numeric_value() throws NonNumericCharacter when the character has no
 // Unicode Numeric_Value property. name() returns an empty string for
 // unassigned, private-use, control and other characters without a formal
-// Unicode name. Property values are those of Unicode 16.0.0; they do not vary
-// with the operating system or selected backend. A character assigned after
-// 16.0.0 is unassigned here, without a name, even where unicode/normalization
-// (Unicode 18.0.0) or the grapheme clusters of terminal/width (Unicode 17.0.0)
-// already know it.
+// Unicode name. Property values are those of Unicode 17.0.0, the version of
+// the grapheme clusters and widths of terminal/width; they do not vary with
+// the operating system or selected backend. A character assigned after 17.0.0
+// is unassigned here, without a name, even where unicode/normalization
+// (Unicode 18.0.0) already knows it.
 
 // The Unicode General Category of a character.
 enum UnicodeCategory = (uppercase_letter, lowercase_letter, titlecase_letter, modifier_letter, other_letter, nonspacing_mark, spacing_mark, enclosing_mark, decimal_number, letter_number, other_number, connector_punctuation, dash_punctuation, open_punctuation, close_punctuation, initial_punctuation, final_punctuation, other_punctuation, math_symbol, currency_symbol, modifier_symbol, other_symbol, space_separator, line_separator, paragraph_separator, control, format, surrogate, private_use, unassigned);
@@ -179,12 +179,18 @@ test "properties come from the Unicode database" {
     );
 }
 
-test "properties are those of Unicode 16.0" {
+test "properties are those of Unicode 17.0" {
     test.is(UnicodeCharacter('\u{20C0}').name(), "SOM SIGN");
-    test.is(UnicodeCharacter('\u{20C0}').category(), UnicodeCategory.currency_symbol);
-    // U+20C1 SAUDI RIYAL SIGN and the mark U+1ADD came with Unicode 17.0.
-    test.is(UnicodeCharacter('\u{20C1}').name(), "");
-    test.is(UnicodeCharacter('\u{20C1}').category(), UnicodeCategory.unassigned);
-    test.is(UnicodeCharacter('\u{1ADD}').category(), UnicodeCategory.unassigned);
-    test.is(UnicodeCharacter('\u{1ADD}').combining_class(), 0);
+    // U+20C1, the mark U+1ADD and the emoji U+1FACD came with Unicode 17.0.
+    test.is(UnicodeCharacter('\u{20C1}').name(), "SAUDI RIYAL SIGN");
+    test.is(UnicodeCharacter('\u{20C1}').category(), UnicodeCategory.currency_symbol);
+    test.is(UnicodeCharacter('\u{1ADD}').name(), "COMBINING DOT-AND-RING BELOW");
+    test.is(UnicodeCharacter('\u{1ADD}').category(), UnicodeCategory.nonspacing_mark);
+    test.is(UnicodeCharacter('\u{1ADD}').combining_class(), 220);
+    test.is(UnicodeCharacter('\u{1FACD}').name(), "ORCA");
+    // 17.0 gave the cuneiform sign U+12226 the value 1/2.
+    test.is(UnicodeCharacter('\u{12226}').numeric_value(), 0.5);
+    // U+209D LATIN SUBSCRIPT SMALL LETTER W came with Unicode 18.0.
+    test.is(UnicodeCharacter('\u{209D}').name(), "");
+    test.is(UnicodeCharacter('\u{209D}').category(), UnicodeCategory.unassigned);
 }

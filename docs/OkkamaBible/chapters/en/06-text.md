@@ -287,7 +287,7 @@ step is a decision that the program states.
   (Section 6.5). The combining marks are recognised by their Unicode general
   category, *nonspacing mark*, through `unicode/character`, and removed.
   Nothing here guesses: the tables are Unicode's own, 18.0.0 for the
-  decomposition and 16.0.0 for the categories.
+  decomposition and 17.0.0 for the categories.
 - **Everything else separates words.** ASCII letters and digits are kept,
   and any other character becomes a space. `split(" ")` keeps the empty
   fields between repeated spaces (Section 6.4), so `filter` drops them
@@ -358,7 +358,7 @@ backreferences, lookaround, conditionals or recursion, so a bounded
 Thompson automaton can run every pattern in linear time. Its limits are
 explicit, typed failures: 4,096 code points of expression, 256 nested
 groups, 1,024 captures and 16,384 states. Its Unicode data is pinned to
-version 16.0, the same as the string type's. A program that needs a
+version 17.0, the same as the string type's. A program that needs a
 backreference writes the check as code after the match. The cost of that
 is a few lines. The cost of a catastrophic pattern is an outage.
 

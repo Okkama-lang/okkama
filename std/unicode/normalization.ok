@@ -17,8 +17,8 @@ import "runtime/unicode_normalization" take normalized_text;
 // selected Unicode normalization algorithm. The source string remains
 // unchanged and normalizing an already normalized result is idempotent. The
 // normalization data is newer than the character properties of
-// unicode/character (Unicode 16.0.0): a mark added since is reordered and
-// composed by its own combining class here, yet unassigned there.
+// unicode/character (Unicode 17.0.0): a character added since is decomposed
+// and reordered by its own data here, yet unassigned there.
 
 // NFC and NFD compose and decompose; NFKC and NFKD also fold compatibility
 // forms such as `ﬁ`.

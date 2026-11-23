@@ -1,6 +1,7 @@
-//! `runtime/unicode_character`: свойства символов по таблицам Unicode::UCD
-//! Perl (`unicode.dat`) и ширина графем для терминала — перенос
-//! на основе встроенных Unicode-таблиц.
+//! `runtime/unicode_character`: свойства символов (`unicode.dat`, Unicode
+//! 17.0.0 из ICU4C 78, `tools/runtime-data/gen-unicode.c`) и ширина графем
+//! для терминала. Кластеры даёт unicode-segmentation, тоже Unicode 17.0.0:
+//! у кластеров и ширины одна версия (#1019), её закрепляет тест ниже.
 use super::Error;
 use super::support::{array, int_value, string, string_array, text};
 use crate::data;
@@ -167,5 +168,50 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn widths(text: &str) -> Vec<i64> {
+        text.graphemes(true).map(width).collect()
+    }
+
+    #[test]
+    fn widths_and_clusters_follow_one_unicode_version() {
+        // unicode.dat names its version; unicode-segmentation is "1" in
+        // Cargo.toml, so an update to a newer Unicode must regenerate the table.
+        let table = data::unicode()
+            .lines()
+            .find_map(|line| line.strip_prefix("V "))
+            .expect("unicode.dat names its Unicode version");
+        let (major, minor, update) = unicode_segmentation::UNICODE_VERSION;
+        assert_eq!(table, format!("{major}.{minor}.{update}"));
+    }
+
+    #[test]
+    fn a_mark_of_unicode_17_takes_no_column() {
+        // U+1ADD COMBINING DOT-AND-RING BELOW, Unicode 17.0, ccc 220.
+        assert_eq!(widths("\u{1ADD}"), [0]);
+        assert_eq!(widths("\u{1ADD}\u{1ADD}"), [0]);
+        assert_eq!(widths("a\u{1ADD}b"), [1, 1]);
+        assert_eq!(
+            "a\u{1ADD}b".graphemes(true).collect::<Vec<_>>(),
+            ["a\u{1ADD}", "b"]
+        );
+        assert_eq!(data::combining_class(0x1ADD), 220);
+        assert_eq!(data::category(0x1ADD), "Mn");
+    }
+
+    #[test]
+    fn an_emoji_of_unicode_17_takes_two_columns() {
+        // U+1FACD ORCA, Unicode 17.0, Emoji_Presentation.
+        assert_eq!(widths("\u{1FACD}"), [2]);
+        assert_eq!(widths("\u{1FACD}a"), [2, 1]);
+        assert_eq!(name(0x1FACD), "ORCA");
+        // U+16FF2 CHINESE SMALL SIMPLIFIED ER, Unicode 17.0, East Asian Wide.
+        assert_eq!(widths("\u{16FF2}"), [2]);
     }
 }

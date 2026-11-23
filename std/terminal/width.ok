@@ -1,10 +1,9 @@
 module terminal/width v1.0.0;
 
 // How many columns text takes on a terminal, by grapheme cluster: wide East
-// Asian characters and emoji take two, combining marks none. Clusters are the
-// extended grapheme clusters of Unicode 17.0.0; a cluster's width comes from
-// the Unicode 16.0.0 properties of its characters (East Asian Width, emoji
-// presentation, marks).
+// Asian characters and emoji take two, combining marks none. Clusters and
+// widths follow one Unicode version, 17.0.0: the extended grapheme clusters,
+// and the East Asian Width, emoji and mark properties of their characters.
 //
 //     DisplayWidth("日本").columns();                        // 4
 //     TruncatedDisplay(origin: title, width: 20, ellipsis: "…").string();
@@ -171,4 +170,17 @@ test "clusters are Unicode 17.0 grapheme clusters" {
     // U+1ADD, a combining mark of Unicode 17.0, stays with its base.
     test.is(TruncatedDisplay(origin: "a\u{1ADD}b", width: 1, ellipsis: "").string(), "a\u{1ADD}");
     test.is(WrappedDisplay(origin: "a\u{1ADD}b", width: 1).string(), "a\u{1ADD}\nb");
+}
+
+test "widths follow the Unicode 17.0 of the clusters" {
+    // U+1ADD is a mark of no width, alone or after a base.
+    test.is(DisplayWidth("\u{1ADD}").columns(), 0);
+    test.is(DisplayWidth("a\u{1ADD}").columns(), 1);
+    test.is(DisplayWidth("a\u{1ADD}b").columns(), 2);
+    test.is(TruncatedDisplay(origin: "\u{1ADD}ab", width: 1, ellipsis: "").string(), "\u{1ADD}a");
+    // U+1FACD ORCA, an emoji of Unicode 17.0, is wide, as is U+16FF2.
+    test.is(DisplayWidth("\u{1FACD}").columns(), 2);
+    test.is(DisplayWidth("\u{16FF2}").columns(), 2);
+    test.is(TruncatedDisplay(origin: "\u{1FACD}ab", width: 2, ellipsis: "").string(), "\u{1FACD}");
+    test.is(WrappedDisplay(origin: "a\u{1FACD}", width: 2).string(), "a\n\u{1FACD}");
 }

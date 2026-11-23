@@ -4314,7 +4314,7 @@ replace. Offsets count Unicode scalars.
 `for Stdin() -> line` (#221);
 `Indented`, `Dedented`, `Wrapped` and `Shortened` lay out text;
 `Normalized(origin:, form:)` follows Unicode 18.0.0 and
-`UnicodeCharacter(c).name()` Unicode 16.0.0.
+`UnicodeCharacter(c).name()` Unicode 17.0.0.
 
 ### URL and cookie policy in the active v4 stdlib
 
