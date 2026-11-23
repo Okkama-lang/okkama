@@ -566,7 +566,13 @@ enum Json {
 struct Reader<'a> {
     text: &'a [char],
     at: usize,
+    /// Nesting of the value being read: a snapshot is a few levels deep, and
+    /// an unbounded recursion overflowed the stack (#1014).
+    depth: usize,
 }
+
+/// The deepest nesting a certificate snapshot may have.
+const SNAPSHOT_DEPTH: usize = 32;
 
 impl Reader<'_> {
     fn skip(&mut self) {
@@ -586,6 +592,16 @@ impl Reader<'_> {
     }
 
     fn value(&mut self) -> Result<Json, Bad> {
+        if self.depth >= SNAPSHOT_DEPTH {
+            return Err(Bad("invalid"));
+        }
+        self.depth += 1;
+        let value = self.nested_value();
+        self.depth -= 1;
+        value
+    }
+
+    fn nested_value(&mut self) -> Result<Json, Bad> {
         self.skip();
         let c = self.peek()?;
         if c == '[' {
@@ -755,7 +771,7 @@ fn read_facts(source: &str) -> Result<Facts, Bad> {
     if source.encode_utf16().count() > 4_194_304 {
         return bad();
     }
-    let mut reader = Reader { text: &text, at: 0 };
+    let mut reader = Reader { text: &text, at: 0, depth: 0 };
     let Json::Map(map) = reader.value()? else {
         return bad();
     };
@@ -1487,6 +1503,11 @@ enum General {
     Ip(Vec<u8>),
     Directory(Vec<Vec<String>>),
     Email(String),
+    /// uniformResourceIdentifier: the host of the URI (RFC 5280 §4.2.1.10).
+    Uri(String),
+    /// A name form the checker does not interpret (otherName, x400Address,
+    /// ediPartyName, registeredID): a constraint on it can only reject (#1014).
+    Other(u32),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1495,6 +1516,22 @@ struct Subtrees {
     excluded: Vec<General>,
     /// Типы, у которых есть permitted-поддеревья (в т. ч. неподдержанные).
     permitted_kinds: HashSet<u32>,
+    /// Types with excluded subtrees, unsupported ones included.
+    excluded_kinds: HashSet<u32>,
+}
+
+/// The host of a URI as name constraints compare it: after `scheme://` and
+/// any `userinfo@`, before a port, path, query or fragment; lower-cased.
+fn uri_host(uri: &str) -> String {
+    let rest = uri.split_once("://").map_or("", |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = if let Some(bracketed) = host.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    host.to_lowercase()
 }
 
 fn general_name(source: &[u8], node: &Node) -> Option<General> {
@@ -1503,6 +1540,8 @@ fn general_name(source: &[u8], node: &Node) -> Option<General> {
         (2, 1) => Some(General::Email(String::from_utf8_lossy(value).to_lowercase())),
         (2, 2) => Some(General::Dns(String::from_utf8_lossy(value).to_lowercase())),
         (2, 7) => Some(General::Ip(value.to_vec())),
+        (2, 6) => Some(General::Uri(String::from_utf8_lossy(value).into_owned())),
+        (2, 0 | 3 | 5 | 8) => Some(General::Other(node.number)),
         (2, 4) => {
             let inner = node.children.first()?;
             let name = name(source, inner).ok()?;
@@ -1529,8 +1568,11 @@ fn name_constraints(facts: &Facts) -> Result<Option<Subtrees>, Bad> {
                 if let Some(general) = general {
                     trees.permitted.push(general);
                 }
-            } else if let Some(general) = general {
-                trees.excluded.push(general);
+            } else {
+                trees.excluded_kinds.insert(base.number);
+                if let Some(general) = general {
+                    trees.excluded.push(general);
+                }
             }
         }
     }
@@ -1550,6 +1592,13 @@ fn within(name: &General, base: &General) -> Option<bool> {
             }
             let (network, mask) = range.split_at(address.len());
             Some(address.iter().zip(network).zip(mask).all(|((a, n), m)| a & m == n & m))
+        }
+        // A URI constraint is a host or, with a leading dot, a domain; the
+        // name compared is the URI's host (RFC 5280 §4.2.1.10).
+        (General::Uri(uri), General::Uri(base)) => {
+            let host = uri_host(uri);
+            let base = base.to_lowercase();
+            Some(if base.starts_with('.') { host.ends_with(&base) } else { host == base })
         }
         (General::Directory(name), General::Directory(base)) => Some(base.len() <= name.len() && name[..base.len()] == base[..]),
         (General::Email(mailbox), General::Email(base)) => {
@@ -1571,7 +1620,9 @@ fn kind_of(name: &General) -> u32 {
         General::Email(_) => 1,
         General::Dns(_) => 2,
         General::Directory(_) => 4,
+        General::Uri(_) => 6,
         General::Ip(_) => 7,
+        General::Other(kind) => *kind,
     }
 }
 
@@ -1624,6 +1675,13 @@ fn hostname_like(text: &str) -> bool {
 fn satisfies(names: &[General], trees: &Subtrees) -> bool {
     for name in names {
         if trees.excluded.iter().any(|base| within(name, base) == Some(true)) {
+            return false;
+        }
+        // A name form the checker cannot compare, under any constraint of
+        // that form: process the constraint or reject, and it cannot process.
+        if let General::Other(kind) = name
+            && (trees.permitted_kinds.contains(kind) || trees.excluded_kinds.contains(kind))
+        {
             return false;
         }
         if trees.permitted_kinds.contains(&kind_of(name)) && !trees.permitted.iter().any(|base| within(name, base) == Some(true)) {
@@ -2162,6 +2220,16 @@ mod tests {
         (0..count).map(|index| format!("{prefix}{index:02}")).collect()
     }
 
+    /// #1014: a deeply nested snapshot is refused, not recursed into until the
+    /// stack overflows.
+    #[test]
+    fn a_deeply_nested_snapshot_is_refused() {
+        let deep = format!("{}{}", "[".repeat(500_000), "]".repeat(500_000));
+        assert!(read_facts(&deep).is_err());
+        let shallow = format!("{}{}", "[".repeat(8), "]".repeat(8));
+        assert!(read_facts(&shallow).is_err(), "not a map, but read without overflow");
+    }
+
     /// Проверка на сервер `host` в момент `at` с якорем `root`; отказ — его причина.
     fn verify(chain: &[String], root: &str, host: &str, at: &str) -> (Result<Vec<String>, &'static str>, Duration) {
         let start = Instant::now();
@@ -2182,6 +2250,22 @@ mod tests {
     }
 
     const AT: &str = "1893456000";
+
+    /// #1014: a URI under a URI constraint is compared by its host, and a name
+    /// form the checker does not interpret is rejected under a constraint of
+    /// its form (OpenSSL agrees on all three).
+    #[test]
+    fn name_constraints_cover_uris_and_reject_uninterpreted_forms() {
+        let chain = |leaf: &str| vec![format!("nc/{leaf}"), "nc/inter".to_string()];
+        let (inside, _) = verify(&chain("uri-in"), "nc/root", "a.nc.invalid", AT);
+        assert!(inside.is_ok(), "{inside:?}");
+        let (outside, _) = verify(&chain("uri-out"), "nc/root", "a.nc.invalid", AT);
+        assert!(outside.is_err(), "{outside:?}");
+        let (other, _) = verify(&chain("other"), "nc/root", "a.nc.invalid", AT);
+        assert!(other.is_err(), "{other:?}");
+        assert_eq!(uri_host("https://user@WWW.nc.invalid:8443/x?q#f"), "www.nc.invalid");
+        assert_eq!(uri_host("ldap://[::1]:389/"), "::1");
+    }
 
     #[test]
     fn ambiguous_issuers_end_in_a_defined_refusal_within_the_budget() {
