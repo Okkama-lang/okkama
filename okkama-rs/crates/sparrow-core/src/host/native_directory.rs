@@ -206,8 +206,8 @@ impl Heap {
                 }
             }
             FsChown => {
-                let owner = chown_id(&self.bigint(a[1])?.into_owned());
-                let group = chown_id(&self.bigint(a[2])?.into_owned());
+                let owner = chown_id(&*self.bigint(a[1])?);
+                let group = chown_id(&*self.bigint(a[2])?);
                 let (Some(owner), Some(group)) = (owner, group) else {
                     return Err(fail(n, "invalid_input", "Invalid owner or group"));
                 };

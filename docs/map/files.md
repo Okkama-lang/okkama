@@ -58,7 +58,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3112 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7571 lines
+## ir — 12 files, 7590 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
@@ -71,7 +71,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 259 — Регионы, которые никогда не владеют идентичностями, — убираются.
 - `okkama-compiler/src/ir/statics.rs` 429 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
-- `okkama-compiler/src/ir/verify.rs` 1911 — Верификатор OIR-1 (§17 спецификации).
+- `okkama-compiler/src/ir/verify.rs` 1930 — Верификатор OIR-1 (§17 спецификации).
 
 ## codegen — 4 files, 1305 lines
 
@@ -111,75 +111,75 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1161 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 522 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 3125 lines
+## ownership-runtime — 2 files, 3134 lines
 
-- `sparrow-core/src/failures.rs` 2338 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 2347 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 33831 lines
+## sparrow — 64 files, 34144 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 494 — Load-time contracts of intrinsics: what the core assumes about the SPB
-- `sparrow-core/src/drivers.rs` 1280 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/heap.rs` 2303 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/intrinsics.rs` 1083 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/intrinsics.rs` 1093 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2946 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 554 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 578 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
-- `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
-- `sparrow-core/src/ops.rs` 1790 — Exact semantics of value instructions without an inline fast path.
+- `sparrow-core/src/natives.rs` 301 — The natives the core serves itself, and the dispatch to the host's
+- `sparrow-core/src/ops.rs` 1796 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 395 — State of the async primitives (Atomic, Event and Cancellation, Lock and
-- `sparrow-core/src/program.rs` 237 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 1081 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/program.rs` 241 — Static facts about a loaded SPB program: the machine representation of every
+- `sparrow-core/src/runtime.rs` 1098 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 605 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB
-- `sparrow-core/src/worker.rs` 658 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-- `sparrow-core/src/worker_process.rs` 792 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
-- `sparrow-core/src/host/arena.rs` 92 — Reusable typed storage with generational handles. No per-value ownership walk.
-- `sparrow-core/src/host/file_lock.rs` 105 — POSIX record locks through nix's safe boundary. A process-wide reservation
+- `sparrow-core/src/worker.rs` 660 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
+- `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
+- `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
+- `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 141 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 876 — Native provider host. The providers of the previous engine (`sparrow-engine`
+- `sparrow-core/src/host/mod.rs` 876 — Native provider host. The providers (`native_*`) see a [`Heap`] and
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
 - `sparrow-core/src/host/native_data.rs` 76 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
 - `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
 - `sparrow-core/src/host/native_debug.rs` 281 — `any` values for the bridged origin natives, and the parts of a value for
-- `sparrow-core/src/host/native_directory.rs` 329 — Host paths and directory snapshots, scoped to each VM's working directory.
+- `sparrow-core/src/host/native_directory.rs` 333 — Host paths and directory snapshots, scoped to each VM's working directory.
 - `sparrow-core/src/host/native_dns.rs` 181 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 200 — The program's environment is the run's host session
-- `sparrow-core/src/host/native_file.rs` 258 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
+- `sparrow-core/src/host/native_file.rs` 281 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 599 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
 - `sparrow-core/src/host/native_fs.rs` 243 — Filesystem native boundary. Lexical paths are portable and independent of
 - `sparrow-core/src/host/native_glob.rs` 186 — Iterative glob matching and traversal. Symlinks are never followed as directories.
 - `sparrow-core/src/host/native_idna.rs` 640 — IDNA/PSL policy retains the language's pinned Unicode tables and error
 - `sparrow-core/src/host/native_input.rs` 185 — Input decorators own only undecoded bytes; standard input retains unread
-- `sparrow-core/src/host/native_io.rs` 241 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
+- `sparrow-core/src/host/native_io.rs` 264 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
 - `sparrow-core/src/host/native_multicast.rs` 175 — Memberships use socket2's safe platform wrappers. The UDP owner retains
 - `sparrow-core/src/host/native_net.rs` 126 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
 - `sparrow-core/src/host/native_network.rs` 732 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
 - `sparrow-core/src/host/native_numbers.rs` 171 — Exact BigInt native operations use the same Rust arithmetic as VM integers.
 - `sparrow-core/src/host/native_origin.rs` 225 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
-- `sparrow-core/src/host/native_process.rs` 635 — Process ABI is a thin typed owner around Tokio children and OS pipes.
+- `sparrow-core/src/host/native_process.rs` 726 — Process ABI is a thin typed owner around Tokio children and OS pipes.
 - `sparrow-core/src/host/native_regex.rs` 1736 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
-- `sparrow-core/src/host/native_root.rs` 440 — Descriptor-relative rooted access. No child operation reconstructs an ambient
+- `sparrow-core/src/host/native_root.rs` 441 — Descriptor-relative rooted access. No child operation reconstructs an ambient
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2634 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
-- `sparrow-core/src/host/native_temporary.rs` 287 — Temporary resources use exclusive OS creation and cryptographic random names.
+- `sparrow-core/src/host/native_temporary.rs` 305 — Temporary resources use exclusive OS creation and cryptographic random names.
 - `sparrow-core/src/host/native_text.rs` 370 — Pure codecs and exact numeric parsing at the independent native boundary.
 - `sparrow-core/src/host/native_tls.rs` 753 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 - `sparrow-core/src/host/native_udp.rs` 503 — Native UDP datagrams: one send/receive per request, Tokio readiness and
 - `sparrow-core/src/host/native_unix.rs` 319 — Unix streams share the TCP readiness/cancellation path. Filesystem listeners
-- `sparrow-core/src/host/native_watch.rs` 263 — Portable file-watch semantics use Tokio timers and its bounded blocking pool.
+- `sparrow-core/src/host/native_watch.rs` 305 — Portable file-watch semantics use Tokio timers and its bounded blocking pool.
 - `sparrow-core/src/host/path_regex.rs` 97 — Pure fixed-pattern compatibility helpers for portable lexical paths.
 - `sparrow-core/src/host/path_syntax.rs` 291 — Portable POSIX/Windows path syntax; no filesystem access or VM values.
-- `sparrow-core/src/host/process_host.rs` 387 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
+- `sparrow-core/src/host/process_host.rs` 412 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
 - `sparrow-core/src/host/native_json/mod.rs` 825 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 340 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
@@ -187,7 +187,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 318 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5073 lines
+## cli — 10 files, 5087 lines
 
 - `okkama-cli/src/core.rs` 58 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
@@ -196,7 +196,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/main.rs` 1706 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 411 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
-- `okkama-cli/src/repl.rs` 409 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
+- `okkama-cli/src/repl.rs` 423 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 

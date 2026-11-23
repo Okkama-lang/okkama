@@ -64,7 +64,7 @@ fn check_value(actual: Ending, expected: &str) {
     match expected.parse::<i64>() {
         Ok(value) => assert_eq!(actual, Ending::Value(value), "expected {expected}"),
         Err(_) => assert!(
-            matches!(&actual, Ending::Error(message) if message.contains("entry result outside")),
+            matches!(&actual, Ending::Error(message) if message.contains("main() must return an int in 0..255")),
             "expected {expected}, Sparrow {actual:?}"
         ),
     }

@@ -1861,7 +1861,6 @@ pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Opti
     }
 }
 
-/// An `int` word as the IR engine's integer, for the shared string contracts.
 // ---- scalar semantics of the instructions ----
 
 /// The two-operand bit operations of int and byte.
