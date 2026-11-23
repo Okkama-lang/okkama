@@ -14,6 +14,12 @@ module db/sqlite v1.0.0;
 // DbConnection, so portable code and pools (through SqliteConnector or
 // SqliteAcquiring) take it. The work runs on a native worker; calls never block
 // the event loop. BLOB streaming, scripts and backups are in the submodules.
+//
+// A refusal is a DbFailure with SQLite's extended result code ("SQLITE_1",
+// "SQLITE_2067") and SQLite's own message ("no such table: notes"). Plain
+// SQLITE_ERROR covers many failures, so its kind follows the message: a
+// statement that does not compile is syntax, a limit is resource, an integer
+// overflow is data, the rest unexpected.
 
 import "runtime/database" as sqlite;
 import "runtime/db" as native_db;
@@ -1148,7 +1154,7 @@ hidden object SqliteRows does RowReading, Closing {
                 SqliteFailureKind(deferred[0]).kind(),
                 DbOperation.fetching,
                 deferred[1],
-                "SQLite operation rejected"
+                SqliteFailureText(deferred[2]).text()
             );
         }
         if position.value() == batch.value().size() {
@@ -1329,7 +1335,7 @@ object SqliteFrame {
                 SqliteFailureKind(fields["kind"]).kind(),
                 operation,
                 fields["code"],
-                "SQLite operation rejected"
+                SqliteFailureText(fields["message"]).text()
             );
         }
     }
@@ -1399,7 +1405,8 @@ object SqliteFrame {
         sqlite.sqlite_reply_eof(state);
     }
 
-    // A failure of the first page fetched with the cursor: [kind, code], or empty.
+    // A failure of the first page fetched with the cursor: [kind, code,
+    // message], or empty.
     deferred() is @string {
         sqlite.sqlite_reply_deferred(state);
     }
@@ -1456,6 +1463,25 @@ object SqliteFrame {
                 Row(DbRowData(schema: schema, page: page, row: index));
             };
             rows;
+        }
+    }
+}
+
+// SQLite's own message of a failure; the provider's own refusals have none and
+// name themselves by their code.
+hidden object SqliteFailureText {
+    has origin is string;
+
+    SqliteFailureText(origin is string) {
+        self.origin = origin;
+    }
+
+    text() is string {
+        if origin == "" {
+            "SQLite operation rejected";
+        }
+        else {
+            origin;
         }
     }
 }
@@ -2075,4 +2101,80 @@ async test "a connection runs SQL with bound values and answers a query" {
     test.is((await change.query("SELECT count(*) AS n FROM t").one()).int("n"), 1);
     await change.rollback();
     test.is((await db.query("SELECT count(*) AS n FROM t").one()).int("n"), 2);
+}
+
+async test "a refusal carries SQLite's message and the kind of what failed" {
+    let connection = await SqliteMemory().connection();
+    defer await connection.settled();
+    defer connection.close();
+    await connection.execution(Statement("CREATE TABLE t(x INTEGER UNIQUE)"));
+    await connection.execution(Statement("INSERT INTO t(x) VALUES (1)"));
+    let typo = try {
+        await connection.execution(Statement("SELEC 1"));
+        "";
+    }
+    catch DbFailure.detailed(kind, _, code, message) {
+        if kind == DbFailureKind.syntax {
+            code + " " + message;
+        }
+        else {
+            "not syntax: " + message;
+        }
+    };
+    test.is(typo, "SQLITE_1 near \"SELEC\": syntax error");
+    let table = try {
+        await Query(origin: connection, statement: Statement("SELECT x FROM absent")).one();
+        "";
+    }
+    catch DbFailure.detailed(kind, _, code, message) {
+        if kind == DbFailureKind.syntax {
+            code + " " + message;
+        }
+        else {
+            "not syntax: " + message;
+        }
+    };
+    test.is(table, "SQLITE_1 no such table: absent");
+    let column = try {
+        await Query(origin: connection, statement: Statement("SELECT y FROM t")).one();
+        "";
+    }
+    catch DbFailure.detailed(kind, _, _, message) {
+        if kind == DbFailureKind.syntax {
+            message;
+        }
+        else {
+            "not syntax: " + message;
+        }
+    };
+    test.is(column, "no such column: y");
+    let overflow = try {
+        await Query(
+            origin: connection,
+            statement: Statement("SELECT abs(-9223372036854775807 - 1) AS v")
+        ).one();
+        "";
+    }
+    catch DbFailure.detailed(kind, operation, code, message) {
+        if kind == DbFailureKind.data && operation == DbOperation.fetching {
+            code + " " + message;
+        }
+        else {
+            "not data while fetching: " + message;
+        }
+    };
+    test.is(overflow, "SQLITE_1 integer overflow");
+    let duplicate = try {
+        await connection.execution(Statement("INSERT INTO t(x) VALUES (1)"));
+        "";
+    }
+    catch DbFailure.detailed(kind, _, code, message) {
+        if kind == DbFailureKind.constraint {
+            code + " " + message;
+        }
+        else {
+            "not constraint: " + message;
+        }
+    };
+    test.is(duplicate, "SQLITE_2067 UNIQUE constraint failed: t.x");
 }

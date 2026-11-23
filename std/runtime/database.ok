@@ -196,5 +196,5 @@ native sqlite_reply_blobs(reply is SqliteReplyState) is @@byte;
 // How many bytes the page took.
 native sqlite_reply_row_bytes(reply is SqliteReplyState) is int;
 
-// A failure of the first page, as kind and code, or [].
+// A failure of the first page, as kind, code and SQLite's message, or [].
 native sqlite_reply_deferred(reply is SqliteReplyState) is @string;

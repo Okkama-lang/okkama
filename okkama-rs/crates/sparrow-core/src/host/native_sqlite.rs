@@ -168,9 +168,12 @@ struct Data {
     total: Option<i64>,
     bytes: Option<Vec<u8>>,
     executions: Option<Vec<Option<String>>>,
+    /// SQLite's own diagnostic of a failure (`sqlite3_errmsg`), empty for
+    /// the provider's own refusals.
+    message: Option<String>,
     /// A failure of the first page fetched with `rows`, raised by the first
-    /// row read (kind, code).
-    deferred: Option<(String, String)>,
+    /// row read (kind, code, message).
+    deferred: Option<(String, String, String)>,
 }
 
 #[derive(Debug)]
@@ -180,12 +183,14 @@ pub(crate) struct Reply {
     closed: std::cell::Cell<bool>,
 }
 
-/// Engine refusal: kind, SQLITE_… code and the autocommit state.
+/// Engine refusal: kind, SQLITE_… code, SQLite's message (empty for the
+/// provider's own refusals) and the autocommit state.
 #[derive(Debug)]
 enum Stop {
     Sqlite {
         kind: &'static str,
         code: String,
+        message: String,
         autocommit: bool,
     },
     Unexpected,
@@ -286,17 +291,82 @@ unsafe extern "C" fn authorize(
     0
 }
 
-fn error_kind(rc: c_int) -> &'static str {
+/// The DbFailureKind of an SQLite result code (extended codes on) and its
+/// message. Kinds follow what PostgreSQL's SQLSTATE classes give for the
+/// same failure, so portable code sees one kind on both (`std/db/postgres`,
+/// `PgFailureKind`).
+fn error_kind(rc: c_int, message: &str) -> &'static str {
+    match rc {
+        // SQLITE_ERROR_MISSING_COLLSEQ: an unknown collation (42704).
+        257 => return "syntax",
+        // SQLITE_IOERR_NOMEM (53200).
+        3082 => return "resource",
+        // Plain SQLITE_ERROR: SQLite has one code for many failures.
+        1 => return generic_error_kind(message),
+        _ => {}
+    }
     match rc & 255 {
         5 | 6 => "busy",
         19 => "constraint",
-        1 => "syntax",
         9 => "cancelled",
-        7 | 18 => "resource",
+        // SQLITE_NOMEM, SQLITE_FULL (53100 disk full), SQLITE_TOOBIG.
+        7 | 13 | 18 => "resource",
         3 | 8 | 23 => "permission",
         14 => "connection",
         20 | 21 | 25 => "data",
+        // SQLITE_NOLFS: large files not supported by the host.
+        22 => "unsupported",
         _ => "unexpected",
+    }
+}
+
+/// The kind of a plain SQLITE_ERROR, by SQLite's own message (the wording
+/// of the bundled library, pinned by the tests below):
+/// - the statement does not compile: a syntax error, or a name SQLite does
+///   not know or already has, as PostgreSQL's class 42 → `syntax`;
+/// - a configured limit (columns, terms, nesting, recursion), as
+///   PostgreSQL's class 54 → `resource`;
+/// - arithmetic overflow (22003) → `data`;
+/// - anything else ("SQL logic error", a transaction in the wrong state) →
+///   `unexpected`.
+fn generic_error_kind(message: &str) -> &'static str {
+    const SYNTAX_PREFIXES: [&str; 9] = [
+        "near \"",
+        "incomplete input",
+        "unrecognized token",
+        "no such ",
+        "ambiguous column name",
+        "wrong number of arguments",
+        "misuse of ",
+        "duplicate column name",
+        "unknown database",
+    ];
+    const SYNTAX_PARTS: [&str; 4] =
+        [" syntax error", " already exists", " has no column named ", " values were supplied"];
+    const LIMIT_PREFIXES: [&str; 4] =
+        ["too many ", "parser stack overflow", "Expression tree is too large", "string or blob too big"];
+    if SYNTAX_PREFIXES.iter().any(|p| message.starts_with(p)) || SYNTAX_PARTS.iter().any(|p| message.contains(p)) {
+        "syntax"
+    } else if LIMIT_PREFIXES.iter().any(|p| message.starts_with(p)) {
+        "resource"
+    } else if message.starts_with("integer overflow") {
+        "data"
+    } else {
+        "unexpected"
+    }
+}
+
+/// SQLite's message of the failure `rc` on `db`: the connection's own
+/// diagnostic when its last error is `rc`, otherwise the library's text for
+/// the code (another handle failed, or the message was already replaced).
+fn sqlite_message(db: *mut ffi::sqlite3, rc: c_int) -> String {
+    // SAFETY: `db` is NULL (then never passed to SQLite) or an open
+    // connection of this worker thread; both calls return NUL-terminated
+    // strings owned by SQLite, copied at once.
+    unsafe {
+        let own = !db.is_null() && ffi::sqlite3_extended_errcode(db) == rc;
+        let text = if own { ffi::sqlite3_errmsg(db) } else { ffi::sqlite3_errstr(rc) };
+        c_bytes(text).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default()
     }
 }
 
@@ -326,12 +396,28 @@ impl Engine {
         Stop::Sqlite {
             kind,
             code: code.into(),
+            message: String::new(),
             autocommit: self.autocommit(),
         }
     }
 
+    /// A failure of SQLite on this connection.
     fn error(&self, rc: c_int) -> Stop {
-        self.raise(error_kind(rc), &format!("SQLITE_{rc}"))
+        self.error_on(rc, self.db)
+    }
+
+    /// A failure of SQLite reported on `db` (a backup's target, say).
+    fn error_on(&self, rc: c_int, db: *mut ffi::sqlite3) -> Stop {
+        self.failed(rc, sqlite_message(db, rc))
+    }
+
+    fn failed(&self, rc: c_int, message: String) -> Stop {
+        Stop::Sqlite {
+            kind: error_kind(rc, &message),
+            code: format!("SQLITE_{rc}"),
+            message,
+            autocommit: self.autocommit(),
+        }
     }
 
     fn check(&self, rc: c_int) -> Done<()> {
@@ -343,8 +429,11 @@ impl Engine {
             // With bundled (modern) SQLite, prepare failures carry their offset.
             // The reference provider missed this variant and reported syntax
             // errors as "unexpected"; the SQLite code decides the kind here.
-            rusqlite::Error::SqliteFailure(error, _)
-            | rusqlite::Error::SqlInputError { error, .. } => self.error(error.extended_code),
+            rusqlite::Error::SqliteFailure(error, message) => {
+                let rc = error.extended_code;
+                self.failed(rc, message.unwrap_or_else(|| sqlite_message(self.db, rc)))
+            }
+            rusqlite::Error::SqlInputError { error, msg, .. } => self.failed(error.extended_code, msg),
             rusqlite::Error::MultipleStatement => {
                 self.raise("syntax", "SQLITE_MULTIPLE_STATEMENTS")
             }
@@ -358,6 +447,7 @@ impl Engine {
             return Err(Stop::Sqlite {
                 kind: "unsupported",
                 code: "SQLITE_VERSION".into(),
+                message: String::new(),
                 autocommit: true,
             });
         }
@@ -370,9 +460,10 @@ impl Engine {
         let library =
             rusqlite::Connection::open_with_flags(&self.options.path, flags).map_err(|error| {
                 match error {
-                    rusqlite::Error::SqliteFailure(error, _) => Stop::Sqlite {
+                    rusqlite::Error::SqliteFailure(error, message) => Stop::Sqlite {
                         kind: "connection",
                         code: format!("SQLITE_{}", error.extended_code),
+                        message: message.unwrap_or_else(|| sqlite_message(std::ptr::null_mut(), error.extended_code)),
                         autocommit: true,
                     },
                     _ => Stop::Unexpected,
@@ -677,12 +768,13 @@ impl Engine {
                 data.eof = page.eof;
                 data.autocommit = page.autocommit;
             }
-            Err(Stop::Sqlite { kind, code, autocommit }) => {
+            Err(Stop::Sqlite { kind, code, message, autocommit }) => {
                 data.autocommit = Some(autocommit);
-                data.deferred = Some((kind.to_owned(), code));
+                data.deferred = Some((kind.to_owned(), code, message));
             }
             Err(Stop::Unexpected) => {
-                data.deferred = Some(("unexpected".to_owned(), "SQLITE_WORKER_FAILURE".to_owned()));
+                data.deferred =
+                    Some(("unexpected".to_owned(), "SQLITE_WORKER_FAILURE".to_owned(), String::new()));
             }
         }
         Ok(data)
@@ -1082,11 +1174,12 @@ impl Engine {
         let rc =
             unsafe { ffi::sqlite3_open_v2(target_path.as_ptr(), &mut target, 6, std::ptr::null()) };
         if rc != 0 {
+            let error = self.error_on(rc, target);
             if !target.is_null() {
                 // SAFETY: a failed open still returns a handle to close.
                 unsafe { ffi::sqlite3_close(target) };
             }
-            return Err(self.error(rc));
+            return Err(error);
         }
         let main = c"main";
         // SAFETY: both connections are open; names are NUL-terminated.
@@ -1095,10 +1188,11 @@ impl Engine {
         if pointer.is_null() {
             // SAFETY: the target connection opened above.
             let code = unsafe { ffi::sqlite3_extended_errcode(target) };
+            let error = self.error_on(code, target);
             // SAFETY: the target opened above has no backup or statement, and
             // is closed here once; nothing keeps the pointer afterwards.
             unsafe { ffi::sqlite3_close(target) };
-            return Err(self.error(code));
+            return Err(error);
         }
         self.serial += 1;
         let id = self.serial;
@@ -1110,7 +1204,7 @@ impl Engine {
     }
 
     fn backup_step(&self, id: i64, pages: i64) -> Done<Data> {
-        let Some((pointer, _, _)) = self.backup.filter(|(_, _, known)| *known == id) else {
+        let Some((pointer, target, _)) = self.backup.filter(|(_, _, known)| *known == id) else {
             return Err(self.raise("data", "SQLITE_BACKUP_STALE"));
         };
         if !(1..=256).contains(&pages) {
@@ -1122,7 +1216,8 @@ impl Engine {
         // SAFETY: the open backup of this connection.
         let rc = unsafe { ffi::sqlite3_backup_step(pointer, pages as c_int) };
         if !matches!(rc, 0 | 101 | 5 | 6) {
-            return Err(self.error(rc));
+            // A backup reports its failures on the target connection.
+            return Err(self.error_on(rc, target));
         }
         // SAFETY: the same open backup, after its step; both only read it.
         let total = unsafe { ffi::sqlite3_backup_pagecount(pointer) };
@@ -1144,11 +1239,17 @@ impl Engine {
         self.backup = None;
         // SAFETY: the backup and its target are finished/closed exactly once.
         let rc = unsafe { ffi::sqlite3_backup_finish(pointer) };
+        // Read before the target closes: a backup reports on its target.
+        let finished = (rc != 0).then(|| self.error_on(rc, target));
         // SAFETY: the target's only user, the backup, finished just above;
         // `self.backup` no longer holds the pointer.
         let closed = unsafe { ffi::sqlite3_close(target) };
-        self.check(rc)?;
-        self.check(closed)?;
+        if let Some(error) = finished {
+            return Err(error);
+        }
+        if closed != 0 {
+            return Err(self.failed(closed, sqlite_message(std::ptr::null_mut(), closed)));
+        }
         Ok(Data::default())
     }
 
@@ -1475,12 +1576,14 @@ fn perform(engine: &mut Engine, operation: Operation) -> (bool, Data) {
         Err(Stop::Sqlite {
             kind,
             code,
+            message,
             autocommit,
         }) => (
             false,
             Data {
                 kind: Some(kind.into()),
                 code: Some(code),
+                message: Some(message),
                 autocommit: Some(autocommit),
                 ..Data::default()
             },
@@ -2422,12 +2525,17 @@ impl Heap {
                 };
                 Ok(value)
             }
-            // [kind, code] of a failed first page, or empty (see `rows_with_page`).
+            // [kind, code, message] of a failed first page, or empty (see
+            // `rows_with_page`).
             DatabaseSqliteReplyDeferred => {
                 let reply = self.sqlite_reply(n, a[0])?;
                 let deferred = reply.data.borrow().deferred.clone();
                 let slots = match deferred {
-                    Some((kind, code)) => vec![self.allocate_text(kind)?, self.allocate_text(code)?],
+                    Some((kind, code, message)) => vec![
+                        self.allocate_text(kind)?,
+                        self.allocate_text(code)?,
+                        self.allocate_text(message)?,
+                    ],
                     None => Vec::new(),
                 };
                 Ok(self.allocate_array(slots)?)
@@ -2457,6 +2565,7 @@ impl Heap {
                         ("ok", flag(reply.ok)),
                         ("code", data.code.clone().unwrap_or_default()),
                         ("kind", data.kind.clone().unwrap_or_default()),
+                        ("message", data.message.clone().unwrap_or_default()),
                         (
                             "affected_known",
                             flag(matches!(data.affected, Some(Some(_)))),
@@ -2479,6 +2588,7 @@ impl Heap {
                         ("total", data.total.unwrap_or(0).to_string()),
                         ("deferred_kind", data.deferred.as_ref().map_or_else(String::new, |d| d.0.clone())),
                         ("deferred_code", data.deferred.as_ref().map_or_else(String::new, |d| d.1.clone())),
+                        ("deferred_message", data.deferred.as_ref().map_or_else(String::new, |d| d.2.clone())),
                     ]
                 };
                 let mut slots = Vec::with_capacity(entries.len());
@@ -2750,6 +2860,86 @@ mod pool_tests {
         session.close();
     }
 
+    /// #1006: a refusal carries SQLite's own message, and a plain
+    /// SQLITE_ERROR gets the kind of what failed instead of `syntax` for all.
+    #[test]
+    fn sqlite_refusals_carry_the_message_and_a_precise_kind() {
+        let mut engine = Engine::new(options(":memory:", true), Arc::new(Shared::default()));
+        engine.open().map_err(|_| ()).expect("open");
+        engine.execution("CREATE TABLE t(x INTEGER UNIQUE)", &[], false).map_err(|_| ()).expect("create");
+        engine.execution("INSERT INTO t(x) VALUES (1)", &[], false).map_err(|_| ()).expect("insert");
+        let wide = format!("CREATE TABLE w({})", (0..1100).map(|i| format!("c{i}")).collect::<Vec<_>>().join(", "));
+        let cases: [(&str, &str, &str, &str); 7] = [
+            ("SELEC 1", "syntax", "SQLITE_1", "near \"SELEC\": syntax error"),
+            ("SELECT x FROM absent", "syntax", "SQLITE_1", "no such table: absent"),
+            ("SELECT y FROM t", "syntax", "SQLITE_1", "no such column: y"),
+            ("CREATE TABLE t(z)", "syntax", "SQLITE_1", "table t already exists"),
+            ("SELECT x FROM t ORDER BY x COLLATE nowhere", "syntax", "SQLITE_257", "no such collation sequence: nowhere"),
+            (&wide, "resource", "SQLITE_1", "too many columns on w"),
+            ("INSERT INTO t(x) VALUES (1)", "constraint", "SQLITE_2067", "UNIQUE constraint failed: t.x"),
+        ];
+        for (sql, want_kind, want_code, want_message) in cases {
+            match engine.execution(sql, &[], false) {
+                Err(Stop::Sqlite { kind, code, message, .. }) => {
+                    assert_eq!((kind, code.as_str(), message.as_str()), (want_kind, want_code, want_message), "{sql:.40}");
+                }
+                other => panic!("{sql:.40}: {:?}", other.map(|_| ())),
+            }
+        }
+        // A failure while stepping: the cursor opens, the fetch fails.
+        let overflow = engine.rows_sql("SELECT abs(-9223372036854775807 - 1)", &[]).map_err(|_| ()).expect("cursor");
+        match engine.fetch(overflow.id.unwrap_or(0), 1) {
+            Err(Stop::Sqlite { kind, code, message, .. }) => {
+                assert_eq!((kind, code.as_str(), message.as_str()), ("data", "SQLITE_1", "integer overflow"));
+            }
+            other => panic!("overflow: {:?}", other.map(|_| ())),
+        }
+        // The provider's own refusals have no SQLite message.
+        match engine.execution("SELECT 1; SELECT 2", &[], false) {
+            Err(Stop::Sqlite { kind, code, message, .. }) => {
+                assert_eq!((kind, code.as_str(), message.as_str()), ("syntax", "SQLITE_MULTIPLE_STATEMENTS", ""));
+            }
+            other => panic!("two statements: {:?}", other.map(|_| ())),
+        }
+    }
+
+    /// #1006: the kinds of plain SQLITE_ERROR follow PostgreSQL's classes for
+    /// the same failure; what SQLite cannot tell apart stays `unexpected`.
+    #[test]
+    fn sqlite_generic_error_kinds() {
+        for (message, kind) in [
+            ("near \"FROM\": syntax error", "syntax"),
+            ("incomplete input", "syntax"),
+            ("unrecognized token: \"'x\"", "syntax"),
+            ("no such table: main.t", "syntax"),
+            ("no such column: t.y", "syntax"),
+            ("no such function: nope", "syntax"),
+            ("index i already exists", "syntax"),
+            ("ambiguous column name: id", "syntax"),
+            ("wrong number of arguments to function abs()", "syntax"),
+            ("misuse of aggregate: count()", "syntax"),
+            ("table t has no column named z", "syntax"),
+            ("table t has 1 columns but 2 values were supplied", "syntax"),
+            ("too many columns in result set", "resource"),
+            ("too many terms in compound SELECT", "resource"),
+            ("parser stack overflow", "resource"),
+            ("Expression tree is too large (maximum depth 1000)", "resource"),
+            ("integer overflow", "data"),
+            ("SQL logic error", "unexpected"),
+            ("cannot commit - no transaction is active", "unexpected"),
+            ("cannot start a transaction within a transaction", "unexpected"),
+            ("", "unexpected"),
+        ] {
+            assert_eq!(error_kind(1, message), kind, "{message}");
+        }
+        // Only plain SQLITE_ERROR is read by its message.
+        assert_eq!(error_kind(19, "no such table: t"), "constraint");
+        assert_eq!(error_kind(2067, "near \"x\": syntax error"), "constraint");
+        assert_eq!(error_kind(13, ""), "resource", "SQLITE_FULL: disk full");
+        assert_eq!(error_kind(3082, ""), "resource", "SQLITE_IOERR_NOMEM");
+        assert_eq!(error_kind(10, ""), "unexpected", "SQLITE_IOERR");
+    }
+
     #[test]
     fn sqlite_pool_reuses_a_worker_with_a_fresh_engine() {
         let pool = pool(4, Duration::from_secs(5));
@@ -2858,6 +3048,7 @@ mod pool_tests {
         let (ok, data) = second.perform(|engine| engine.execution("SELEC 1", &[], false));
         assert!(!ok);
         assert_eq!((kind(&data), data.code.as_deref(), data.autocommit), ("syntax", Some("SQLITE_1"), Some(true)));
+        assert_eq!(data.message.as_deref(), Some("near \"SELEC\": syntax error"));
         let (ok, _) = second.perform(|engine| engine.execution("BEGIN IMMEDIATE", &[], true));
         assert!(ok && !second.shared.autocommit.load(Ordering::SeqCst));
         let (ok, data) = second.perform(|engine| engine.execution("ROLLBACK", &[], true));

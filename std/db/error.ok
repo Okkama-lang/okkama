@@ -8,8 +8,12 @@ module db/error v1.0.0;
 //     }
 //
 // Drivers map their errors to a DbFailureKind and keep the database's own code
-// (SQLSTATE or SQLite code). Messages come from the database; SQL, bound values
-// and connection strings never appear in them.
+// (SQLSTATE or SQLite code). One failure gets one kind on every database: a
+// statement that does not compile (bad syntax, an unknown table or column) is
+// syntax, a configured limit is resource. Messages come from the database
+// (SQLite's own text, say "no such table: notes"); they may name schema objects
+// and quote the token a statement failed at, but bound values and connection
+// strings never appear in them.
 
 // What went wrong, across databases.
 enum DbFailureKind = (connection, constraint, syntax, data, permission, busy, deadlock, serialization, timeout, cancelled, resource, unsupported, unexpected);
