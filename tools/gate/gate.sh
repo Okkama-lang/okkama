@@ -13,7 +13,8 @@
 #   2. conformance на Sparrow, Sparrow без IR-проходов
 #      (OKKAMA_IR_PASSES=none) и Sparrow со стресс-GC
 #      (SPARROW_CORE_GC_STRESS=1);
-#   3. актуальный перечень std в conformance; встроенные тесты std на Sparrow;
+#   3. актуальный перечень std в conformance; std в форме `okkama fmt`
+#      (fmt --check, #1006); встроенные тесты std на Sparrow;
 #   4. t/ на sparrow, sparrow-passes-off, sparrow-gc-stress;
 #      TAP-потоки конфигураций обязаны совпадать.
 #
@@ -180,6 +181,19 @@ else
     record "std inventory" fail $((SECONDS - started))
     tail -3 "$LOGS/std-inventory.log"
     fail "std inventory"
+fi
+
+# Every std file is in the shape `okkama fmt` gives it (#1006), generated ones included: their
+# generators run their output through the formatter (tools/okkama_fmt.py).
+step "std fmt"
+started=$SECONDS
+if find "$ROOT/std" -name '*.ok' -print0 | sort -z | xargs -0 "$OKKAMA" fmt --check >"$LOGS/std-fmt.log" 2>&1; then
+    record "std fmt" pass $((SECONDS - started))
+else
+    record "std fmt" fail $((SECONDS - started))
+    echo "not formatted ($(wc -l <"$LOGS/std-fmt.log" | tr -d ' ') files; okkama fmt -w FILE...):"
+    head -20 "$LOGS/std-fmt.log"
+    fail "std fmt"
 fi
 
 step "std inline tests"

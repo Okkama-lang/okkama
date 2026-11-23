@@ -138,6 +138,8 @@ jobs:
           }
           run t python3 tools/t/run.py $t --jobs 4
           run micro python3 bench/micro/check.py --okkama $bin $pipeline --jobs 4
+          # Every std file is in the shape `okkama fmt` gives it (#1006).
+          run std-fmt sh -c "find std -name '*.ok' -print0 | sort -z | xargs -0 $bin fmt --check"
           run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
           run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
           exit $status

@@ -36,6 +36,17 @@
 - [x] Runtime part (SQLite text and kind, Unicode versions, async natives, blocking,
   dead natives) with an agent; formatter header comments, width, std fmt-clean + gate.
 
+- [ ] Runtime part (SQLite text and kind, Unicode versions, async natives, blocking,
+  dead natives) with an agent.
+- [x] Formatter (feature/1006-fmt): header comments stay on the header line (`//` opens the
+  body); lines over WIDTH break at the outermost list/operator chain/call chain (`fit` in
+  `syntax/format.rs`), roles after `does` and case patterns fill; generators of plurals, iana,
+  hpack (and gregorian drift from #943) emit fmt-clean text; `fmt --check` over std in gate.sh,
+  CI and wave. Blast radius over std, t/, examples, conformance, Bible examples (2291 files):
+  no Internal, all idempotent; code lines over 100 columns not made of one long literal
+  712 → 7, none with a break point (a string, 3 test names, 3 long `let … is Type`).
+- [ ] `okkama fmt -w std` (lead; 251 std files change under the new formatter), then the gate step passes.
+
 ## #1018 one Duration constructor (2026-11-23, feature/1018-duration, part of #1005)
 
 - [x] `std/time/duration.ok`: only `Duration(seconds is rat)` (whole nanoseconds or

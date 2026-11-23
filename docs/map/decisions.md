@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-23. #1006 formatter: header comments, width, std fmt-clean (owner).**
+  A block comment between a declaration's parameter list (or result) and its `{`/`;` stays on the header
+  line; a `//` comment there opens the body (a bodiless header prints it after its `;`); a list ends at its
+  real `)`. Lines over `WIDTH` break at the outermost list, operator chain or call chain on them until
+  they fit; the layout with the least overflow wins (no break that gains nothing). A body under a header
+  that broke stays one level in from the statement. `okkama fmt --check` over std is a gate step (gate.sh,
+  CI `std` job, wave Corpora); generators run their output through the formatter (`tools/okkama_fmt.py`).
+
 - **2026-11-23. #1016 no native provider twins in runtime-core (owner).**
   `okkama-runtime-core::native::execute` provides exactly the natives Sparrow's
   `host/mod.rs` `classify` routes to `ORIGIN` (minus those `natives.rs` answers

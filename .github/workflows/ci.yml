@@ -147,3 +147,6 @@ jobs:
         run: cargo build --release --locked -p okkama-cli
       - name: std tests
         run: python3 tools/gate/std-tests.py
+      # Every std file is in the shape `okkama fmt` gives it (#1006).
+      - name: std formatted
+        run: find std -name '*.ok' -print0 | sort -z | xargs -0 okkama-rs/target/release/okkama fmt --check
