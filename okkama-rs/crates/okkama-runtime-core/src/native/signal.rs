@@ -1,13 +1,10 @@
-//! `runtime/signal`: ожидание сигналов процесса (TERM, INT, HUP), #80.
-//! Обработчик пишет номер сигнала в self-pipe (единственное, что можно делать
-//! в обработчике); поток-диспетчер читает трубу и считает приходы каждого
-//! сигнала, ожидающие ждут роста своих счётчиков. Обработчик стоит, пока
-//! сигнал кто-то ждёт: когда ожидание кончилось (сигнал пришёл или ожидание
-//! отменено), сигналу возвращается прежнее действие, и следующий завершает
-//! процесс как обычно. Sparrow берёт этот native через мост (`native_origin`).
+//! `runtime/signal`: наблюдение за сигналами процесса (TERM, INT, HUP), #80,
+//! #638. Обработчик пишет номер сигнала в self-pipe (единственное, что можно
+//! делать в обработчике); поток-диспетчер читает трубу и считает приходы
+//! каждого сигнала. Sparrow берёт этот native через мост (`native_origin`).
 //!
-//! Наблюдение (`signal_watch`, #638) — ожидание без потока: оно держит
-//! обработчики своих сигналов, пока не сработает. Первый приход одного из них
+//! Наблюдение (`signal_watch`) — ожидание без потока: оно держит обработчики
+//! своих сигналов, пока не сработает. Первый приход одного из них
 //! запоминается (`signal_arrived` отвечает его имя, `signal_arrival` будит
 //! ждущих), и наблюдение отпускает обработчики: сигналу, которого больше никто
 //! не ждёт, возвращается прежнее действие, так что второй завершает процесс.
@@ -69,15 +66,6 @@ fn hub() -> &'static Hub {
 
 fn registry() -> MutexGuard<'static, Registry> {
     hub().registry.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn fail(native: Native, code: &str, message: &str) -> Value {
-    Value::Future(sched::resolved(Err(Failure::new(Kind::Native(Rc::new(crate::abi::NativeFailure {
-        domain: "core.signal".into(),
-        code: code.into(),
-        operation: native.symbol().into(),
-        message: message.into(),
-    }))))))
 }
 
 extern "C" fn on_signal(number: libc::c_int) {
@@ -178,16 +166,11 @@ fn fire(registry: &mut Registry, place: usize) {
     }
 }
 
-/// Записать ожидание сигналов `wanted`, поставив обработчики тем, у кого их
-/// ещё нет. Возвращает номер ожидания и счётчики приходов на этот момент.
-fn enter(wanted: &[usize]) -> Option<(u64, [u64; 3])> {
-    enter_as(wanted, false)
-}
-
-/// [`enter`]; with `watch`, the watch is recorded in the same critical
-/// section, so a signal the dispatcher handles right after the handlers go in
-/// already finds it (#940).
-fn enter_as(wanted: &[usize], watch: bool) -> Option<(u64, [u64; 3])> {
+/// Наблюдение за сигналами `wanted` (#638): номер. Обработчики ставятся тем,
+/// у кого их ещё нет, и наблюдение записано в той же критической секции, так
+/// что сигнал, который диспетчер обработает сразу после установки, его уже
+/// застанет (#940).
+fn watch(wanted: &[usize]) -> Option<u64> {
     let mut registry = registry();
     if !start(&mut registry) {
         return None;
@@ -215,10 +198,8 @@ fn enter_as(wanted: &[usize], watch: bool) -> Option<(u64, [u64; 3])> {
     let id = registry.next;
     registry.next += 1;
     registry.waiters.push((id, wanted.to_vec()));
-    if watch {
-        registry.watches.push((id, wanted.to_vec(), None));
-    }
-    Some((id, registry.arrived))
+    registry.watches.push((id, wanted.to_vec(), None));
+    Some(id)
 }
 
 /// Снять ожидание `id` (повторный вызов ничего не делает).
@@ -239,22 +220,6 @@ fn release(registry: &mut Registry) {
                 libc::sigaction(*number, &prior, std::ptr::null_mut());
             }
         }
-    }
-}
-
-/// Рабочий поток: ждать прихода одного из сигналов `wanted` после `seen`;
-/// `None` — ожидание снято (отменено).
-fn wait(id: u64, wanted: &[usize], seen: [u64; 3]) -> Option<usize> {
-    let mut registry = registry();
-    loop {
-        if !registry.waiters.iter().any(|(waiter, _)| *waiter == id) {
-            return None;
-        }
-        if let Some(&place) = wanted.iter().find(|&&place| registry.arrived[place] > seen[place]) {
-            leave(&mut registry, id);
-            return Some(place);
-        }
-        registry = hub().changed.wait(registry).unwrap_or_else(PoisonError::into_inner);
     }
 }
 
@@ -292,12 +257,6 @@ fn places(value: &Value) -> Result<Result<Vec<usize>, &'static str>, Error> {
 /// Номер наблюдения из аргумента.
 fn watch_id(value: &Value) -> Result<u64, Error> {
     small(int(value)?, usize::MAX).map(|id| id as u64).ok_or_else(|| Error::InvalidState("signal watch".into()))
-}
-
-/// Наблюдение за сигналами `wanted` (#638): номер.
-fn watch(wanted: &[usize]) -> Option<u64> {
-    let (id, _) = enter_as(wanted, true)?;
-    Some(id)
 }
 
 /// Имя сработавшего сигнала наблюдения `id`, `""` — ещё не сработало или
@@ -373,12 +332,12 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let Some(id) = watch(&wanted) else {
                 return Err(refusal(native, "unsupported", "Signals cannot be handled here"));
             };
-            return Ok(int_value(id as i64));
+            Ok(int_value(id as i64))
         }
-        Native::SignalSignalArrived => return Ok(text(arrived(watch_id(&args[0])?))),
+        Native::SignalSignalArrived => Ok(text(arrived(watch_id(&args[0])?))),
         Native::SignalSignalUnwatch => {
             unwatch(watch_id(&args[0])?);
-            return Ok(Value::Bool(true));
+            Ok(Value::Bool(true))
         }
         Native::SignalSignalArrival => {
             let id = watch_id(&args[0])?;
@@ -405,35 +364,10 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 registry().arrivals.retain(|&waiting| waiting != token);
                 hub().changed.notify_all();
             });
-            return Ok(Value::Future(promise));
+            Ok(Value::Future(promise))
         }
-        Native::SignalSignalWait => {}
-        _ => return Err(Error::InvalidState("not a signal native".into())),
+        _ => Err(Error::InvalidState("not a signal native".into())),
     }
-    let wanted = match places(&args[0])? {
-        Ok(wanted) => wanted,
-        Err(message) => return Ok(fail(native, "invalid_input", message)),
-    };
-    let Some((id, seen)) = enter(&wanted) else {
-        return Ok(fail(native, "unsupported", "Signals cannot be handled here"));
-    };
-    let promise = sched::promise();
-    let target = promise.clone();
-    let op = sched::offload(
-        move || wait(id, &wanted, seen),
-        move |received: Option<usize>| {
-            if let Some(place) = received {
-                sched::settle(&target, Ok(text(SIGNALS[place].0)));
-            }
-        },
-    );
-    // Исход или отмена: ожидание снимается сразу, рабочий поток выходит.
-    promise.listen(move || {
-        op.detach();
-        leave(&mut registry(), id);
-        hub().changed.notify_all();
-    });
-    Ok(Value::Future(promise))
 }
 
 #[cfg(test)]

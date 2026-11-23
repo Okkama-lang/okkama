@@ -20,20 +20,3 @@ native pcg_float(state is PcgState) is float;
 
 // size random bytes.
 native pcg_bytes(state is PcgState, size is int) is @byte;
-
-// Whether sample gives an unbiased integer in start..stop.
-native random_sample_accepted(
-    sample is @byte,
-    start is int,
-    stop is int,
-) is bool;
-
-// The integer sample gives in start..stop.
-native random_integer_from_sample(
-    sample is @byte,
-    start is int,
-    stop is int,
-) is int;
-
-// The float in [0, 1) sample gives.
-native random_float_from_sample(sample is @byte) is float;

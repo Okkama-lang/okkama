@@ -150,8 +150,7 @@ fn route(native: Native) -> Option<Provider> {
         | "runtime/layout" => Provider::Misc,
         "runtime/json" if name.starts_with("json_split_") => Provider::Json,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => Provider::Math,
-        "runtime/random" if name.starts_with("pcg_") => Provider::Math,
-        "runtime/random" => Provider::Host,
+        "runtime/random" => Provider::Math,
         "runtime/system"
             if !matches!(
                 native,

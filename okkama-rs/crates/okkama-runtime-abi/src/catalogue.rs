@@ -262,8 +262,8 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 214), ((AbiKind::Sync, Transport::Handle), 298),
-            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
+        let expected = [((AbiKind::Sync, Transport::Data), 211), ((AbiKind::Sync, Transport::Handle), 298),
+            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 4),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
         let mut roles = std::collections::BTreeMap::new();
@@ -274,16 +274,16 @@ mod tests {
                 *effects.entry(contract.effect).or_insert(0) += 1;
             }
         }
-        // #601 N1: the 52 async natives are admitted too (all host; #638 added the 52nd).
-        let roles_expected = [(HandleRole::None, 219), (HandleRole::Uses, 229), (HandleRole::Publishes, 93),
+        // #601 N1: the 51 async natives are admitted too (all host; #638 added one, #1006 dropped signal_wait).
+        let roles_expected = [(HandleRole::None, 215), (HandleRole::Uses, 229), (HandleRole::Publishes, 93),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 252), (Effect::Stdio, 3), (Effect::Host, 309)];
+        let effects_expected = [(Effect::Pure, 252), (Effect::Stdio, 3), (Effect::Host, 305)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 
     /// #601 N1, audit item 1 of the slice: every asynchronous native of the table takes and publishes plain data
-    /// or native handles only, so its driver's creation packet is statically empty (ruling PR-N). The 52 natives,
+    /// or native handles only, so its driver's creation packet is statically empty (ruling PR-N). The 51 natives,
     /// by module, are the `native async` declarations of std `runtime/`.
     #[test]
     fn async_natives_carry_data_and_handles_only() {
@@ -299,7 +299,7 @@ mod tests {
             *modules.entry(contract.native.module()).or_insert(0) += 1;
         }
         let expected = [("runtime/application", 5), ("runtime/database", 19), ("runtime/fs", 1),
-            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 2),
+            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 1),
             ("runtime/time", 1), ("runtime/tls_transport", 4)];
         assert_eq!(modules, expected.into_iter().collect());
     }

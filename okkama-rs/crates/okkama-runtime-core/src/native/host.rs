@@ -1,8 +1,8 @@
 //! Host natives Sparrow routes here (`host/native_origin.rs`): `runtime/system`
-//! (secure_random, secure_integer, secure_float, host name, CPU count, storage)
-//! and the samples of `runtime/random`. Clocks, sleep, platform, architecture
+//! (secure_random, secure_integer, secure_float, host name, CPU count,
+//! storage). Clocks, sleep, platform, architecture
 //! and byte order are Sparrow's own (`host/mod.rs`, `natives.rs`).
-use super::support::{byte_array, bytes, failure, int, int_value, string, string_map, text};
+use super::support::{byte_array, failure, int, int_value, string, string_map, text};
 use super::Error;
 use crate::bignum::Big;
 use crate::{IntValue, Value, abi::Native};
@@ -34,8 +34,7 @@ fn secure_bytes(native: Native, size: usize) -> Result<Vec<u8>, Error> {
 /// Несмещённое смещение в `0..span` (span > 0) из криптостойких выборок
 /// (#195, #507). Выборка берёт столько 64-битных слов, сколько нужно числу
 /// `span - 1`, и тянется заново, пока она меньше `2^(64·слов) mod span`. Для
-/// `span` до 2^64 это одно слово в big-endian, как у random_sample_accepted и
-/// random_integer_from_sample.
+/// `span` до 2^64 это одно слово в big-endian.
 fn secure_offset(native: Native, span: &IntValue) -> Result<IntValue, Error> {
     if let Some(small) = span.to_i64() {
         let small = small.unsigned_abs();
@@ -215,56 +214,10 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             Ok(Value::Int(crate::integer::add(start, &secure_offset(native, &span)?)))
         }
         "secure_float" => {
-            // 53 старших бита из семи байт, как у random_float_from_sample.
+            // 53 старших бита из семи байт.
             let mut sample = [0u8; 8];
             secure_fill(native, &mut sample[1..])?;
             let value = u64::from_be_bytes(sample) >> 3;
-            Ok(Value::Float(value as f64 / 9_007_199_254_740_992.0))
-        }
-        "random_sample_accepted" | "random_integer_from_sample" => {
-            let sample = bytes(&args[0])?;
-            if sample.len() != 8 {
-                return Err(failure(
-                    "core.random",
-                    "invalid_input",
-                    native,
-                    "Random integer sample must have eight bytes",
-                ));
-            }
-            let value = IntValue::from_big(unsigned(&sample));
-            let (start, stop) = (int(&args[1])?, int(&args[2])?);
-            let span = crate::integer::subtract(stop, start);
-            if operation(native) == "random_sample_accepted" {
-                if span.signum() <= 0 {
-                    return Ok(Value::Bool(false));
-                }
-                let modulus = IntValue::from_big(Big::from_u64(2).power(64));
-                let threshold = crate::integer::divide(&modulus, &span).expect("positive").1;
-                return Ok(Value::Bool(crate::integer::compare(&value, &threshold).is_ge()));
-            }
-            if span.is_zero() {
-                // Math::BigInt: x mod 0 = x.
-                return Ok(Value::Int(crate::integer::add(start, &value)));
-            }
-            let magnitude = if span.is_negative() { span.negated() } else { span.clone() };
-            let mut rest = crate::integer::divide(&value, &magnitude).expect("non-zero").1;
-            // Остаток со знаком делителя, как у Math::BigInt.
-            if span.is_negative() && !rest.is_zero() {
-                rest = crate::integer::add(&rest, &span);
-            }
-            Ok(Value::Int(crate::integer::add(start, &rest)))
-        }
-        "random_float_from_sample" => {
-            let sample = bytes(&args[0])?;
-            if sample.len() != 7 {
-                return Err(failure(
-                    "core.random",
-                    "invalid_input",
-                    native,
-                    "Random float sample must have seven bytes",
-                ));
-            }
-            let value = sample.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)) >> 3;
             Ok(Value::Float(value as f64 / 9_007_199_254_740_992.0))
         }
         "system_host_name" => Ok(text(host_name(native)?)),

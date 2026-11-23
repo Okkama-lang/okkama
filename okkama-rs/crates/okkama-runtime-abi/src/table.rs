@@ -336,9 +336,6 @@ natives! {
     RandomPcgInteger = 383, "runtime/random@1::pcg_integer/3", "(PcgState, int, int) -> int";
     RandomPcgFloat = 384, "runtime/random@1::pcg_float/1", "(PcgState) -> float";
     RandomPcgBytes = 385, "runtime/random@1::pcg_bytes/2", "(PcgState, int) -> @byte";
-    RandomRandomSampleAccepted = 386, "runtime/random@1::random_sample_accepted/3", "(@byte, int, int) -> bool";
-    RandomRandomIntegerFromSample = 387, "runtime/random@1::random_integer_from_sample/3", "(@byte, int, int) -> int";
-    RandomRandomFloatFromSample = 388, "runtime/random@1::random_float_from_sample/1", "(@byte) -> float";
     RandomDistributionDistributionUniform = 389, "runtime/random_distribution@1::distribution_uniform/3", "(float, float, float) -> float";
     RandomDistributionDistributionLog = 390, "runtime/random_distribution@1::distribution_log/1", "(float) -> float";
     RandomDistributionDistributionExp = 391, "runtime/random_distribution@1::distribution_exp/1", "(float) -> float";
@@ -536,7 +533,6 @@ natives! {
     CompressionCodecEnded = 629, "runtime/compression@1::codec_ended/1", "(CodecState) -> bool";
     CompressionCodecRemainder = 630, "runtime/compression@1::codec_remainder/1", "(CodecState) -> @byte";
     TlsTransportServer = 631, "runtime/tls_transport@1::server/5", "(SocketState, int, @string, @@byte, @byte) -> TlsState";
-    SignalSignalWait = 632, "runtime/signal@1::signal_wait/1", "async (@string) -> string";
     FsRootRootedEntryPiece = 633, "runtime/fs_root@1::rooted_entry_piece/3", "async (RootedEntryState, int, int) -> @byte";
     NumberTextFloatParseValid = 634, "runtime/number_text@1::float_parse_valid/1", "(string) -> bool";
     NumberTextFloatParse = 635, "runtime/number_text@1::float_parse/1", "(string) -> float";
@@ -575,4 +571,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 386, 387, 388, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 632, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
