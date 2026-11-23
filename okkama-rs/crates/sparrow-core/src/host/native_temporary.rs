@@ -17,6 +17,29 @@ pub(crate) struct TemporaryDirectory {
     shown: String,
     closed: bool,
 }
+impl TemporaryDirectory {
+    /// Removes the directory and what is in it; a missing one is fine.
+    fn remove(&mut self) -> std::io::Result<()> {
+        if !self.closed {
+            match fs::symlink_metadata(&self.path) {
+                Ok(meta) if meta.is_dir() => fs::remove_dir_all(&self.path)?,
+                Ok(_) => fs::remove_file(&self.path)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            self.closed = true;
+        }
+        Ok(())
+    }
+}
+/// A directory whose `close` never ran (a run stopped by its budget, a
+/// destroy that did not happen) is removed with its handle, as a temporary
+/// file is (#1010).
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = self.remove();
+    }
+}
 pub(crate) fn handles(n: Native) -> bool {
     use Native::*;
     matches!(
@@ -209,21 +232,7 @@ impl Heap {
             }
             FsTemporaryDirectoryClosed => Ok(Slot::boolean(state.closed)),
             FsTemporaryDirectoryClose => {
-                if !state.closed {
-                    match fs::symlink_metadata(&state.path) {
-                        Ok(meta) => {
-                            if meta.is_dir() {
-                                fs::remove_dir_all(&state.path)
-                            } else {
-                                fs::remove_file(&state.path)
-                            }
-                            .map_err(|e| host(n, e))?;
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(host(n, e)),
-                    }
-                    state.closed = true;
-                }
+                state.remove().map_err(|e| host(n, e))?;
                 Ok(yes)
             }
             _ => Err(Error("unsupported temporary native".into()).into()),
@@ -234,6 +243,22 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1010: a temporary directory that was never closed goes with its
+    /// handle, contents and all; a closed one is not touched again.
+    #[test]
+    fn an_unclosed_temporary_directory_goes_with_its_handle() {
+        let root = scratch("directory-drop");
+        let path = root.join("left-XXXXXXXX");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("inside.txt"), b"x").unwrap();
+        drop(TemporaryDirectory { path: path.clone(), shown: "left-XXXXXXXX".into(), closed: false });
+        assert!(!path.exists(), "removed with its handle");
+        fs::create_dir(&path).unwrap();
+        drop(TemporaryDirectory { path: path.clone(), shown: "left-XXXXXXXX".into(), closed: true });
+        assert!(path.exists(), "a closed one is not removed again");
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     /// A fresh directory for one test, removed by the caller.
     fn scratch(tag: &str) -> PathBuf {

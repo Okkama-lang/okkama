@@ -33,7 +33,11 @@ pub(crate) struct Request {
     /// The body is woken only from a provider thread (a SQLite worker), so
     /// the scheduler need not turn the reactor for it while it spins (#943).
     threaded: Cell<bool>,
-    waiters: RefCell<Vec<Waker>>,
+    /// The waker of the last poll. Only the request's own driver frame polls
+    /// it, and the driver makes a new waker for every poll, so keeping one per
+    /// poll grew without bound while a request waited (#1010); the `Future`
+    /// contract asks only that the latest be woken.
+    waiter: RefCell<Option<Waker>>,
 }
 impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,7 +62,7 @@ impl Request {
             cancelling: Cell::new(false),
             finished: Cell::new(false),
             threaded: Cell::new(false),
-            waiters: RefCell::new(Vec::new()),
+            waiter: RefCell::new(None),
         })
     }
     pub fn poll(&self, cx: &mut Context<'_>) -> Poll<()> {
@@ -84,9 +88,9 @@ impl Request {
         };
         match result {
             Poll::Pending => {
-                let mut waiters = self.waiters.borrow_mut();
-                if !waiters.iter().any(|w| w.will_wake(cx.waker())) {
-                    waiters.push(cx.waker().clone());
+                let mut waiter = self.waiter.borrow_mut();
+                if !waiter.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+                    *waiter = Some(cx.waker().clone());
                 }
                 Poll::Pending
             }
@@ -95,11 +99,16 @@ impl Request {
                 self.cleanup.borrow_mut().take();
                 *self.result.borrow_mut() = Some(value);
                 self.finished.set(true);
-                for waker in self.waiters.borrow_mut().drain(..) {
-                    waker.wake();
-                }
+                self.wake();
                 Poll::Ready(())
             }
+        }
+    }
+    /// Wake the last poller, if any.
+    fn wake(&self) {
+        let waker = self.waiter.borrow_mut().take();
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
     /// True while only a provider thread can wake the request: its body is
@@ -119,9 +128,7 @@ impl Request {
             self.cancelling.set(true);
             self.finished.set(false);
             *self.cleanup.borrow_mut() = Some(hook());
-            for waker in self.waiters.borrow_mut().drain(..) {
-                waker.wake();
-            }
+            self.wake();
             true
         } else {
             self.cancel();
@@ -134,9 +141,7 @@ impl Request {
         self.body.borrow_mut().take();
         self.result.borrow_mut().take();
         self.finished.set(true);
-        for waker in self.waiters.borrow_mut().drain(..) {
-            waker.wake();
-        }
+        self.wake();
     }
 }
 impl Heap {
@@ -239,6 +244,33 @@ mod tests {
 
     fn poll(request: &Request) -> Poll<()> {
         request.poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    struct Count(std::sync::atomic::AtomicUsize);
+    impl std::task::Wake for Count {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// #1010: the driver polls with a new waker every time; a waiting request
+    /// keeps only the latest, and wakes it when it is cancelled.
+    #[test]
+    fn a_waiting_request_keeps_only_the_latest_waker() {
+        let request = pending();
+        let counts: Vec<std::sync::Arc<Count>> =
+            (0..100).map(|_| std::sync::Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)))).collect();
+        for count in &counts {
+            let waker = Waker::from(count.clone());
+            assert!(request.poll(&mut Context::from_waker(&waker)).is_pending());
+        }
+        for count in &counts[..99] {
+            assert_eq!(std::sync::Arc::strong_count(count), 1, "an earlier waker is not kept");
+        }
+        assert_eq!(std::sync::Arc::strong_count(&counts[99]), 2);
+        *request.cancel_hook.borrow_mut() = Some(Box::new(|| Box::pin(std::future::pending())));
+        assert!(request.request_cancel());
+        assert_eq!(counts[99].0.load(std::sync::atomic::Ordering::Relaxed), 1, "the latest is woken");
     }
 
     /// A threaded request stays off the reactor only while its body runs: a
