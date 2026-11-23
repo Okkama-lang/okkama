@@ -7,7 +7,12 @@
 //! error is written, before a child process starts or the terminal is
 //! written, and when the program ends; [`before_input`] flushes before
 //! standard input is read from a terminal, so a prompt shows, as C stdio does.
+//!
+//! A process whose output must survive `SIGKILL` (a test worker that a
+//! `--test-timeout` may kill, #1011) calls [`write_through`] first: every
+//! write then goes out at once.
 use std::io::{self, IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 thread_local! {
@@ -50,6 +55,17 @@ pub fn capture<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>) {
 /// The block a pipe or a file gets at once.
 const BLOCK: usize = 64 * 1024;
 
+/// Set by [`write_through`]: nothing waits in the buffer.
+static WRITE_THROUGH: AtomicBool = AtomicBool::new(false);
+
+/// From now on, for the rest of the process, every write goes out at once
+/// (after anything already pending): a process that may be killed without
+/// warning loses nothing it wrote, at the cost of one system call per write.
+pub fn write_through() -> io::Result<()> {
+    WRITE_THROUGH.store(true, Ordering::Relaxed);
+    flush()
+}
+
 fn buffer() -> &'static Mutex<Vec<u8>> {
     static PENDING: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(Vec::new()))
@@ -86,6 +102,10 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
     }
     let mut pending = pending();
     pending.extend_from_slice(bytes);
+    if WRITE_THROUGH.load(Ordering::Relaxed) {
+        let all = std::mem::take(&mut *pending);
+        return emit(&all);
+    }
     if terminal() {
         if let Some(end) = pending.iter().rposition(|&byte| byte == b'\n') {
             let rest = pending.split_off(end + 1);
@@ -162,5 +182,16 @@ mod tests {
         assert!(!TO_STDERR.with(std::cell::Cell::get));
         let (_, captured) = capture(|| to_stderr(|| write(b"captured").unwrap()));
         assert_eq!(captured, b"captured");
+    }
+
+    /// #1011: after write_through nothing waits in the buffer, so a process
+    /// killed with SIGKILL has already written everything.
+    #[test]
+    fn write_through_leaves_nothing_pending() {
+        let _ = write_through();
+        write(b"").unwrap();
+        write(b" ").unwrap();
+        assert!(pending().is_empty());
+        WRITE_THROUGH.store(false, Ordering::Relaxed);
     }
 }

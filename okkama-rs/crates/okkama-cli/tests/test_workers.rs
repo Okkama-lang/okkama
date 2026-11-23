@@ -106,3 +106,23 @@ fn worker_options_are_checked() {
     assert_eq!(only.status.code(), Some(0), "{}", text(&only.stdout));
     assert_eq!(text(&only.stdout), "=== RUN   passes\n--- PASS: passes\nPASS\n");
 }
+
+/// #1011: a test that `--test-timeout` kills keeps what it printed: the
+/// worker writes its stdout through, nothing waits in a buffer at the kill.
+#[test]
+fn a_killed_test_keeps_its_output() {
+    let dir = std::env::temp_dir().join(format!("okkama-test-workers-{}-killed", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let file = dir.join("slow.ok");
+    std::fs::write(
+        &file,
+        "module slow;\nimport \"io/stdout\" take Stdout;\nimport \"time/clock\" take SystemClock;\nimport \"time/duration\" take Duration;\n\
+         async test \"prints then hangs\" {\n    Stdout().writeln(\"progress: step 1 done\");\n    await SystemClock().wait(Duration(seconds: 5));\n    test.ok(true);\n}\n",
+    )
+    .expect("write the suite");
+    let path = file.display().to_string();
+    let output = okkama(&["run", "-t", "--workers", "1", "--test-timeout", "0.5", "--report", "json", &path]);
+    let report = text(&output.stdout);
+    assert!(report.contains("progress: step 1 done"), "{report}");
+    no_worker_left(&file);
+}

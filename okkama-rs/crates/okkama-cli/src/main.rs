@@ -1752,7 +1752,10 @@ fn run_command(args: &[String]) -> Outcome {
     };
     if let (true, Some(result)) = (tests, &worker_result) {
         // The worker side (#938): the test's output stays on this process's
-        // stdout and stderr, the report goes to the parent's file.
+        // stdout and stderr, the report goes to the parent's file. Nothing
+        // waits in the stdout buffer, so a worker that `--test-timeout` kills
+        // has already handed over everything the test printed (#1011).
+        let _ = okkama_runtime_core::stdout::write_through();
         return match sparrow_core::run_test_report_with(bytes, plan, Some(Box::new(io::sink())), workers) {
             Ok(report) => match std::fs::write(result, workers::record(&report)) {
                 Ok(()) => Outcome::success(String::new()),
