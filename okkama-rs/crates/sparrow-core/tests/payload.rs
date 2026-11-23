@@ -153,7 +153,7 @@ fn payload_436_persistent_map_versions_trace_shared_nodes() {
 #[test]
 fn payload_436_failure_causes_secondaries_and_cancellation() {
     let program = okkama_sparrow::assemble("sparrow 16\nmodule \"failures\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n").unwrap();
-    let mut runtime = Runtime::new(Loaded::new(program)).unwrap();
+    let mut runtime = Runtime::new(Loaded::verified(program).unwrap()).unwrap();
     runtime.heap.set_stress(true);
     let thrown = runtime.heap.allocate_text("thrown value");
     let native = runtime.heap.allocate_text("native value");

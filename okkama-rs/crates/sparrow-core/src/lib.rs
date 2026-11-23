@@ -249,6 +249,8 @@ pub struct Uncaught {
     /// Function and instruction numbers; they are shared with OIR, so a
     /// compiler can map them to source (`okkama-cli/src/trace.rs`).
     pub trace: Vec<Site>,
+    /// Activations of the root's unwind past the recorded limit (#1009).
+    pub trace_omitted: u64,
     /// Byte offset after the root and its secondaries in the plain report,
     /// before its cause entries.
     pub trace_offset: usize,
@@ -269,7 +271,10 @@ impl Uncaught {
         traces.sort_by_key(|entry| entry.0);
         for (offset, trace, indent) in traces {
             output.push_str(&report[start..offset]);
-            let stack = render(trace);
+            let mut stack = render(trace);
+            if indent.is_empty() && self.trace_omitted > 0 && !stack.is_empty() {
+                stack = format!("{}\n... and {} more activations, not recorded\n", stack.trim_end_matches('\n'), self.trace_omitted);
+            }
             if !stack.is_empty() {
                 output.push('\n');
                 for (index, line) in stack.trim_end_matches('\n').split('\n').enumerate() {
@@ -716,3 +721,27 @@ fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecE
 
 #[cfg(test)]
 mod session_tests;
+
+#[cfg(test)]
+mod uncaught_report_tests {
+    use super::{Site, Uncaught};
+
+    /// #1009: a trace cut at the recording limit says how many activations
+    /// it left out, under the root's stack only.
+    #[test]
+    fn an_omitted_tail_of_the_trace_is_reported() {
+        let uncaught = Uncaught {
+            category: "runtime",
+            error_type: None,
+            message: "Stack overflow".into(),
+            trace: vec![Site { function: 0, pc: 1 }],
+            trace_omitted: 7,
+            trace_offset: 14,
+            cause_traces: Vec::new(),
+        };
+        let report = uncaught.render_report("Stack overflow", |_| "  at f\n".into());
+        assert_eq!(report, "Stack overflow\n  at f\n... and 7 more activations, not recorded");
+        let whole = Uncaught { trace_omitted: 0, ..uncaught };
+        assert_eq!(whole.render_report("Stack overflow", |_| "  at f\n".into()), "Stack overflow\n  at f");
+    }
+}

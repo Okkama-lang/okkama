@@ -1158,7 +1158,19 @@ pub extern "C" fn rt_exec(
         }
         // The init of a constant runs machine code: it needs the context.
         I::GlobalGet { global, .. } => crate::intrinsics::global(ctx, runtime, *global as usize),
-        _ => execute(runtime, function, instruction, &operands),
+        // A panic (a heap length past 4 GiB, #985) must not unwind through
+        // machine code: it stops the run and poisons the runtime, as a native's
+        // does (H-14, #1009).
+        _ => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute(runtime, function, instruction, &operands)
+        })) {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                runtime.poisoned = true;
+                let message = format!("internal error in {}: {}", instruction.mnemonic(), crate::runtime::panic_text(&*payload));
+                return crate::runtime::fatal(ctx, runtime, message);
+            }
+        },
     };
     // #529: a container made from summarized parts is summarized at birth.
     if let Ok(result) = outcome
@@ -1229,6 +1241,16 @@ fn result_bytes(runtime: &Runtime, instruction: &I, value: &dyn Fn(&okkama_sparr
         }
         I::StrReplace { text: source, pattern, replacement, .. } => {
             Some(replace_bytes(text(source), text(pattern), text(replacement)))
+        }
+        // The results that can be much larger than their inputs are measured
+        // before they are built (#1009): `repeat` up to its 1 GiB limit, and
+        // `replace_first` by one replacement.
+        I::StrFn { op: StrFn::Repeat, args, .. } => {
+            let count = runtime.small_or_big(value(&args[1])).unwrap_or(i64::MAX).max(0) as u64;
+            Some((text(&args[0]).len() as u64).saturating_mul(count))
+        }
+        I::StrReplaceFirst { text: source, replacement, .. } => {
+            Some(text(source).len() as u64 + text(replacement).len() as u64)
         }
         _ => None,
     }

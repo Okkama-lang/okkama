@@ -2071,7 +2071,7 @@ impl Runtime {
             }
         };
         let trace = record.trace.iter().map(|&(function, pc)| crate::Site { function, pc }).collect();
-        Some(crate::Uncaught { category, error_type, message, trace, trace_offset: 0, cause_traces: Vec::new() })
+        Some(crate::Uncaught { category, error_type, message, trace, trace_omitted: record.trace_omitted, trace_offset: 0, cause_traces: Vec::new() })
     }
 
     fn error_text_method(&self, object: Word) -> Option<usize> {

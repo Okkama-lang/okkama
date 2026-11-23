@@ -102,7 +102,26 @@ impl Input {
     }
 }
 
+/// The REPL on a thread with the VM's stack (#1009): a cell runs with
+/// `sparrow_core::STACK_BYTES` as its stack limit, so the thread must really
+/// have it; on the 8 MiB main thread deep recursion killed the process
+/// instead of failing with "Stack overflow".
 pub(crate) fn run() -> ExitCode {
+    let thread = std::thread::Builder::new()
+        .name("okkama-repl".into())
+        .stack_size(sparrow_core::STACK_BYTES as usize)
+        .spawn(repl);
+    match thread.map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        Ok(Err(_)) => ExitCode::from(70),
+        Err(error) => {
+            eprintln!("okkama: REPL thread: {error}");
+            ExitCode::from(70)
+        }
+    }
+}
+
+fn repl() -> ExitCode {
     if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none()
         && let Some(icu) = pinned_icu()
     {
@@ -268,7 +287,7 @@ impl Session {
                 runtime.extend(merged).map_err(|error| format!("okkama: {}; :reset starts a fresh session\n", error.0))?;
             }
             None => {
-                let runtime = Runtime::session(Loaded::new(fresh), CAPACITIES).map_err(|error| format!("okkama: {}\n", error.0))?;
+                let runtime = Runtime::session(Loaded::verified(fresh).map_err(|error| format!("okkama: {}\n", error.0))?, CAPACITIES).map_err(|error| format!("okkama: {}\n", error.0))?;
                 self.runtime = Some(Box::new(runtime));
             }
         }

@@ -156,3 +156,16 @@ print("ok" if b"21 (int)" in first and b"21 (int)" in second else "fail", repr(f
     let report = String::from_utf8_lossy(&output.stdout);
     assert!(report.starts_with("ok"), "{report}");
 }
+
+/// #1009: a cell's deep recursion fails with the VM's "Stack overflow" and the
+/// session goes on; on the 8 MiB main thread it killed the process.
+#[test]
+fn a_deep_recursion_fails_and_the_session_continues() {
+    let (out, err) = repl(&[
+        "object D { D(); go(n is int) is int { if n == 0 { 0; } else { 1 + self.go(n - 1); } } }",
+        "D().go(100000000)",
+        "1 + 1",
+    ]);
+    assert!(err.contains("Stack overflow"), "{err}");
+    assert!(out.contains("2 (int)"), "{out}");
+}

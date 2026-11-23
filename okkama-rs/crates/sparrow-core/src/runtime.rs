@@ -48,8 +48,11 @@ pub struct Ctx {
 #[derive(Debug)]
 pub struct Failure {
     pub kind: FailureKind,
-    /// (function, pc) of each activation it unwound through, innermost first.
+    /// (function, pc) of each activation it unwound through, innermost first;
+    /// at most `TRACE_LIMIT` of them, the rest only counted (#1009).
     pub trace: Vec<(u32, u32)>,
+    /// Activations past `TRACE_LIMIT`, not recorded.
+    pub trace_omitted: u64,
     pub cause: Option<Word>,
     pub secondary: Vec<Word>,
     last_frame: Option<(u32, u64)>,
@@ -204,6 +207,8 @@ macro_rules! frame_pointer {
 }
 
 impl Runtime {
+    /// A runtime for a loaded program. A `Loaded` is verified by construction
+    /// outside the crate (`Loaded::verified`, #1009).
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
         Self::assemble(loaded)
@@ -562,6 +567,7 @@ impl Runtime {
         self.heap.allocate_payload(Box::new(Failure {
             kind,
             trace: Vec::new(),
+            trace_omitted: 0,
             cause: None,
             secondary: Vec::new(),
             last_frame: None,
@@ -729,7 +735,7 @@ impl Runtime {
     /// The report of an exhausted run.
     pub(crate) fn exhausted_report(&mut self) -> Error {
         let message = self.budget.exhausted.unwrap_or(Exhausted::Interrupted).message();
-        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new(), trace_offset: 0, cause_traces: Vec::new() });
+        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new(), trace_omitted: 0, trace_offset: 0, cause_traces: Vec::new() });
         Error(message.into())
     }
 }
@@ -862,6 +868,9 @@ pub extern "C" fn rt_throw(ctx: *mut Ctx, value: Word) -> Word {
     fail(ctx, runtime, if native { FailureKind::Native(value) } else { FailureKind::Thrown(value) })
 }
 
+/// The most activations a failure's trace records (8 MiB of sites).
+pub const TRACE_LIMIT: usize = 1 << 20;
+
 /// Record that the pending failure reaches `function` at `pc` in the
 /// activation with frame pointer `frame`; each activation is recorded once, at
 /// the pc where the failure first reached it (a rethrow does not add it again).
@@ -871,7 +880,13 @@ pub extern "C" fn rt_trace(ctx: *mut Ctx, function: u64, pc: u64, frame: u64) {
     let failure = ctx.failure;
     if let Some(failure) = runtime.heap.payload_mut::<Failure>(failure)
         && failure.last_frame != Some((function as u32, frame)) {
-            failure.trace.push((function as u32, pc as u32));
+            // A stack overflow unwinds through tens of millions of
+            // activations: the first million are kept, the rest counted (#1009).
+            if failure.trace.len() < TRACE_LIMIT {
+                failure.trace.push((function as u32, pc as u32));
+            } else {
+                failure.trace_omitted += 1;
+            }
             failure.last_frame = Some((function as u32, frame));
         }
 }
@@ -1194,6 +1209,20 @@ mod embedding_tests {
         let entry = Invocation { code: 0, params: 9, is_async: true };
         assert_eq!(entry.capture_count(0), Err("closure with more than 8 parameters"));
         assert_eq!(entry.capture_count(u64::MAX), Err("closure with more than 8 parameters"));
+    }
+
+    /// #1009: outside the crate a `Loaded` is made only from a verified
+    /// program: a hand-made one with a parameter register out of range is
+    /// refused before any analysis indexes it.
+    #[test]
+    fn public_runtimes_verify_their_program() {
+        let source = "sparrow 16\nmodule \"bad\" \"1.0.0\"\ntype t0 int\n\
+            function f0 \"f\" {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n";
+        let good = okkama_sparrow::assemble(source).unwrap();
+        assert!(Runtime::new(Loaded::verified(good.clone()).unwrap()).is_ok());
+        let mut bad = good;
+        bad.functions[0].params = vec![okkama_sparrow::Register(7)];
+        assert!(Loaded::verified(bad).is_err());
     }
 
     fn bridge_runtime() -> Box<Runtime> {

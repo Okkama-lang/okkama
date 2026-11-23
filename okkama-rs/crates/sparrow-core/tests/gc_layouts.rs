@@ -76,7 +76,7 @@ fn gc_layout_retained_arguments_survive_reused_async_registers() {
          registers [t0, t2, t1, t3]\nparams [r0, r2]\nresult t0\n0: ret r0\n}\n\
          function f1 \"Lease.destroy\" {\n registers [t4]\n params [r0]\n result void\n 0: ret _\n}\n",
     ).unwrap();
-    let mut runtime = sparrow_core::runtime::Runtime::new(Loaded::new(program)).unwrap();
+    let mut runtime = sparrow_core::runtime::Runtime::new(Loaded::verified(program).unwrap()).unwrap();
     runtime.heap.set_stress(true);
     let integer = runtime.heap.int(i64::MIN);
     let text = runtime.heap.allocate_text("retained argument");
@@ -110,7 +110,7 @@ fn gc_layout_retained_arguments_survive_reused_async_registers() {
 fn gc_layout_driver_state_and_runtime_object_overrides() {
     // Reuse the suspended-Event/ownership regression instead of duplicating it.
     let program = okkama_sparrow::assemble(include_str!("all_futures.spa")).unwrap();
-    let loaded = Loaded::new(program);
+    let loaded = Loaded::verified(program).unwrap();
     let layouts = loaded.layouts();
     assert_eq!(layouts.objects[0], [Repr::Ref, Repr::Raw]); // Atomic<string>
     assert_eq!(layouts.objects[6], [Repr::Raw, Repr::Raw, Repr::Ref]); // Event
@@ -145,7 +145,7 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
          function f0 \"new\" intrinsic \"okkama.atomic.Atomic.new_value\" [obj0] [] {\n\
          registers [t0]\nparams [r0]\nresult t1\n}\n",
     ).unwrap();
-    let loaded = Loaded::new(program);
+    let loaded = Loaded::verified(program).unwrap();
     let layouts = loaded.layouts();
     assert_eq!(layouts.objects[0], [Repr::Int, Repr::Raw]);
     let mut heap = Heap::new(layouts);

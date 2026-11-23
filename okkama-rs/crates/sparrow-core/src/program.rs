@@ -124,7 +124,16 @@ pub fn is_driver(function: &okkama_sparrow::Function) -> bool {
 }
 
 impl Loaded {
-    pub fn new(mut program: Program) -> Self {
+    /// A loaded program, verified first (#1009): the analyses here and the JIT
+    /// index registers and pick machine representations by the program's
+    /// types, so an unverified program could crash or corrupt memory.
+    pub fn verified(program: Program) -> Result<Self, crate::Error> {
+        program.verify().map_err(|error| crate::Error(error.to_string()))?;
+        Ok(Self::new(program))
+    }
+
+    /// For a program the crate has verified (`decode` verifies).
+    pub(crate) fn new(mut program: Program) -> Self {
         let workers = add_workers(&mut program);
         // One switch for both JIT roots and suspended-frame layouts. Read it
         // once at load time; never change a live runtime's tracing contract.

@@ -4,7 +4,7 @@ use sparrow_core::{jit, program::Loaded, runtime::Runtime};
 
 fn runtime() -> Box<Runtime> {
     let program = okkama_sparrow::assemble(include_str!("ready_callees.spa")).unwrap();
-    Box::new(Runtime::new(Loaded::new(program)).unwrap())
+    Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap())
 }
 
 #[test]
