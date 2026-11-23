@@ -21,8 +21,10 @@ struct Metadata {
     identity: (u64, u64),
     mode: u32,
     size: u64,
-    modified: i64,
-    changed: i64,
+    /// Seconds and nanoseconds: a rewrite with the same number of bytes in
+    /// the same second differs only there (#1010).
+    modified: (i64, i64),
+    changed: (i64, i64),
     directory: bool,
 }
 impl Metadata {
@@ -44,8 +46,8 @@ fn metadata(path: &Path) -> std::io::Result<Option<Metadata>> {
             identity: (m.dev(), m.ino()),
             mode: m.mode(),
             size: m.size(),
-            modified: m.mtime(),
-            changed: m.ctime(),
+            modified: (m.mtime(), m.mtime_nsec()),
+            changed: (m.ctime(), m.ctime_nsec()),
             directory: m.is_dir(),
         })),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -251,17 +253,62 @@ impl Heap {
         let guard = error.is_none().then(|| Waiter(watch.clone()));
         let mut closed = watch.changed.subscribe();
         Ok(self.native_io(async move {
-            let _guard=guard;if let Some(error)=error {return Err(error);}
+            let _guard = guard;
+            if let Some(error) = error {
+                return Err(error);
+            }
             loop {
-                if watch.closed.get() {return Err(failure(n,"already_closed","File watch is closed"));}
-                if let Some(event)=watch.events.borrow_mut().pop_front() {return Ok(event);}
-                let path=watch.path.clone();
-                let scan=tokio::task::spawn_blocking(move||snapshot(&path));
-                let next=tokio::select! {biased;_=closed.changed()=>return Err(failure(n,"already_closed","File watch is closed")),result=scan=>result.map_err(|_|failure(n,"unexpected","File watch scan failed"))?.map_err(|e|io_failure(n,e))?};
+                if watch.closed.get() {
+                    return Err(failure(n, "already_closed", "File watch is closed"));
+                }
+                if let Some(event) = watch.events.borrow_mut().pop_front() {
+                    return Ok(event);
+                }
+                let path = watch.path.clone();
+                let scan = tokio::task::spawn_blocking(move || snapshot(&path));
+                let next = tokio::select! {
+                    biased;
+                    _ = closed.changed() => {
+                        return Err(failure(n, "already_closed", "File watch is closed"));
+                    }
+                    result = scan => result
+                        .map_err(|_| failure(n, "unexpected", "File watch scan failed"))?
+                        .map_err(|e| io_failure(n, e))?,
+                };
                 watch.compare(next);
-                if let Some(event)=watch.events.borrow_mut().pop_front(){return Ok(event);}
-                tokio::select! {biased;_=closed.changed()=>return Err(failure(n,"already_closed","File watch is closed")),_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{}}
+                if let Some(event) = watch.events.borrow_mut().pop_front() {
+                    return Ok(event);
+                }
+                tokio::select! {
+                    biased;
+                    _ = closed.changed() => {
+                        return Err(failure(n, "already_closed", "File watch is closed"));
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                }
             }
         })?)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1010: a rewrite with the same size in the same second is a change:
+    /// the snapshot keeps the nanoseconds of the times.
+    #[test]
+    fn a_change_within_one_second_is_seen() {
+        let path = std::env::temp_dir().join(format!("sparrow-watch-{}", std::process::id()));
+        std::fs::write(&path, b"aaaa").unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        let second = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        file.set_modified(second + std::time::Duration::from_millis(100)).unwrap();
+        let before = metadata(&path).unwrap().expect("exists");
+        std::fs::write(&path, b"bbbb").unwrap();
+        file.set_modified(second + std::time::Duration::from_millis(200)).unwrap();
+        let after = metadata(&path).unwrap().expect("exists");
+        assert_eq!((before.size, before.modified.0), (after.size, after.modified.0), "same size, same second");
+        assert!(before.differs(&after));
+        let _ = std::fs::remove_file(&path);
     }
 }
