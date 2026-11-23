@@ -16,6 +16,28 @@
   net, text, misc, formats, host cut to their live parts), ~14.9k lines; `native::execute` refuses
   unrouted natives; a sparrow-core test keeps the ORIGIN routes and runtime-core providers equal.
 
+## #1011, #1012 Sparrow host net, test reports and data (2026-11-23, feature/1011-host-net)
+
+- [x] #1011: TLS `abort` wakes pending operations (no hang after a cancelled
+  write); TCP `listen(backlog)` at `tcp_start_listening`, nothing queued before;
+  `IPV6_V6ONLY = !dual_stack` for TCP and UDP; IPv4 `IP_MULTICAST_IF` by index;
+  DNS `unavailable` for `EAI_AGAIN`, IPv6 literals before the name check, the
+  five dropped resolver tests back; zone names by `if_nametoindex`; JUnit
+  `errors` counts crashes; Busy/interruptible shared by TCP and TLS.
+- [x] #1012: legacy SQLite floating text refused (`SQLITE_FLOAT_RANGE`);
+  `Regex.all` linear (queries share the text's scalars: 16000 matches 44.3 s →
+  0.54 s, debug); `Json.text(name)` and friends through the name index
+  (20000 members 1310 → 62 ms, debug); JSON hard depth limit reports a real
+  line/column; postgres page restored on any exit; `needs_tokio` skips
+  Postgres; stale headers and SAFETY comments.
+- [ ] Parked: stdout of a worker killed by `--test-timeout` — `stdout::write_through`
+  is in runtime-core, the one-line call in `okkama-cli/src/main.rs` (worker
+  side) waits for the lead (CLI was another fixer's area). SQLITE_ERROR kinds and
+  `sqlite3_errmsg` text (std refusal texts, owner decision).
+- Blast radius, base `release/064` vs branch (debug): conformance run/test 873
+  cases 0 differences; std `run -t` 212 modules same (132 with tests, all pass);
+  t/ 142 files 50972 checks pass on both; examples 75/75 on both.
+
 ## Release 0.6.3 (2026-11-22, release/063)
 
 - [x] Bible findings #952–#971, #954, #956, #967; #957 (Cell stays synchronous, local rule); security

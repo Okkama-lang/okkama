@@ -344,3 +344,27 @@ A role or an enum named `Error`, `Maybe` or `Presence` gets "… is the name of 
 system role/enum" instead of "already declared". An object named `Maybe` or
 `Presence` still shadows the system enum: whether to reserve these names for
 every declaration is open (#1005, owner decision).
+
+## Sparrow host net and data hotfixes (#1011, #1012, fixer decisions, 2026-11-23)
+
+- **`test.case` and an uncatchable failure.** The Bible (ch. 15) promises that
+  a failed check or a *thrown error* fails one sub-case and the rows after it
+  still run; the parser's desugaring catches `Error`, and that already holds. A
+  panic or a runtime error is uncatchable (ch. 10): it fails the sub-case it
+  happened in and ends the test, the later rows are not run and not reported
+  (`okkama-cli/tests/cli.rs` "nested"). Code unchanged; ch. 15 (en, ru) now
+  says so.
+- **No implicit dual stack.** An IPv6 TCP listener or UDP socket sets
+  `IPV6_V6ONLY` to `!dual_stack` explicitly, whatever the system default; with
+  `dual_stack: false` a bind to `::ffff:a.b.c.d` is refused.
+- **Listen backlog.** `tcp_bound` binds without listening; `tcp_start_listening`
+  calls `listen(backlog)` (the system may round or cap it). No peer is queued
+  before the program starts listening.
+- **DNS failure codes.** `EAI_NONAME`/`EAI_NODATA` stay `not_found`
+  (`UnknownHost`); `EAI_AGAIN` is `unavailable` "System resolver is temporarily
+  unavailable"; anything else is `unexpected` with the resolver's text. std maps
+  every code but `not_found`/`resource_exhausted` to `DnsFailure.because(message)`.
+- **Legacy natives stay.** The kind-code SQLite path and `db_capture*` have no
+  std caller but are declared in `runtime/database` and `runtime/db`; std loses
+  nothing (owner rule), so they are kept and documented, and the floating text
+  of the old path is refused (`SQLITE_FLOAT_RANGE`) instead of becoming 0.0.
