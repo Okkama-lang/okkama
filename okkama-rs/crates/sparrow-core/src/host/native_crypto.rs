@@ -61,13 +61,18 @@ impl Heap {
     ) -> Result<Outcome, Error> {
         match native {
             Native::HostCrypto => {
+                // The arguments may be keys and passwords: their copies are
+                // zeroed once the operation has them (#1015).
                 let parts = self
                     .elements(args[1])?
                     .iter()
-                    .map(|part| self.native_bytes(*part))
+                    .map(|part| self.native_bytes(*part).map(zeroize::Zeroizing::new))
                     .collect::<Result<Vec<_>, _>>()?;
-                let slices = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                match okkama_native::call(self.text(args[0])?, &slices) {
+                let slices = parts.iter().map(|part| part.as_slice()).collect::<Vec<_>>();
+                let result = okkama_native::call(self.text(args[0])?, &slices);
+                drop(slices);
+                drop(parts);
+                match result {
                     Ok(bytes) => self.native_byte_array(bytes).map(Outcome::Value),
                     Err(error) => self.crypto_failure(native, error),
                 }

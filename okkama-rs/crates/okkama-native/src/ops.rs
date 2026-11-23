@@ -76,6 +76,12 @@ fn fixed<const N: usize>(bytes: &[u8], what: &str) -> Result<[u8; N]> {
         .map_err(|_| invalid(format!("{what} must be {N} bytes")))
 }
 
+/// A fixed-size secret, zeroed when dropped (#1015): seeds and private keys
+/// copied out of the arguments.
+fn secret<const N: usize>(bytes: &[u8], what: &str) -> Result<zeroize::Zeroizing<[u8; N]>> {
+    fixed::<N>(bytes, what).map(zeroize::Zeroizing::new)
+}
+
 fn truth(value: bool) -> Vec<u8> {
     vec![u8::from(value)]
 }
@@ -612,7 +618,7 @@ fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     };
     use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     let signing = |seed: &[u8]| -> Result<SigningKey> {
-        Ok(SigningKey::from_bytes(&fixed::<32>(seed, "Ed25519 seed")?))
+        Ok(SigningKey::from_bytes(&*secret::<32>(seed, "Ed25519 seed")?))
     };
     let verifying = |raw: &[u8]| -> Result<VerifyingKey> {
         VerifyingKey::from_bytes(&fixed::<32>(raw, "Ed25519 public key")?)
@@ -638,7 +644,7 @@ fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
             arity(args, 1, &name)?;
             // PKCS#8 v1 (RFC 8410, 48 байт) без открытого ключа — как OpenSSL.
             let pair = ed25519_dalek::pkcs8::KeypairBytes {
-                secret_key: fixed::<32>(args[0], "Ed25519 seed")?,
+                secret_key: *secret::<32>(args[0], "Ed25519 seed")?,
                 public_key: None,
             };
             let der = pair
@@ -678,12 +684,12 @@ fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     match op {
         "public" => {
             arity(args, 1, &name)?;
-            let secret = StaticSecret::from(fixed::<32>(args[0], "X25519 private key")?);
+            let secret = StaticSecret::from(*self::secret::<32>(args[0], "X25519 private key")?);
             Ok(PublicKey::from(&secret).as_bytes().to_vec())
         }
         "shared" => {
             arity(args, 2, &name)?;
-            let secret = StaticSecret::from(fixed::<32>(args[0], "X25519 private key")?);
+            let secret = StaticSecret::from(*self::secret::<32>(args[0], "X25519 private key")?);
             let peer = PublicKey::from(fixed::<32>(args[1], "X25519 public key")?);
             let shared = secret.diffie_hellman(&peer);
             if !shared.was_contributory() {
@@ -728,11 +734,14 @@ macro_rules! ecdsa_curve {
                 // Decoding checks an embedded public key against the scalar.
                 let secret = $curve::SecretKey::from_pkcs8_der(args[0]).map_err(|_| invalid("invalid ECDSA PKCS#8 key"))?;
                 let digest = <$digest as sha2::Digest>::digest(args[1]);
+                let mut scalar = secret.to_nonzero_scalar();
                 let (signature, _) = ecdsa::hazmat::sign_prehashed_rfc6979::<$point, $digest>(
-                    &secret.to_nonzero_scalar(),
+                    &scalar,
                     &digest,
                     &[],
                 );
+                // The scalar is `Copy`: the copy made here is zeroed too (#1015).
+                scalar.zeroize();
                 Ok(signature.to_der().as_bytes().to_vec())
             }
             "verify" => {
