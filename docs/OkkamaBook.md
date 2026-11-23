@@ -4271,9 +4271,9 @@ and changes its own ends (`first()`, `last()`, `prefix(x)`, `suffix(x)`,
 `ShortestFloat(x).decimal()` is the shortest decimal that reads back as the
 same float. `Crc32(bytes).checksum()`, `Adler32` and `Crc16Ccitt` checksum.
 
-`time` keeps durations, instants, dates and zones apart. `Duration(seconds:
-90)` and `Duration(milliseconds: 250)` take whole amounts, and `Duration(value:,
-unit:)` any rational one; arithmetic is exact (`d.times(f)`). A date counts
+`time` keeps durations, instants, dates and zones apart. A duration has one
+constructor, exact rational seconds: `Duration(seconds: 90.rat())`, `Duration(seconds:
+rat(250, 1000))`, `Duration(seconds: (5 * 60).rat())`; arithmetic is exact (`d.times(f)`). A date counts
 its own days: `date.shifted(days)`, `release.days_until(deadline)`,
 `date.day_number()` and `Date(day_number: n)`, and its months: `date.plus_months(n)` and
 `date.plus_years(n)` keep the day where the target month has it and take its last day otherwise

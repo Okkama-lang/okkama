@@ -22,7 +22,7 @@ main() is int {
                     case 1: Json(n).string().length();
                     case 2: ObservedDbValue(DbInteger(n)).width();
                     case 3: ObservedDbValue(DbInteger(n)).integer();
-                    case 4: Duration(nanoseconds: n).nanoseconds();
+                    case 4: Duration(seconds: rat(n, 1000000000)).nanoseconds();
                     case 5: ByteBody([1.byte(), 2.byte()]).length();
                     case 6: ((n * n) / 7).int() + n % 7;
                     else {

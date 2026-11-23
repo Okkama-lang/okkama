@@ -3,7 +3,7 @@ module bible/authority v1.0.0;
 import "io/stdout" take Stdout;
 import "os/environment" take Environment;
 import "time/clock" take Timing, Instant, MonotonicInstant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // A clock that always reads the same instant: what a test or a replay
 // hands to code that asks for the time.
@@ -36,7 +36,7 @@ object Greeting {
 }
 
 main() is int {
-    let noon = Instant(origin: Duration(value: 43200.rat(), unit: DurationUnit.second));
+    let noon = Instant(origin: Duration(seconds: 43200.rat()));
     let clock = FixedClock(at: noon);
     Stdout().writeln(Greeting(environment: Environment(values: ["USER": "ada"]), clock: clock).text());
     Stdout().writeln(Greeting(environment: Environment(values: [:]), clock: clock).text());

@@ -22,7 +22,7 @@ main() is int {
                     case 1: Json(BigInt(n)).string().length();
                     case 2: ObservedDbValue(DbInteger(BigInt(n))).width();
                     case 3: ObservedDbValue(DbInteger(BigInt(n))).integer().int();
-                    case 4: Duration(nanoseconds: n).nanoseconds().int();
+                    case 4: Duration(seconds: rat(n, 1000000000)).nanoseconds().int();
                     case 5: ByteBody([1.byte(), 2.byte()]).length().int();
                     case 6: ((BigInt(n) * BigInt(n)) / BigInt(7) + BigInt(n) % BigInt(7)).int();
                     else {

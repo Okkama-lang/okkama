@@ -363,8 +363,8 @@ object StoreRefusals does ExceptionScope {
 ```okkama
 let pool = DbPool(
     origin: PostgresConnector(PostgresDatabase(url: "postgresql://notes@127.0.0.1:5432/notes")),
-    options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(minutes: 5),
-        lifetime: Duration(minutes: 30), acquisition_timeout: Duration(seconds: 5)),
+    options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(seconds: (5 * 60).rat()),
+        lifetime: Duration(seconds: (30 * 60).rat()), acquisition_timeout: Duration(seconds: 5.rat())),
     clock: SystemClock(),
 );
 defer pool.close();

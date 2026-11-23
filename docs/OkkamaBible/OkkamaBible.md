@@ -12773,7 +12773,7 @@ object Backoff {
     Backoff(:timing, :attempts);
 
     async fetched(source is Source) is string {
-        await self.attempt(source, 1, Duration(seconds: 1));
+        await self.attempt(source, 1, Duration(seconds: 1.rat()));
     }
 
     async attempt(source is Source, number is int, delay is Duration) is string {
@@ -12794,8 +12794,8 @@ object Recording does Timing {
 
     Recording(:waits);
 
-    instant() is Instant { Instant(Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { waits.record(duration); }
 }
 
@@ -12818,8 +12818,8 @@ async test "two failures cost one and then two seconds" {
     let source = Scripted(answers: Stub(["down", "down", "ready"]));
     test.is(await backoff.fetched(source), "ready");
     test.is(waits.size(), 2);
-    test.is(waits.records().item(0).value(), Duration(seconds: 1));
-    test.is(waits.records().item(1).value(), Duration(seconds: 2));
+    test.is(waits.records().item(0).value(), Duration(seconds: 1.rat()));
+    test.is(waits.records().item(1).value(), Duration(seconds: 2.rat()));
 }
 
 async test "the first answer needs no wait" {
@@ -17436,7 +17436,7 @@ import "async/event" take Event;
 import "async/collect" take AllFutures;
 import "async/timeout" take Within, TimedOut;
 import "time/clock" take SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "collections/sequence" take Sequencing;
 
 object Supplier {
@@ -17473,7 +17473,7 @@ async main() is int {
     Stdout().writeln("quotes: " + prices.size().string());
     let bounded is Within<int> = Within(
         origin: Courier(never: Event()).eta(),
-        limit: Duration(value: 20.rat(), unit: DurationUnit.millisecond),
+        limit: Duration(seconds: rat(20, 1000)),
         clock: SystemClock(),
     );
     let eta = try {
@@ -18546,7 +18546,7 @@ module bible/deadline v1.0.0;
 import "async/event" take Event;
 import "async/timeout" take Within, TimedOut;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "testing/time" take ManualClock;
 
 object Courier {
@@ -18568,7 +18568,7 @@ object Dispatch {
     async eta() is int {
         let bounded is Within<int> = Within(
             origin: Courier(never: Event()).eta(),
-            limit: Duration(30.rat(), DurationUnit.second),
+            limit: Duration(seconds: 30.rat()),
             clock: clock,
         );
         try {
@@ -18581,13 +18581,13 @@ object Dispatch {
 }
 
 async test "a courier that never answers times out after thirty seconds" {
-    let clock = ManualClock(Instant(Duration(0.rat(), DurationUnit.second)));
+    let clock = ManualClock(Instant(Duration(seconds: 0.rat())));
     defer clock.close();
     let eta = spawn Dispatch(clock: clock).eta();
     test.is(clock.pending(), 1);
-    clock.advance(Duration(29.rat(), DurationUnit.second));
+    clock.advance(Duration(seconds: 29.rat()));
     test.ok(!eta.done());
-    clock.advance(Duration(1.rat(), DurationUnit.second));
+    clock.advance(Duration(seconds: 1.rat()));
     test.is(await eta, -1);
 }
 ```
@@ -19260,7 +19260,7 @@ module bible/authority v1.0.0;
 import "io/stdout" take Stdout;
 import "os/environment" take Environment;
 import "time/clock" take Timing, Instant, MonotonicInstant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // A clock that always reads the same instant: what a test or a replay
 // hands to code that asks for the time.
@@ -19293,7 +19293,7 @@ object Greeting {
 }
 
 main() is int {
-    let noon = Instant(origin: Duration(value: 43200.rat(), unit: DurationUnit.second));
+    let noon = Instant(origin: Duration(seconds: 43200.rat()));
     let clock = FixedClock(at: noon);
     Stdout().writeln(Greeting(environment: Environment(values: ["USER": "ada"]), clock: clock).text());
     Stdout().writeln(Greeting(environment: Environment(values: [:]), clock: clock).text());
@@ -22633,8 +22633,8 @@ names PostgreSQL:
 ```okkama
 let pool = DbPool(
     origin: PostgresConnector(PostgresDatabase(url: "postgresql://notes@127.0.0.1:5432/notes")),
-    options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(minutes: 5),
-        lifetime: Duration(minutes: 30), acquisition_timeout: Duration(seconds: 5)),
+    options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(seconds: (5 * 60).rat()),
+        lifetime: Duration(seconds: (30 * 60).rat()), acquisition_timeout: Duration(seconds: 5.rat())),
     clock: SystemClock(),
 );
 defer pool.close();

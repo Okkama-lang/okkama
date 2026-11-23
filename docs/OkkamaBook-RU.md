@@ -4432,9 +4432,9 @@ URL-safe), Base32, Base85, hex, quoted-printable, ASCII и Latin-1 устрое�
 обратно в тот же float. Контрольные суммы: `Crc32(bytes).checksum()`, `Adler32`
 и `Crc16Ccitt`.
 
-`time` разделяет длительности, моменты, даты и зоны. `Duration(seconds: 90)` и
-`Duration(milliseconds: 250)` принимают целые количества, `Duration(value:,
-unit:)` — любое рациональное; арифметика точна (`d.times(f)`). Дата сама
+`time` разделяет длительности, моменты, даты и зоны. У длительности один
+конструктор — точные секунды рациональным числом: `Duration(seconds: 90.rat())`,
+`Duration(seconds: rat(250, 1000))`, `Duration(seconds: (5 * 60).rat())`; арифметика точна (`d.times(f)`). Дата сама
 считает дни: `date.shifted(days)`, `release.days_until(deadline)`,
 `date.day_number()` и `Date(day_number: n)`, и месяцы: `date.plus_months(n)` и `date.plus_years(n)`
 сохраняют день, если в целевом месяце он есть, и берут последний день месяца иначе (2024-01-31 плюс

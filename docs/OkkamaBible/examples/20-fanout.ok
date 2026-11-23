@@ -5,7 +5,7 @@ import "async/event" take Event;
 import "async/collect" take AllFutures;
 import "async/timeout" take Within, TimedOut;
 import "time/clock" take SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "collections/sequence" take Sequencing;
 
 object Supplier {
@@ -42,7 +42,7 @@ async main() is int {
     Stdout().writeln("quotes: " + prices.size().string());
     let bounded is Within<int> = Within(
         origin: Courier(never: Event()).eta(),
-        limit: Duration(value: 20.rat(), unit: DurationUnit.millisecond),
+        limit: Duration(seconds: rat(20, 1000)),
         clock: SystemClock(),
     );
     let eta = try {
