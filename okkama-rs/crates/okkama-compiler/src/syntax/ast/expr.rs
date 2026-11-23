@@ -59,7 +59,6 @@ pub enum ExprKind {
     /// `@int(args)` / `@byte(...)` — the array cast syntax. The target is
     /// one of `int`, `float`, `byte`, `string`.
     ArrayCast {
-        marker: Span,
         target: Name,
         args: Vec<Argument>,
     },
@@ -87,7 +86,6 @@ pub enum ExprKind {
     /// Postfix unpack `operand...`.
     Unpack {
         operand: Box<Expr>,
-        ellipsis: Span,
     },
     /// `receiver.map() -> a { }`, `.filter()`, `.reduce(init) -> acc, a { }`, `.any()`, `.all()`, `.find()`.
     Functional {

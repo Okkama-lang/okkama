@@ -505,7 +505,6 @@ impl Parser<'_> {
                     span: expr.span.to(ellipsis),
                     kind: ExprKind::Unpack {
                         operand: Box::new(expr),
-                        ellipsis,
                     },
                 };
                 continue;
@@ -919,11 +918,7 @@ impl Parser<'_> {
         let close = self.previous().span;
         Ok(Expr {
             span: marker.to(close),
-            kind: ExprKind::ArrayCast {
-                marker,
-                target,
-                args,
-            },
+            kind: ExprKind::ArrayCast { target, args },
         })
     }
 

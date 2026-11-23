@@ -154,5 +154,4 @@ pub struct CatchClause {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ForBinding {
     pub name: Name,
-    pub span: Span,
 }

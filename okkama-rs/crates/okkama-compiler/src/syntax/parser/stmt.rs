@@ -572,8 +572,7 @@ impl Parser<'_> {
                 "A for binding is one name; batched bindings like \"name[2]\" are not part of Okkama. Batch the source instead: a source that does Batching<T> binds one @T batch per step.",
             ));
         }
-        let span = name.span;
-        Ok(ForBinding { name, span })
+        Ok(ForBinding { name })
     }
 
     /// `next ("if" expr)? ";"` — `next` never carries a value.

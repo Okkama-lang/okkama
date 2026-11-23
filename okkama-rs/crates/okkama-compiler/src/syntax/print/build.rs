@@ -408,7 +408,7 @@ fn stmt_node(stmt: &Stmt) -> Node {
             .field(
                 "bindings",
                 list(bindings, |binding| {
-                    Node::new("ForBinding", binding.span).field("name", name(&binding.name))
+                    Node::new("ForBinding", binding.name.span).field("name", name(&binding.name))
                 }),
             )
             .field("body", Value::node(block_node(body))),
@@ -533,11 +533,7 @@ fn expr_node(expr: &Expr) -> Node {
         ExprKind::Call { callee, args } => Node::new("Call", span)
             .field("callee", Value::node(expr_node(callee)))
             .field("arguments", list(args, argument_node)),
-        ExprKind::ArrayCast {
-            marker: _,
-            target,
-            args,
-        } => Node::new("ArrayCast", span)
+        ExprKind::ArrayCast { target, args } => Node::new("ArrayCast", span)
             .field("target", name(target))
             .field("arguments", list(args, argument_node)),
         ExprKind::Get {
@@ -560,10 +556,7 @@ fn expr_node(expr: &Expr) -> Node {
             .field("object", Value::node(expr_node(object)))
             .field("index", Value::node(expr_node(index)))
             .field("fallback", opt_node(fallback.as_deref(), expr_node)),
-        ExprKind::Unpack {
-            operand,
-            ellipsis: _,
-        } => Node::new("Unpack", span).field("operand", Value::node(expr_node(operand))),
+        ExprKind::Unpack { operand } => Node::new("Unpack", span).field("operand", Value::node(expr_node(operand))),
         ExprKind::Functional {
             operation: _,
             operation_name,

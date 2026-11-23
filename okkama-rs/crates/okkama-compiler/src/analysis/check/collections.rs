@@ -239,7 +239,7 @@ impl Checker<'_, '_> {
             args: vec![ast::Argument {
                 name: None,
                 value: expr(ast::ExprKind::Name(binding.name.clone())),
-                span: binding.span,
+                span: binding.name.span,
             }],
         });
         let matched = ast::Stmt {
