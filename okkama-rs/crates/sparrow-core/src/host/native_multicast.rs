@@ -14,6 +14,64 @@ use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     rc::{Rc, Weak},
 };
+/// `IP_MULTICAST_IF` by interface index, as `set_multicast_if_v6` does for
+/// IPv6: IPv4 multicast leaves through the interface the policy joined, not
+/// the one of the routing table (#1011). socket2 sets it only by address.
+fn set_multicast_if_v4(socket: &SockRef<'_>, index: u32) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        /// `<netinet/in.h>`: the outgoing interface by index (macOS 10.13+).
+        const IP_MULTICAST_IFINDEX: libc::c_int = 66;
+        let value: libc::c_uint = index;
+        set_option(socket, libc::IPPROTO_IP, IP_MULTICAST_IFINDEX, &value)
+    }
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "fuchsia"))]
+    {
+        let unspecified = libc::in_addr { s_addr: 0 };
+        let request = libc::ip_mreqn {
+            imr_multiaddr: unspecified,
+            imr_address: unspecified,
+            imr_ifindex: libc::c_int::try_from(index).map_err(|_| std::io::ErrorKind::InvalidInput)?,
+        };
+        set_option(socket, libc::IPPROTO_IP, libc::IP_MULTICAST_IF, &request)
+    }
+    #[cfg(windows)]
+    {
+        // Winsock reads an address in 0.0.0.0/8 as an interface index.
+        socket.set_multicast_if_v4(&std::net::Ipv4Addr::from(index))
+    }
+    #[cfg(not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        windows
+    )))]
+    {
+        let _ = (socket, index);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(unix)]
+fn set_option<T>(socket: &SockRef<'_>, level: libc::c_int, name: libc::c_int, value: &T) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: the descriptor is open for the life of `socket`; `value` points
+    // to a live, initialised `T` of exactly the length passed, which the
+    // kernel only reads.
+    let status = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            level,
+            name,
+            (value as *const T).cast(),
+            std::mem::size_of::<T>() as libc::socklen_t,
+        )
+    };
+    if status == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
 #[derive(Debug)]
 pub(crate) struct Membership {
     owner: Weak<Udp>,
@@ -144,8 +202,8 @@ impl Heap {
         let socket = SockRef::from(&*socket);
         if state.policy.get().is_none() {
             let result = match group.ip() {
-                IpAddr::V4(_) => socket
-                    .set_multicast_ttl_v4(hops)
+                IpAddr::V4(_) => set_multicast_if_v4(&socket, index)
+                    .and_then(|()| socket.set_multicast_ttl_v4(hops))
                     .and_then(|()| socket.set_multicast_loop_v4(loopback)),
                 IpAddr::V6(_) => socket
                     .set_multicast_if_v6(index)
@@ -176,3 +234,38 @@ impl Heap {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loopback_index() -> u32 {
+        let name = if cfg!(target_vendor = "apple") { c"lo0" } else { c"lo" };
+        // SAFETY: a valid NUL-terminated name; the call only reads it.
+        unsafe { libc::if_nametoindex(name.as_ptr()) }
+    }
+
+    /// #1011: an IPv4 multicast socket gets the outgoing interface of its
+    /// policy by index, as IPv6 does.
+    #[test]
+    fn ipv4_multicast_leaves_through_the_policy_interface() {
+        let index = loopback_index();
+        assert_ne!(index, 0);
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let socket = SockRef::from(&socket);
+        set_multicast_if_v4(&socket, index).unwrap();
+        #[cfg(target_vendor = "apple")]
+        {
+            use std::os::fd::AsRawFd;
+            let mut value: libc::c_uint = 0;
+            let mut length = std::mem::size_of::<libc::c_uint>() as libc::socklen_t;
+            // SAFETY: `value` and `length` are live locals of the sizes passed.
+            let status = unsafe {
+                libc::getsockopt(socket.as_raw_fd(), libc::IPPROTO_IP, 66, (&mut value as *mut libc::c_uint).cast(), &mut length)
+            };
+            assert_eq!(status, 0);
+            assert_eq!(value, index);
+        }
+        assert!(set_multicast_if_v4(&socket, u32::MAX).is_err(), "no such interface");
+    }
+}

@@ -155,7 +155,7 @@ fn packet(source: SocketAddr, payload: &[u8], limit: usize) -> Vec<u8> {
     bytes.extend(&payload[..payload.len().min(limit)]);
     bytes
 }
-fn unpack(n: Native, raw: &[u8]) -> Result<(bool, SocketAddr, u32, &[u8]), NativeFailure> {
+fn unpack(n: Native, raw: &[u8]) -> Result<(bool, SocketAddr, &[u8]), NativeFailure> {
     let invalid = |message| failure(n, "invalid_data", message);
     if raw.len() < 8 || raw[..3] != [79, 75, 3] || raw[3] > 1 {
         return Err(invalid("Invalid received packet envelope"));
@@ -172,7 +172,7 @@ fn unpack(n: Native, raw: &[u8]) -> Result<(bool, SocketAddr, u32, &[u8]), Nativ
     if let SocketAddr::V6(v) = &mut source {
         v.set_scope_id(scope);
     }
-    Ok((raw[3] != 0, source, scope, &raw[13 + length..]))
+    Ok((raw[3] != 0, source, &raw[13 + length..]))
 }
 impl Heap {
     pub(crate) fn udp(&self, value: Slot) -> Result<Rc<Udp>, Error> {
@@ -206,19 +206,12 @@ impl Heap {
             NetworkPacketBytes | NetworkPacketSource | NetworkPacketTruncated
         ) {
             let bytes = self.native_bytes(a[0])?;
-            let (truncated, source, scope, payload) = unpack(n, &bytes).map_err(native)?;
+            let (truncated, source, payload) = unpack(n, &bytes).map_err(native)?;
             return Ok(match n {
                 NetworkPacketBytes => self.native_byte_array(payload.to_vec())?,
-                NetworkPacketSource => {
-                    let endpoint = self.network_endpoint(source)?;
-                    if scope == 0 {
-                        endpoint
-                    } else {
-                        let mut values = self.elements(endpoint)?.to_vec();
-                        values[2] = self.allocate_text(scope.to_string())?;
-                        self.allocate_array(values)?
-                    }
-                }
+                // `unpack` put the scope in the address, and the endpoint
+                // carries it.
+                NetworkPacketSource => self.network_endpoint(source)?,
                 _ => Slot::boolean(truncated),
             });
         }
@@ -282,8 +275,12 @@ impl Heap {
             socket
                 .set_nonblocking(true)
                 .map_err(|e| native(host(n, "Cannot configure socket", e)))?;
+            // No implicit dual stack: an IPv6 socket reaches IPv4 peers only
+            // when asked, matching `destination`, whatever the system default.
             if v6 {
-                let _ = socket.set_only_v6(false);
+                socket
+                    .set_only_v6(!dual)
+                    .map_err(|e| native(host(n, "Cannot apply socket dual stack", e)))?;
             }
             if let Some(endpoint) = endpoint {
                 socket

@@ -110,12 +110,10 @@ pub(crate) fn format(raw: &[u8]) -> String {
         if index != 0 {
             out.push(':');
         }
-        if index == 6
-            && best == 0
-            && (best_length == 6
-                || (best_length == 7 && words[7] != 0x0001)
-                || (best_length == 5 && words[5] == 0xffff))
-        {
+        // `::a.b.c.d` and `::ffff:a.b.c.d` end in dotted quads. BSD's third
+        // case (a run of seven, `::0.0.0.2`) never reaches here: index 6 is
+        // inside that run. Such an address prints `::2`, as in Rust and Python.
+        if index == 6 && best == 0 && (best_length == 6 || (best_length == 5 && words[5] == 0xffff)) {
             out.push_str(&format!("{}.{}.{}.{}", raw[12], raw[13], raw[14], raw[15]));
             break;
         }
@@ -127,3 +125,23 @@ pub(crate) fn format(raw: &[u8]) -> String {
     out
 }
 
+
+#[cfg(test)]
+mod tests {
+    fn shown(text: &str) -> String {
+        super::format(&text.parse::<std::net::Ipv6Addr>().unwrap().octets())
+    }
+
+    /// Dotted quads end only `::a.b.c.d` and `::ffff:a.b.c.d`; a run of
+    /// seven zeros prints as hex (#1011).
+    #[test]
+    fn embedded_ipv4_forms() {
+        assert_eq!(shown("::1.2.3.4"), "::1.2.3.4");
+        assert_eq!(shown("::ffff:1.2.3.4"), "::ffff:1.2.3.4");
+        assert_eq!(shown("::0.0.0.2"), "::2");
+        assert_eq!(shown("::1"), "::1");
+        assert_eq!(shown("::"), "::");
+        assert_eq!(shown("1::"), "1::");
+        assert_eq!(shown("2001:db8::1"), "2001:db8::1");
+    }
+}

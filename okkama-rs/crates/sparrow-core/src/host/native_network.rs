@@ -178,6 +178,7 @@ impl Output for bool {
         Ok(Slot::boolean(*self))
     }
 }
+/// One pending operation of a kind; released when the operation ends.
 pub(crate) struct Busy(Rc<Cell<bool>>);
 impl Busy {
     pub(crate) fn acquire(
@@ -185,10 +186,11 @@ impl Busy {
         n: Native,
         message: &str,
     ) -> Result<Self, NativeFailure> {
-        if flag.replace(true) {
-            return Err(failure(n, "resource_exhausted", message));
-        }
-        Ok(Self(flag.clone()))
+        Self::claim(flag).ok_or_else(|| failure(n, "resource_exhausted", message))
+    }
+    /// The flag, unless an operation of the kind is already pending.
+    pub(crate) fn claim(flag: &Rc<Cell<bool>>) -> Option<Self> {
+        (!flag.replace(true)).then(|| Self(flag.clone()))
     }
 }
 impl Drop for Busy {
@@ -299,17 +301,10 @@ pub(crate) fn address(n: Native, bytes: &[u8], zone: &str) -> Result<SocketAddr,
         };
         return Ok(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)));
     }
-    // Safe numeric-only getaddrinfo resolves interface scope, never a hostname.
-    let name = format!("{ip}%{zone}");
-    let hints = dns_lookup::AddrInfoHints {
-        flags: libc::AI_NUMERICHOST | libc::AI_NUMERICSERV,
-        address: libc::AF_INET6,
-        socktype: libc::SOCK_STREAM,
-        protocol: libc::IPPROTO_TCP,
-    };
-    dns_lookup::getaddrinfo(Some(&name), Some(&port.to_string()), Some(hints))
-        .ok()
-        .and_then(|mut records| records.find_map(|r| r.ok().map(|r| r.sockaddr)))
+    // An interface name gives its index; an unknown one is refused here, not
+    // later by bind (macOS getaddrinfo takes any name as scope 0, #1011).
+    zone_index(zone)
+        .map(|scope| SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)))
         .ok_or_else(|| {
             failure(
                 n,
@@ -318,23 +313,67 @@ pub(crate) fn address(n: Native, bytes: &[u8], zone: &str) -> Result<SocketAddr,
             )
         })
 }
+/// The index of the interface named `name`, if there is one.
+fn zone_index(name: &str) -> Option<u32> {
+    let name = std::ffi::CString::new(name).ok()?;
+    // SAFETY: `name` is a valid NUL-terminated string the call only reads.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    (index != 0).then_some(index)
+}
 pub(crate) async fn interruptible<F, T>(
-    mut changed: tokio::sync::watch::Receiver<()>,
+    changed: tokio::sync::watch::Receiver<()>,
     n: Native,
     body: F,
 ) -> Result<T, NativeFailure>
 where
     F: Future<Output = Result<T, NativeFailure>>,
 {
+    interrupted_by(changed, || failure(n, "already_closed", "Socket is closed"), body).await
+}
+/// Runs `body` until the state it works on is closed: a send on `changed`
+/// ends it with `closed()`, the failure of the operation that was waiting.
+pub(crate) async fn interrupted_by<F, T>(
+    mut changed: tokio::sync::watch::Receiver<()>,
+    closed: impl FnOnce() -> NativeFailure,
+    body: F,
+) -> Result<T, NativeFailure>
+where
+    F: Future<Output = Result<T, NativeFailure>>,
+{
     let mut body = std::pin::pin!(body);
-    let mut closed = std::pin::pin!(changed.changed());
+    let mut closing = std::pin::pin!(changed.changed());
+    let mut closed = Some(closed);
     std::future::poll_fn(|cx| {
-        if closed.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Err(failure(n, "already_closed", "Socket is closed")));
+        if closing.as_mut().poll(cx).is_ready()
+            && let Some(closed) = closed.take()
+        {
+            return Poll::Ready(Err(closed()));
         }
         body.as_mut().poll(cx)
     })
     .await
+}
+/// The socket of a TCP listener (`tcp_bound`): bound, not listening, so no
+/// peer is queued before `tcp_start_listening` gives the queue its backlog.
+/// No implicit dual stack: an IPv6 listener takes IPv4 peers only with
+/// `dual` (`std/net/tcp`), whatever the system default.
+fn bound_listener(endpoint: SocketAddr, reuse: bool, dual: bool) -> Result<Socket, (&'static str, std::io::Error)> {
+    let socket = Socket::new(Domain::for_address(endpoint), Type::STREAM, Some(Protocol::TCP))
+        .map_err(|e| ("Cannot create TCP socket", e))?;
+    if endpoint.is_ipv6() {
+        socket.set_only_v6(!dual).map_err(|e| ("Cannot apply TCP listener dual stack", e))?;
+    }
+    socket.set_reuse_address(reuse).map_err(|e| ("Cannot apply TCP listener address reuse", e))?;
+    socket
+        .set_nonblocking(true)
+        .and_then(|()| socket.bind(&SockAddr::from(endpoint)))
+        .map_err(|e| ("Cannot bind TCP listener", e))?;
+    Ok(socket)
+}
+/// `listen` with the program's backlog; the system may round the queue up
+/// or cap it (`somaxconn`), and 0 asks for its smallest.
+fn start_listening(socket: SockRef<'_>, backlog: i32) -> std::io::Result<()> {
+    socket.listen(backlog)
 }
 fn options(stream: &TcpStream, keep: bool, delay: bool, n: Native) -> Result<(), NativeFailure> {
     SockRef::from(stream)
@@ -446,23 +485,8 @@ impl Heap {
                 if endpoint.is_ipv4() && second {
                     return Err(invalid("unsupported", "Dual stack requires IPv6 listener"));
                 }
-                let socket = Socket::new(
-                    Domain::for_address(endpoint),
-                    Type::STREAM,
-                    Some(Protocol::TCP),
-                )
-                .map_err(|e| native(host(n, "Cannot create TCP socket", e)))?;
-                if endpoint.is_ipv6() {
-                    let _ = socket.set_only_v6(false);
-                }
-                socket
-                    .set_reuse_address(first)
-                    .map_err(|e| native(host(n, "Cannot apply TCP listener address reuse", e)))?;
-                socket
-                    .set_nonblocking(true)
-                    .and_then(|()| socket.bind(&SockAddr::from(endpoint)))
-                    .and_then(|()| socket.listen(128))
-                    .map_err(|e| native(host(n, "Cannot bind TCP listener", e)))?;
+                let socket = bound_listener(endpoint, first, second)
+                    .map_err(|(message, e)| native(host(n, message, e)))?;
                 if tokio::runtime::Handle::try_current().is_err() {
                     return Err(Error("TCP listener requires a Tokio runtime".into()).into());
                 }
@@ -496,22 +520,25 @@ impl Heap {
                             .map_err(|e| native(host(n, "Cannot inspect TCP endpoint", e)))?,
                     )?),
                     NetworkTcpStartListening => {
-                        if self
+                        let Some(backlog) = self
                             .int64(a[1])?
-                            .filter(|v| (0..=i32::MAX as i64).contains(v))
-                            .is_none()
-                        {
+                            .and_then(|v| i32::try_from(v).ok())
+                            .filter(|v| *v >= 0)
+                        else {
                             return Err(invalid(
                                 "invalid_input",
                                 "TCP backlog must be nonnegative and fit a host int",
                             ));
-                        }
-                        if state.listening.replace(true) {
+                        };
+                        if state.listening.get() {
                             return Err(invalid(
                                 "invalid_input",
                                 "TCP listener is already listening",
                             ));
                         }
+                        start_listening(SockRef::from(&*socket), backlog)
+                            .map_err(|e| native(host(n, "Cannot listen on TCP socket", e)))?;
+                        state.listening.set(true);
                         Ok(Slot::boolean(true))
                     }
                     _ => {
@@ -738,3 +765,66 @@ impl Heap {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn loopback() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
+    }
+
+    /// How many of `count` peers get a connection within a short wait.
+    fn connected(address: SocketAddr, count: usize) -> usize {
+        let peers: Vec<_> = (0..count)
+            .filter_map(|_| std::net::TcpStream::connect_timeout(&address, Duration::from_millis(150)).ok())
+            .collect();
+        peers.len()
+    }
+
+    /// #1011: a bound listener queues no peer before it listens, and then
+    /// queues only about as many as the program's backlog, not always 128.
+    #[test]
+    fn the_listen_queue_takes_the_program_backlog() {
+        let socket = bound_listener(loopback(), true, false).unwrap();
+        let address = socket.local_addr().unwrap().as_socket().unwrap();
+        assert_eq!(connected(address, 1), 0, "bound but not listening refuses peers");
+        start_listening(SockRef::from(&socket), 1).unwrap();
+        // macOS queues `backlog` peers, Linux `backlog + 1`; nobody accepts.
+        let queued = connected(address, 8);
+        assert!((1..=3).contains(&queued), "backlog 1 queued {queued} peers");
+
+        let roomy = bound_listener(loopback(), true, false).unwrap();
+        let address = roomy.local_addr().unwrap().as_socket().unwrap();
+        start_listening(SockRef::from(&roomy), 128).unwrap();
+        assert_eq!(connected(address, 8), 8);
+    }
+
+    /// #1011: an interface zone by name is its index; an unknown name is
+    /// refused at once, on macOS too.
+    #[test]
+    fn a_zone_name_must_name_an_interface() {
+        let loopback = if cfg!(target_vendor = "apple") { "lo0" } else { "lo" };
+        let mut envelope = vec![79, 75, 1, 2, 0, 7];
+        envelope.extend(Ipv6Addr::LOCALHOST.octets());
+        let n = Native::NetworkTcpBound;
+        let SocketAddr::V6(named) = address(n, &envelope, loopback).unwrap() else { panic!("IPv6") };
+        assert_ne!(named.scope_id(), 0);
+        assert_eq!(named.port(), 7);
+        let unknown = address(n, &envelope, "nosuch9").unwrap_err();
+        assert_eq!(unknown.message, "Unknown or unsupported IPv6 interface zone");
+        assert!(matches!(address(n, &envelope, "3").unwrap(), SocketAddr::V6(v) if v.scope_id() == 3));
+    }
+
+    /// #1011: an IPv6 listener is dual stack only when asked.
+    #[test]
+    fn an_ipv6_listener_is_dual_stack_only_when_asked() {
+        let v6 = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
+        let Ok(single) = bound_listener(v6, true, false) else {
+            return; // no IPv6 on this host
+        };
+        assert!(single.only_v6().unwrap());
+        assert!(!bound_listener(v6, true, true).unwrap().only_v6().unwrap());
+    }
+}
