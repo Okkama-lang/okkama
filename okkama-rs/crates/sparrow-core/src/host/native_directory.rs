@@ -206,24 +206,11 @@ impl Heap {
                 }
             }
             FsChown => {
-                use num_traits::ToPrimitive;
-                let owner = self.bigint(a[1])?.into_owned();
-                let group = self.bigint(a[2])?.into_owned();
-                if owner < (-1).into() || group < (-1).into() {
+                let owner = chown_id(&self.bigint(a[1])?.into_owned());
+                let group = chown_id(&self.bigint(a[2])?.into_owned());
+                let (Some(owner), Some(group)) = (owner, group) else {
                     return Err(fail(n, "invalid_input", "Invalid owner or group"));
-                }
-                let id = |v: num_bigint::BigInt| {
-                    if v == (-1).into() {
-                        None
-                    } else {
-                        Some(
-                            (v & num_bigint::BigInt::from(u32::MAX))
-                                .to_u32()
-                                .expect("masked"),
-                        )
-                    }
                 };
-                let (owner, group) = (id(owner), id(group));
                 #[cfg(unix)]
                 if owner.is_none() && group.is_none() {
                     fs::metadata(path).map_err(|e| host(n, e))?;
@@ -318,9 +305,32 @@ impl Heap {
     }
 }
 
+/// A `chown` id: -1 keeps the current one (`Some(None)`), `0..=u32::MAX`
+/// is an id, and anything else is refused (`None`), never truncated: a mask
+/// made 2^32 + 501 uid 501 (#1010).
+fn chown_id(v: &num_bigint::BigInt) -> Option<Option<u32>> {
+    use num_traits::ToPrimitive;
+    if *v == (-1).into() {
+        return Some(None);
+    }
+    v.to_u32().map(Some)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1010: a chown id is -1 (keep), or fits uid_t; a larger one is
+    /// refused, not truncated to its low 32 bits.
+    #[test]
+    fn chown_ids_are_refused_not_truncated() {
+        let id = |v: i128| chown_id(&num_bigint::BigInt::from(v));
+        assert_eq!(id(-1), Some(None));
+        assert_eq!(id(0), Some(Some(0)));
+        assert_eq!(id(501), Some(Some(501)));
+        assert_eq!(id(u32::MAX as i128), Some(Some(u32::MAX)));
+        assert_eq!(id((1i128 << 32) + 501), None);
+        assert_eq!(id(-2), None);
+    }
 
     /// #122: a directory is synchronized; a file or a missing path is
     /// refused with the host's failure.
