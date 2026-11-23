@@ -887,3 +887,19 @@ fn module_constants_are_completed() {
     let limit = found.iter().find(|completion| completion.label == "LIMIT").unwrap_or_else(|| panic!("{:?}", found.iter().map(|c| &c.label).collect::<Vec<_>>()));
     assert_eq!(limit.detail, "const LIMIT is int");
 }
+
+/// #1006: a module constant folds into its value in THIR, yet its uses keep a
+/// hover with its type and docs and lead to its declaration.
+#[test]
+fn a_constant_use_hovers_and_leads_to_its_declaration() {
+    let text = "module app v1.0.0;\n\n// The answer.\nconst ANSWER is int = 42;\nconst NAMES = [\"a\", \"b\"];\n\nmain() is int {\n    return ANSWER + NAMES.size();\n}\n";
+    let inspection = inspect(text);
+    let answer = at(&inspection, text, "ANSWER", 1, 1);
+    assert!(answer.hover.contains("const ANSWER is int"), "{}", answer.hover);
+    assert!(answer.hover.contains("The answer."), "{}", answer.hover);
+    let definition = answer.definition.as_ref().expect("a definition");
+    assert_eq!(definition.range.start.line, 3);
+    let names = at(&inspection, text, "NAMES", 1, 1);
+    assert!(names.hover.contains("const NAMES is @string"), "{}", names.hover);
+    assert_eq!(names.definition.as_ref().expect("a definition").range.start.line, 4);
+}

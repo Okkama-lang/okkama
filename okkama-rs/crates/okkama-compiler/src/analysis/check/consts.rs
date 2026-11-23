@@ -24,6 +24,7 @@ use crate::source::Span;
 impl Checker<'_, '_> {
     /// `NAME` на месте использования: литерал или ссылка на значение.
     pub(super) fn const_value(&mut self, id: usize, span: Span) -> Expr {
+        self.reg.const_uses.push((self.module, span, id));
         let Some(result) = evaluate(self.reg, id) else {
             return Self::poisoned(span);
         };

@@ -53,6 +53,7 @@ pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], roo
     for body in bodies.iter().filter(|body| body.module == root) {
         builder.body(body, owner_object(&body.owner));
     }
+    builder.const_uses();
     builder.declarations();
     builder.tokens();
     let globals = builder.globals();
@@ -374,6 +375,19 @@ impl<'r, 'a> Builder<'r, 'a> {
     }
 
     /// Собственные имена модуля `module` (для `take` и `alias.`); `only` — взятые.
+    /// The uses of module constants in the root (#1006): hover with the
+    /// constant's type and docs, and the way to its declaration.
+    fn const_uses(&mut self) {
+        let uses: Vec<(Span, usize)> =
+            self.registry.const_uses.iter().filter(|(module, ..)| *module == self.root).map(|(_, span, id)| (*span, *id)).collect();
+        for (span, id) in uses {
+            let completion = self.const_completion(id);
+            let info = &self.registry.consts[id];
+            let definition = self.location(info.module, info.decl.name.span);
+            self.push(span, hover_text(&completion.detail, &completion.documentation), definition);
+        }
+    }
+
     /// A module constant (#153) as a completion: its name, type and docs (#1008).
     fn const_completion(&self, index: usize) -> Completion {
         let info = &self.registry.consts[index];

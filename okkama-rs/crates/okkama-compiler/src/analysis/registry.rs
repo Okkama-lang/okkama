@@ -306,6 +306,9 @@ pub struct Registry<'a> {
     pub handles: Vec<HandleInfo>,
     pub natives: Vec<NativeInfo<'a>>,
     pub consts: Vec<ConstInfo<'a>>,
+    /// Every use of a module constant in a body: module, span, constant (#1006).
+    /// THIR folds the value in, so the IDE finds the declaration here.
+    pub const_uses: Vec<(usize, Span, usize)>,
     /// По одному на `consts`, заполняется при проверке тел.
     pub const_state: Vec<ConstState>,
     pub params: Vec<ParamInfo>,
@@ -389,6 +392,7 @@ impl<'a> Registry<'a> {
             handles: Vec::new(),
             natives: Vec::new(),
             consts: Vec::new(),
+            const_uses: Vec::new(),
             const_state: Vec::new(),
             params: Vec::new(),
             system: System {
