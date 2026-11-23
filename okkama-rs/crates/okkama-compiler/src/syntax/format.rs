@@ -11,7 +11,12 @@
 //! элементу на строку, если не помещаются в [`WIDTH`] столбцов, если автор
 //! уже разбил их на строки или поставил висячую запятую. Цепочки `&&`/`||`
 //! переносятся перед оператором, вызовы через точку — там, где их перенёс
-//! автор.
+//! автор. Строка, которая всё ещё длиннее [`WIDTH`], переносится в самом
+//! внешнем месте, где это возможно (список, цепочка операторов или вызовов),
+//! пока не поместится (#1006); длиннее остаются только строки, которые нечем
+//! перенести (длинный литерал, комментарий, тип). Комментарий между
+//! заголовком объявления и `{` остаётся на строке заголовка, `//` — переезжает
+//! в первую строку тела.
 //!
 //! Форматтер меняет только пробелы и переводы строк: токены остаются теми же
 //! и в том же порядке, комментарии сохраняются (комментарий внутри выражения
@@ -157,9 +162,43 @@ struct Printer<'s> {
     /// not depend on where the item stands; without the cache each nesting level measured its
     /// items again inside the measurement of its parent, doubling the time per level.
     flat_widths: FlatWidths,
+    /// Break points that must break (#1006), shared with every scratch printer so that a
+    /// measurement sees the layout the line will get.
+    forced: Forced,
+    /// The order in which this printer forced break points, to undo the breaks that did not help.
+    forced_log: Vec<BreakKey>,
+    /// Break points printed unbroken, one frame per [`Printer::line`] being fitted.
+    frames: Vec<Vec<BreakPoint>>,
 }
 
 type FlatWidths = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u32, u32, std::any::TypeId), Option<usize>>>>;
+type Forced = std::rc::Rc<std::cell::RefCell<std::collections::HashSet<BreakKey>>>;
+
+/// A place the printer may break a line (#1006): the source span of a list (from its opening
+/// bracket), an operator chain or a call chain, and its kind.
+type BreakKey = (u32, u32, BreakKind);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum BreakKind {
+    /// A bracketed list: one item per line.
+    List,
+    /// A chain of `&&` or `||`: a break before each operator.
+    Logical,
+    /// A chain of binary operators of one precedence: breaks after operators, filling lines.
+    Binary,
+    /// A call chain `a.f().g()`: a break before each call.
+    Chain,
+}
+
+/// A break point printed unbroken, at byte `at` of the output.
+#[derive(Clone, Copy, Debug)]
+struct BreakPoint {
+    key: BreakKey,
+    at: usize,
+}
+
+/// Attempts at fitting one element into [`WIDTH`] (#1006): each forces one more break point.
+const FIT_ATTEMPTS: usize = 24;
 
 impl<'s> Printer<'s> {
     fn new(text: &'s str, comments: Vec<Comment>, width: usize) -> Self {
@@ -173,6 +212,9 @@ impl<'s> Printer<'s> {
             next_comment: 0,
             width,
             flat_widths: FlatWidths::default(),
+            forced: Forced::default(),
+            forced_log: Vec::new(),
+            frames: Vec::new(),
         }
     }
 
@@ -180,6 +222,7 @@ impl<'s> Printer<'s> {
     fn scratch(&self) -> Printer<'s> {
         let mut scratch = Printer::new(self.text, Vec::new(), usize::MAX);
         scratch.flat_widths = self.flat_widths.clone();
+        scratch.forced = self.forced.clone();
         scratch.line_start = false;
         scratch
     }
@@ -268,6 +311,52 @@ impl<'s> Printer<'s> {
             .any(|comment| span.start <= comment.span.start && comment.span.end <= span.end)
     }
 
+    /// The offset of the first source character at or after `from` that is not a space or a
+    /// comment.
+    fn next_token(&self, from: u32) -> u32 {
+        let mut at = from as usize;
+        loop {
+            let rest = &self.text[at..];
+            let trimmed = rest.trim_start();
+            at += rest.len() - trimmed.len();
+            if trimmed.starts_with("//") {
+                at += trimmed.find('\n').unwrap_or(trimmed.len());
+            } else if trimmed.starts_with("/*") {
+                at += trimmed.find("*/").map_or(trimmed.len(), |end| end + 2);
+            } else {
+                return at as u32;
+            }
+        }
+    }
+
+    /// The end of a list's closing bracket after its last item ending at `last` (#1006): past an
+    /// optional trailing comma and any comments. `end` when the bracket is not there.
+    fn list_close(&self, last: u32, close: &str, end: u32) -> u32 {
+        let mut at = self.next_token(last);
+        if self.text[at as usize..].starts_with(',') {
+            at = self.next_token(at + 1);
+        }
+        if self.text[at as usize..].starts_with(close) {
+            (at + close.len() as u32).min(end)
+        } else {
+            end
+        }
+    }
+
+    /// The offset of the `{` that opens a declaration body after its header ends at `from`
+    /// (headers of objects, roles and caps hold no braces or strings).
+    fn brace_after(&self, from: u32) -> u32 {
+        let mut at = from;
+        while (at as usize) < self.text.len() {
+            at = self.next_token(at);
+            if self.text[at as usize..].starts_with('{') {
+                return at;
+            }
+            at += self.text[at as usize..].chars().next().map_or(1, char::len_utf8) as u32;
+        }
+        at
+    }
+
     // ---- комментарии ----
 
     /// Комментарии до `offset` — каждый на своей строке. `first` — первый
@@ -306,8 +395,50 @@ impl<'s> Printer<'s> {
         }
     }
 
+    /// Comments between a declaration header's last token and `before` (its `{`, `;` or result),
+    /// owner's decision for #1006: a one-line block comment stays on the header line where the
+    /// author wrote it. A `//` comment cannot precede `{` on one line, so from the first `//` (or
+    /// a block comment spanning lines) on, the comments stay pending: a body prints them on its
+    /// first line, a bodiless header after its `;` ([`Printer::header_trailing`]).
+    fn header_comments(&mut self, before: u32) {
+        while let Some(comment) = self.comments.get(self.next_comment).cloned() {
+            if comment.span.start >= before {
+                break;
+            }
+            let text = self.slice(comment.span).trim_end();
+            if text.starts_with("//") || text.contains('\n') {
+                break;
+            }
+            self.next_comment += 1;
+            self.word(" ");
+            self.word(text);
+        }
+    }
+
+    /// The first comment left in a bodiless header (role signature, native action) before its
+    /// end, printed after its `;` (#1006). A same-line comment written after the `;` keeps that
+    /// place; the header's comments then print on their own lines below.
+    fn header_trailing(&mut self, end: u32) {
+        let Some(comment) = self.comments.get(self.next_comment).cloned() else {
+            return;
+        };
+        if comment.span.start >= end {
+            return;
+        }
+        if let Some(after) = self.comments.get(self.next_comment + 1)
+            && after.span.start >= end
+            && !self.broken(end, after.span.start)
+        {
+            return;
+        }
+        self.next_comment += 1;
+        self.word(" ");
+        let text = self.slice(comment.span).trim_end();
+        self.word(text);
+    }
+
     /// Элемент на своей строке (оператор, член, объявление).
-    fn line(&mut self, span: Span, first: bool, blank: bool, print: impl FnOnce(&mut Self)) {
+    fn line(&mut self, span: Span, first: bool, blank: bool, print: impl Fn(&mut Self)) {
         // Обязательная пустая строка — перед комментариями элемента: они
         // документируют его и остаются над ним.
         if !first && blank {
@@ -322,11 +453,132 @@ impl<'s> Printer<'s> {
         }
         let saved = (self.indent, self.stmt_indent);
         self.stmt_indent = self.indent;
-        print(self);
+        self.fit(&print);
         self.indent = saved.0;
         self.stmt_indent = saved.1;
         self.trailing_comment(span.end);
         self.newline();
+    }
+
+    // ---- ширина ----
+
+    /// Prints an element so that its lines fit into the width wherever a break point allows
+    /// (#1006). Each list, operator chain and call chain decides its own layout from the source
+    /// and its own width, blind to what follows it on the line; when a line still overflows,
+    /// the outermost break point printed unbroken on it is forced to break and the element is
+    /// printed again, until it fits or no break point is left. The layout with the least
+    /// overflow wins, the earliest among equals: breaks that did not shorten the overflow are
+    /// undone (a long string stays where it was). Nested statements are fitted by their own
+    /// [`Printer::line`].
+    fn fit(&mut self, print: &dyn Fn(&mut Self)) {
+        if self.width == usize::MAX {
+            print(self);
+            return;
+        }
+        let start = (self.out.len(), self.indent, self.stmt_indent, self.line_start, self.next_comment);
+        let attempt = |p: &mut Self| -> (Vec<BreakPoint>, usize) {
+            p.out.truncate(start.0);
+            (p.indent, p.stmt_indent, p.line_start, p.next_comment) = (start.1, start.2, start.3, start.4);
+            p.frames.push(Vec::new());
+            print(p);
+            let points = p.frames.pop().unwrap_or_default();
+            let overflow = p.overflow(start.0);
+            (points, overflow)
+        };
+        let (mut points, mut overflow) = attempt(self);
+        let mut best = (overflow, self.forced_log.len(), self.snapshot(start.0));
+        for _ in 0..FIT_ATTEMPTS {
+            if overflow == 0 {
+                break;
+            }
+            let Some(key) = self.break_to_force(start.0, &points) else {
+                break;
+            };
+            self.force(key);
+            (points, overflow) = attempt(self);
+            if overflow < best.0 {
+                best = (overflow, self.forced_log.len(), self.snapshot(start.0));
+            }
+        }
+        // The breaks forced after the best layout did not shorten the overflow: undone.
+        while self.forced_log.len() > best.1 {
+            if let Some(undone) = self.forced_log.pop() {
+                self.unforce(undone);
+            }
+        }
+        self.restore(start.0, best.2);
+    }
+
+    /// The output of the element being fitted and the printer state after it.
+    fn snapshot(&self, from: usize) -> (String, usize, usize, bool, usize) {
+        (self.out[from..].to_string(), self.indent, self.stmt_indent, self.line_start, self.next_comment)
+    }
+
+    fn restore(&mut self, from: usize, state: (String, usize, usize, bool, usize)) {
+        self.out.truncate(from);
+        self.out.push_str(&state.0);
+        (self.indent, self.stmt_indent, self.line_start, self.next_comment) = (state.1, state.2, state.3, state.4);
+    }
+
+    /// Columns past the width, summed over the lines from the one holding byte `from` on.
+    fn overflow(&self, from: usize) -> usize {
+        let line_start = self.out[..from].rfind('\n').map_or(0, |at| at + 1);
+        self.out[line_start..]
+            .split('\n')
+            .map(|line| line.chars().count().saturating_sub(self.width))
+            .sum()
+    }
+
+    /// The break point to force next: on the first overflowing line that has unbroken ones, the
+    /// outermost (the longest source span, then the first).
+    fn break_to_force(&self, from: usize, points: &[BreakPoint]) -> Option<BreakKey> {
+        let mut line_start = self.out[..from].rfind('\n').map_or(0, |at| at + 1);
+        for line in self.out[line_start..].split('\n') {
+            let line_end = line_start + line.len();
+            if line.chars().count() > self.width {
+                let found = points
+                    .iter()
+                    .filter(|point| line_start <= point.at && point.at <= line_end)
+                    .filter(|point| !self.is_forced(point.key))
+                    .max_by_key(|point| (point.key.1 - point.key.0, std::cmp::Reverse(point.key.0)));
+                if let Some(point) = found {
+                    return Some(point.key);
+                }
+            }
+            line_start = line_end + 1;
+        }
+        None
+    }
+
+    fn is_forced(&self, key: BreakKey) -> bool {
+        self.forced.borrow().contains(&key)
+    }
+
+    /// Forces a break point and forgets the one-line widths measured over it.
+    fn force(&mut self, key: BreakKey) {
+        if self.forced.borrow_mut().insert(key) {
+            self.forced_log.push(key);
+            self.forget_widths(key);
+        }
+    }
+
+    fn unforce(&mut self, key: BreakKey) {
+        self.forced.borrow_mut().remove(&key);
+        self.forget_widths(key);
+    }
+
+    fn forget_widths(&self, key: BreakKey) {
+        self.flat_widths
+            .borrow_mut()
+            .retain(|&(start, end, _), _| !(start <= key.0 && key.1 <= end));
+    }
+
+    /// A break point printed unbroken here, for the element being fitted.
+    fn break_point(&mut self, key: BreakKey) {
+        let at = self.out.len();
+        if let Some(frame) = self.frames.last_mut() {
+            frame.push(BreakPoint { key, at });
+        }
     }
 
     /// Ширина первой строки `print`.
@@ -464,8 +716,11 @@ impl<'s> Printer<'s> {
                 }
                 self.word(&decl.name.text);
                 self.params(&decl.params, decl.span.end);
+                self.header_comments(decl.result.span().start);
                 self.result(&decl.result);
+                self.header_comments(decl.span.end);
                 self.word(";");
+                self.header_trailing(decl.span.end);
             }
             Item::NativeObject(decl) => {
                 self.word("native object ");
@@ -522,13 +777,10 @@ impl<'s> Printer<'s> {
         self.generics(&decl.generics);
         if !decl.roles.is_empty() {
             self.word(" does ");
-            for (index, role) in decl.roles.iter().enumerate() {
-                if index > 0 {
-                    self.word(", ");
-                }
-                self.ty(role);
-            }
+            self.filled(&decl.roles, " {".len(), |p, role| p.ty(role), |role| role.span);
         }
+        self.header_comments(self.brace_after(decl.name.span.end));
+        self.indent = self.stmt_indent;
         self.word(" ");
         self.members(&decl.members, decl.span);
     }
@@ -578,8 +830,9 @@ impl<'s> Printer<'s> {
                 match &ctor.form {
                     ConstructorForm::Full { params, body } => {
                         self.params(params, body.span.start);
+                        self.header_comments(body.span.start);
                         self.word(" ");
-                        self.block(body);
+                        self.header_block(body);
                     }
                     ConstructorForm::Shorthand { fields, body } => {
                         let close = body.as_ref().map_or(ctor.span.end, |body| body.span.start);
@@ -596,10 +849,15 @@ impl<'s> Printer<'s> {
                         );
                         match body {
                             Some(body) => {
+                                self.header_comments(body.span.start);
                                 self.word(" ");
-                                self.block(body);
+                                self.header_block(body);
                             }
-                            None => self.word(";"),
+                            None => {
+                                self.header_comments(ctor.span.end);
+                                self.word(";");
+                                self.header_trailing(ctor.span.end);
+                            }
                         }
                     }
                 }
@@ -609,7 +867,7 @@ impl<'s> Printer<'s> {
                     self.word("async ");
                 }
                 self.word("destroy ");
-                self.block(&destroy.body);
+                self.header_block(&destroy.body);
             }
             ObjectMember::Test(test) => self.test(test),
             ObjectMember::Action(action) => self.action(action),
@@ -623,6 +881,7 @@ impl<'s> Printer<'s> {
             self.word("::");
         }
         self.word(&cap.name.text);
+        self.header_comments(self.brace_after(cap.name.span.end));
         self.word(" {");
         // An empty body keeps the comments written inside it (#988).
         if cap.fields.is_empty() && !self.has_comment_in(cap.span) {
@@ -635,8 +894,9 @@ impl<'s> Printer<'s> {
                 p.word(&field.name.text);
                 p.word(" is ");
                 p.ty(&field.ty);
+                p.header_comments(field.body.span.start);
                 p.word(" ");
-                p.block(&field.body);
+                p.header_block(&field.body);
             });
         }
         self.leading_comments(cap.span.end.saturating_sub(1), cap.fields.is_empty());
@@ -651,9 +911,12 @@ impl<'s> Printer<'s> {
         }
         self.word("test ");
         self.word(self.slice(test.name.span));
+        if let TestBody::Parsed(block) = &test.body {
+            self.header_comments(block.span.start);
+        }
         self.word(" ");
         match &test.body {
-            TestBody::Parsed(block) => self.block(block),
+            TestBody::Parsed(block) => self.header_block(block),
             TestBody::Skipped(span) => self.word(self.slice(*span)),
         }
     }
@@ -667,9 +930,11 @@ impl<'s> Printer<'s> {
         }
         self.word(&action.name.text);
         self.params(&action.params, action.body.span.start);
+        self.header_comments(action.result.span().start);
         self.result(&action.result);
+        self.header_comments(action.body.span.start);
         self.word(" ");
-        self.block(&action.body);
+        self.header_block(&action.body);
     }
 
     fn role(&mut self, decl: &RoleDecl) {
@@ -679,6 +944,7 @@ impl<'s> Printer<'s> {
         self.word("role ");
         self.word(&decl.name.text);
         self.generics(&decl.generics);
+        self.header_comments(self.brace_after(decl.name.span.end));
         self.word(" {");
         if decl.members.is_empty() && !self.has_comment_in(decl.span) {
             self.word("}");
@@ -696,8 +962,11 @@ impl<'s> Printer<'s> {
                     }
                     p.word(&signature.name.text);
                     p.params(&signature.params, signature.span.end);
+                    p.header_comments(signature.result.span().start);
                     p.result(&signature.result);
+                    p.header_comments(signature.span.end);
                     p.word(";");
+                    p.header_trailing(signature.span.end);
                 }
                 RoleMember::Fake(fake) => {
                     p.word("fake ");
@@ -830,11 +1099,15 @@ impl<'s> Printer<'s> {
         }
         let first = span(&items[0]);
         let last = span(&items[items.len() - 1]);
+        // The list ends at its real closing bracket, never at the block or `;` after it: a
+        // comment between them belongs to the header, not to the last item (#1006).
+        let end = self.list_close(last.end, close, end);
         let start = self.text[..first.start as usize]
             .rfind(open)
             .map_or(first.start, |at| at as u32);
         let trailing = self.comma_between(last.end, end);
-        let mut broken = trailing || self.has_comment_in(Span::new(start, end));
+        let key = (start, end, BreakKind::List);
+        let mut broken = trailing || self.has_comment_in(Span::new(start, end)) || self.is_forced(key);
         for pair in items.windows(2) {
             broken |= self.broken(span(&pair[0]).end, span(&pair[1]).start);
         }
@@ -868,6 +1141,9 @@ impl<'s> Printer<'s> {
                 }
             }
         }
+        if !broken {
+            self.break_point(key);
+        }
         self.word(open);
         if !broken {
             for (index, item) in items.iter().enumerate() {
@@ -883,6 +1159,9 @@ impl<'s> Printer<'s> {
         self.indent += 1;
         self.stmt_indent = self.indent;
         for (index, item) in items.iter().enumerate() {
+            // A continuation inside the previous item does not shift this one (#1006).
+            self.indent = saved.0 + 1;
+            self.stmt_indent = self.indent;
             self.leading_comments(span(item).start, index == 0);
             self.newline();
             print(self, item);
@@ -899,6 +1178,25 @@ impl<'s> Printer<'s> {
         self.word(close);
     }
 
+    /// Items separated by `, ` without brackets (the roles after `does`, a case's patterns),
+    /// filling each line (#1006): an item that would pass the width, with `tail` after the last
+    /// one, starts a continuation line.
+    fn filled<T: 'static>(&mut self, items: &[T], tail: usize, print: impl Fn(&mut Self, &T), span: impl Fn(&T) -> Span) {
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                self.word(",");
+                let width = self.flat_item::<T>(span(item), |p| print(p, item)).unwrap_or(0);
+                let after = if index + 1 < items.len() { ",".len() } else { tail };
+                if self.width != usize::MAX && self.column() + 1 + width + after > self.width {
+                    self.continuation();
+                } else {
+                    self.word(" ");
+                }
+            }
+            print(self, item);
+        }
+    }
+
     /// Комментарий в конце строки элемента списка (после его запятой).
     fn trailing_comment_before(&mut self, end: u32, limit: u32) {
         if let Some(comment) = self.comments.get(self.next_comment)
@@ -909,15 +1207,29 @@ impl<'s> Printer<'s> {
 
     // ---- блоки и операторы ----
 
+    /// The body of a statement or declaration: indented from the statement's line even when its
+    /// header broke onto continuation lines (#1006), and `}` back at the statement's indent.
+    fn header_block(&mut self, block: &Block) {
+        self.indent = self.stmt_indent;
+        self.block(block);
+    }
+
     fn block(&mut self, block: &Block) {
         self.word("{");
-        if block.stmts.is_empty() && !self.has_comment_in(block.span) {
+        // Comments still pending before the `{` were written in the header (a `//` there, #1006):
+        // they open the body.
+        let header = self
+            .comments
+            .get(self.next_comment)
+            .is_some_and(|comment| comment.span.start < block.span.start);
+        if block.stmts.is_empty() && !header && !self.has_comment_in(block.span) {
             self.word("}");
             return;
         }
         self.indent += 1;
+        let opened = self.leading_comments(block.span.start, true);
         for (index, stmt) in block.stmts.iter().enumerate() {
-            self.line(stmt.span, index == 0, false, |p| p.stmt(stmt));
+            self.line(stmt.span, index == 0 && !opened, false, |p| p.stmt(stmt));
         }
         self.leading_comments(block.span.end.saturating_sub(1), block.stmts.is_empty());
         self.newline();
@@ -1011,7 +1323,7 @@ impl<'s> Printer<'s> {
                 self.expr(value);
                 self.word(";");
             }
-            StmtKind::Block(block) => self.block(block),
+            StmtKind::Block(block) => self.header_block(block),
             StmtKind::If(found) => {
                 self.if_stmt(found);
                 if self.slice(stmt.span).trim_end().ends_with(';') {
@@ -1040,7 +1352,7 @@ impl<'s> Printer<'s> {
                     self.word(&binding.name.text);
                 }
                 self.word(" ");
-                self.block(body);
+                self.header_block(body);
             }
             StmtKind::Next { condition } => {
                 self.word("next");
@@ -1091,13 +1403,13 @@ impl<'s> Printer<'s> {
         self.word("if ");
         self.expr(&found.condition);
         self.word(" ");
-        self.block(&found.then_block);
+        self.header_block(&found.then_block);
         match &found.else_branch {
             None => {}
             Some(ElseBranch::Block(block)) => {
                 self.else_line(block.span.start);
                 self.word("else ");
-                self.block(block);
+                self.header_block(block);
             }
             Some(ElseBranch::If(next)) => {
                 self.else_line(next.span.start);
@@ -1116,24 +1428,21 @@ impl<'s> Printer<'s> {
     fn match_body(&mut self, body: &MatchBody) {
         self.word("match ");
         self.expr(&body.subject);
+        self.indent = self.stmt_indent;
         self.word(" {");
         self.indent += 1;
         for (index, case) in body.cases.iter().enumerate() {
             self.line(case.span, index == 0, false, |p| {
                 p.word("case ");
-                for (index, pattern) in case.patterns.iter().enumerate() {
-                    if index > 0 {
-                        p.word(", ");
-                    }
-                    p.expr(pattern);
-                }
+                let tail = if case.compact { ":".len() } else { " {".len() };
+                p.filled(&case.patterns, tail, |p, pattern| p.expr(pattern), |pattern| pattern.span);
                 if case.compact {
                     p.word(": ");
                     p.compact_value(&case.body);
                     p.word(";");
                 } else {
                     p.word(" ");
-                    p.block(&case.body);
+                    p.header_block(&case.body);
                 }
             });
         }
@@ -1148,7 +1457,7 @@ impl<'s> Printer<'s> {
                 let span = Span::new(self.else_keyword(block.span.start), block.span.end);
                 self.line(span, body.cases.is_empty(), false, |p| {
                     p.word("else ");
-                    p.block(block);
+                    p.header_block(block);
                 });
             }
         }
@@ -1178,11 +1487,11 @@ impl<'s> Printer<'s> {
             self.word(") ");
             let mut written = body.body.clone();
             written.stmts.pop();
-            self.block(&written);
+            self.header_block(&written);
             return;
         }
         self.word("try ");
-        self.block(&body.body);
+        self.header_block(&body.body);
         for catch in &body.catches {
             self.else_line(catch.span.start);
             self.word("catch ");
@@ -1204,7 +1513,7 @@ impl<'s> Printer<'s> {
                 }
             }
             self.word(" ");
-            self.block(&catch.body);
+            self.header_block(&catch.body);
         }
     }
 
@@ -1246,26 +1555,11 @@ impl<'s> Printer<'s> {
                 }
                 self.expr(operand);
             }
-            ExprKind::Binary {
-                op,
-                left,
-                right,
-                op_span,
-            } => {
+            ExprKind::Binary { op, .. } => {
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     self.logical_chain(expr);
                 } else {
-                    self.expr(left);
-                    self.word(" ");
-                    self.word(op.symbol());
-                    if self.broken(left.span.end, op_span.start)
-                        || self.broken(op_span.end, right.span.start)
-                    {
-                        self.continuation();
-                    } else {
-                        self.word(" ");
-                    }
-                    self.expr(right);
+                    self.binary_chain(expr);
                 }
             }
             ExprKind::StreamWrite {
@@ -1292,6 +1586,7 @@ impl<'s> Printer<'s> {
                 self.word(if *inclusive { "..=" } else { ".." });
                 self.expr(end);
             }
+            ExprKind::Call { callee, .. } if matches!(callee.kind, ExprKind::Get { .. }) => self.chain(expr),
             ExprKind::Call { callee, args } => {
                 self.expr(callee);
                 self.args(args, expr.span.end);
@@ -1301,14 +1596,7 @@ impl<'s> Printer<'s> {
                 self.word(&target.text);
                 self.args(args, expr.span.end);
             }
-            ExprKind::Get { object, name } => {
-                self.expr(object);
-                if self.broken(object.span.end, name.span.start) {
-                    self.continuation();
-                }
-                self.word(".");
-                self.word(&name.text);
-            }
+            ExprKind::Get { .. } | ExprKind::Functional { .. } => self.chain(expr),
             ExprKind::Select { object, name } => {
                 self.expr(object);
                 self.word("::");
@@ -1337,40 +1625,22 @@ impl<'s> Printer<'s> {
                 self.expr(operand);
                 self.word("...");
             }
-            ExprKind::Functional {
-                operation_name,
-                receiver,
-                args,
-                bindings,
-                body,
-                ..
-            } => {
-                self.expr(receiver);
-                if self.broken(receiver.span.end, operation_name.span.start) {
-                    self.continuation();
-                }
-                self.word(".");
-                self.word(&operation_name.text);
-                self.args(args, body.span.start);
-                self.word(" ->");
-                for (index, binding) in bindings.iter().enumerate() {
-                    self.word(if index > 0 { ", " } else { " " });
-                    self.word(&binding.text);
-                }
-                self.word(" ");
-                self.block(body);
-            }
             ExprKind::AnonymousAction {
                 params,
                 result,
                 body,
             } => {
                 self.params(params, body.span.start);
+                self.header_comments(match result {
+                    ActionResult::Void(span) => span.start,
+                    ActionResult::Type(ty) => ty.span.start,
+                });
                 self.word(" is ");
                 match result {
                     ActionResult::Void(_) => self.word("void"),
                     ActionResult::Type(ty) => self.ty(ty),
                 }
+                self.header_comments(body.span.start);
                 self.word(" ");
                 self.block(body);
             }
@@ -1420,18 +1690,18 @@ impl<'s> Printer<'s> {
                 self.word("if ");
                 self.expr(condition);
                 self.word(" ");
-                self.block(then_block);
+                self.header_block(then_block);
                 self.else_line(else_block.span.start);
                 self.word("else ");
                 match else_if(else_block) {
                     Some(next) => self.expr(next),
-                    None => self.block(else_block),
+                    None => self.header_block(else_block),
                 }
             }
             ExprKind::Match(body) => self.match_body(body),
             ExprKind::Loop { body } => {
                 self.word("loop ");
-                self.block(body);
+                self.header_block(body);
             }
             ExprKind::Try(body) => self.try_body(body),
             ExprKind::Panic { value } => {
@@ -1470,6 +1740,124 @@ impl<'s> Printer<'s> {
         );
     }
 
+    /// A chain of binary operators of one precedence, `a + b - c` (#1006): a break after an
+    /// operator where the author broke the line; once forced to break, the operands fill each
+    /// line and the chain breaks after the last operator that fits. A scratch printer breaks a
+    /// forced chain after every operator, so a measurement sees it take several lines, as the
+    /// source will once formatted.
+    fn binary_chain(&mut self, expr: &Expr) {
+        let ExprKind::Binary { op, .. } = &expr.kind else {
+            return self.expr(expr);
+        };
+        let mut links = Vec::new();
+        let first = collect_level(expr, precedence(*op), &mut links);
+        let key = (expr.span.start, expr.span.end, BreakKind::Binary);
+        let forced = self.is_forced(key);
+        if !forced {
+            self.break_point(key);
+        }
+        self.expr(first);
+        let mut previous = first.span.end;
+        for (index, (op, op_span, right)) in links.iter().enumerate() {
+            self.word(" ");
+            self.word(op.symbol());
+            let breaks = if !forced {
+                self.broken(previous, op_span.start) || self.broken(op_span.end, right.span.start)
+            } else if self.width == usize::MAX {
+                true
+            } else {
+                let width = self
+                    .flat_item::<BinaryOperand>(right.span, |p| p.expr(right))
+                    .unwrap_or_else(|| self.first_line(|p| p.expr(right)));
+                let operator = links.get(index + 1).map_or(0, |next| next.0.symbol().len() + 1);
+                self.column() + 1 + width + operator > self.width
+            };
+            if breaks {
+                self.continuation();
+            } else {
+                self.word(" ");
+            }
+            self.expr(right);
+            previous = right.span.end;
+        }
+    }
+
+    /// A call chain `root.field.f(x).g(y) -> v { … }` (#1006): a break before a link where the
+    /// author broke the line; once forced to break, a break before every call, except the first
+    /// call on a plain name (`out.writeln(…)` keeps its receiver).
+    fn chain(&mut self, expr: &Expr) {
+        let mut links = Vec::new();
+        let mut root = expr;
+        loop {
+            root = match &root.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Get { object, .. } => {
+                        links.push(root);
+                        object
+                    }
+                    _ => break,
+                },
+                ExprKind::Get { object, .. } => {
+                    links.push(root);
+                    object
+                }
+                ExprKind::Functional { receiver, .. } => {
+                    links.push(root);
+                    receiver
+                }
+                _ => break,
+            };
+        }
+        links.reverse();
+        let plain = matches!(
+            root.kind,
+            ExprKind::Name(_) | ExprKind::SelfValue | ExprKind::OwnerField { .. } | ExprKind::Select { .. }
+        );
+        let calls = |link: &&Expr| !matches!(link.kind, ExprKind::Get { .. });
+        let mut breakable: Vec<bool> = links.iter().map(calls).collect();
+        if plain && let Some(first) = breakable.iter().position(|&call| call) {
+            breakable[first] = false;
+        }
+        let key = (expr.span.start, expr.span.end, BreakKind::Chain);
+        let forced = self.is_forced(key);
+        if !forced && breakable.contains(&true) {
+            self.break_point(key);
+        }
+        self.expr(root);
+        let mut previous = root.span.end;
+        for (link, breakable) in links.iter().zip(breakable) {
+            let name = match &link.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Get { name, .. } => name,
+                    _ => unreachable!("a chain link calls a field"),
+                },
+                ExprKind::Get { name, .. } => name,
+                ExprKind::Functional { operation_name, .. } => operation_name,
+                _ => unreachable!("a chain link is a call, a field or a functional call"),
+            };
+            if self.broken(previous, name.span.start) || (forced && breakable) {
+                self.continuation();
+            }
+            self.word(".");
+            self.word(&name.text);
+            match &link.kind {
+                ExprKind::Call { args, .. } => self.args(args, link.span.end),
+                ExprKind::Functional { args, bindings, body, .. } => {
+                    self.args(args, body.span.start);
+                    self.word(" ->");
+                    for (index, binding) in bindings.iter().enumerate() {
+                        self.word(if index > 0 { ", " } else { " " });
+                        self.word(&binding.text);
+                    }
+                    self.word(" ");
+                    self.block(body);
+                }
+                _ => {}
+            }
+            previous = link.span.end;
+        }
+    }
+
     /// `a && b || c`: в строку, если помещается и автор не переносил; иначе
     /// перенос перед каждым `&&`/`||` цепочки одного оператора.
     fn logical_chain(&mut self, expr: &Expr) {
@@ -1492,9 +1880,14 @@ impl<'s> Printer<'s> {
             }
         });
         let fits = flat.is_some_and(|width| self.column() + width <= self.width);
+        let key = (expr.span.start, expr.span.end, BreakKind::Logical);
+        let breaks = user_broken || !fits || self.is_forced(key);
+        if !breaks {
+            self.break_point(key);
+        }
         for (index, operand) in operands.iter().enumerate() {
             if index > 0 {
-                if user_broken || !fits {
+                if breaks {
                     self.continuation();
                 } else {
                     self.word(" ");
@@ -1527,6 +1920,39 @@ fn else_if(block: &Block) -> Option<&Expr> {
             Some(expr)
         }
         _ => None,
+    }
+}
+
+/// Marks the cached one-line width of a binary operand (#1006).
+struct BinaryOperand;
+
+/// The parser's precedence level of a binary operator other than `&&` and `||`.
+fn precedence(op: BinaryOp) -> u8 {
+    match op {
+        BinaryOp::Or | BinaryOp::And => 0,
+        BinaryOp::Equal | BinaryOp::NotEqual => 1,
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 2,
+        BinaryOp::BitOr => 3,
+        BinaryOp::BitXor => 4,
+        BinaryOp::BitAnd => 5,
+        BinaryOp::ShiftLeft | BinaryOp::ShiftRight | BinaryOp::ShiftRightUnsigned => 6,
+        BinaryOp::Add | BinaryOp::Subtract => 7,
+        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 8,
+    }
+}
+
+/// The first operand of a left-associative chain of operators of one precedence `level`, and
+/// each following operator with its operand.
+fn collect_level<'e>(expr: &'e Expr, level: u8, links: &mut Vec<(BinaryOp, Span, &'e Expr)>) -> &'e Expr {
+    match &expr.kind {
+        ExprKind::Binary { op, left, right, op_span }
+            if !matches!(op, BinaryOp::And | BinaryOp::Or) && precedence(*op) == level =>
+        {
+            let first = collect_level(left, level, links);
+            links.push((*op, *op_span, right));
+            first
+        }
+        _ => expr,
     }
 }
 

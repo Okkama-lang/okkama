@@ -366,3 +366,211 @@ fn comments_in_empty_bodies_stay_inside() {
     assert!(out.contains("object Bare {\n    // only a note\n}"), "{out}");
     assert_eq!(fmt(&out), out, "idempotent");
 }
+
+/// #1006 (owner's decision): a block comment between a declaration's parameter list (or result)
+/// and its `{` or `;` stays on the header line where the author wrote it, and the list stays on
+/// one line: its end is the real `)`, so it never takes the comment in.
+#[test]
+fn block_comments_in_headers_stay_on_the_header_line() {
+    let text = "module app v1.0.0;\nobject A /* object */ {\nA(x is int) /* ctor */ {\nx;\n}\nA(:x) /* short */;\ngo(a is int) is int /* result */ {\na;\n}\nempty() /* none */ is void {}\ntest \"t\" /* test */ {\ntest.ok(true);\n}\ncap Extra /* cap */ {\nsize is int /* field */ {\n1;\n}\n}\n}\nrole R /* role */ {\nsig(a is int) is int /* sig */;\n}\nnative host(a is int, b is string) is int /* host */;\nmain() is int {\nlet f = (a is int) is int /* closure */ { a; };\n0;\n}\n";
+    assert_eq!(
+        fmt(text),
+        "module app v1.0.0;
+
+object A /* object */ {
+    A(x is int) /* ctor */ {
+        x;
+    }
+
+    A(:x) /* short */;
+
+    go(a is int) is int /* result */ {
+        a;
+    }
+
+    empty() /* none */ is void {}
+
+    test \"t\" /* test */ {
+        test.ok(true);
+    }
+
+    cap Extra /* cap */ {
+        size is int /* field */ {
+            1;
+        }
+    }
+}
+
+role R /* role */ {
+    sig(a is int) is int /* sig */;
+}
+
+native host(a is int, b is string) is int /* host */;
+
+main() is int {
+    let f = (a is int) is int /* closure */ {
+        a;
+    };
+    0;
+}
+"
+    );
+}
+
+/// #1006 (owner's decision): a `//` comment between a header and its `{` cannot stay before the
+/// `{` on one line, so it opens the body, indented, empty bodies included; a bodiless header
+/// (role signature, native action) prints it after its `;`.
+#[test]
+fn line_comments_in_headers_open_the_body() {
+    let text = "module app v1.0.0;\nobject A {\nA(x is int) // ctor\n{\nx;\n}\ngo(a is int) is int // why\n{\na;\n}\nempty() is void // nothing\n{}\ntest \"t\" // test\n{\ntest.ok(true);\n}\nboth(a is int) /* kept */ is int // moved\n/* after */ {\na;\n}\n}\nrole R {\nsig(a is int) is int // sig\n;\nother() is int;\n}\nnative host(a is int) is int // host\n;\nmain() is int {\n0;\n}\n";
+    assert_eq!(
+        fmt(text),
+        "module app v1.0.0;
+
+object A {
+    A(x is int) {
+        // ctor
+        x;
+    }
+
+    go(a is int) is int {
+        // why
+        a;
+    }
+
+    empty() is void {
+        // nothing
+    }
+
+    test \"t\" {
+        // test
+        test.ok(true);
+    }
+
+    both(a is int) /* kept */ is int {
+        // moved
+        /* after */
+        a;
+    }
+}
+
+role R {
+    sig(a is int) is int; // sig
+    other() is int;
+}
+
+native host(a is int) is int; // host
+
+main() is int {
+    0;
+}
+"
+    );
+}
+
+/// Every line of `text` fits into [`WIDTH`].
+fn assert_fits(text: &str) {
+    for line in text.lines() {
+        assert!(line.chars().count() <= WIDTH, "{} columns: {line}", line.chars().count());
+    }
+}
+
+/// #1006: a line that a list, an operator chain or a call chain could break never passes the
+/// width. These shapes reached 101–131 columns: the list measured itself but not the result,
+/// the `{`, the `;` or the call after it, and operator and call chains broke only where the
+/// author had. A body under a header that broke stays one level in from the statement, and a
+/// continuation inside one list item does not shift the next item.
+#[test]
+fn lines_that_can_break_fit_the_width() {
+    let text = "module app v1.0.0;\n\nobject Store does Comparing<Store>, Adding<Duration, Store>, Subtracting<Duration, Store>, Negating<Store> {\n    async transaction(options is TransactionOptions, mode is SqliteTransactionMode) is SqliteTransaction {\n        let raw = await TcpConnecting(address: IpAddress(\"127.0.0.1\"), port: server::Local::port).connection();\n        let line = first.string() + \" \" + second.string() + \" \" + third.string() + \" \" + fourth.string();\n        if chosen == \"h2\" || (chosen == \"\" && !policy.protocols().membership(HttpVersion.http_1_1)) {\n            return 1;\n        }\n        if PackedIpPrefix(origin: origin, prefix: \"00000000000000000000000000000000\", bits: 128).matches() {\n            return 65;\n        }\n        let reply = Reply(waiting: TlsServerHandshake(origin: connection, policy: tls[0], protocols: offered).connection(), limit: policy.timeouts().headers_timeout(), clock: clock);\n        match code {\n            case 33, 35, 36, 37, 38, 39, 42, 43, 45, 47, 61, 63, 94, 95, 96, 123, 124, 125, 126, 127 {\n                0;\n            }\n        }\n    }\n}\n";
+    let formatted = fmt(text);
+    assert_eq!(
+        formatted,
+        "module app v1.0.0;
+
+object Store does Comparing<Store>, Adding<Duration, Store>, Subtracting<Duration, Store>,
+    Negating<Store> {
+    async transaction(
+        options is TransactionOptions,
+        mode is SqliteTransactionMode
+    ) is SqliteTransaction {
+        let raw = await TcpConnecting(address: IpAddress(\"127.0.0.1\"), port: server::Local::port)
+            .connection();
+        let line = first.string() + \" \" + second.string() + \" \" + third.string() + \" \" +
+            fourth.string();
+        if chosen == \"h2\"
+            || (chosen == \"\" && !policy.protocols().membership(HttpVersion.http_1_1)) {
+            return 1;
+        }
+        if PackedIpPrefix(origin: origin, prefix: \"00000000000000000000000000000000\", bits: 128)
+            .matches() {
+            return 65;
+        }
+        let reply = Reply(
+            waiting: TlsServerHandshake(origin: connection, policy: tls[0], protocols: offered)
+                .connection(),
+            limit: policy.timeouts().headers_timeout(),
+            clock: clock
+        );
+        match code {
+            case 33, 35, 36, 37, 38, 39, 42, 43, 45, 47, 61, 63, 94, 95, 96, 123, 124, 125, 126,
+                127 {
+                0;
+            }
+        }
+    }
+}
+"
+    );
+    assert_fits(&formatted);
+}
+
+/// #1006: a call on a plain receiver keeps it (`out.writeln(` does not break before `.writeln`),
+/// and a native or a role signature breaks its parameters when its result passes the width.
+#[test]
+fn plain_receivers_stay_and_bodiless_headers_break_their_parameters() {
+    let text = "module app v1.0.0;\n\nrole Opening {\n    upgrade_tls_server(versions is int, protocols is @string, certificates is @@byte, key is @byte) is TlsState;\n}\n\nnative tcp_bound(address is @byte, zone is string, reuse is bool, dual_stack is bool) is TcpListenerState;\n\nmain() is int {\n    out.writeln(total.string() + \" \" + ready.string() + \" \" + negated.string() + \" \" + pair.sum().string() + \" \" + nested.string());\n    let result = connection.transaction(options: TransactionOptions(), mode: mmmmmmmmmmmmmmmmmmmmmm);\n    0;\n}\n";
+    let formatted = fmt(text);
+    assert_eq!(
+        formatted,
+        "module app v1.0.0;
+
+role Opening {
+    upgrade_tls_server(
+        versions is int,
+        protocols is @string,
+        certificates is @@byte,
+        key is @byte
+    ) is TlsState;
+}
+
+native tcp_bound(
+    address is @byte,
+    zone is string,
+    reuse is bool,
+    dual_stack is bool
+) is TcpListenerState;
+
+main() is int {
+    out.writeln(total.string() + \" \" + ready.string() + \" \" + negated.string() + \" \" +
+        pair.sum().string() + \" \" + nested.string());
+    let result = connection.transaction(
+        options: TransactionOptions(),
+        mode: mmmmmmmmmmmmmmmmmmmmmm
+    );
+    0;
+}
+"
+    );
+    assert_fits(&formatted);
+}
+
+/// #1006: a break that does not shorten the overflow is not made. Breaking `x(` would move
+/// the string from column 6 to column 8 and gain nothing, so the line stays as written.
+#[test]
+fn a_break_that_does_not_shorten_the_line_is_not_made() {
+    let long = format!("    x(\"{}\");", "a".repeat(91));
+    let text = format!("module app v1.0.0;\n\nmain() is int {{\n{long}\n    0;\n}}\n");
+    assert_eq!(long.chars().count(), WIDTH + 1);
+    assert_eq!(fmt(&text), text);
+}
