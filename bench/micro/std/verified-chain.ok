@@ -22,7 +22,7 @@ object Bench {
             chain: CertificateChain(leaf),
             trust: trust,
             host: DnsCertificateIdentity(HostName("localhost")),
-            at: Instant(origin: Duration(seconds: 1900000000 + i)),
+            at: Instant(origin: Duration(seconds: (1900000000 + i).rat())),
             purpose: CertificatePurpose("1.3.6.1.5.5.7.3.1")
         );
         let subject = verified.leaf().subject().relative_names().first().attributes().first().value();

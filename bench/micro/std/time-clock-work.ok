@@ -14,11 +14,11 @@ object Bench {
             return acc;
         }
         let v = i % 23 + 1;
-        let a = Instant(Duration(seconds: v));
-        let b = Instant(Duration(seconds: 0));
-        let m = MonotonicInstant(Duration(seconds: v));
-        let z = MonotonicInstant(Duration(seconds: 0));
-        let result = a.minus(b).nanoseconds() + a.string().length() + m.plus(Duration(seconds: 1)).minus(
+        let a = Instant(Duration(seconds: v.rat()));
+        let b = Instant(Duration(seconds: 0.rat()));
+        let m = MonotonicInstant(Duration(seconds: v.rat()));
+        let z = MonotonicInstant(Duration(seconds: 0.rat()));
+        let result = a.minus(b).nanoseconds() + a.string().length() + m.plus(Duration(seconds: 1.rat())).minus(
             z
         ).nanoseconds() + (if a.order(b) == Order.greater {
             1;

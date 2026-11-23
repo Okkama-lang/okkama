@@ -17,8 +17,8 @@ import "async/event" take Event;
 // A clock whose waits never end on their own: nothing here reads real time.
 hidden object StillClock does Timing {
     StillClock();
-    instant() is Instant { Instant(origin: Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(origin: Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { await Event().wait(); }
 }
 
@@ -48,7 +48,7 @@ object Bench {
     async run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
         let v = i % 9 + 1;
-        let state = DbPoolState(origin: Memory(), options: PoolOptions(minimum: (i % 2) + 1, maximum: 3, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5)), clock: StillClock(), health: Picky(false));
+        let state = DbPoolState(origin: Memory(), options: PoolOptions(minimum: (i % 2) + 1, maximum: 3, idle_timeout: Duration(seconds: 60.rat()), lifetime: Duration(seconds: 600.rat()), acquisition_timeout: Duration(seconds: 5.rat())), clock: StillClock(), health: Picky(false));
         let lease = await state.connection();
         await lease.execution("CREATE TABLE t(x INTEGER)");
         let before = state.snapshot();

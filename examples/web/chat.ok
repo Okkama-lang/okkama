@@ -53,8 +53,8 @@ async main() is int {
         resolver: FixedResolution(),
         policy: WebSocketPolicy(
             limits: WebSocketLimits(),
-            opening: Duration(seconds: 5),
-            closing: Duration(seconds: 2),
+            opening: Duration(seconds: 5.rat()),
+            closing: Duration(seconds: 2.rat()),
             access: LoopbackEndpoints(),
         ),
     ).connection();
@@ -66,6 +66,6 @@ async main() is int {
         out.writeln("< ", message.json().text("text"));
     }
     out.writeln("closed");
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     0;
 }

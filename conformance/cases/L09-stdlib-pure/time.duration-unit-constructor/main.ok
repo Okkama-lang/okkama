@@ -1,0 +1,9 @@
+module app v1.0.0;
+
+import "time/duration" take Duration;
+
+main() is int {
+    // Minutes are arithmetic at the call site: Duration(seconds: (5 * 60).rat()).
+    let wait = Duration(minutes: 5);
+    0;
+}

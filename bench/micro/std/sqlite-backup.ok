@@ -13,8 +13,8 @@ import "async/event" take Event;
 // A clock whose waits never end on their own: nothing here reads real time.
 hidden object StillClock does Timing {
     StillClock();
-    instant() is Instant { Instant(origin: Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(origin: Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { await Event().wait(); }
 }
 
@@ -31,7 +31,7 @@ object Bench {
         let made = await db.script(((0..v).map() -> k { "CREATE TABLE t" + k.string() + "(x INTEGER);"; }).join(""));
         let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-bk-");
         let report = await SqliteBackup(origin: db, target: scratch.path().child("copy.db"), pages: i % 4 + 12, clock: StillClock(),
-            timeout: Duration(seconds: 5)).report();
+            timeout: Duration(seconds: 5.rat())).report();
         let given = BackupReport(copies: v, total: v + 1);
         db.close();
         scratch.close();

@@ -14,7 +14,7 @@ object Bench {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let contribution = ServerEvent("data"+x,"update",x,Duration(seconds:v)).retry()::Span::seconds.int();
+        let contribution = ServerEvent("data"+x,"update",x,Duration(seconds: v.rat())).retry()::Span::seconds.int();
         self.run(i + 1, n, acc + contribution);
     }
 }

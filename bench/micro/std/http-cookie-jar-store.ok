@@ -14,7 +14,7 @@ import "time/duration" take Duration;
 import "http/method" take Method;
 
 
-object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void {} }
 object Bench {
     Bench();
     run(i is int, n is int, acc is int) is int {

@@ -23,7 +23,7 @@ object Bench {
         let x = v.string();
         let tls = TlsClientPolicy(TrustedCertificates());
         let client = ClientPolicy();
-        let timeouts = ClientTimeouts(Duration(seconds:v),Duration(seconds:1),Duration(seconds:2));
+        let timeouts = ClientTimeouts(Duration(seconds: v.rat()),Duration(seconds: 1.rat()),Duration(seconds: 2.rat()));
         let protocols = Http1ClientProtocols(client,tls);
         let selected = HttpClientProtocols(client,tls).clear();
         let server = ServerPolicy();

@@ -17,8 +17,8 @@ import "async/event" take Event;
 // A clock whose waits never end on their own: nothing here reads real time.
 hidden object StillClock does Timing {
     StillClock();
-    instant() is Instant { Instant(origin: Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(origin: Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { await Event().wait(); }
 }
 
@@ -54,7 +54,7 @@ object Bench {
     async run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
         let v = i % 9 + 1;
-        let pool = DbPreparedPool(origin: Memory(), options: PoolOptions(minimum: 0, maximum: 3, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5)), clock: StillClock());
+        let pool = DbPreparedPool(origin: Memory(), options: PoolOptions(minimum: 0, maximum: 3, idle_timeout: Duration(seconds: 60.rat()), lifetime: Duration(seconds: 600.rat()), acquisition_timeout: Duration(seconds: 5.rat())), clock: StillClock());
         let lease = await pool.connection();
         await lease.execution("CREATE TABLE t(x INTEGER)");
         let tx = await lease.prepared_transaction(TransactionOptions());
@@ -65,7 +65,7 @@ object Bench {
         lease.close();
         let first = if await pool.settled() { 1; } else { 0; };
         pool.close();
-        let plain = DbPool(origin: MemoryConnecting(), options: PoolOptions(minimum: 0, maximum: 3, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5)), clock: StillClock());
+        let plain = DbPool(origin: MemoryConnecting(), options: PoolOptions(minimum: 0, maximum: 3, idle_timeout: Duration(seconds: 60.rat()), lifetime: Duration(seconds: 600.rat()), acquisition_timeout: Duration(seconds: 5.rat())), clock: StillClock());
         let other = await plain.connection();
         await other.execution("CREATE TABLE u(x INTEGER)");
         other.close();

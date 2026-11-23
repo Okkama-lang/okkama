@@ -41,7 +41,7 @@ object QueueRound {
         let queued = QueuedLogs(origin: collected, capacity: 8, overflow: LogOverflow.reject, scope: scope);
         let context = LogContext(name: LogName("app"), fields: LogFields(JsonField("n", round)), process: 1);
         for (0..1 + round % 3) -> k {
-            queued.write(LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000)), level: LogLevel.info, message: "m" + k.string(), context: context));
+            queued.write(LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000.rat())), level: LogLevel.info, message: "m" + k.string(), context: context));
         }
         await queued.drain();
         queued.close();

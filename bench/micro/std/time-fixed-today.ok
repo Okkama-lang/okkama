@@ -20,7 +20,7 @@ object FixedClock does Timing {
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(Duration(seconds: 0));
+        MonotonicInstant(Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {}
@@ -34,7 +34,7 @@ object Bench {
             return acc;
         }
         let v = i % 23 + 1;
-        let zone = FixedZone("fixed", Duration(hours: 1));
+        let zone = FixedZone("fixed", Duration(seconds: 3600.rat()));
         let local = LocalDateTime(Date(1970, 1, v), TimeOfDay(1, 0, 0, 0));
         let at = zone.instant(local);
         let result = at.unix_duration().nanoseconds() + Today(zone: zone, clock: FixedClock(at: at)).date()::Calendar::day;

@@ -21,7 +21,7 @@ object Bench {
         if i == n { return acc; }
         let buffer = ByteBuffer();
         let context = LogContext(name: LogName("app", "http"), fields: LogFields(JsonField("id", i)), process: 42);
-        let record = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: levels[i % 5], message: "request " + i.string(), context: context);
+        let record = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: levels[i % 5], message: "request " + i.string(), context: context);
         JsonStreamLogs(buffer.writing()).write(record);
         let bytes = buffer.content().bytes();
         self.run(i + 1, n, acc + (bytes.size() + bytes[bytes.size() - 1].int()) % 7);

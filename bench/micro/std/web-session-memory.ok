@@ -5,7 +5,7 @@ import "time/clock" take Timing, Instant, MonotonicInstant;
 import "time/duration" take Duration;
 import "web/session" take MemorySessions, Session;
 import "http/cookie" take SetCookie;
-object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void {} }
 object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
 
 object Bench {

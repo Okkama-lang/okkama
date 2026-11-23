@@ -16,11 +16,11 @@ object Bench {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let start = MonotonicInstant(Duration(seconds:0));
-        let end = MonotonicInstant(Duration(seconds:2));
-        let timing = CacheResponseTiming(Instant(Duration(seconds:100)),start,end);
+        let start = MonotonicInstant(Duration(seconds: 0.rat()));
+        let end = MonotonicInstant(Duration(seconds: 2.rat()));
+        let timing = CacheResponseTiming(Instant(Duration(seconds: 100.rat())),start,end);
         let value = CacheFreshness(Headers(Header("Cache-Control","max-age=3600"),Header("Age",x)),timing);
-        let contribution = value.age(MonotonicInstant(Duration(seconds:12)))::Span::seconds.int();
+        let contribution = value.age(MonotonicInstant(Duration(seconds: 12.rat())))::Span::seconds.int();
         self.run(i + 1, n, acc + contribution);
     }
 }

@@ -16,7 +16,7 @@ import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
 import "mime/part" take TextBody;
 import "crypto/x509/trust" take TrustedCertificates;
 import "net/dns" take FixedResolution;
-object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void { await Event().wait(); } }
 object Bench {
     Bench();
     run(i is int, n is int, acc is int) is int {

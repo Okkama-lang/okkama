@@ -1,0 +1,43 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L09.time.duration-int-seconds",
+  "title": "Duration seconds are a rat, never an implicit int",
+  "purpose": "`Duration(seconds: 5)` passes an int where the constructor takes rat; there is no implicit numeric conversion.",
+  "level": "L09",
+  "contracts": [
+    {
+      "contract": "STD.TIME.DURATION",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "check",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {},
+  "expect": {
+    "outcome": "reject",
+    "rejection": {
+      "stages": [
+        "check"
+      ],
+      "categories": [
+        "semantic"
+      ]
+    }
+  },
+  "spec_refs": [
+    "std/time/duration.ok"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #1018 (part of #1005)",
+    "expected_basis": "time/duration (#1018, owner decision of 2026-11-23 on #1005): Duration(seconds is rat), no implicit conversion; whole seconds are written `5.rat()`."
+  },
+  "status": "mandatory"
+}

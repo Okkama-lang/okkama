@@ -26,9 +26,9 @@ async main() is int {
     let options = PoolOptions(
         minimum: 0,
         maximum: 1,
-        idle_timeout: Duration(seconds: 30),
-        lifetime: Duration(seconds: 60),
-        acquisition_timeout: Duration(seconds: 5)
+        idle_timeout: Duration(seconds: 30.rat()),
+        lifetime: Duration(seconds: 60.rat()),
+        acquisition_timeout: Duration(seconds: 5.rat())
     );
     let pool = DbPreparedPool(
         origin: SqliteAcquiring(database),

@@ -75,6 +75,6 @@ async main() is int {
         }
     }
 
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     0;
 }

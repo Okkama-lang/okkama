@@ -15,7 +15,7 @@ object Bench {
     Bench() { epoch = LocalDateTime(Date(2026, 11, 22), TimeOfDay(23, 59, 0, 0)); }
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        let contribution = epoch.plus(Duration(seconds: i % 100000)).time()::Clock::second;
+        let contribution = epoch.plus(Duration(seconds: (i % 100000).rat())).time()::Clock::second;
         self.run(i + 1, n, acc + contribution % 7);
     }
 }

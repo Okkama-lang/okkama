@@ -35,14 +35,14 @@ object Bench {
             let acquired = await PortableDbAcquiring(SqliteConnector(database)).acquisition();
             let summed = await acquired.connection().query("SELECT SUM(x) AS s FROM t").all(1);
             acquired.connection().close();
-            let options = PoolOptions(minimum: 0, maximum: 2, idle_timeout: Duration(seconds: 60), lifetime: Duration(seconds: 600), acquisition_timeout: Duration(seconds: 5));
+            let options = PoolOptions(minimum: 0, maximum: 2, idle_timeout: Duration(seconds: 60.rat()), lifetime: Duration(seconds: 600.rat()), acquisition_timeout: Duration(seconds: 5.rat()));
             let pool = DbPool(origin: SqliteConnector(database), options: options, clock: StillClock());
             let pooled = await pool.connection();
             await pooled.execution("INSERT INTO t(x) VALUES (?)", DbInteger(3));
             pooled.close();
             pool.close();
             let owner = await database.connection();
-            let report = await owner.backup(target: scratch.path().child("copy.db"), pages: 16, clock: StillClock(), timeout: Duration(seconds: 5));
+            let report = await owner.backup(target: scratch.path().child("copy.db"), pages: 16, clock: StillClock(), timeout: Duration(seconds: 5.rat()));
             owner.close();
             direct.close();
             scratch.close();
@@ -58,11 +58,11 @@ object StillClock does Timing {
     StillClock();
 
     instant() is Instant {
-        Instant(origin: Duration(seconds: 0));
+        Instant(origin: Duration(seconds: 0.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(origin: Duration(seconds: 0));
+        MonotonicInstant(origin: Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {

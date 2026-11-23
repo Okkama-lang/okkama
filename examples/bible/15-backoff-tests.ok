@@ -20,7 +20,7 @@ object Backoff {
     Backoff(:timing, :attempts);
 
     async fetched(source is Source) is string {
-        await self.attempt(source, 1, Duration(seconds: 1));
+        await self.attempt(source, 1, Duration(seconds: 1.rat()));
     }
 
     async attempt(source is Source, number is int, delay is Duration) is string {
@@ -41,8 +41,8 @@ object Recording does Timing {
 
     Recording(:waits);
 
-    instant() is Instant { Instant(Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { waits.record(duration); }
 }
 
@@ -65,8 +65,8 @@ async test "two failures cost one and then two seconds" {
     let source = Scripted(answers: Stub(["down", "down", "ready"]));
     test.is(await backoff.fetched(source), "ready");
     test.is(waits.size(), 2);
-    test.is(waits.records().item(0).value(), Duration(seconds: 1));
-    test.is(waits.records().item(1).value(), Duration(seconds: 2));
+    test.is(waits.records().item(0).value(), Duration(seconds: 1.rat()));
+    test.is(waits.records().item(1).value(), Duration(seconds: 2.rat()));
 }
 
 async test "the first answer needs no wait" {

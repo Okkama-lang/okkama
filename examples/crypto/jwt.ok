@@ -21,11 +21,11 @@ object FixedClock does Timing {
     }
 
     instant() is Instant {
-        Instant(Duration(seconds: seconds));
+        Instant(Duration(seconds: seconds.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(Duration(seconds: 0));
+        MonotonicInstant(Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {}
@@ -72,7 +72,7 @@ main() is int {
     let token = JwtToken(
         claims: Json(JsonField("sub", "user-7"), JsonField("role", "admin")),
         key: session,
-        expires: Duration(minutes: 15),
+        expires: Duration(seconds: (15 * 60).rat()),
         clock: now
     ).string();
     out.writeln("token: ", token.slice(0, 36), "… (", token.length(), " chars)");
@@ -99,7 +99,7 @@ main() is int {
             token: token,
             key: session,
             clock: FixedClock(1700000920),
-            leeway: Duration(seconds: 30)
+            leeway: Duration(seconds: 30.rat())
         )
     );
     let parts = token.split(".");
@@ -123,7 +123,7 @@ main() is int {
             JsonField("iss", "auth")
         ),
         key: signer,
-        expires: Duration(hours: 1),
+        expires: Duration(seconds: 3600.rat()),
         clock: now
     ).string();
     check.report(

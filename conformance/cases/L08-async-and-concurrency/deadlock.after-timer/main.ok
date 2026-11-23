@@ -12,7 +12,7 @@ object Alarm {
     Alarm(:rung);
 
     async ring() is void {
-        await SystemClock().wait(Duration(milliseconds: 20));
+        await SystemClock().wait(Duration(seconds: rat(20, 1000)));
         Stdout().writeln("alarm: rang");
         rung.set();
     }

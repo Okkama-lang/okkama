@@ -17,7 +17,7 @@ object Answer {
 async main() is int {
     let out = Stdout();
     let clock = SystemClock();
-    let budget = Duration(seconds: 30);
+    let budget = Duration(seconds: 30.rat());
     let within is Within<int> = Within(origin: Answer(value: 41).compute(), limit: budget, clock: clock);
     let deadline = clock.monotonic_instant() + budget;
     let before is Before<int> = Before(origin: Answer(value: 1).compute(), deadline: deadline, clock: clock);

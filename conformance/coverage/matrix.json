@@ -25750,9 +25750,13 @@
     },
     "invalid": {
      "cases": [
+      "L09.time.duration-int-seconds",
+      "L09.time.duration-unit-constructor",
       "L09.time.durations"
      ],
      "mandatory_cases": [
+      "L09.time.duration-int-seconds",
+      "L09.time.duration-unit-constructor",
       "L09.time.durations"
      ],
      "requirement": "required"
@@ -25776,7 +25780,7 @@
     "std/time/duration.ok"
    ],
    "status": "mandatory",
-   "title": "std time/duration public contract (Duration, DurationString, DurationUnit, InvalidDuration)"
+   "title": "std time/duration public contract (Duration, DurationString, InvalidDuration)"
   },
   {
    "aspects": {
@@ -31343,5 +31347,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "041f6b168b228119caebc005af3e2651a5fe5611bf9bc9396438647a673bb7b0"
+ "suite_tree_sha256": "f703ec8451b3cfb37db8359f01cd08fb623f116362557f9bc7150e906454c3a8"
 }

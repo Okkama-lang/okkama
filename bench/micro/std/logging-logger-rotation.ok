@@ -25,16 +25,16 @@ object Bench {
         let x = v.string();
         let levels is @LogLevel = [LogLevel.debug, LogLevel.info, LogLevel.warning, LogLevel.error, LogLevel.critical];
         let level = levels[i % 5];
-        let record = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: level, message: "m" + x,
+        let record = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: level, message: "m" + x,
             context: LogContext(name: LogName("app", ["db", "web"][i % 2]), fields: LogFields(JsonField("password", "s" + x), JsonField("id", v)), process: 42));
         let collected = CollectedLogs();
         let logger = Logger(name: "svc", destination: collected, level: levels[i % 3]);
         logger.debug("d" + x, JsonField("k", v));
         logger.critical("c", DbClosed.closed, JsonField("k", v));
         let delivered = await SynchronousLogDelivery(collected).deliver(record);
-        let rule = IntervalRotating(interval: Duration(hours: 1), zone: FixedZone(name: "Z", offset: Duration(seconds: 0)));
-        let opened = Instant(origin: Duration(seconds: 1700000000));
-        let total = collected.size() + 10 * delivered + (if rule.needed(0, opened, Instant(origin: Duration(seconds: 1700000000 + i * 600))) { 100; } else { 0; })
+        let rule = IntervalRotating(interval: Duration(seconds: 3600.rat()), zone: FixedZone(name: "Z", offset: Duration(seconds: 0.rat())));
+        let opened = Instant(origin: Duration(seconds: 1700000000.rat()));
+        let total = collected.size() + 10 * delivered + (if rule.needed(0, opened, Instant(origin: Duration(seconds: (1700000000 + i * 600).rat()))) { 100; } else { 0; })
             + 1000 * rule.suffix(opened, v).length();
         await self.run(i + 1, n, acc + total % 7);
     }

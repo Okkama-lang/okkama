@@ -17,7 +17,7 @@ import "http/websocket_session" take WebSocketSession;
 import "http/internal/websocket_upgrade" take WebSocketOpeningCleanup;
 import "io/stream" take AsyncReading, Closing;
 import "json" take Json, JsonField;
-object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }object Input does AsyncReading, Closing { has source is ByteBodyInput; has stop is Event; Input(bytes is @byte) { source=ByteBodyInput(bytes); stop=Event(); } async bytes(limit is int) is @byte { let bytes=await source.bytes(limit); if bytes.size()>0 { return bytes; } await stop.wait(); []; } close() is void { source.close(); stop.set(); } closed() is bool { stop.ready(); } }object Returned { has session is WebSocketSession; Returned(session is WebSocketSession) { self.session=session; } async value() is WebSocketSession { session; } }
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void { await Event().wait(); } }object Input does AsyncReading, Closing { has source is ByteBodyInput; has stop is Event; Input(bytes is @byte) { source=ByteBodyInput(bytes); stop=Event(); } async bytes(limit is int) is @byte { let bytes=await source.bytes(limit); if bytes.size()>0 { return bytes; } await stop.wait(); []; } close() is void { source.close(); stop.set(); } closed() is bool { stop.ready(); } }object Returned { has session is WebSocketSession; Returned(session is WebSocketSession) { self.session=session; } async value() is WebSocketSession { session; } }
 object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
 
 object Bench {
@@ -30,7 +30,7 @@ object Bench {
             let frame = WebSocketFrame(1,true,Utf8Encoded(x).bytes()).bytes([0.byte(),0.byte(),0.byte(),0.byte()]);
             let input = Input(frame+frame);
             let sink = Sink();
-            let session = WebSocketSession(input,sink,input,false,PcgRandom(v),WebSocketLimits(),Duration(seconds:1),FixedClock());
+            let session = WebSocketSession(input,sink,input,false,PcgRandom(v),WebSocketLimits(),Duration(seconds: 1.rat()),FixedClock());
             await session.started();
             let message = await session.message();
             let following = await session.next() else TextWebSocketMessage("");

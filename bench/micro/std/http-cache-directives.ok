@@ -16,7 +16,7 @@ object Bench {
         let x = v.string();
         let control = CacheControl(Headers(Header("Cache-Control","max-age="+x+", public")));
         let seconds = CacheDeltaSeconds(control.arguments("max-age")[0]).seconds();
-        let date = HttpDate(Instant(Duration(seconds:v)));
+        let date = HttpDate(Instant(Duration(seconds: v.rat())));
         let contribution = seconds+control.count("public")+(if date.order(date)==Order.equal { 1; } else { 0; });
         self.run(i + 1, n, acc + contribution);
     }

@@ -23,11 +23,11 @@ object FixedClock does Timing {
     FixedClock();
 
     instant() is Instant {
-        Instant(Duration(seconds: 1700000000));
+        Instant(Duration(seconds: 1700000000.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(Duration(seconds: 0));
+        MonotonicInstant(Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {}

@@ -20,7 +20,7 @@ object Bench {
         if i == n { return acc; }
         let hosts is @string = ["localhost", "example.org"];
         let verified = VerifiedCertificateChain(chain: CertificateChain(leaf), trust: TrustedCertificates(ca),
-            host: DnsCertificateIdentity(HostName(hosts[i % 2])), at: Instant(origin: Duration(seconds: 1900000000 + i)),
+            host: DnsCertificateIdentity(HostName(hosts[i % 2])), at: Instant(origin: Duration(seconds: (1900000000 + i).rat())),
             purpose: CertificatePurpose("1.3.6.1.5.5.7.3.1"));
         let path = try { verified.path().certificates().size(); } catch e is CertificateVerificationFailed { 100; };
         let codes is @string = ["untrusted", "expired", "invalid_name", "whatever"];

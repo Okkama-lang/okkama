@@ -17,8 +17,8 @@ object Bench {
         let x = v.string();
         let name = DistinguishedName(RelativeDistinguishedName(NameAttribute(identifier: "2.5.4.3", value: "host" + x)),
             RelativeDistinguishedName(NameAttribute(identifier: "2.5.4.10", value: "Org"), NameAttribute(identifier: "2.5.4.11", value: "Unit")));
-        let starts = Instant(origin: Duration(seconds: 1000 * v));
-        let ends = Instant(origin: Duration(seconds: if i % 3 == 0 { 10; } else { 100000; }));
+        let starts = Instant(origin: Duration(seconds: (1000 * v).rat()));
+        let ends = Instant(origin: Duration(seconds: (if i % 3 == 0 { 10; } else { 100000; }).rat()));
         let validity = try { CertificateValidity(starts: starts, ends: ends); 1; } catch e is InvalidCertificate { 2; };
         let total = name.relative_names().size() + 10 * name.relative_names().item(1).attributes().size()
             + 100 * CertificateConstraints(authority: true, maximum_depth: v).maximum_depth() + 1000 * validity

@@ -46,11 +46,11 @@ object FixedClock does Timing {
     FixedClock();
 
     instant() is Instant {
-        Instant(origin: Duration(seconds: 1700000000));
+        Instant(origin: Duration(seconds: 1700000000.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(origin: Duration(seconds: 1));
+        MonotonicInstant(origin: Duration(seconds: 1.rat()));
     }
 
     async wait(duration is Duration) is void {}

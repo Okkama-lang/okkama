@@ -18,7 +18,7 @@ import "http/header" take Headers, Header;
 import "http/method" take Method;
 import "random/source" take Randomizing;
 import "crypto/secret" take SecretBytes;
-object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void {} }
 object Context { Context(); value() is HttpRequestContext {
     let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(local:IpEndpoint(IpAddress("127.0.0.1"),80),remote:IpEndpoint(IpAddress("127.0.0.1"),50000));
     HttpRequestContext(details:ExchangeDetails(endpoints:ends,version:HttpVersion.http_1_1),cancellation:Cancellation().cancelling());

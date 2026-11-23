@@ -8,14 +8,14 @@ import "time/duration" take Duration;
 import "time/clock" take Instant, MonotonicInstant, Timing;
 
 
-object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void {} }
 object Bench {
     Bench();
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let value = Http1ContinueState(i%2==0,FixedClock(),Duration(seconds:v)).begun();
+        let value = Http1ContinueState(i%2==0,FixedClock(),Duration(seconds: v.rat())).begun();
         let contribution = if value.body_sent() { v; } else { 0; };
         self.run(i + 1, n, acc + contribution);
     }

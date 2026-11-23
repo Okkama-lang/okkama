@@ -46,11 +46,11 @@ object StillClock does Timing {
     StillClock();
 
     instant() is Instant {
-        Instant(Duration(seconds: 0));
+        Instant(Duration(seconds: 0.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(Duration(seconds: 0));
+        MonotonicInstant(Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {
@@ -67,7 +67,7 @@ object Bench {
             let v = i % 23 + 1;
             let input = TimedAsyncReading(
                 MemoryReading([byte(v)]),
-                Duration(seconds: 1),
+                Duration(seconds: 1.rat()),
                 StillClock()
             );
             let data = await input.bytes(1);

@@ -61,7 +61,7 @@ async main() is int {
     });
 
     let clock = SystemClock();
-    let short = Duration(milliseconds: 20);
+    let short = Duration(seconds: rat(20, 1000));
     let within is Within<int> = Within(origin: Forever(event: Event()).run(), limit: short, clock: clock);
     out.writeln(try {
         (await within.outcome()).string();
@@ -79,7 +79,7 @@ async main() is int {
     // An origin already settled wins without a clock wait, even at zero.
     let done = Quiet(result: 7).run();
     let seven = await done;
-    let ready is Within<int> = Within(origin: done, limit: Duration(seconds: 0), clock: clock);
+    let ready is Within<int> = Within(origin: done, limit: Duration(seconds: 0.rat()), clock: clock);
     out.writeln("settled first: " + (await ready.outcome()).string() + " " + seven.string());
     0;
 }

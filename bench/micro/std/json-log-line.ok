@@ -19,7 +19,7 @@ object Bench {
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
         let context = LogContext(name: LogName("app", "http"), fields: LogFields(JsonField("id", i)), process: 42);
-        let record = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: levels[i % 5], message: "request " + i.string(), context: context);
+        let record = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: levels[i % 5], message: "request " + i.string(), context: context);
         let line = JsonLogLine(record).string();
         self.run(i + 1, n, acc + (line.length() + line.characters()[line.length() - 3].code()) % 7);
     }

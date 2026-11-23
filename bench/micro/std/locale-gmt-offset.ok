@@ -24,7 +24,7 @@ object Bench {
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
         let data = GregorianLocaleData(Locale(["en", "de", "fr"][i % 3]));
-        let offset = Duration(seconds: (i % 52 - 24) * 1800);
+        let offset = Duration(seconds: ((i % 52 - 24) * 1800).rat());
         let total = Codes().of(LocalizedGmtOffset(offset: offset, data: data, table: CldrZoneNames(), wide: i % 2 == 0).string());
         self.run(i + 1, n, acc + total % 7);
     }

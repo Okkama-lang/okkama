@@ -1,5 +1,5 @@
 // Deterministic composite iteration; see oracles.py for the independent checksum.
-// Duration.new(days is int) is Duration | Duration.new(hours is int) is Duration | Duration.new(microseconds is int) is Duration | Duration.new(milliseconds is int) is Duration | Duration.new(minutes is int) is Duration | Duration.new(nanoseconds is int) is Duration | Duration.new(seconds is int) is Duration | Duration.new(value is rat, unit is DurationUnit) is Duration
+// Duration.new(seconds is rat) is Duration
 module bench/micro v1.0.0;
 
 import "../support/harness" take Measurement;
@@ -9,10 +9,10 @@ import "time/duration" take Duration;
 
 object Bench {
     has extra is Duration;
-    Bench() { extra = Duration(milliseconds: 250); }
+    Bench() { extra = Duration(seconds: rat(250, 1000)); }
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        let value = Duration(milliseconds: i);
+        let value = Duration(seconds: rat(i, 1000));
         let contribution = value.plus(extra).nanoseconds();
         self.run(i + 1, n, acc + contribution % 7);
     }

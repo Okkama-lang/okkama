@@ -19,7 +19,7 @@ object Bench {
     async run(n is int) is int {
         let sum = Sum(total: 0);
         for 0..n -> i {
-            let value = await Within(origin: Job(value: i).result(), limit: Duration(seconds: 5), clock: StillClock()).outcome();
+            let value = await Within(origin: Job(value: i).result(), limit: Duration(seconds: 5.rat()), clock: StillClock()).outcome();
             sum = sum.add(value % 7);
         }
         sum.total();
@@ -37,11 +37,11 @@ object StillClock does Timing {
     StillClock();
 
     instant() is Instant {
-        Instant(origin: Duration(seconds: 0));
+        Instant(origin: Duration(seconds: 0.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(origin: Duration(seconds: 0));
+        MonotonicInstant(origin: Duration(seconds: 0.rat()));
     }
 
     async wait(duration is Duration) is void {

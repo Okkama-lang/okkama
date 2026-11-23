@@ -30,12 +30,12 @@ object Bench {
         let short = DateTimeStyle(date: DateStyle.short, time: TimeStyle.short);
         let time = TimeOfDay(hour: i % 24, minute: i * 7 % 60, second: 0, nanosecond: 0);
         let local = LocalDateTime(date: Date(year: 2026, month: i % 12 + 1, day: i % 28 + 1), time: time);
-        let instant = Instant(origin: Duration(seconds: 1767600000 + i * 1234567));
+        let instant = Instant(origin: Duration(seconds: (1767600000 + i * 1234567).rat()));
         let observed = LocalizedZoneObservation(zone: Zone("Europe/Berlin"), instant: instant);
         let c = Codes();
         let total = c.of(LocalizedTime(origin: time, locale: locale, style: TimeStyle.short).string())
             + c.of(LocalizedLocalDateTime(origin: local, locale: locale, style: short).string())
-            + c.of(LocalizedInstant(origin: instant, zone: FixedZone("X", Duration(hours: 3)), locale: locale, style: short).string())
+            + c.of(LocalizedInstant(origin: instant, zone: FixedZone("X", Duration(seconds: (3 * 3600).rat())), locale: locale, style: short).string())
             + c.of(LocalizedLocalDateTime(origin: observed.local(), locale: locale, style: short).string())
             + c.of(LocalizedZoneName(origin: observed, data: data, wide: true).string())
             + c.of(data.combination(DateStyle.short));

@@ -16,7 +16,7 @@ import "message/header" take MessageHeaders, MessageHeader, MessageHeaderName;
 import "mime/part" take TextBody;
 import "crypto/x509/trust" take TrustedCertificates;
 import "net/dns" take FixedResolution;
-object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void { await Event().wait(); } }
 object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
 
 object Bench {
@@ -29,7 +29,7 @@ object Bench {
             let input = ByteBodyInput(Utf8Encoded("250 ok\r\n250 ok\r\n354 send\r\n250 saved\r\n221 bye\r\n").bytes());
             let sink = Sink();
             let caps = SmtpCapabilities(SmtpReply(250,["server"]));
-            let session = SmtpSession(input,sink,input,caps,[],Duration(seconds:10),FixedClock());
+            let session = SmtpSession(input,sink,input,caps,[],Duration(seconds: 10.rat()),FixedClock());
             let mail = MailMessage(MessageHeaders(MessageHeader(MessageHeaderName("Subject"),x)),TextBody("hello\r\n","us-ascii"));
             let result = await session.submission(mail,"a@example.test",["b@example.test"]);
             await session.quit();

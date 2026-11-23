@@ -10,10 +10,10 @@ import "time/duration" take Duration;
 
 object Bench {
     has epoch is Instant;
-    Bench() { epoch = Instant(Duration(seconds: 0)); }
+    Bench() { epoch = Instant(Duration(seconds: 0.rat())); }
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        let contribution = epoch.plus(Duration(seconds: i)).unix_duration().nanoseconds();
+        let contribution = epoch.plus(Duration(seconds: i.rat())).unix_duration().nanoseconds();
         self.run(i + 1, n, acc + contribution % 7);
     }
 }

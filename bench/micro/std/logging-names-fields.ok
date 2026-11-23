@@ -23,7 +23,7 @@ object Bench {
         let x = v.string();
         let levels is @LogLevel = [LogLevel.debug, LogLevel.info, LogLevel.warning, LogLevel.error, LogLevel.critical];
         let level = levels[i % 5];
-        let record = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: level, message: "m" + x,
+        let record = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: level, message: "m" + x,
             context: LogContext(name: LogName("app", ["db", "web"][i % 2]), fields: LogFields(JsonField("password", "s" + x), JsonField("id", v)), process: 42));
         let name = LogName("app", ["db", "web"][i % 2]);
         let child = ChildLogName(origin: name, segment: "q" + x).name();

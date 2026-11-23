@@ -31,11 +31,11 @@ object Bench {
         let x = v.string();
         let levels is @LogLevel = [LogLevel.debug, LogLevel.info, LogLevel.warning, LogLevel.error, LogLevel.critical];
         let level = levels[i % 5];
-        let record = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: level, message: "m" + x,
+        let record = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: level, message: "m" + x,
             context: LogContext(name: LogName("app", ["db", "web"][i % 2]), fields: LogFields(JsonField("password", "s" + x), JsonField("id", v)), process: 42));
-        let failed = LogRecord(occurred: Instant(origin: Duration(seconds: 1700000000 + i)), level: level, message: "m" + x,
+        let failed = LogRecord(occurred: Instant(origin: Duration(seconds: (1700000000 + i).rat())), level: level, message: "m" + x,
             context: LogContext(name: LogName("app"), fields: LogFields(JsonField("id", v)), process: 42), cause: DbClosed.closed);
-        let line = TextLogLine(origin: record, zone: FixedZone(name: "X", offset: Duration(hours: 1))).string();
+        let line = TextLogLine(origin: record, zone: FixedZone(name: "X", offset: Duration(seconds: 3600.rat()))).string();
         let buffer = ByteBuffer();
         TextStreamLogs(origin: buffer.writing()).write(failed);
         let hidden = CollectedLogs();

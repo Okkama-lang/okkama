@@ -55,7 +55,7 @@ async main() is int {
         out.writeln(version, " ", page::Head::code, " ", await page.text());
         client.close();
     }
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     out.writeln("drained");
     0;
 }

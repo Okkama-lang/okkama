@@ -31,7 +31,7 @@ object Bench {
         let request = Request(url:"https://example.test/"+x);
         let response = Response(status:Status.ok,headers:Headers(Header("ETag","\"tag"+x+"\""),Header("Cache-Control","max-age=60")));
         let reply = ClientResponse(request,response,details);
-        let timing = CacheResponseTiming(Instant(Duration(seconds:100)),MonotonicInstant(Duration(seconds:1)),MonotonicInstant(Duration(seconds:2)));
+        let timing = CacheResponseTiming(Instant(Duration(seconds: 100.rat())),MonotonicInstant(Duration(seconds: 1.rat())),MonotonicInstant(Duration(seconds: 2.rat())));
         let entry = CachedHttpEntry(request,reply,timing,[],Headers());
         let value = CacheValidation(request,entry).request();
         let contribution = value::Head::headers.text("If-None-Match").length();

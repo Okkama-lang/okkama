@@ -15,7 +15,7 @@ object Lookup {
     Lookup(:name, :delay, :clock);
 
     async answer() is string {
-        await clock.wait(Duration(milliseconds: delay));
+        await clock.wait(Duration(seconds: rat(delay, 1000)));
         name;
     }
 }
@@ -23,7 +23,7 @@ object Lookup {
 async main() is int {
     let out = Stdout();
     let clock = SystemClock();
-    let limit = Duration(milliseconds: 50);
+    let limit = Duration(seconds: rat(50, 1000));
 
     let fast = await Within(origin: Lookup(name: "cache", delay: 1, clock: clock).answer(), limit: limit, clock: clock).outcome();
     out.writeln("within the limit: " + fast);

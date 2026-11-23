@@ -12,7 +12,7 @@ import "cli/arguments" take ProcessArguments;
 import "strings/parse" take Number;
 import "encoding/utf" take Utf8Decoded;
 import "async/timeout" take Within, TimedOut;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/clock" take SystemClock;
 import "io/decorators" take ByteSnapshot;
 
@@ -32,7 +32,7 @@ async main() is int {
     let connection = await TlsClientHandshake(origin: tcp, server: IpCertificateIdentity(IpAddress("127.0.0.1")), policy: policy).connection();
     defer connection.close();
     let timed = try {
-        await Within(origin: Reader(connection: connection).bytes(), limit: Duration(1.rat() / 10.rat(), DurationUnit.second), clock: SystemClock()).outcome();
+        await Within(origin: Reader(connection: connection).bytes(), limit: Duration(seconds: rat(1, 10)), clock: SystemClock()).outcome();
         "read early";
     } catch TimedOut.elapsed { "timed out"; };
     out.writeln(timed);

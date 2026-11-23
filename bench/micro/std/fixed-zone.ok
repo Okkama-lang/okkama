@@ -11,10 +11,10 @@ import "time/duration" take Duration;
 
 object Bench {
     has epoch is Instant;
-    Bench() { epoch = Instant(Duration(seconds: 0)); }
+    Bench() { epoch = Instant(Duration(seconds: 0.rat())); }
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }
-        let zone = FixedZone("test", Duration(minutes: i % 1440));
+        let zone = FixedZone("test", Duration(seconds: ((i % 1440) * 60).rat()));
         let contribution = zone.offset(epoch).nanoseconds();
         self.run(i + 1, n, acc + contribution % 7);
     }

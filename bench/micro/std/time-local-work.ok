@@ -25,8 +25,8 @@ object Bench {
         let b = LocalDateTime(Date(2024, 1, 1), z);
         let text = a.string();
         let result = a.minus(b).nanoseconds() + text.length() + IsoText(text).local_date_time().time()::Clock::hour + Rfc3339(
-            Instant(Duration(seconds: v)),
-            Duration(seconds: 0)
+            Instant(Duration(seconds: v.rat())),
+            Duration(seconds: 0.rat())
         ).string().length() + (if t.order(z) == Order.greater {
             1;
         }

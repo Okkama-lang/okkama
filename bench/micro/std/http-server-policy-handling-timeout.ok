@@ -14,7 +14,7 @@ object Bench {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let contribution = ServerTimeouts(Duration(seconds:1),Duration(seconds:2),Duration(seconds:3),Duration(seconds:v)).handling_timeout()::Span::seconds.int();
+        let contribution = ServerTimeouts(Duration(seconds: 1.rat()),Duration(seconds: 2.rat()),Duration(seconds: 3.rat()),Duration(seconds: v.rat())).handling_timeout()::Span::seconds.int();
         self.run(i + 1, n, acc + contribution);
     }
 }

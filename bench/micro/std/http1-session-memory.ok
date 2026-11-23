@@ -19,7 +19,7 @@ import "http/body" take ByteBodyInput;
 import "encoding/utf" take Utf8Encoded;
 import "http/conversation" take Http1Conversation;
 object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }
-object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void {} }
+object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void {} }
 object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
 
 object Bench {
@@ -31,7 +31,7 @@ object Bench {
             let x = v.string();
             let input = ByteBodyInput(Utf8Encoded("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").bytes());
             let sink = Sink();
-            let session = Http1Session(input,sink,input,Http1Limits(),Duration(seconds:1),FixedClock());
+            let session = Http1Session(input,sink,input,Http1Limits(),Duration(seconds: 1.rat()),FixedClock());
             let conversation = Http1Conversation(session);
             let result = await conversation.exchange(Request(url:"http://example.test/"+x));
             let contribution = result.response()::Head::code+sink.checksum();

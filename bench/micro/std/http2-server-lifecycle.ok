@@ -33,7 +33,7 @@ import "http/http2_server" take Http2ServerSession;
 import "http/server_policy" take ServerPolicy, ServerTimeouts;
 import "collections/set" take OrderedSet;
 import "io/stream" take AsyncReading, Closing;
-object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds:100)); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds:100)); } async wait(duration is Duration) is void { await Event().wait(); } }object Handler does Handling { Handler(); async handling(request is Request,context is HttpRequestContext) is HandlingResult { ResponseHandling(Response(status:Status.ok)); } }object Context { Context(); value() is HttpRequestContext {
+object Sink does AsyncWriting { has sum is Atomic<int>; Sink() { sum=Atomic(0); } async write(source is ByteSource) is AsyncWriting { await self.write(source.bytes()); } async write(bytes is @byte) is AsyncWriting { sum.replace(sum.value()+bytes.reduce(0) -> s,b { s+b.int(); }); self; } checksum() is int { sum.value(); } }object FixedClock does Timing { FixedClock(); instant() is Instant { Instant(Duration(seconds: 100.rat())); } monotonic_instant() is MonotonicInstant { MonotonicInstant(Duration(seconds: 100.rat())); } async wait(duration is Duration) is void { await Event().wait(); } }object Handler does Handling { Handler(); async handling(request is Request,context is HttpRequestContext) is HandlingResult { ResponseHandling(Response(status:Status.ok)); } }object Context { Context(); value() is HttpRequestContext {
     let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(local:IpEndpoint(IpAddress("127.0.0.1"),80),remote:IpEndpoint(IpAddress("127.0.0.1"),50000));
     HttpRequestContext(details:ExchangeDetails(endpoints:ends,version:HttpVersion.http_1_1),cancellation:Cancellation().cancelling());
 } }object Input does AsyncReading, Closing { has source is ByteBodyInput; has stop is Event; Input(bytes is @byte) { source=ByteBodyInput(bytes); stop=Event(); } async bytes(limit is int) is @byte { let bytes=await source.bytes(limit); if bytes.size()>0 { return bytes; } await stop.wait(); []; } close() is void { source.close(); stop.set(); } closed() is bool { stop.ready(); } }
@@ -48,7 +48,7 @@ object Bench {
             let x = v.string();
             let payload = Http2SettingsWire(Http2Settings(4096,65535,16384,v),true).bytes();
             let input = Input(Utf8Encoded("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").bytes()+Http2Frame(Http2FrameHeader(4.byte(),0.byte(),0,payload.size()),payload).bytes());
-            let policy = ServerPolicy(OrderedSet([HttpVersion.http_2]),HttpLimits(),ServerTimeouts(Duration(seconds:0),Duration(seconds:0),Duration(seconds:0),Duration(seconds:0)),v,16);
+            let policy = ServerPolicy(OrderedSet([HttpVersion.http_2]),HttpLimits(),ServerTimeouts(Duration(seconds: 0.rat()),Duration(seconds: 0.rat()),Duration(seconds: 0.rat()),Duration(seconds: 0.rat())),v,16);
             let details=ExchangeDetails(Context().value().endpoints(),HttpVersion.http_2);
             let server = Http2ServerSession(input,Sink(),input,Handler(),details,policy,FixedClock());
             let group is FutureGroup<bool> = FutureGroup();

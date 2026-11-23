@@ -9,7 +9,7 @@ import "time/duration" take Duration;
 object Bench {
     has opened is Instant;
     Bench() {
-        opened = Instant(origin: Duration(seconds: 1700000000));
+        opened = Instant(origin: Duration(seconds: 1700000000.rat()));
     }
     run(i is int, n is int, acc is int) is int {
         if i == n { return acc; }

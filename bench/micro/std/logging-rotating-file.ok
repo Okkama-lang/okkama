@@ -24,8 +24,8 @@ import "async/event" take Event;
 // A clock whose waits never end on their own: nothing here reads real time.
 hidden object StillClock does Timing {
     StillClock();
-    instant() is Instant { Instant(origin: Duration(seconds: 0)); }
-    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    instant() is Instant { Instant(origin: Duration(seconds: 0.rat())); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0.rat())); }
     async wait(duration is Duration) is void { await Event().wait(); }
 }
 
@@ -42,7 +42,7 @@ object Bench {
         let scratch = TemporaryDirectory(parent: parent.temporary(), prefix: "okkama-lr-");
         let options = FileLogOptions(permissions: PermissionMode(384), flush_each: i % 2 == 0, sync_each: false);
         let rotating = RotatingLogFile(path: scratch.path().child("r.log"), options: options,
-            rotation: IntervalRotating(interval: Duration(hours: 1), zone: FixedZone(name: "Z", offset: Duration(seconds: 0))), backups: 2, clock: StillClock());
+            rotation: IntervalRotating(interval: Duration(seconds: 3600.rat()), zone: FixedZone(name: "Z", offset: Duration(seconds: 0.rat()))), backups: 2, clock: StillClock());
         rotating.write(Utf8Encoded("r" + x + "\n").bytes());
         rotating.reopen();
         rotating.write(Utf8Encoded("s\n").bytes());

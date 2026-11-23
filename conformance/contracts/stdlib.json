@@ -7103,7 +7103,7 @@
     },
     {
       "id": "STD.TIME.DURATION",
-      "title": "std time/duration public contract (Duration, DurationString, DurationUnit, InvalidDuration)",
+      "title": "std time/duration public contract (Duration, DurationString, InvalidDuration)",
       "family": "Standard library: time",
       "spec_refs": [
         "std/time/duration.ok"

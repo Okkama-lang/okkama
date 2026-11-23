@@ -8158,7 +8158,7 @@ Only explicitly declared measured calls count, not harness imports, fixture setu
 | `time/duration:Duration.minus` | work | `Duration.minus(other is Duration) is Duration` | time-duration-work |
 | `time/duration:Duration.nanoseconds` | work | `Duration.nanoseconds() is int` | duration-add, fixed-zone, instant-shift, rfc3339-parse |
 | `time/duration:Duration.negated` | wrapper | `Duration.negated() is Duration` | via callers |
-| `time/duration:Duration.new` | work | `Duration.new(days is int) is Duration`<br>`Duration.new(hours is int) is Duration`<br>`Duration.new(microseconds is int) is Duration`<br>`Duration.new(milliseconds is int) is Duration`<br>`Duration.new(minutes is int) is Duration`<br>`Duration.new(nanoseconds is int) is Duration`<br>`Duration.new(seconds is int) is Duration`<br>`Duration.new(value is rat, unit is DurationUnit) is Duration` | duration-add, fixed-zone, http-cache-freshness-age, http-cache-validation-request, http-server-policy-handling-timeout, http-sse-retry, http1-continue-begun, instant-shift, local-datetime-shift, websocket-client-limits, websocket-server-protocols |
+| `time/duration:Duration.new` | work | `Duration.new(seconds is rat) is Duration` | duration-add, fixed-zone, http-cache-freshness-age, http-cache-validation-request, http-server-policy-handling-timeout, http-sse-retry, http1-continue-begun, instant-shift, local-datetime-shift, websocket-client-limits, websocket-server-protocols |
 | `time/duration:Duration.order` | work | `Duration.order(other is Duration) is Order` | time-duration-work |
 | `time/duration:Duration.plus` | work | `Duration.plus(other is Duration) is Duration` | duration-add |
 | `time/duration:Duration.times` | wrapper | `Duration.times(factor is rat) is Duration` | via callers |

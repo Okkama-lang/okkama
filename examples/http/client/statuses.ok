@@ -60,6 +60,6 @@ async main() is int {
     Stdout().writeln(reply::Head::code, " ", StatusCode(status).phrase());
 
     client.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     0;
 }

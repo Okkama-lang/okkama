@@ -12,7 +12,7 @@ object Bench {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let expiry = CookieExpiry(Instant(Duration(seconds:100+v)));
+        let expiry = CookieExpiry(Instant(Duration(seconds: (100+v).rat())));
         let flags is OrderedSet<CookieFlag> = OrderedSet([CookieFlag.secure,CookieFlag.http_only]);
         let attributes = CookieAttributes("","/",expiry,SameSite.lax,flags);
         let cookie = Cookie("sid",x,attributes);

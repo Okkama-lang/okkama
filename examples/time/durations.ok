@@ -1,19 +1,19 @@
 module examples/time/durations v1.0.0;
 
-import "time/duration" take Duration, DurationUnit, DurationString;
+import "time/duration" take Duration, DurationString;
 import "io/stdout" take Stdout;
 
 // Durations are exact: rational seconds, never a float.
 
 main() is int {
     let out = Stdout();
-    let lap = Duration(seconds: 90);
-    let pause = Duration(milliseconds: 250);
+    let lap = Duration(seconds: 90.rat());
+    let pause = Duration(seconds: rat(250, 1000));
     let total = lap + lap + pause;
     out.writeln("total: ", DurationString(origin: total));
     out.writeln("seconds: ", total::Span::seconds);
     out.writeln("tripled: ", DurationString(origin: total.times(3.rat())));
-    out.writeln("longer than three minutes: ", total > Duration(minutes: 3));
+    out.writeln("longer than three minutes: ", total > Duration(seconds: (3 * 60).rat()));
     let nanos is int = total.nanoseconds();
     out.writeln("nanoseconds: ", nanos);
     0;

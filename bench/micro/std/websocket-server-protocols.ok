@@ -16,7 +16,7 @@ object Bench {
         if i == n { return acc; }
         let v = i % 251 + 1;
         let x = v.string();
-        let value = WebSocketUpgrade(["chat"+x],WebSocketLimits(),SameOriginWebSockets(),Duration(seconds:5));
+        let value = WebSocketUpgrade(["chat"+x],WebSocketLimits(),SameOriginWebSockets(),Duration(seconds: 5.rat()));
         let contribution = value.protocols()[0].length();
         self.run(i + 1, n, acc + contribution);
     }

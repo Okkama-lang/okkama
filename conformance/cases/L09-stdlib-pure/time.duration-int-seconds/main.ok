@@ -1,0 +1,9 @@
+module app v1.0.0;
+
+import "time/duration" take Duration;
+
+main() is int {
+    // Whole seconds are written 5.rat(): an int is not converted implicitly.
+    let wait = Duration(seconds: 5);
+    0;
+}

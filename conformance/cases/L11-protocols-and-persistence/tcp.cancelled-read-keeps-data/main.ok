@@ -13,7 +13,7 @@ import "encoding/utf" take Utf8Decoded, Utf8Encoded;
 import "io/decorators" take ByteSnapshot;
 import "async/timeout" take Within, TimedOut;
 import "async/atomic" take Atomic;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/clock" take SystemClock;
 
 object Reader {
@@ -29,7 +29,7 @@ async main() is int {
     defer connection.close();
     // The peer answers only after a whole line, so both reads find nothing.
     let timed = try {
-        await Within(origin: Reader(connection: connection).bytes(), limit: Duration(1.rat() / 10.rat(), DurationUnit.second), clock: SystemClock()).outcome();
+        await Within(origin: Reader(connection: connection).bytes(), limit: Duration(seconds: rat(1, 10)), clock: SystemClock()).outcome();
         "read early";
     } catch TimedOut.elapsed { "timed out"; };
     out.writeln(timed);

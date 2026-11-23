@@ -9,10 +9,10 @@ async main() is int {
     let out = Stdout();
     let clock = SystemClock();
     let before = clock.monotonic_instant();
-    await clock.wait(Duration(milliseconds: 20));
+    await clock.wait(Duration(seconds: rat(20, 1000)));
     let after = clock.monotonic_instant();
     let elapsed = after.minus(before);
     out.writeln(if after.order(before) == Order.greater { "advanced"; } else { "not advanced"; });
-    out.writeln(if elapsed.order(Duration(milliseconds: 20)) != Order.less { "waited" ; } else { "too short"; });
+    out.writeln(if elapsed.order(Duration(seconds: rat(20, 1000))) != Order.less { "waited" ; } else { "too short"; });
     0;
 }

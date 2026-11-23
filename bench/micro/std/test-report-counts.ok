@@ -16,9 +16,9 @@ object Bench {
         let output = TestOutput(output: [], errors: [], truncated: false);
         let failures is @TestFailure = [];
         let results is @TestResult = (0..1 + i % 4).map() -> k {
-            TestResult(name: "case " + k.string(), status: statuses[(i + k) % 5], duration: Duration(seconds: 0), failures: failures, output: output);
+            TestResult(name: "case " + k.string(), status: statuses[(i + k) % 5], duration: Duration(seconds: 0.rat()), failures: failures, output: output);
         };
-        let report = TestReport(start: Instant(origin: Duration(seconds: 0)), duration: Duration(seconds: 1), seed: i, results: results);
+        let report = TestReport(start: Instant(origin: Duration(seconds: 0.rat())), duration: Duration(seconds: 1.rat()), seed: i, results: results);
         let counts = report.counts();
         self.run(i + 1, n, acc + (counts.total() + counts::Counts::passes * 2 + TestCounts(passes: i % 3, failures: 1, skips: 0).total()) % 7);
     }

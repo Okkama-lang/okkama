@@ -1,0 +1,43 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L09.time.duration-unit-constructor",
+  "title": "a Duration has no unit constructors",
+  "purpose": "Duration(seconds is rat) is the only constructor; `Duration(minutes: 5)` names no constructor.",
+  "level": "L09",
+  "contracts": [
+    {
+      "contract": "STD.TIME.DURATION",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "check",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {},
+  "expect": {
+    "outcome": "reject",
+    "rejection": {
+      "stages": [
+        "check"
+      ],
+      "categories": [
+        "semantic"
+      ]
+    }
+  },
+  "spec_refs": [
+    "std/time/duration.ok"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #1018 (part of #1005)",
+    "expected_basis": "time/duration (#1018, owner decision of 2026-11-23 on #1005): one canonical constructor, Duration(seconds is rat); the unit constructors were removed, minutes are written as `(5 * 60).rat()` seconds."
+  },
+  "status": "mandatory"
+}

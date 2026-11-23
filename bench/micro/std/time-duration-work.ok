@@ -13,8 +13,8 @@ object Bench {
             return acc;
         }
         let v = i % 23 + 1;
-        let a = Duration(seconds: v);
-        let b = Duration(seconds: 30);
+        let a = Duration(seconds: v.rat());
+        let b = Duration(seconds: 30.rat());
         let result = a.minus(b).nanoseconds() + DurationString(a).string().length() + (if a.order(b) == Order.less {
             1;
         }

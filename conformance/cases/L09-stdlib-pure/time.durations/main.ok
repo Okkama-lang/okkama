@@ -1,15 +1,17 @@
 module app v1.0.0;
 
 import "conformance/check" take Checks;
-import "time/duration" take Duration, DurationUnit, DurationString, InvalidDuration;
+import "time/duration" take Duration, DurationString, InvalidDuration;
 
 main() is int {
     let c = Checks();
-    c = c.same_text("nanoseconds", Duration(value: rat(3, 2), unit: DurationUnit.second).nanoseconds().string(), "1500000000");
-    c = c.same_text("canonical string", DurationString(origin: Duration(value: rat(3, 2), unit: DurationUnit.second)).string(), "3/2s");
-    c = c.same_text("minute in seconds", string(Duration(minutes: 1)::Span::seconds), "60");
-    c = c.same_text("day is 86400 s", string(Duration(days: 1)::Span::seconds), "86400");
-    c = c.same_text("sum", string(Duration(seconds: 1).plus(Duration(milliseconds: 500))::Span::seconds), "3/2");
-    c = c.same_text("non-integral nanoseconds", try { let probe = Duration(value: rat(1, 3), unit: DurationUnit.second)::Span::seconds; "no error"; } catch e is InvalidDuration { "InvalidDuration"; }, "InvalidDuration");
+    c = c.same_text("nanoseconds", Duration(seconds: rat(3, 2)).nanoseconds().string(), "1500000000");
+    c = c.same_text("canonical string", DurationString(origin: Duration(seconds: rat(3, 2))).string(), "3/2s");
+    c = c.same_text("one nanosecond", Duration(seconds: rat(1, 1000000000)).nanoseconds().string(), "1");
+    c = c.same_text("five minutes as seconds", string(Duration(seconds: (5 * 60).rat())::Span::seconds), "300");
+    c = c.same_text("sum", string(Duration(seconds: 1.rat()).plus(Duration(seconds: rat(250, 1000)))::Span::seconds), "5/4");
+    c = c.same_text("negative", DurationString(origin: Duration(seconds: rat(-1, 4))).string(), "-1/4s");
+    c = c.same_text("non-integral nanoseconds", try { let probe = Duration(seconds: rat(1, 3))::Span::seconds; "no error"; } catch e is InvalidDuration { "InvalidDuration"; }, "InvalidDuration");
+    c = c.same_text("finer than a nanosecond", try { let probe = Duration(seconds: rat(1, 2000000000))::Span::seconds; "no error"; } catch e is InvalidDuration { "InvalidDuration"; }, "InvalidDuration");
     c.done();
 }
