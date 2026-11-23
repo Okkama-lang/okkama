@@ -686,7 +686,6 @@ const SIMPLE_FOLD_EXTRAS: &[(char, char)] = &[
     ('\u{fb06}', '\u{fb05}'),
 ];
 
-// Identifies C/S classes; Cherokee uses a lowercase representative (#550).
 /// Visited marks of one NFA frontier, by instruction (#463): a mark is the generation that set it, so moving to
 /// the next input position clears every mark at once.
 struct Visited {
@@ -718,6 +717,7 @@ impl Visited {
     }
 }
 
+// Identifies C/S classes; Cherokee uses a lowercase representative (#550).
 fn fold_key(c: char) -> char {
     match c {
         // Dotless i has no C/S mapping (#550).
@@ -991,6 +991,7 @@ impl Program {
     }
 
     /// Совпадение в [start, end) в режиме first/prefix/entire: спаны или пусто.
+    #[cfg(test)]
     fn selected_spans(
         &self,
         input: &str,
@@ -998,7 +999,11 @@ impl Program {
         end: &BigInt,
         mode: i64,
     ) -> Result<Vec<(i64, i64)>, &'static str> {
-        let all = input_scalars(input, MAX_INPUT)?;
+        self.spans_in(&input_scalars(input, MAX_INPUT)?, start, end, mode)
+    }
+
+    /// [`Self::selected_spans`] over the scalars of the text.
+    fn spans_in(&self, all: &[u32], start: &BigInt, end: &BigInt, mode: i64) -> Result<Vec<(i64, i64)>, &'static str> {
         let length = BigInt::from(all.len());
         if start.is_negative() || end.cmp(start).is_lt() || end.cmp(&length).is_gt() {
             return Err("Invalid regex search range\n");
@@ -1134,10 +1139,33 @@ type Spans = Rc<[(i64, i64)]>;
 /// A parsed replacement template: (failed, error offset, literal/group tokens).
 type PreparedTemplate = Rc<(i64, i64, Vec<String>)>;
 
+thread_local! {
+    /// The text the last query was made over and its scalars (#1012).
+    static SCALARS: RefCell<Option<(Rc<str>, Rc<[u32]>)>> = const { RefCell::new(None) };
+}
+
+/// The scalars of `text`, shared with the last query over the same text:
+/// `Regex.all` and `parts` make a query per match over one text, and each
+/// used to copy and convert the whole text again, which made them quadratic
+/// (#1012). A query now costs one comparison of the text with the cached one.
+fn shared_scalars(text: &str) -> Result<Rc<[u32]>, &'static str> {
+    SCALARS.with(|cache| {
+        if let Some((cached, points)) = cache.borrow().as_ref()
+            && **cached == *text
+        {
+            return Ok(Rc::clone(points));
+        }
+        let points: Rc<[u32]> = input_scalars(text, MAX_INPUT)?.into();
+        *cache.borrow_mut() = Some((Rc::from(text), Rc::clone(&points)));
+        Ok(points)
+    })
+}
+
 #[derive(Debug)]
 pub(crate) struct Query {
     pattern: std::rc::Rc<State>,
-    origin: String,
+    /// The scalars of the text, or why the text is refused (on search).
+    points: Result<Rc<[u32]>, &'static str>,
     start: BigInt,
     end: BigInt,
     mode: i64,
@@ -1174,11 +1202,13 @@ fn prepare_query(native: Native, query: &Query) -> Result<Spans, ProviderError> 
     let prepared = query.pattern.prepare();
     let result = match prepared.status {
         2 => Err("Regex pattern resource limit exceeded\n"),
-        0 => prepared
-            .program
-            .as_ref()
-            .expect("valid pattern has a program")
-            .selected_spans(&query.origin, &query.start, &query.end, query.mode),
+        0 => query.points.clone().and_then(|points| {
+            prepared
+                .program
+                .as_ref()
+                .expect("valid pattern has a program")
+                .spans_in(&points, &query.start, &query.end, query.mode)
+        }),
         _ => Err("Invalid regex pattern\n"),
     };
     match result {
@@ -1403,7 +1433,7 @@ impl Heap {
                 };
                 let query = Query {
                     pattern,
-                    origin: self.text(args[1])?.into(),
+                    points: shared_scalars(self.text(args[1])?),
                     start: self.regex_int(args[2])?,
                     end: self.regex_int(args[3])?,
                     mode,
@@ -1550,6 +1580,25 @@ mod tests {
     }
 
     use super::*;
+
+    /// #1012: queries over the same text share its scalars instead of
+    /// converting the whole text again for every match of `Regex.all`.
+    #[test]
+    fn queries_over_one_text_share_its_scalars() {
+        let text = "a1 b22 c333 ".repeat(100);
+        let first = shared_scalars(&text).unwrap();
+        let again = shared_scalars(&text.clone()).unwrap();
+        assert!(Rc::ptr_eq(&first, &again), "the same text converts once");
+        assert_eq!(first.len(), text.chars().count());
+        let other = shared_scalars("é1").unwrap();
+        assert_eq!(&*other, &[0xe9, u32::from('1')]);
+        assert!(!Rc::ptr_eq(&first, &shared_scalars(&text).unwrap()), "a new text replaces the cache");
+        let long = "x".repeat(MAX_INPUT + 1);
+        assert_eq!(shared_scalars(&long), Err("Regex input resource limit exceeded\n"));
+        let program = regex_program("[0-9]+", false, false);
+        let points = shared_scalars(&text).unwrap();
+        assert_eq!(program.spans_in(&points, &BigInt::from(3), &BigInt::from(points.len()), 0), Ok(vec![(4, 6)]));
+    }
 
     fn regex_program(pattern: &str, ascii: bool, ignore_case: bool) -> Program {
         compile_pattern(pattern, &[ascii, ignore_case, false, false, false])
