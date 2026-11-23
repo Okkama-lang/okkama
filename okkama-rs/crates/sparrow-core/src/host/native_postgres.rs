@@ -152,12 +152,22 @@ impl Heap {
             let page = PgPage::parse(&self.byte_slice(args[0])?, width, &oids);
             return Ok(Outcome::Value(Slot { tag: HANDLE, bits: self.handles.allocate(Handle::PgPage(Box::new(page)))? }));
         }
-        // The page is moved out while its arrays are allocated, then put back.
+        // The page is moved out while its arrays are allocated, then put back
+        // however the allocation ends.
         let Handle::PgPage(slot) = self.handles.get_mut(args[0].bits)? else {
             return Err(Error("expected a PgPageState".into()));
         };
         let page = std::mem::take(&mut **slot);
-        let result = match native {
+        let result = self.pg_page_part(native, &page);
+        let Handle::PgPage(slot) = self.handles.get_mut(args[0].bits)? else { unreachable!() };
+        **slot = page;
+        result.map(Outcome::Value)
+    }
+
+    /// One part of a page as program values.
+    fn pg_page_part(&mut self, native: Native, page: &PgPage) -> Result<Slot, Error> {
+        use Native::*;
+        match native {
             PostgresPgPageFailure => self.allocate_text(page.failure.clone()),
             PostgresPgPageRows => Ok(Slot::small(page.rows as i64)),
             PostgresPgPageKinds => self.allocate_array(page.kinds.iter().map(|&k| Slot::small(k)).collect()),
@@ -173,9 +183,6 @@ impl Heap {
                 let blobs = page.blobs.iter().map(|b| self.allocate_bytes(b)).collect::<Result<Vec<_>, _>>()?;
                 self.allocate_array(blobs)
             }
-        };
-        let Handle::PgPage(slot) = self.handles.get_mut(args[0].bits)? else { unreachable!() };
-        **slot = page;
-        result.map(Outcome::Value)
+        }
     }
 }

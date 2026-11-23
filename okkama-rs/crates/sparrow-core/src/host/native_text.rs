@@ -10,7 +10,7 @@ pub(crate) fn handles(native: Native) -> bool {
         HexEncode
             | HexDecode
             | HexValidPrefix
-            | Utf8Encode
+            // `utf8_encode` is the core's own (`natives::supported`).
             | Utf8Decode
             | Utf8ValidPrefix
             | Utf16Encode
@@ -128,7 +128,7 @@ impl Heap {
             _ => {}
         }
         let width = match native {
-            Utf8Encode | Utf8Decode | Utf8ValidPrefix => 1,
+            Utf8Decode | Utf8ValidPrefix => 1,
             Utf16Encode | Utf16Decode | Utf16ValidPrefix => 2,
             Utf32Encode | Utf32Decode | Utf32ValidPrefix => 4,
             _ => return Err(Error("invalid text provider".into())),
@@ -142,7 +142,7 @@ impl Heap {
                 _ => return Err(failed(native)),
             }
         };
-        if matches!(native, Utf8Encode | Utf16Encode | Utf32Encode) {
+        if matches!(native, Utf16Encode | Utf32Encode) {
             let bytes = encode(self.text(args[0])?, width, big);
             return self.native_byte_array(bytes).map(Outcome::Value);
         }

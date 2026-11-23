@@ -1,4 +1,6 @@
-//! Exact BigInt native operations use the same Rust arithmetic as VM integers.
+//! Decimal text (validity, canonical form, coefficient, exponent, order) and the
+//! two BigInt checks that stay native (`bigint_valid`, `bigint_bits`); exact
+//! integer arithmetic is the VM's own since #13.
 use crate::host::*;
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};

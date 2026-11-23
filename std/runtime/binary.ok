@@ -36,10 +36,10 @@ native binary_integer_from_bytes(
     order is string,
 ) is int;
 
-// Whether value fits a float of width bytes without overflow.
+// Whether value fits a float of width bits (32 or 64) without overflow.
 native binary_float_fits(value is float, width is int) is bool;
 
-// value as an IEEE 754 float of width bytes in byte order.
+// value as an IEEE 754 float of width bits (32 or 64) in byte order.
 native binary_float_bytes(value is float, width is int, order is string) is @byte;
 
 // Whether origin's float is finite.

@@ -232,7 +232,8 @@ mod tests {
     fn answered_by_the_core(native: Native) -> bool {
         matches!(
             native,
-            Native::StdoutWrite
+            Native::Utf8Encode
+                | Native::StdoutWrite
                 | Native::StderrWrite
                 | Native::StdoutFlush
                 | Native::BytesBytesFind

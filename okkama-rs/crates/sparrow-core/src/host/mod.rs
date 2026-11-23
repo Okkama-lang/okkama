@@ -856,6 +856,7 @@ fn needs_tokio(native: Native) -> bool {
                 | Provider::Text
                 | Provider::Db
                 | Provider::Sqlite
+                | Provider::Postgres
                 | Provider::Core
         )
     )

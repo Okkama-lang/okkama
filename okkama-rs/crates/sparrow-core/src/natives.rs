@@ -111,7 +111,9 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
             }
             match parsed {
                 Some(value) => Ok((runtime.heap.big(value), Repr::Int)),
-                // The typed failure comes from the provider.
+                // The provider refuses it too: an engine error (`Native
+                // invocation … failed`), not a NativeFailure; std asks
+                // `int_parse_valid` first.
                 None => host(runtime, native, arguments),
             }
         }
