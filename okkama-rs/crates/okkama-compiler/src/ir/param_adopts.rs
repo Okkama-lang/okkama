@@ -293,10 +293,21 @@ impl Plain {
             variants: module.variants.iter().map(|variant| variant.cases.iter().map(|(_, id)| id.0).collect()).collect(),
         };
         let carried = super::channel_carriers(module);
+        // Registered Futures are hidden intrinsic state, not fields: such an
+        // object is never plain, as in region elision (`regions::Plain`, #1007).
+        let holds_futures: Vec<usize> = module
+            .functions
+            .iter()
+            .filter_map(|function| function.intrinsic())
+            .filter(|(name, _)| matches!(*name, "okkama.scope.FutureGroup.new" | "okkama.scope.FutureScope.outcome"))
+            .map(|(_, objects)| objects[0].0)
+            .collect();
         loop {
             let before = (plain.objects.clone(), plain.roles.clone());
             for (index, object) in module.objects.iter().enumerate() {
-                plain.objects[index] = object.destroy.is_none() && object.fields.iter().all(|field| plain.ty(&field.ty))
+                plain.objects[index] = !holds_futures.contains(&index)
+                    && object.destroy.is_none()
+                    && object.fields.iter().all(|field| plain.ty(&field.ty))
                     && carried.iter().all(|(holder, ty)| *holder != index || plain.ty(ty));
             }
             for (index, role) in plain.roles.iter_mut().enumerate() {

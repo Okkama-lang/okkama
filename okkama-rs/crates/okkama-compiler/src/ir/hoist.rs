@@ -15,7 +15,7 @@
 use super::cfg::all_successors;
 use super::{BlockId, Function, InstKind, Module};
 
-/// Перенести константы циклов во входные блоки; число перенесённых.
+/// Перенести константы циклов в ближайший внешний доминатор (#239); число перенесённых.
 pub fn hoist_loop_constants(module: &mut Module) -> usize {
     module.functions.iter_mut().map(hoist).sum()
 }

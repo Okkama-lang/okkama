@@ -248,3 +248,31 @@ fn register_colouring_bounded_diagnostic() {
         elapsed.as_nanos(), f.registers.len(), f.code.len());
     program.verify().unwrap();
 }
+
+/// #1007: the value a lookup writes for its found target does not share a
+/// register with the lookup's operands, as an instruction's result does not.
+#[test]
+fn a_lookup_value_does_not_share_a_register_with_its_operands() {
+    let module = module(
+        "module app;\nobject Calc {\n    Calc();\n    pick(xs is @int, i is int) is int { xs[i] else -1; }\n    \
+         find(m is %int:int, k is int) is int { m[k] else -1; }\n}\nmain() is int { Calc().pick([5, 6], 1) + Calc().find([1: 2], 1); }\n",
+    );
+    let program = codegen::sparrow::generate(&module).unwrap();
+    let mut seen = 0;
+    for function in &program.functions {
+        for instruction in &function.code {
+            match instruction {
+                okkama_sparrow::Instruction::ArrayLookup { array, index, value, .. } => {
+                    assert!(value.0 != *array && value.0 != *index, "{}: {instruction:?}", function.symbol);
+                    seen += 1;
+                }
+                okkama_sparrow::Instruction::MapLookup { map, key, value, .. } => {
+                    assert!(value.0 != *map && value.0 != *key, "{}: {instruction:?}", function.symbol);
+                    seen += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(seen, 2);
+}

@@ -19,7 +19,7 @@ use crate::ir::{Function, ValueId};
 struct Set(std::collections::BTreeSet<usize>);
 
 impl Set {
-    fn new(_count: usize) -> Self {
+    fn new() -> Self {
         Self(std::collections::BTreeSet::new())
     }
 
@@ -84,6 +84,23 @@ fn allocate_profiled<const PROFILE: bool>(function: &Function) -> Function {
         live.union(&unwind);
         for operand in block.term.kind.operands() {
             live.insert(operand);
+        }
+        // A terminator that produces a value for its target (the found value
+        // of a lookup, a catch value) writes the target's parameters beyond its
+        // arguments: like an instruction's result, they must not share a
+        // register with the terminator's operands (#1007).
+        let mut operands = Set::new();
+        for operand in block.term.kind.operands() {
+            operands.insert(operand);
+        }
+        for target in block.term.kind.targets() {
+            for param in function.blocks[target.block.0].params.iter().skip(target.args.len()) {
+                if !conflict(*param, &operands) {
+                    profile.phase(1);
+                    profile.graph(&conflicts, edges);
+                    return profile.fallback(function, "edge-budget");
+                }
+            }
         }
         for inst in block.insts.iter().rev() {
             let clone_start = PROFILE.then(std::time::Instant::now);
@@ -258,8 +275,7 @@ impl<const ON: bool> Profile<ON> {
 
 /// Живые на входе каждого блока (с его параметрами).
 fn live_in(function: &Function) -> Vec<Set> {
-    let count = function.values.len();
-    let mut live_in = vec![Set::new(count); function.blocks.len()];
+    let mut live_in = vec![Set::new(); function.blocks.len()];
     let mut changed = true;
     while changed {
         changed = false;
@@ -302,7 +318,7 @@ fn through(function: &Function, target: &crate::ir::Target, live_in: &[Set], int
 }
 
 fn live_out(function: &Function, index: usize, live_in: &[Set]) -> Set {
-    let mut out = Set::new(function.values.len());
+    let mut out = Set::new();
     for target in function.blocks[index].term.kind.targets() {
         through(function, target, live_in, &mut out);
     }
@@ -311,7 +327,7 @@ fn live_out(function: &Function, index: usize, live_in: &[Set]) -> Set {
 
 /// Нужное обработчику unwind блока: живёт весь блок.
 fn unwind_live(function: &Function, index: usize, live_in: &[Set]) -> Set {
-    let mut out = Set::new(function.values.len());
+    let mut out = Set::new();
     if let Some(unwind) = &function.blocks[index].unwind {
         through(function, unwind, live_in, &mut out);
     }

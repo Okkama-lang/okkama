@@ -123,7 +123,6 @@ fn regs(values: &[ir::ValueId]) -> Vec<Register> {
 
 /// Генератор одной функции: начала блоков и типы значений.
 struct FunctionGen<'a> {
-    module: &'a ir::Module,
     function: &'a ir::Function,
     starts: Vec<u32>,
 }
@@ -505,7 +504,7 @@ impl FunctionGen<'_> {
     }
 }
 
-fn function(module: &ir::Module, function: &ir::Function, types: &mut Types) -> Result<Function, GenerateError> {
+fn function(function: &ir::Function, types: &mut Types) -> Result<Function, GenerateError> {
     // Значения с непересекающейся жизнью делят регистр; проверка независима
     // от распределителя (H-10).
     let allocated = registers::allocate(function);
@@ -547,7 +546,7 @@ fn function(module: &ir::Module, function: &ir::Function, types: &mut Types) -> 
         starts.push(pc);
         pc += block.insts.len() as u32 + 1;
     }
-    let generator = FunctionGen { module, function, starts };
+    let generator = FunctionGen { function, starts };
     for (index, block) in function.blocks.iter().enumerate() {
         let start = generator.starts[index];
         for inst in &block.insts {
@@ -564,7 +563,6 @@ fn function(module: &ir::Module, function: &ir::Function, types: &mut Types) -> 
             });
         }
     }
-    let _ = generator.module;
     Ok(out)
 }
 
@@ -751,7 +749,7 @@ pub fn generate(module: &ir::Module) -> Result<Program, GenerateError> {
         .enumerate()
         .map(|(index, item)| match stubs.get(&index) {
             Some(&global) => Ok(stub(item, global, &mut types)),
-            None => function(module, item, &mut types),
+            None => function(item, &mut types),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let program = Program {

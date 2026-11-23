@@ -11,8 +11,9 @@
 //!   or async body, unless its region settles (an async destroy elsewhere in the program). An async destroy
 //!   (#329): in an async body whose region settles, alone in that region; its exits become `resource.settle`
 //!   and `resource.settle_unwind`, which await the destroy as `region.settle` does;
-//! - its region operations are `region.track`/`region.adopt` into one region R, and R holds nothing else: no
-//!   other member, no transfer, no keep that could reach a resource, R not passed around;
+//! - its region operations are `region.track`/`region.adopt` into one region R; other members are allowed
+//!   since 291a41b66 (`shared`, `leave_after`, `handler_after`), but no transfer, no keep that could reach a
+//!   resource, and R is not passed around;
 //! - every block reachable from its creation before R's exits is dominated by the code right after the creation
 //!   (no drop flags yet). An unwind edge counts only from a block that can fail: a block of `fail.secondary`
 //!   and constants never takes it.
