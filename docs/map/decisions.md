@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-23. #1016 no native provider twins in runtime-core (owner).**
+  `okkama-runtime-core::native::execute` provides exactly the natives Sparrow's
+  `host/mod.rs` `classify` routes to `ORIGIN` (minus those `natives.rs` answers
+  itself: stdout/stderr and `runtime/bytes`); every other native is refused as
+  "not provided by runtime-core". A twin of a Sparrow provider is not kept "just
+  in case": live behaviour is fixed in the host. Guard:
+  `native_origin::tests::origin_routes_match_the_runtime_core_providers`.
+
 - **2026-11-22. #946 worker reuse (supplied implementation task).** Keep the
   public `parallel/map` and `spawn` APIs. A hidden map helper gives a copied
   bound action a pool for one `results()` call; existing batches, FutureScope

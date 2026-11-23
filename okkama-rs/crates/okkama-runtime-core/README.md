@@ -5,6 +5,14 @@
 
 - `native`, `data`, `host`, `stdout`: провайдеры std и контекст запуска,
   доступные Sparrow через `host/native_origin.rs`, а также общие операции ОС.
+  `native::execute` обслуживает ровно те natives, которые `classify` Sparrow
+  отдаёт в `ORIGIN` (x509, терминал и учётные записи, сигналы, часть
+  `runtime/system`, `math`, сжатие, CLDR, часовые пояса, Unicode и др.);
+  остальные получают явный отказ «not provided by runtime-core». Двойники
+  провайдеров Sparrow (сеть, TLS, SQLite, `db`, Postgres, `host_crypto`, fs,
+  процессы, stdio, ввод и др.) удалены в #1016. Прямо из Sparrow вызываются
+  только `native::fs::{rename_noreplace, copy_file}` и
+  `native::regex::{MAX_INPUT, input_scalars}`.
 - `sched`: промисы native-провайдеров и `pump`, который вызывает мост Sparrow.
   Стековые корутины IR, `run_main`/`run_test` и зависимость `corosensei` удалены.
   Владение объектами программы, GC, async-инструкции и process workers реализует

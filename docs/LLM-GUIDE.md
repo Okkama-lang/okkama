@@ -540,10 +540,13 @@ analysis keeps one register set per block leader within `MAX_ANALYSIS_BYTES`
 1. `okkama-runtime-abi/src/table.rs`: id, symbol, signature;
    `std/runtime/<module>.ok`: the `native` declaration.
 2. Sparrow: a provider in `sparrow-core/src/host/native_*.rs`
-   (registered in `host/mod.rs` `classify`), or nothing if the origin bridge
-   can run the `okkama-runtime-core` implementation.
+   (registered in `host/mod.rs` `classify`), or the origin bridge
+   (`host/native_origin.rs`) to an `okkama-runtime-core` implementation.
 3. For a bridged native: `okkama-runtime-core/src/native/*.rs` (register its
-   provider in `native.rs`).
+   provider in `native.rs` `route`). runtime-core provides exactly the natives
+   `classify` routes to `ORIGIN`, no twins of Sparrow's own providers (#1016);
+   `native_origin::tests::origin_routes_match_the_runtime_core_providers`
+   checks both directions.
 
 `sparrow --native-capabilities` lists Sparrow's coverage.
 

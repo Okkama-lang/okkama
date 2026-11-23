@@ -1,5 +1,6 @@
-//! Natives форматов данных: `runtime/io_decorators`,
-//! `runtime/testing`, `runtime/pem`, `runtime/template` (`runtime/csv_state` became Okkama in #13)
+//! Data format natives Sparrow routes here (`host/native_origin.rs`):
+//! `runtime/io_decorators`, `runtime/pem`, `runtime/template`
+//! (`runtime/csv_state` became Okkama in #13; `runtime/testing` is Sparrow's own)
 //! (`runtime/ini` переписан на Okkama, #13). Смещения и длины — в символах (code points), тексты отказов
 //! — как у Perl-provider. Строки Rust всегда скалярны, поэтому проверки
 //! одиночных суррогатов здесь не срабатывают никогда.
@@ -8,7 +9,7 @@ use super::support::{
     failed, failure, handle, int, int_value, new_handle, string, string_array, text,
 };
 use crate::{IntValue, Value, abi::Native};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 fn operation(native: Native) -> &'static str {
     native.name()
@@ -26,41 +27,6 @@ fn slice(points: &[char], from: usize, to: usize) -> String {
 
 #[derive(Debug)]
 struct Counter(RefCell<IntValue>);
-
-// ---- runtime/testing ----
-
-#[derive(Debug)]
-struct TestState {
-    limit: i64,
-    size: Cell<i64>,
-    closed: Cell<bool>,
-}
-
-fn require_test(native: Native) -> Result<(), Error> {
-    if !crate::testing::active() {
-        return Err(failure(
-            "core.testing",
-            "permission_denied",
-            native,
-            "Test state requires a running case",
-        ));
-    }
-    Ok(())
-}
-
-fn test_state(native: Native, value: &Value) -> Result<&TestState, Error> {
-    require_test(native)?;
-    let state = handle::<TestState>(value)?;
-    if state.closed.get() {
-        return Err(failure(
-            "core.testing",
-            "already_closed",
-            native,
-            "Native handle is already closed",
-        ));
-    }
-    Ok(state)
-}
 
 // ---- runtime/pem ----
 
@@ -330,46 +296,6 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             *counter.0.borrow_mut() = next.clone();
             Ok(Value::Int(next))
         }
-        // ---- testing ----
-        "test_state_open" => {
-            require_test(native)?;
-            let limit = int(&args[0])?
-                .to_i64()
-                .filter(|limit| (0..=65_536).contains(limit))
-                .ok_or_else(|| {
-                    failure(
-                        "core.testing",
-                        "invalid_input",
-                        native,
-                        "Test state capacity must be 0..65536",
-                    )
-                })?;
-            Ok(new_handle(TestState {
-                limit,
-                size: Cell::new(0),
-                closed: Cell::new(false),
-            }))
-        }
-        "test_state_size" => Ok(int_value(test_state(native, &args[0])?.size.get())),
-        "test_state_next" => {
-            let state = test_state(native, &args[0])?;
-            if state.size.get() >= state.limit {
-                return Err(failure(
-                    "core.testing",
-                    "resource_exhausted",
-                    native,
-                    "Test state capacity exhausted",
-                ));
-            }
-            state.size.set(state.size.get() + 1);
-            Ok(int_value(state.size.get() - 1))
-        }
-        "test_state_close" => {
-            require_test(native)?;
-            handle::<TestState>(&args[0])?.closed.set(true);
-            Ok(Value::Bool(true))
-        }
-        "test_context_active" => Ok(Value::Bool(crate::testing::active())),
         // ---- pem ----
         "pem_kind_invalid_offset" => Ok(int_value(kind_invalid_offset(string(&args[0])?))),
         "pem_encode" => {

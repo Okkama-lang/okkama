@@ -1,55 +1,42 @@
-//! Shared providers. Native identifiers and signatures live in runtime-abi.
+//! Native providers Sparrow does not implement itself. The only entry is
+//! [`execute`], called by Sparrow's bridge (`sparrow-core/src/host/native_origin.rs`)
+//! for the natives its host routes to `ORIGIN`; every other native has a
+//! Sparrow provider and never reaches this crate (#1016). A native without a
+//! provider here is an explicit [`Error::Unsupported`]. `fs` and `regex` also
+//! hold the few items Sparrow's own providers call directly. Native identifiers
+//! and signatures live in runtime-abi.
 use crate::{
-    IntValue, Value, ValueError,
+    Value, ValueError,
     abi::{Native, NativeFailure},
     heap::ArrayHeap,
 };
-use std::rc::Rc;
-pub mod application;
-pub mod buffer;
-pub mod bytes;
-pub mod cldr;
-pub mod collation;
-pub mod compression;
-pub mod encoding;
-pub mod formats;
+pub(crate) mod application;
+pub(crate) mod cldr;
+pub(crate) mod collation;
+pub(crate) mod compression;
+pub(crate) mod formats;
 pub mod fs;
-pub mod host;
-pub mod host_crypto;
-pub mod idna;
-pub mod input;
-pub mod jre;
-pub mod json;
-pub mod json_split;
-pub mod db;
-pub mod math;
-pub mod misc;
-pub mod net;
-pub mod network;
-pub mod numbers;
-pub mod postgres;
-pub mod process;
+pub(crate) mod host;
+pub(crate) mod idna;
+pub(crate) mod json;
+pub(crate) mod json_split;
+pub(crate) mod math;
+pub(crate) mod misc;
+pub(crate) mod net;
 pub mod regex;
-pub mod signal;
-pub mod sqlite;
-pub mod stdio;
-pub mod text;
-pub mod time;
-pub mod tls;
-pub mod unicode;
-pub mod value;
-pub mod x509;
+pub(crate) mod signal;
+pub(crate) mod text;
+pub(crate) mod time;
+pub(crate) mod unicode;
+pub(crate) mod value;
+pub(crate) mod x509;
 
-pub mod inspect;
-pub mod support;
-pub mod system;
+pub(crate) mod inspect;
+pub(crate) mod support;
 
 /// Provider state belongs to one execution, not a process-global VM singleton.
 #[derive(Debug, Default)]
 pub struct Context {
-    streams: stdio::State,
-    /// Аргументы командной строки программы.
-    pub arguments: Vec<String>,
     /// Имена enum программы без модуля и их case (`debug.data_dump`).
     pub enums: Vec<(String, Vec<String>)>,
     /// Имена объектов программы и их полей по порядку (`debug/dumper`).
@@ -59,7 +46,7 @@ pub struct Context {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidState(String),
-    /// Provider ещё не перенесён в этот рантайм.
+    /// No provider for this native here: Sparrow provides it itself.
     Unsupported(String),
     Trap(String),
     Failure(NativeFailure),
@@ -82,101 +69,69 @@ pub fn execute(
         ));
     }
     match provider(native) {
-        Provider::Regex => regex::execute(native, args),
-        Provider::Bytes => bytes::execute(native, args),
-        Provider::Postgres => postgres::execute(native, args),
-        Provider::Misc => misc::execute(native, args, context),
-        Provider::Idna => idna::execute(native, args),
-        Provider::Json => json::execute(native, args, arrays),
-        Provider::Db => db::execute(native, args),
-        Provider::Math => math::execute(native, args, context),
-        Provider::Host => host::execute(native, args),
-        Provider::Value => value::execute(native, args),
-        Provider::Unicode => unicode::execute(native, args),
-        Provider::Net => net::execute(native, args),
-        Provider::Network => network::execute(native, args),
-        Provider::X509 => x509::execute(native, args),
-        Provider::Tls => tls::execute(native, args),
-        Provider::Sqlite => sqlite::execute(native, args),
-        Provider::Application => application::execute(native, args),
-        Provider::Collation => collation::execute(native, args),
-        Provider::Fs => fs::execute(native, args),
-        Provider::System => system::execute(native, args),
-        Provider::Input => input::execute(native, args, context),
-        Provider::Process => process::execute(native, args),
-        Provider::Time => time::execute(native, args),
-        Provider::Formats => formats::execute(native, args),
-        Provider::Text => text::execute(native, args),
-        Provider::HostCrypto => host_crypto::execute(native, args, arrays),
-        Provider::Encoding => encoding::execute(native, args, arrays),
-        Provider::Numbers => numbers::execute(native, args),
-        Provider::Buffer => buffer::execute(native, args, arrays),
-        Provider::Compression => compression::execute(native, args, arrays),
-        Provider::Signal => signal::execute(native, args),
-        Provider::Cldr => cldr::execute(native, args),
-        Provider::Streams => context.streams.execute(
-            native,
-            args,
-            arrays,
-            &mut std::io::stdin().lock(),
-            // The process buffer (#132), shared with the test report.
-            &mut crate::stdout::Buffered,
-            &mut std::io::stderr().lock(),
-        ),
-        Provider::Utf => unicode_text(native, args, arrays),
+        Some(Provider::Misc) => misc::execute(native, args, context),
+        Some(Provider::Json) => json::execute(native, args, arrays),
+        Some(Provider::Math) => math::execute(native, args, context),
+        Some(Provider::Host) => host::execute(native, args),
+        Some(Provider::Value) => value::execute(native, args),
+        Some(Provider::Unicode) => unicode::execute(native, args),
+        Some(Provider::X509) => x509::execute(native, args),
+        Some(Provider::Application) => application::execute(native, args),
+        Some(Provider::Collation) => collation::execute(native, args),
+        Some(Provider::Time) => time::execute(native, args),
+        Some(Provider::Formats) => formats::execute(native, args),
+        Some(Provider::Text) => text::execute(native, args),
+        Some(Provider::Compression) => compression::execute(native, args, arrays),
+        Some(Provider::Signal) => signal::execute(native, args),
+        Some(Provider::Cldr) => cldr::execute(native, args),
+        None => Err(not_provided(native)),
     }
 }
 
+/// Whether [`execute`] has a provider for `native`; the others are refused
+/// with [`Error::Unsupported`]. Sparrow checks its `ORIGIN` routes against it.
+pub fn provides(native: Native) -> bool {
+    provider(native).is_some()
+}
+
+/// The refusal for a native Sparrow provides itself (#1016).
+fn not_provided(native: Native) -> Error {
+    Error::Unsupported(format!(
+        "native is not provided by runtime-core: {}",
+        native.symbol()
+    ))
+}
+
 /// Provider, исполняющий native.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Provider {
-    Bytes,
-    Postgres,
-    Regex,
     Misc,
-    Idna,
     Json,
-    Db,
     Math,
     Host,
     Value,
     Unicode,
-    Net,
-    Network,
     X509,
-    Tls,
-    Sqlite,
     Application,
     Collation,
-    Fs,
-    System,
-    Input,
-    Process,
     Time,
     Formats,
     Text,
-    HostCrypto,
-    Encoding,
-    Numbers,
-    Buffer,
     Compression,
     Signal,
     Cldr,
-    Streams,
-    /// UTF-8/16/32 и всё, чего нет у других providers (там — `Unsupported`).
-    Utf,
 }
 
 /// Provider native по таблице, заполненной один раз [`route`]: при вызове —
 /// индекс, а не сравнение строк модуля.
-fn provider(native: Native) -> Provider {
-    static PROVIDERS: std::sync::OnceLock<Vec<Provider>> = std::sync::OnceLock::new();
+fn provider(native: Native) -> Option<Provider> {
+    static PROVIDERS: std::sync::OnceLock<Vec<Option<Provider>>> = std::sync::OnceLock::new();
     PROVIDERS.get_or_init(|| {
         let mut providers = Vec::new();
         for native in Native::ALL {
             let at = *native as usize;
             if providers.len() <= at {
-                providers.resize(at + 1, Provider::Utf);
+                providers.resize(at + 1, None);
             }
             providers[at] = route(*native);
         }
@@ -184,371 +139,63 @@ fn provider(native: Native) -> Provider {
     })[native as usize]
 }
 
-/// Providers по модулю символа (`runtime/regex@1::…` → `runtime/regex`).
-fn route(native: Native) -> Provider {
-    match native.module() {
-        "runtime/regex" => return Provider::Regex,
-        "runtime/bytes" => return Provider::Bytes,
-        "runtime/postgres" => return Provider::Postgres,
-        "runtime/crypto" | "runtime/secret" | "runtime/debug" | "runtime/diff"
-        | "runtime/math_aggregate" | "runtime/layout" => {
-            return Provider::Misc;
+/// Providers по модулю символа (`runtime/x509@1::…` → `runtime/x509`): only
+/// the natives Sparrow's host routes to `ORIGIN` (`sparrow-core/src/host/mod.rs`,
+/// `classify`). The rest are `None`.
+fn route(native: Native) -> Option<Provider> {
+    let name = native.name();
+    Some(match native.module() {
+        "runtime/crypto" | "runtime/debug" | "runtime/diff" | "runtime/math_aggregate"
+        | "runtime/layout" => Provider::Misc,
+        "runtime/json" if name.starts_with("json_split_") => Provider::Json,
+        "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => Provider::Math,
+        "runtime/random" if name.starts_with("pcg_") => Provider::Math,
+        "runtime/random" => Provider::Host,
+        "runtime/system"
+            if !matches!(
+                native,
+                Native::SystemSystemPlatform
+                    | Native::SystemSystemArchitecture
+                    | Native::SystemSystemByteOrder
+            ) =>
+        {
+            Provider::Host
         }
-        "runtime/idna" | "runtime/public_suffix" => return Provider::Idna,
-        "runtime/json" => return Provider::Json,
-        "runtime/db" => return Provider::Db,
-        "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => {
-            return Provider::Math;
-        }
-        "runtime/random" => {
-            return if native.name().starts_with("pcg_") {
-                Provider::Math
-            } else {
-                Provider::Host
-            };
-        }
-        "runtime/time" | "runtime/system" => return Provider::Host,
-        "runtime/uuid" | "runtime/unicode_normalization" => return Provider::Value,
-        "runtime/unicode_character" => return Provider::Unicode,
-        "runtime/net" => return Provider::Net,
-        "runtime/network" => return Provider::Network,
-        "runtime/x509" => return Provider::X509,
-        "runtime/tls_transport" => return Provider::Tls,
-        "runtime/database" => return Provider::Sqlite,
-        "runtime/application" | "runtime/account" => return Provider::Application,
-        "runtime/collation" | "runtime/locale" => return Provider::Collation,
-        "runtime/fs" => return Provider::Fs,
-        "runtime/fs_root" | "runtime/snapshot" | "runtime/environment" => {
-            return Provider::System;
-        }
-        "runtime/input_state" => return Provider::Input,
-        "runtime/process" if native.symbol().contains("::process_arguments/") => {
-            return Provider::Input;
-        }
-        "runtime/process" => return Provider::Process,
-        "runtime/time_zone" => return Provider::Time,
-        "runtime/io_decorators" | "runtime/testing" | "runtime/pem"
-        | "runtime/template" => return Provider::Formats,
-        "runtime/binary" | "runtime/hpack" | "runtime/collections" | "runtime/number_text" => {
-            return Provider::Text;
-        }
-        _ => {}
-    }
-    if matches!(
-        native,
-        Native::HostCrypto | Native::DigestCreate | Native::DigestUpdate | Native::DigestBytes
-    ) {
-        return Provider::HostCrypto;
-    }
-    if encoding::handles(native) {
-        return Provider::Encoding;
-    }
-    if numbers::handles(native) {
-        return Provider::Numbers;
-    }
-    if buffer::handles(native) {
-        return Provider::Buffer;
-    }
-    if compression::handles(native) {
-        return Provider::Compression;
-    }
-    if signal::handles(native) {
-        return Provider::Signal;
-    }
-    if cldr::handles(native) {
-        return Provider::Cldr;
-    }
-    if matches!(
-        native,
-        Native::StdoutWrite
-            | Native::StderrWrite
-            | Native::StdoutFlush
-            | Native::StdinRead
-            | Native::StdinReadLine
-    ) {
-        return Provider::Streams;
-    }
-    Provider::Utf
-}
-
-/// UTF-8/16/32 encode, decode и valid prefix; прочие natives без provider —
-/// `Unsupported`.
-fn unicode_text(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result<Value, Error> {
-    let width = match native {
-        Native::Utf8Encode | Native::Utf8Decode | Native::Utf8ValidPrefix => 1,
-        Native::Utf16Encode | Native::Utf16Decode | Native::Utf16ValidPrefix => 2,
-        Native::Utf32Encode | Native::Utf32Decode | Native::Utf32ValidPrefix => 4,
-        _ => {
-            return Err(Error::Unsupported(format!(
-                "native provider is not implemented: {}",
-                native.symbol()
-            )));
-        }
-    };
-    let big = if width == 1 {
-        true
-    } else {
-        match args[1].as_string()? {
-            "big" => true,
-            "little" => false,
-            _ => {
-                return Err(Error::Trap(format!(
-                    "Native invocation \"{}\" failed",
-                    native.symbol()
-                )));
-            }
-        }
-    };
-    if matches!(
-        native,
-        Native::Utf8Encode | Native::Utf16Encode | Native::Utf32Encode
-    ) {
-        let text = args[0].as_string()?;
-        let bytes = encode(text, width, big);
-        return Ok(arrays.allocate(bytes.into_iter().map(Value::Byte).collect()));
-    }
-    let bytes = arrays
-        .elements(&args[0])?
-        .iter()
-        .map(Value::as_byte)
-        .collect::<Result<Vec<_>, _>>()?;
-    if matches!(
-        native,
-        Native::Utf8ValidPrefix | Native::Utf16ValidPrefix | Native::Utf32ValidPrefix
-    ) {
-        let prefix = scan_prefix(&bytes, width, big, None);
-        return Ok(Value::Int(IntValue::from_u128(prefix as u128)));
-    }
-    let (text, prefix) = decode_prefix(&bytes, width, big);
-    if prefix != bytes.len() {
-        let encoding = match (width, big) {
-            (1, _) => "UTF-8",
-            (2, true) => "UTF-16BE",
-            (2, false) => "UTF-16LE",
-            (4, true) => "UTF-32BE",
-            _ => "UTF-32LE",
-        };
-        return Err(Error::Failure(NativeFailure {
-            domain: "core.utf".into(),
-            code: "invalid_data".into(),
-            operation: native.symbol().into(),
-            message: format!("Bytes are not valid {encoding}"),
-        }));
-    }
-    Ok(Value::Str(Rc::from(text)))
-}
-
-fn encode(text: &str, width: usize, big: bool) -> Vec<u8> {
-    if width == 1 {
-        return text.as_bytes().to_vec();
-    }
-    let mut out = Vec::new();
-    if width == 2 {
-        for unit in text.encode_utf16() {
-            out.extend(if big {
-                unit.to_be_bytes()
-            } else {
-                unit.to_le_bytes()
-            });
-        }
-    } else {
-        for value in text.chars() {
-            let unit = value as u32;
-            out.extend(if big {
-                unit.to_be_bytes()
-            } else {
-                unit.to_le_bytes()
-            });
-        }
-    }
-    out
-}
-
-/// Return the first malformed scalar's starting BYTE offset, never replacement text.
-fn decode_prefix(bytes: &[u8], width: usize, big: bool) -> (String, usize) {
-    let mut text = String::new();
-    let prefix = scan_prefix(bytes, width, big, Some(&mut text));
-    (text, prefix)
-}
-
-// The borrowed sink is optional so validation shares scalar rules without text allocation (#459).
-fn scan_prefix(bytes: &[u8], width: usize, big: bool, mut text: Option<&mut String>) -> usize {
-    if width == 1 {
-        let prefix =
-            std::str::from_utf8(bytes).map_or_else(|error| error.valid_up_to(), |_| bytes.len());
-        if let Some(text) = text {
-            text.push_str(std::str::from_utf8(&bytes[..prefix]).expect("validated UTF-8 prefix"));
-        }
-        return prefix;
-    }
-    let unit = |offset: usize| -> Option<u32> {
-        let data = bytes.get(offset..offset.checked_add(width)?)?;
-        let mut value = 0u32;
-        for index in 0..width {
-            value = (value << 8) | u32::from(data[if big { index } else { width - 1 - index }]);
-        }
-        Some(value)
-    };
-    let mut offset = 0;
-    while let Some(mut scalar) = unit(offset) {
-        let mut length = width;
-        if width == 2 && (0xd800..=0xdbff).contains(&scalar) {
-            let Some(low) = unit(offset + 2).filter(|low| (0xdc00..=0xdfff).contains(low)) else {
-                break;
-            };
-            scalar = 0x10000 + ((scalar - 0xd800) << 10) + low - 0xdc00;
-            length = 4;
-        }
-        let Some(value) = char::from_u32(scalar) else {
-            break;
-        };
-        if let Some(text) = text.as_mut() {
-            text.push(value);
-        }
-        offset += length;
-    }
-    offset
+        "runtime/uuid" | "runtime/unicode_normalization" => Provider::Value,
+        "runtime/unicode_character" => Provider::Unicode,
+        "runtime/x509" => Provider::X509,
+        "runtime/application" | "runtime/account" => Provider::Application,
+        "runtime/collation" | "runtime/locale" => Provider::Collation,
+        "runtime/time_zone" => Provider::Time,
+        "runtime/io_decorators" | "runtime/pem" | "runtime/template" => Provider::Formats,
+        "runtime/hpack" | "runtime/collections" => Provider::Text,
+        "runtime/number_text" if name.starts_with("float_parse") => Provider::Text,
+        _ if compression::handles(native) => Provider::Compression,
+        _ if signal::handles(native) => Provider::Signal,
+        _ if cldr::handles(native) => Provider::Cldr,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// #1016: a native Sparrow provides itself is refused by name, not run by
+    /// a twin provider; the routed ones still reach theirs.
     #[test]
-    fn validity_459_utf_natives() {
-        let mut arrays = ArrayHeap;
-        for (width, valid, decode) in [
-            (1, Native::Utf8ValidPrefix, Native::Utf8Decode),
-            (2, Native::Utf16ValidPrefix, Native::Utf16Decode),
-            (4, Native::Utf32ValidPrefix, Native::Utf32Decode),
-        ] {
-            for big in [false, true] {
-                let bytes = encode("Aé🙂", width, big);
-                let input = arrays.allocate(bytes.iter().copied().map(Value::Byte).collect());
-                let order = Value::Str(Rc::from(if big { "big" } else { "little" }));
-                let args = [input, order];
-                assert_eq!(
-                    unicode_text(valid, &args, &mut arrays)
-                        .unwrap()
-                        .as_int()
-                        .unwrap(),
-                    &IntValue::from_u128(bytes.len() as u128)
-                );
-                assert_eq!(
-                    unicode_text(decode, &args, &mut arrays)
-                        .unwrap()
-                        .as_string()
-                        .unwrap(),
-                    "Aé🙂"
-                );
-            }
+    fn natives_without_a_provider_here_are_refused_explicitly() {
+        let mut context = Context::default();
+        for native in [Native::Utf8Encode, Native::StdoutFlush, Native::SystemSystemPlatform] {
+            let args = vec![Value::Str("x".into()); native.parameters().len()];
+            assert_eq!(provider(native), None, "{}", native.symbol());
+            let refused = execute(native, &args, &mut ArrayHeap, &mut context).err();
+            assert_eq!(refused, Some(not_provided(native)), "{}", native.symbol());
         }
-    }
-
-    fn validity_459_prefix(bytes: &[u8], width: usize, big: bool, text: &str, prefix: usize) {
-        assert_eq!(decode_prefix(bytes, width, big), (text.into(), prefix));
-        assert_eq!(scan_prefix(bytes, width, big, None), prefix);
-    }
-
-    #[test]
-    fn validity_459_utf_prefixes() {
-        for width in [1, 2, 4] {
-            for big in [false, true] {
-                for text in ["", "Aé🙂\u{10ffff}"] {
-                    let bytes = encode(text, width, big);
-                    validity_459_prefix(&bytes, width, big, text, bytes.len());
-                }
-                let bytes = encode("A🙂", width, big);
-                for removed in 1..if width == 1 { 4 } else { width } {
-                    validity_459_prefix(&bytes[..bytes.len() - removed], width, big, "A", width);
-                }
-            }
-        }
-        for bad in [
-            &[0xff, b'B'][..],
-            &[0xc0, 0x80],
-            &[0xe0, 0x80, 0x80],
-            &[0xed, 0xa0, 0x80],
-            &[0xf4, 0x90, 0x80, 0x80],
-            &[0xf0, 0x90],
-        ] {
-            validity_459_prefix(&[b"A", bad].concat(), 1, true, "A", 1);
-        }
-        for big in [false, true] {
-            for units in [&[0xd800u16][..], &[0xdc00], &[0xd800, 65]] {
-                let mut bytes = encode("A", 2, big);
-                for unit in units {
-                    bytes.extend(if big {
-                        unit.to_be_bytes()
-                    } else {
-                        unit.to_le_bytes()
-                    });
-                }
-                validity_459_prefix(&bytes, 2, big, "A", 2);
-            }
-            for scalar in [0xd800u32, 0xdc00, 0x110000, 0xffffffff] {
-                let mut bytes = encode("A", 4, big);
-                bytes.extend(if big {
-                    scalar.to_be_bytes()
-                } else {
-                    scalar.to_le_bytes()
-                });
-                bytes.extend(encode("B", 4, big));
-                validity_459_prefix(&bytes, 4, big, "A", 4);
-            }
-            validity_459_prefix(&[encode("A", 2, big), vec![0]].concat(), 2, big, "A", 2);
-        }
-    }
-
-    #[test]
-    fn unicode_boundaries_and_bom_roundtrip_without_normalization() {
-        let text = "\0\u{7f}\u{80}\u{7ff}\u{800}\u{d7ff}\u{e000}\u{feff}\u{ffff}\u{10000}\u{10ffff}e\u{301}";
-        for width in [1, 2, 4] {
-            for big in [false, true] {
-                let bytes = encode(text, width, big);
-                assert_eq!(
-                    decode_prefix(&bytes, width, big),
-                    (text.into(), bytes.len())
-                );
-            }
-        }
-        assert_eq!(encode("A🙂", 2, true), [0, 65, 0xd8, 0x3d, 0xde, 0x42]);
-        assert_eq!(encode("A🙂", 4, false), [65, 0, 0, 0, 0x42, 0xf6, 1, 0]);
-    }
-
-    #[test]
-    fn malformed_prefix_starts_at_the_whole_scalar() {
-        for bad in [
-            &[0xc0, 0x80][..],
-            &[0xed, 0xa0, 0x80],
-            &[0xf4, 0x90, 0x80, 0x80],
-            &[0xf0, 0x90],
-            &[0x80],
-        ] {
-            let mut bytes = vec![65];
-            bytes.extend_from_slice(bad);
-            assert_eq!(decode_prefix(&bytes, 1, true), ("A".into(), 1));
-        }
-        for bad in [
-            &[0xd8, 0x00][..],
-            &[0xdc, 0x00],
-            &[0xd8, 0x00, 0, 65],
-            &[0xd8, 0x00, 0xdc],
-            &[0],
-        ] {
-            let mut bytes = vec![0, 65];
-            bytes.extend_from_slice(bad);
-            assert_eq!(decode_prefix(&bytes, 2, true), ("A".into(), 2));
-        }
-        for bad in [
-            &[0, 0x11, 0, 0][..],
-            &[0, 0, 0xd8, 0],
-            &[0, 0, 0],
-            &[0xff, 0xff, 0xff, 0xff],
-        ] {
-            let mut bytes = vec![0, 0, 0, 65];
-            bytes.extend_from_slice(bad);
-            assert_eq!(decode_prefix(&bytes, 4, true), ("A".into(), 4));
-        }
+        let routed = execute(Native::SystemSystemCpuCount, &[], &mut ArrayHeap, &mut context);
+        assert!(matches!(routed, Ok(Value::Int(_))), "{routed:?}");
+        assert_eq!(provider(Native::X509SystemCertificates), Some(Provider::X509));
+        assert_eq!(provider(Native::JsonJsonSplitState), Some(Provider::Json));
+        assert_eq!(provider(Native::JsonJsonParseState), None);
     }
 }

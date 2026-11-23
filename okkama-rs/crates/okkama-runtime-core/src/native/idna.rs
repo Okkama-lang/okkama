@@ -1,10 +1,9 @@
-//! `runtime/idna` и `runtime/public_suffix`:
 //! UTS #46 (nontransitional, STD3, без unassigned) как Net::IDN::UTS46 2.591
-//! на тех же таблицах (`idna.dat`) и Public Suffix List (`psl.dat`).
-use super::Error;
-use super::support::{failure, string, text};
+//! на тех же таблицах (`idna.dat`) и Public Suffix List (`psl.dat`), for the
+//! name checks of `x509` (`hostname_ascii`, `suffix_parts`). The
+//! `runtime/idna` and `runtime/public_suffix` natives are Sparrow's own
+//! provider (`host/native_idna.rs`).
 use crate::data;
-use crate::{Value, abi::Native};
 use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
@@ -465,7 +464,6 @@ pub(crate) fn hostname_ascii(source: &str) -> Result<String, ()> {
 // ---- runtime/public_suffix ----
 
 struct Rules {
-    version: &'static str,
     exact: HashSet<&'static str>,
     wildcard: HashSet<&'static str>,
     exception: HashSet<&'static str>,
@@ -475,9 +473,9 @@ fn rules() -> &'static Rules {
     static RULES: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
     RULES.get_or_init(|| {
         let mut lines = data::public_suffixes().lines();
-        let version = lines.next().unwrap_or("");
+        // The first line is the list version.
+        lines.next();
         let mut rules = Rules {
-            version,
             exact: HashSet::new(),
             wildcard: HashSet::new(),
             exception: HashSet::new(),
@@ -526,47 +524,6 @@ pub(crate) fn suffix_parts(source: &str) -> Result<(Vec<String>, usize), ()> {
         }
     }
     Ok((labels, best))
-}
-
-pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
-    let name = native.name();
-    match name {
-        "hostname_ascii" | "hostname_unicode" => {
-            let invalid = || failure("core.idna", "invalid_input", native, "invalid bounded IDNA hostname");
-            let ascii = hostname_ascii(string(&args[0])?).map_err(|_| invalid())?;
-            if name == "hostname_ascii" {
-                return Ok(text(ascii));
-            }
-            Ok(text(process(&ascii, false).map_err(|_| invalid())?))
-        }
-        "public_suffix_name" | "registrable_name" => {
-            let (labels, mut width) = suffix_parts(string(&args[0])?).map_err(|_| {
-                failure(
-                    "core.public_suffix",
-                    "invalid_input",
-                    native,
-                    "invalid bounded IDNA hostname",
-                )
-            })?;
-            if name == "registrable_name" {
-                if labels.len() <= width {
-                    return Err(failure(
-                        "core.public_suffix",
-                        "not_found",
-                        native,
-                        "public suffix has no registrable domain",
-                    ));
-                }
-                width += 1;
-            }
-            Ok(text(labels[labels.len().saturating_sub(width)..].join(".")))
-        }
-        "public_suffix_version" => Ok(text(rules().version)),
-        _ => Err(Error::Unsupported(format!(
-            "native provider is not implemented: {}",
-            native.symbol()
-        ))),
-    }
 }
 
 #[cfg(test)]

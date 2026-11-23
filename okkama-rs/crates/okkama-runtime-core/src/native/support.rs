@@ -42,10 +42,6 @@ pub fn int(value: &Value) -> Result<&IntValue, Error> {
     Ok(value.as_int()?)
 }
 
-pub fn boolean(value: &Value) -> Result<bool, Error> {
-    Ok(value.as_bool()?)
-}
-
 pub fn float(value: &Value) -> Result<f64, Error> {
     Ok(value.as_float()?)
 }
@@ -59,20 +55,6 @@ pub fn bytes(value: &Value) -> Result<Vec<u8>, Error> {
         .iter()
         .map(Value::as_byte)
         .collect::<Result<Vec<_>, _>>()?)
-}
-
-pub fn strings(value: &Value) -> Result<Vec<String>, Error> {
-    items(value)?
-        .iter()
-        .map(|item| Ok(item.as_string()?.to_string()))
-        .collect()
-}
-
-pub fn ints(value: &Value) -> Result<Vec<IntValue>, Error> {
-    items(value)?
-        .iter()
-        .map(|item| Ok(item.as_int()?.clone()))
-        .collect()
 }
 
 pub fn text(value: impl Into<String>) -> Value {
@@ -111,17 +93,6 @@ pub fn string_map(entries: impl IntoIterator<Item = (String, String)>) -> Value 
     map(entries.into_iter().map(|(key, value)| (key, text(value))))
 }
 
-/// Пары `%string:V` словаря-аргумента.
-pub fn entries(value: &Value) -> Result<Vec<(String, Value)>, Error> {
-    maps::entries(value)?
-        .iter()
-        .map(|(key, value)| match key.to_value() {
-            Value::Str(key) => Ok((key.to_string(), value.clone())),
-            _ => Err(Error::InvalidState("expected string map keys".into())),
-        })
-        .collect()
-}
-
 /// Индекс `int` в `0..limit` (Java `int`), иначе None.
 pub fn small(value: &IntValue, limit: usize) -> Option<usize> {
     value
@@ -142,9 +113,4 @@ pub fn java_long(value: &IntValue) -> i64 {
     }
     let unsigned: u128 = rest.to_string().parse().expect("64-bit remainder");
     unsigned as u64 as i64
-}
-
-/// `BigInteger.intValue()` Java: младшие 32 бита.
-pub fn java_int(value: &IntValue) -> i32 {
-    java_long(value) as i32
 }

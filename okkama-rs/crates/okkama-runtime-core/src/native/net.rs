@@ -1,11 +1,6 @@
-//! `runtime/net` (числовые IP-адреса): текст
-//! `inet_pton`/`inet_ntop` и конверт адреса `'O' 'K' 1 family port(be) address`.
-use super::Error;
-use super::support::{byte_array, bytes, failure, int, string, text};
-use crate::{Value, abi::Native};
-
-pub const IPV4: u8 = 1;
-pub const IPV6: u8 = 2;
+//! Numeric IP address text (`inet_pton`/`inet_ntop`) for the name checks of
+//! `x509`. The `runtime/net` natives are Sparrow's own provider
+//! (`host/native_net.rs`).
 
 pub fn parse_ipv4(text: &str) -> Option<[u8; 4]> {
     let parts: Vec<&str> = text.split('.').collect();
@@ -131,76 +126,4 @@ pub fn format(raw: &[u8]) -> String {
         out.push(':');
     }
     out
-}
-
-pub fn encode(family: u8, port: u16, address: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![79, 75, 1, family, (port >> 8) as u8, port as u8];
-    bytes.extend_from_slice(address);
-    bytes
-}
-
-/// Семейство, порт и адрес конверта.
-pub fn decode(native: Native, value: &Value) -> Result<(u8, u16, Vec<u8>), Error> {
-    let bytes = bytes(value)?;
-    let family = if bytes.len() >= 6 { bytes[3] } else { 0 };
-    let expected = match family {
-        IPV4 => 10,
-        IPV6 => 22,
-        _ => 0,
-    };
-    if bytes.len() < 6 || bytes[..3] != [79, 75, 1] || expected == 0 || bytes.len() != expected {
-        return Err(failure("core.net", "invalid_data", native, "Invalid network address envelope"));
-    }
-    Ok((family, u16::from_be_bytes([bytes[4], bytes[5]]), bytes[6..].to_vec()))
-}
-
-pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
-    let operation = native.name();
-    match operation {
-        "ip_parse" => {
-            let kind = match int(&args[0])?.to_i64() {
-                Some(1) => IPV4,
-                Some(2) => IPV6,
-                _ => {
-                    return Err(failure(
-                        "core.net",
-                        "unsupported",
-                        native,
-                        "IP address family is not supported",
-                    ));
-                }
-            };
-            let port = int(&args[2])?
-                .to_i64()
-                .filter(|port| (0..=65535).contains(port))
-                .ok_or_else(|| {
-                    failure(
-                        "core.net",
-                        "invalid_input",
-                        native,
-                        "Network port must be in range 0..65535",
-                    )
-                })? as u16;
-            let source = string(&args[1])?;
-            let invalid = || failure("core.net", "invalid_input", native, "Invalid numeric IP address");
-            if kind == IPV4 || source.contains('.') {
-                let dotted = source.rsplit(':').next().unwrap_or(source);
-                if parse_ipv4(dotted).is_none() {
-                    return Err(invalid());
-                }
-            }
-            let address = if kind == IPV4 {
-                parse_ipv4(source).map(|a| a.to_vec())
-            } else {
-                parse_ipv6(source).map(|a| a.to_vec())
-            }
-            .ok_or_else(invalid)?;
-            Ok(byte_array(encode(kind, port, &address)))
-        }
-        "ip_format" => Ok(text(format(&decode(native, &args[0])?.2))),
-        _ => Err(Error::Unsupported(format!(
-            "native provider is not implemented: {}",
-            native.symbol()
-        ))),
-    }
 }

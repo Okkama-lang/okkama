@@ -104,10 +104,9 @@ handlers cannot catch it and ordinary destroy/defer cleanup is not promised (`sp
 `steps_are_counted_alike_and_running_out_cannot_be_caught` ([#21], [#71]).
 
 Shared native value graphs are freed without recursion (`okkama-runtime-core/src/heap.rs`,
-`deep_chains_are_released_without_recursion`, [#28]). SQLite cancellation handles cannot touch a closed
-connection (`okkama-runtime-core/src/native/sqlite.rs`,
-`a_handle_loaded_before_close_never_touches_the_closed_connection`, `interrupt_races_close_and_worker_exit`,
-[#18]). X.509 path search has a 1024-step budget (`okkama-runtime-core/src/native/x509.rs`,
+`deep_chains_are_released_without_recursion`, [#28]). SQLite cancellation handles reach only their own
+connection: a closed connection's handle does not touch the next one on the same worker
+(`sparrow-core/src/host/native_sqlite.rs`, `sqlite_interrupt_reaches_only_its_own_connection`, [#18]). X.509 path search has a 1024-step budget (`okkama-runtime-core/src/native/x509.rs`,
 `ambiguous_issuers_end_in_a_defined_refusal_within_the_budget`, [#17]). Private RSA operations (key
 generation, PSS/PKCS#1 v1.5 signing, OAEP decryption) use aws-lc's constant-time, blinded implementation
 (`okkama-native/src/ops.rs`; `okkama-native/tests/vectors.rs`, `rsa_signatures_and_oaep_round_trip`,

@@ -222,3 +222,42 @@ impl Heap {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use okkama_runtime_abi::Native;
+
+    /// Natives `natives.rs` answers itself without falling back to the host,
+    /// although `classify` would send them to the bridge.
+    fn answered_by_the_core(native: Native) -> bool {
+        matches!(
+            native,
+            Native::StdoutWrite
+                | Native::StderrWrite
+                | Native::StdoutFlush
+                | Native::BytesBytesFind
+                | Native::BytesBytesUtf8Invalid
+                | Native::BytesBytesText
+                | Native::BytesBytesDecimalInvalid
+                | Native::BytesBytesDecimal
+                | Native::BytesBytesEqual
+                | Native::BytesBytesIntegerFits
+                | Native::BytesBytesInteger
+                | Native::BytesBytesJoin
+        )
+    }
+
+    /// #1016: runtime-core provides exactly the natives the host routes to
+    /// the bridge. A native routed here without a provider would fail at run
+    /// time; a provider for a native the host serves itself is a twin.
+    #[cfg(unix)]
+    #[test]
+    fn origin_routes_match_the_runtime_core_providers() {
+        for &native in Native::ALL {
+            let routed = crate::host::provider(native) == Some(crate::host::Provider::Origin)
+                && !answered_by_the_core(native);
+            let provided = okkama_runtime_core::native::provides(native);
+            assert_eq!(routed, provided, "{}: routed to the bridge {routed}, provided {provided}", native.symbol());
+        }
+    }
+}

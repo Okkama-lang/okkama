@@ -8,8 +8,6 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-# Diagnostic only: inline SQLite blocks the event loop and cannot cancel active SQL.
-sqlite-inline-bench = []
 allocation-scopes = ["dep:okkama-allocation-counter"]
 
 [dependencies]
@@ -21,10 +19,11 @@ okkama-persistent = { path = "../okkama-persistent" }
 num-bigint = "0.4"
 num-integer = "0.1"
 num-traits = "0.2"
-# Криптография хоста (runtime/host_crypto), Rust API.
+# Platform randomness, digests and certificate store (runtime/system,
+# runtime/crypto, runtime/x509), Rust API.
 okkama-native = { path = "../okkama-native" }
 
-# Вызовы ОС без обёртки std (access, файловые режимы, сокеты, процессы).
+# Вызовы ОС без обёртки std (renameat2/renamex_np, терминал, сигналы, учётные записи).
 libc = "0.2"
 # Распаковка gzip-таблиц рантайма (unicode.dat и др.).
 miniz_oxide = "0.8"
@@ -33,22 +32,11 @@ zstd = { version = "0.13", default-features = false }
 brotli = { version = "8", default-features = false, features = ["std"] }
 # Нормализация Unicode (NFC/NFD/NFKC/NFKD), как java.text.Normalizer.
 unicode-normalization = "0.1"
-# Сокеты с опциями (reuse, dual stack, multicast).
-socket2 = { version = "0.5", features = ["all"] }
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-# Регулярные выражения с lookbehind и бэктрекингом, как java.util.regex
-# (лексические пути File::Spec и совместимые с Java разборы).
-fancy-regex = "0.14"
 # Кластеры графем для ширины текста в терминале.
 unicode-segmentation = "1"
 # Именованные UUID (v3 — MD5, v5 — SHA-1).
 md-5 = "0.10"
 sha1 = "0.10"
-# Owned SQLite statements/rows; bundle SQLite so the Rust provider has one ABI.
-rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
-# A movable worker cursor must not retag its borrowed statement as a unique Box.
-aliasable = "0.1"
-fallible-iterator = "0.3"
 
 # unsafe требует локального разрешения и обоснования в native-провайдерах.
 [lints.rust]

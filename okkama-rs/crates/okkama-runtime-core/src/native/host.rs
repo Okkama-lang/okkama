@@ -1,25 +1,14 @@
-//! Natives часов, ожидания, случайности и сведений хоста — перенос
-//! `runtime/time` (часы, сон), `runtime/system`
-//! (secure_random, secure_integer, secure_float, платформа, хост, хранилище)
-//! и выборки `runtime/random`.
+//! Host natives Sparrow routes here (`host/native_origin.rs`): `runtime/system`
+//! (secure_random, secure_integer, secure_float, host name, CPU count, storage)
+//! and the samples of `runtime/random`. Clocks, sleep, platform, architecture
+//! and byte order are Sparrow's own (`host/mod.rs`, `natives.rs`).
 use super::support::{byte_array, bytes, failure, int, int_value, string, string_map, text};
 use super::Error;
 use crate::bignum::Big;
-use crate::sched;
 use crate::{IntValue, Value, abi::Native};
-use std::sync::OnceLock;
 
 fn operation(native: Native) -> &'static str {
     native.name()
-}
-
-fn origin() -> std::time::Instant {
-    static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
-    *ORIGIN.get_or_init(std::time::Instant::now)
-}
-
-thread_local! {
-    static DOMAIN_SERIAL: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
 fn unsigned(sample: &[u8]) -> Big {
@@ -73,35 +62,6 @@ fn secure_offset(native: Native, span: &IntValue) -> Result<IntValue, Error> {
         if crate::integer::compare(&sample, &threshold).is_ge() {
             return Ok(crate::integer::divide(&sample, span).expect("positive").1);
         }
-    }
-}
-
-fn platform() -> &'static str {
-    match std::env::consts::OS {
-        "macos" | "ios" => "macos",
-        "linux" | "android" => "linux",
-        "windows" => "windows",
-        "freebsd" => "freebsd",
-        "openbsd" => "openbsd",
-        "netbsd" => "netbsd",
-        "dragonfly" => "dragonfly",
-        "solaris" | "illumos" => "solaris",
-        "aix" => "aix",
-        _ => "unknown",
-    }
-}
-
-fn architecture() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "x86" => "x86",
-        "aarch64" => "arm64",
-        "arm" => "arm",
-        "powerpc64" => "ppc64",
-        "powerpc" => "ppc",
-        "riscv64" => "riscv64",
-        "s390x" => "s390x",
-        _ => "unknown",
     }
 }
 
@@ -181,71 +141,8 @@ fn storage_usage(native: Native, path: &str) -> Result<Value, Error> {
     ]))
 }
 
-fn sleep(native: Native, source: &str) -> Value {
-    let invalid = |message: &str| {
-        let Error::Failure(failure) = failure("core.time", "invalid_input", native, message) else {
-            unreachable!("failure builds NativeFailure")
-        };
-        crate::failure::Failure::new(crate::failure::Kind::Native(std::rc::Rc::new(failure)))
-    };
-    let canonical = source == "0"
-        || (!source.is_empty() && !source.starts_with('0') && source.bytes().all(|b| b.is_ascii_digit()));
-    if !canonical {
-        return Value::Future(sched::resolved(Err(invalid(
-            "Wait duration must be a canonical non-negative integer",
-        ))));
-    }
-    let Some(nanoseconds) = source.parse::<i64>().ok() else {
-        return Value::Future(sched::resolved(Err(invalid(
-            "Wait duration exceeds the runtime timer range",
-        ))));
-    };
-    if nanoseconds == 0 {
-        return Value::Future(sched::resolved(Ok(Value::Bool(true))));
-    }
-    let promise = sched::promise();
-    let target = promise.clone();
-    // A timer on the event loop, not a sleeping thread per wait (#503).
-    let (op, id) = sched::timer(std::time::Duration::from_nanos(nanoseconds as u64), move || {
-        sched::settle(&target, Ok(Value::Bool(true)))
-    });
-    // Отменённое ожидание не держит программу и не держит продолжение.
-    promise.listen(move || {
-        op.detach();
-        sched::forget(id);
-    });
-    Value::Future(promise)
-}
-
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     match operation(native) {
-        "wall_clock" => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            Ok(Value::Int(IntValue::from_u128(now.as_nanos())))
-        }
-        "monotonic_clock" => Ok(Value::Int(IntValue::from_u128(origin().elapsed().as_nanos()))),
-        "clock_domain" => {
-            let pid = std::process::id();
-            if !args[0].as_bool()? {
-                return Ok(text(format!("system:{pid}:1")));
-            }
-            if !crate::testing::active() {
-                return Err(failure(
-                    "core.time",
-                    "permission_denied",
-                    native,
-                    "Manual clock domains require a running test case",
-                ));
-            }
-            let serial = DOMAIN_SERIAL.with(|serial| {
-                serial.set(serial.get() + 1);
-                serial.get()
-            });
-            Ok(text(format!("manual:{pid}:{serial}")))
-        }
-        "sleep_nanoseconds" => Ok(sleep(native, string(&args[0])?)),
         "secure_random" => {
             let size = int(&args[0])?;
             if size.is_negative() {
@@ -335,9 +232,6 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let value = sample.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)) >> 3;
             Ok(Value::Float(value as f64 / 9_007_199_254_740_992.0))
         }
-        "system_platform" => Ok(text(platform())),
-        "system_architecture" => Ok(text(architecture())),
-        "system_byte_order" => Ok(text(if cfg!(target_endian = "little") { "little" } else { "big" })),
         "system_host_name" => Ok(text(host_name(native)?)),
         "system_cpu_count" => {
             if let Ok(environment) = std::env::var("NUMBER_OF_PROCESSORS") {
@@ -363,12 +257,12 @@ mod tests {
 
     fn usage(path: &str) -> std::collections::HashMap<String, u128> {
         let Ok(value) = storage_usage(Native::SystemStorageUsage, path) else { panic!("usage of {path}") };
-        let Ok(entries) = super::super::support::entries(&value) else { panic!("a map") };
+        let Ok(entries) = crate::heap::maps::entries(&value) else { panic!("a map") };
         entries
-            .into_iter()
+            .iter()
             .map(|(key, value)| {
-                let Ok(text) = value.as_string() else { panic!("text") };
-                (key, text.parse().expect("number"))
+                let (Value::Str(key), Ok(text)) = (key.to_value(), value.as_string()) else { panic!("text") };
+                (key.to_string(), text.parse().expect("number"))
             })
             .collect()
     }

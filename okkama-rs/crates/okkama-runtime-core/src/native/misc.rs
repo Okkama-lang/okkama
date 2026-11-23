@@ -1,12 +1,12 @@
-//! Небольшие natives std: `runtime/crypto`,
-//! `runtime/secret`, `runtime/debug`, `runtime/diff`, `runtime/math_aggregate`,
-//! `runtime/layout`. Тексты отказов — как у Perl-provider.
+//! Small std natives Sparrow routes here (`host/native_origin.rs`):
+//! `runtime/crypto` (digest, secure_equal), `runtime/debug`, `runtime/diff`,
+//! `runtime/math_aggregate`, `runtime/layout`. Failure texts follow the Perl
+//! provider. `runtime/secret` is Sparrow's own provider.
 use super::support::{
-    byte_array, bytes, failure, float, handle, int, int_value, items, new_handle, string, text,
+    byte_array, bytes, failure, float, int, int_value, items, string, text,
 };
 use super::{Context, Error};
 use crate::{Value, abi::Native};
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 fn operation(native: Native) -> &'static str {
@@ -26,24 +26,6 @@ fn digest_with(native: Native, algorithm: &str, data: &[u8]) -> Result<Vec<u8>, 
     let mut hasher = okkama_native::Hasher::new(algorithm, &[], 0).map_err(|_| unsupported())?;
     hasher.update(data);
     hasher.finish(0).map_err(|_| unsupported())
-}
-
-// ---- runtime/secret ----
-
-#[derive(Debug, Default)]
-struct Secret {
-    bytes: RefCell<Option<Vec<u8>>>,
-}
-
-fn open_secret(native: Native, value: &Value) -> Result<Vec<u8>, Error> {
-    handle::<Secret>(value)?.bytes.borrow().clone().ok_or_else(|| {
-        failure(
-            "core.secret",
-            "already_closed",
-            native,
-            "Native handle is already closed",
-        )
-    })
 }
 
 // ---- runtime/debug ----
@@ -408,31 +390,6 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             }
             Ok(Value::Bool(difference == 0))
         }
-        ("runtime/secret", "create") => {
-            if items(&args[0])?.len() > 1_048_576 {
-                return Err(failure(
-                    "core.secret",
-                    "invalid_input",
-                    native,
-                    "secret payload exceeds limit",
-                ));
-            }
-            Ok(new_handle(Secret {
-                bytes: RefCell::new(Some(bytes(&args[0])?)),
-            }))
-        }
-        ("runtime/secret", "size") => Ok(int_value(open_secret(native, &args[0])?.len() as i64)),
-        ("runtime/secret", "export") => Ok(byte_array(open_secret(native, &args[0])?)),
-        ("runtime/secret", "close") => {
-            let state = handle::<Secret>(&args[0])?;
-            if let Some(mut bytes) = state.bytes.borrow_mut().take() {
-                bytes.fill(0);
-            }
-            Ok(Value::Bool(true))
-        }
-        ("runtime/secret", "closed") => Ok(Value::Bool(
-            handle::<Secret>(&args[0])?.bytes.borrow().is_none(),
-        )),
         ("runtime/debug", "data_dump") => Ok(text(dump(native, context, &args[0])?)),
         ("runtime/debug", name) => super::inspect::execute(name, native, &args[0], context),
         ("runtime/diff", "diff_script") => {

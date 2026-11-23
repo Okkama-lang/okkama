@@ -1,6 +1,6 @@
 //! `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 //! `runtime/network`, driven by the core's Tokio readiness like the stream
-//! itself. Behaviour, limits and failures follow the origin provider: the
+//! itself. This is the only TLS provider (runtime-core's twin went in #1016): the
 //! engine checks handshake signatures but not the peer chain, which
 //! `authorize` verifies explicitly (`runtime/x509.verify_chain`) before any
 //! application I/O; ciphertext is fed one record at a time, so one read

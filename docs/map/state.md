@@ -11,6 +11,10 @@
   green; micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
   (okkama-docs reports/2026-11-23-v0.6.4/micro.html); version 0.6.4.
 - [ ] Tag v0.6.4 (owner pushes), Packages and GitHub Release, install-pgo, man site, cleanup.
+- [x] #1016 (feature/1016-twins): runtime-core native twins removed (network, tls, sqlite, db, postgres,
+  host_crypto, process, input, system, stdio, buffer, encoding, numbers, bytes, jre; regex, fs, json, idna,
+  net, text, misc, formats, host cut to their live parts), ~14.9k lines; `native::execute` refuses
+  unrouted natives; a sparrow-core test keeps the ORIGIN routes and runtime-core providers equal.
 
 ## Release 0.6.3 (2026-11-22, release/063)
 
