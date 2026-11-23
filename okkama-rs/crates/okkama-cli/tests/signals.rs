@@ -1,7 +1,8 @@
 //! A web application stops on SIGTERM or SIGINT (#80): it stops accepting,
 //! lets the request in flight finish, and `listen()` returns, so the program
 //! goes on and ends with code 0; a second signal during the drain ends the
-//! process at once; an HTTPS application stops the same way. Runs
+//! process at once; an HTTPS application stops the same way, also while TLS
+//! handshakes are still in flight (#1000, #1021). Runs
 //! `tests/signals/serve.ok` on every engine.
 #![cfg(unix)]
 
@@ -211,5 +212,38 @@ fn an_https_application_stops_on_sigterm() {
         let ended = app.ended(Duration::from_secs(60));
         assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
         assert_eq!(ended.stdout, "stopped\n", "{engine}: {}", ended.stderr);
+    }
+}
+
+/// SIGTERM while TLS handshakes are in flight (#1000, #1021): one client sends
+/// nothing, one the start of a ClientHello, and one hangs up in the middle of
+/// one as the signal comes. The drain cancels those handshakes, which is not a
+/// failure: `listen()` returns and the program ends with 0.
+#[test]
+fn an_https_application_stops_on_sigterm_during_tls_handshakes() {
+    // A TLS 1.2 record header announcing a 512-byte ClientHello, then its
+    // first bytes: the server waits for the rest.
+    const PARTIAL: [u8; 9] = [0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc];
+    for engine in engines() {
+        let app = App::start(engine, 3, true);
+        let connect = || TcpStream::connect(("127.0.0.1", app.port)).expect("connect");
+        let silent = connect();
+        let mut partial = connect();
+        partial.write_all(&PARTIAL).expect("send a partial ClientHello");
+        let mut hanging_up = connect();
+        hanging_up.write_all(&PARTIAL).expect("send a partial ClientHello");
+        // The server takes connections one by one, in order: once it has
+        // refused this one's handshake, the three before it are handshaking.
+        let mut refused = connect();
+        refused.set_read_timeout(Some(Duration::from_secs(60))).expect("read timeout");
+        refused.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("send plain HTTP");
+        let mut alert = Vec::new();
+        let _ = refused.read_to_end(&mut alert);
+        hanging_up.shutdown(std::net::Shutdown::Both).expect("hang up");
+        app.signal("TERM");
+        let ended = app.ended(Duration::from_secs(60));
+        assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
+        assert_eq!(ended.stdout, "stopped\n", "{engine}: {}", ended.stderr);
+        drop((silent, partial, hanging_up, refused));
     }
 }

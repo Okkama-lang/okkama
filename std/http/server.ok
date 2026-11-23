@@ -50,7 +50,8 @@ import "http/websocket_server" take WebSocketAccepting;
 import "http/connection" take HttpAcquisitionCleanup, HttpTcpDisposal;
 import "http/internal/websocket_output" take WebSocketOutputSettlement;
 import "net/tcp" take TcpListener, TcpConnection, TcpListening, TcpConnecting;
-import "net/tls" take TlsServerPolicy, TlsServerHandshake, TlsConnection, TlsIdentity;
+import "net/tls" take TlsServerPolicy, TlsServerHandshake, TlsConnection, TlsIdentity, TlsFailure,
+    TlsPhase;
 import "crypto/x509/trust" take PemTrustStore;
 import "net/endpoint" take IpEndpoint;
 import "net/failure" take NetworkClosed;
@@ -667,21 +668,15 @@ hidden object HttpServerPeer {
                 "http/1.1";
             }
         };
-        let deadline is HttpServerDeadline<TlsConnection> = HttpServerDeadline(
+        let handshake = HttpServerHandshake(
             waiting: TlsServerHandshake(origin: connection, policy: tls[0], protocols: offered)
                 .connection(),
             limit: policy.timeouts().headers_timeout(),
             clock: clock
         );
-        let handshake = deadline.outcome();
-        let secured is @HttpServerStream = try {
-            [TlsServerStream(await handshake)];
-        }
-        catch e is Cancelled {
-            throw;
-        }
-        catch e is Error {
-            [];
+        let connections = await handshake.connections();
+        let secured is @HttpServerStream = connections.map() -> secure {
+            TlsServerStream(secure);
         };
         secured;
     }
@@ -1263,6 +1258,50 @@ hidden object HttpServerDeadline<T> {
     }
 }
 
+// A TLS handshake as the server takes it, bounded by limit: the connection, or
+// none when the handshake fails or runs out of time. A failed handshake is the
+// peer's, not the server's: it only closes that connection. The deadline's
+// origin is secured(), never the handshake itself, so a handshake that fails
+// just as a drain cancels it does not become a secondary failure of the drain's
+// cancellation (#1021).
+hidden object HttpServerHandshake {
+    has waiting is Future<TlsConnection>;
+    has limit is Duration;
+    has clock is Timing;
+
+    HttpServerHandshake(:waiting, :limit, :clock);
+
+    async connections() is @TlsConnection {
+        let deadline is HttpServerDeadline<@TlsConnection> = HttpServerDeadline(
+            waiting: self.secured(),
+            limit: limit,
+            clock: clock
+        );
+        let bounded = deadline.outcome();
+        try {
+            await bounded;
+        }
+        catch e is Cancelled {
+            throw;
+        }
+        catch e is Error {
+            [];
+        };
+    }
+
+    async secured() is @TlsConnection {
+        try {
+            [await waiting];
+        }
+        catch e is Cancelled {
+            throw;
+        }
+        catch e is Error {
+            [];
+        };
+    }
+}
+
 // HTTP's body idle timeout over TimedAsyncReading: a zero limit turns it off,
 // and running out is HttpServerBodyTimedOut, which the server answers with 408.
 hidden object HttpServerTimedInput does AsyncReading {
@@ -1612,4 +1651,106 @@ async test "a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN" {
     older.close();
     await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
+}
+
+// A handshake that fails as a peer that hangs up does, once gate is set; it
+// sets failing just before it fails.
+hidden object HttpServerFailingHandshake {
+    has gate, failing is Event;
+
+    HttpServerFailingHandshake(gate is Event, failing is Event) {
+        self.gate = gate;
+        self.failing = failing;
+    }
+
+    async connection() is TlsConnection {
+        let opened = gate.wait();
+        await opened;
+        failing.set();
+        throw TlsFailure.detailed(TlsPhase.handshaking, "invalid_data");
+    }
+}
+
+// Whether the drain's cancellation of a failing handshake ends plain. The
+// handshake fails when gate is set and the drain cancels it right after, before
+// the handshake resumes: its failure settled first, so its body still sees it
+// (#663), which the old server reported as a cleanup failure (#1021). When
+// late, the gate opens only after the drain cancelled the handshake.
+hidden object HttpServerHandshakeDrain {
+    has late is bool;
+
+    HttpServerHandshakeDrain(late is bool) {
+        self.late = late;
+    }
+
+    async plain() is bool {
+        let gate = Event();
+        let handshake = HttpServerHandshake(
+            waiting: HttpServerFailingHandshake(gate, Event()).connection(),
+            limit: Duration(seconds: 30.rat()),
+            clock: SystemClock()
+        );
+        let peers is FutureGroup<@TlsConnection> = FutureGroup();
+        peers.start(handshake.connections());
+        if late {
+            peers.cancel();
+            gate.set();
+        }
+        else {
+            gate.set();
+            peers.cancel();
+        }
+        try {
+            await peers.wait();
+            true;
+        }
+        catch e is Error {
+            false;
+        };
+    }
+}
+
+async test "a failed handshake closes its connection and fails nothing" {
+    let failed = HttpServerHandshake(
+        waiting: HttpServerFailingHandshake(Event(ready: true), Event()).connection(),
+        limit: Duration(seconds: 30.rat()),
+        clock: SystemClock()
+    );
+    test.is((await failed.connections()).size(), 0);
+}
+
+async test "a handshake that fails just as the drain cancels it is a plain cancellation (#1021)" {
+    test.ok(await HttpServerHandshakeDrain(late: false).plain());
+    test.ok(await HttpServerHandshakeDrain(late: true).plain());
+}
+
+async test "the handshake under the deadline keeps a failure it already saw out of the cancellation (#1021)" {
+    // failing wakes this test, then the failure wakes secured(): the deadline
+    // is cancelled while secured() is about to resume with the failure.
+    let gate = Event();
+    let failing = Event();
+    let handshake = HttpServerHandshake(
+        waiting: HttpServerFailingHandshake(gate, failing).connection(),
+        limit: Duration(seconds: 30.rat()),
+        clock: SystemClock()
+    );
+    let deadline is HttpServerDeadline<@TlsConnection> = HttpServerDeadline(
+        waiting: handshake.secured(),
+        limit: Duration(seconds: 30.rat()),
+        clock: SystemClock()
+    );
+    let peers is FutureGroup<@TlsConnection> = FutureGroup();
+    peers.start(deadline.outcome());
+    gate.set();
+    await failing.wait();
+    peers.cancel();
+    test.ok(
+        try {
+            await peers.wait();
+            true;
+        }
+        catch e is Error {
+            false;
+        }
+    );
 }
