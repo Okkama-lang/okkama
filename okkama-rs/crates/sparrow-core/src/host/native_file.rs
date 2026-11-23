@@ -43,6 +43,14 @@ impl RawFile {
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(mode);
+            // Appending is `O_APPEND`, so the kernel moves to the end and
+            // writes in one step: a seek to the end before each write let
+            // another process's lines land between the two (#1010).
+            // `custom_flags`, not `append(true)`: std refuses append together
+            // with truncate, which the flags allow.
+            if flags & 16 != 0 {
+                options.custom_flags(libc::O_APPEND);
+            }
         }
         let file = options.open(path).map_err(|e| host_as(n, e, "Cannot open file"))?;
         Ok(Self {
@@ -259,5 +267,30 @@ impl Heap {
 impl Drop for RawFile {
     fn drop(&mut self) {
         let _ = self.close(Native::FsClose);
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1010: an appending file writes at the end even when its position was
+    /// moved, as it is when another process appends between a seek and a
+    /// write: the kernel places every write (`O_APPEND`).
+    #[test]
+    fn appending_writes_land_at_the_end_whatever_the_position() {
+        let path = std::env::temp_dir().join(format!("sparrow-append-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut first = RawFile::create(Native::FsOpen, &path, 2 | 4 | 16, 0o600).unwrap();
+        first.writable(Native::FsWrite).unwrap().write_all(b"first\n").unwrap();
+        let mut second = RawFile::create(Native::FsOpen, &path, 2 | 4 | 16, 0o600).unwrap();
+        second.writable(Native::FsWrite).unwrap().write_all(b"second\n").unwrap();
+        let file = first.writable(Native::FsWrite).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(b"third\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\nthird\n");
+        // Truncating and appending together stays allowed.
+        drop(RawFile::create(Native::FsOpen, &path, 2 | 8 | 16, 0o600).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        let _ = std::fs::remove_file(&path);
     }
 }
