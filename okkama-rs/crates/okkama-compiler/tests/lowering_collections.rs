@@ -239,7 +239,7 @@ fn early_exits_over_an_untagged_empty_array_give_their_defaults() {
 
 #[test]
 fn constants_outside_loops_stay_in_their_branch() {
-    let listing = main_listing("let n = 7; if n > 3 { 40 + n; } else { 50; }");
+    let listing = main_listing("let n = \"abcdefg\".length(); if n > 3 { 40 + n; } else { 50; }");
     let entry = listing.split("^b1").next().expect("entry block");
     assert!(!entry.contains("const 40") && !entry.contains("const 50"), "{listing}");
     assert!(listing.contains("const 40") && listing.contains("const 50"), "{listing}");

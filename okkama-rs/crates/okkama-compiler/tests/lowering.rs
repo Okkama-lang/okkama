@@ -40,10 +40,8 @@ fn integer_addition_has_the_canonical_module_text() {
             "\n",
             "func @main() -> int [entry] {\n",
             "^b0:\n",
-            "    %0: int = const 1\n",
-            "    %1: int = const 1\n",
-            "    %2: int = const 2\n",
-            "    ret %2\n",
+            "    %0: int = const 2\n",
+            "    ret %0\n",
             "}\n",
         )
     );
@@ -53,7 +51,7 @@ fn integer_addition_has_the_canonical_module_text() {
 fn literals_are_exact_canonical_integers() {
     let text = main_listing(
         "let a = 0x2a; let b = 0b10_1010; let c = 00042; let d = -0; let e = -7; \
-         let f = 340282366920938463463374607431768211456; a;",
+         let f = 340282366920938463463374607431768211456; [a, b, c, d, e, f].size();",
     );
     for constant in [
         "const 42\n",
@@ -76,10 +74,8 @@ fn let_bindings_reuse_values_and_check_declared_types() {
         concat!(
             "func @main() -> int [entry] {\n",
             "^b0:\n",
-            "    %0: int = const 40\n",
-            "    %1: int = const 2\n",
-            "    %2: int = const 42\n",
-            "    ret %2\n",
+            "    %0: int = const 42\n",
+            "    ret %0\n",
             "}\n",
         )
     );
@@ -224,8 +220,9 @@ fn defers_that_take_a_successor_lower_to_valid_ir() {
 fn confirm_and_panic_become_terminators() {
     let text = main_listing("confirm 1 == 1; confirm true else panic \"boom\"; 0;");
     assert!(text.contains("trap confirm \"confirm failed\""), "{text}");
-    assert!(text.contains("%5: str = const \"boom\""), "{text}");
-    assert!(text.contains("panic %5"), "{text}");
+    let boom = text.lines().find(|line| line.ends_with("= const \"boom\"")).expect("the panic message");
+    let value = boom.trim().split(':').next().unwrap();
+    assert!(text.contains(&format!("panic {value}")), "{text}");
 }
 
 #[test]

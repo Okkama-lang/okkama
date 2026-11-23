@@ -71,7 +71,7 @@ fn bytes_widen_to_int_for_arithmetic_and_stay_bytes_for_bits() {
     assert!(ordered.contains("bool = int.lt %"), "{ordered}");
     let rotated = main_listing("let n = 1; n.rotate_left(3);");
     assert!(rotated.contains("int = int.rotl %"), "{rotated}");
-    let escaped = main_listing("let c = '\\n'; let q = '\\''; 0;");
+    let escaped = main_listing("let c = '\\n'; let q = '\\''; [c, q].size();");
     assert!(escaped.contains("char = const '\\n'"), "{escaped}");
     assert!(escaped.contains("char = const '\\''"), "{escaped}");
 }
@@ -146,7 +146,7 @@ fn byte_and_char_rule_violations_are_semantic_errors() {
 #[test]
 fn float_never_mixes_with_other_numeric_types() {
     let listing =
-        main_listing("let x = 1.5 + float(1); let y = -0.0; if x > 2.0 { 1; } else { 0; }");
+        main_listing("let x = 1.5 + float(1); let y = -0.0; if x > 2.0 { [y].size(); } else { 0; }");
     for expected in [
         "float = const 1.5\n",
         "float = cvt %",

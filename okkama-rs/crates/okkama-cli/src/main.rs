@@ -218,7 +218,7 @@ USAGE:
 OPTIONS:
     --format text     Output format (default: text)
     --passes LIST     Run only these IR passes: none, all, or a comma list of
-                      statics, regions, tail-calls, fold, hoist, undef, jumps
+                      statics, regions, tail-calls, fold, hoist, dce, undef, jumps
                       (in that order)
     --after PASS      The IR after PASS: the passes up to it in that order
 

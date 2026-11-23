@@ -275,6 +275,18 @@ pub fn merge_blocks(function: &mut Function) -> bool {
 /// регионы и удалённые блоки; машинный код исполнял бы каждый при каждом
 /// вызове.
 pub fn drop_unread_undef(function: &mut Function) {
+    drop_unread(function, false);
+}
+
+/// Constants nobody reads, and unread `undef` (#1006): what folding leaves
+/// behind (`1 + 1` folds to `const 2`, its operands are dead). A constant has
+/// no operands and no effect, so one sweep removes them all; values are
+/// renumbered as for `undef`.
+pub fn drop_dead_constants(function: &mut Function) {
+    drop_unread(function, true);
+}
+
+fn drop_unread(function: &mut Function, constants: bool) {
     let mut read = vec![false; function.values.len()];
     for block in &function.blocks {
         for inst in &block.insts {
@@ -294,7 +306,7 @@ pub fn drop_unread_undef(function: &mut Function) {
     let mut removed = false;
     for block in &mut function.blocks {
         block.insts.retain(|inst| {
-            let unread = matches!(inst.kind, InstKind::Undef) && inst.result.is_none_or(|value| !read[value.0]);
+            let unread = (matches!(inst.kind, InstKind::Undef) || constants && matches!(inst.kind, InstKind::Const(_))) && inst.result.is_none_or(|value| !read[value.0]);
             removed |= unread;
             !unread
         });

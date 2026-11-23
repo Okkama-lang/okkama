@@ -543,6 +543,10 @@ fn lower_analyzed(
     // `undef` убранного `region.enter`, пуст только после этого (#292).
     // Удалённые блоки могли быть единственными читателями других `undef`.
     for function in &mut module.functions {
+        // Constants nobody reads any more: the operands of folded arithmetic.
+        if passes.on("dce") {
+            ir::cfg::drop_dead_constants(function);
+        }
         if passes.on("undef") {
             ir::cfg::drop_unread_undef(function);
         }
@@ -798,7 +802,7 @@ fn verify_ownership() -> bool {
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
 /// default), `none` or a comma list of `statics`, `regions`, `tail-calls`, `fold`, `hoist`,
-/// `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
+/// `dce`, `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
 /// passes off shows whether a pass changed meaning; the release gate runs the
 /// IR conformance suite both ways. `sabotage-int-add` turns the first
 /// `int.add` into `int.sub` — a self-test that the check catches a wrong
@@ -810,7 +814,7 @@ struct Passes {
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 7] = ["statics", "regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
+pub const PASSES: [&str; 8] = ["statics", "regions", "tail-calls", "fold", "hoist", "dce", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
