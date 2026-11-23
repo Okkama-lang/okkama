@@ -58,7 +58,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3112 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7590 lines
+## ir — 12 files, 7599 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
@@ -66,38 +66,38 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/linearity.rs` 255 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
 - `okkama-compiler/src/ir/mod.rs` 1597 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
 - `okkama-compiler/src/ir/ownership.rs` 943 — Read-only ownership census after the OIR passes (#553).
-- `okkama-compiler/src/ir/param_adopts.rs` 295 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
+- `okkama-compiler/src/ir/param_adopts.rs` 304 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
 - `okkama-compiler/src/ir/print.rs` 913 — Канонический текст OIR-1 (§18 спецификации).
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 259 — Регионы, которые никогда не владеют идентичностями, — убираются.
 - `okkama-compiler/src/ir/statics.rs` 429 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
 - `okkama-compiler/src/ir/verify.rs` 1930 — Верификатор OIR-1 (§17 спецификации).
 
-## codegen — 4 files, 1305 lines
+## codegen — 4 files, 1315 lines
 
 - `okkama-compiler/src/codegen/mod.rs` 79 — Выбор backend и генерация выходного артефакта из IR.
 - `okkama-compiler/src/codegen/sparrow/check.rs` 225 — Независимая проверка распределения регистров (H-10): `registers` красит
-- `okkama-compiler/src/codegen/sparrow/mod.rs` 734 — Проверенный IR → программа Sparrow (SPB).
-- `okkama-compiler/src/codegen/sparrow/registers.rs` 267 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
+- `okkama-compiler/src/codegen/sparrow/mod.rs` 732 — Проверенный IR → программа Sparrow (SPB).
+- `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 16 files, 6168 lines
+## compiler — 16 files, 6210 lines
 
 - `okkama-compiler/src/lib.rs` 12 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
 - `okkama-compiler/src/doc/coverage.rs` 43 — Public declaration coverage and the incremental std gate (#514).
 - `okkama-compiler/src/doc/examples.rs` 102 — Documentation examples (#514): CommonMark blocks and original byte spans.
 - `okkama-compiler/src/doc/links.rs` 233 — Symbol links, documentation lookup and search (#513), shared by man and IDE.
-- `okkama-compiler/src/doc/mod.rs` 633 — The documentation model (#512): what a module says about itself in its
+- `okkama-compiler/src/doc/mod.rs` 609 — The documentation model (#512): what a module says about itself in its
 - `okkama-compiler/src/doc/publish.rs` 222 — Publishing from the canonical public doc model (#515): man(7), standalone
-- `okkama-compiler/src/doc/render.rs` 649 — Reference pages from the documentation model (#512): terminal text and
-- `okkama-compiler/src/ide/complete.rs` 950 — Дополнение и подсказка сигнатуры.
-- `okkama-compiler/src/ide/index.rs` 1111 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
-- `okkama-compiler/src/ide/lint.rs` 916 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
-- `okkama-compiler/src/ide/mod.rs` 255 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
+- `okkama-compiler/src/doc/render.rs` 673 — Reference pages from the documentation model (#512): terminal text and
+- `okkama-compiler/src/ide/complete.rs` 957 — Дополнение и подсказка сигнатуры.
+- `okkama-compiler/src/ide/index.rs` 1156 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
+- `okkama-compiler/src/ide/lint.rs` 882 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
+- `okkama-compiler/src/ide/mod.rs` 249 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
 - `okkama-compiler/src/ide/outline.rs` 288 — Структура файла по синтаксическому дереву (без анализа).
-- `okkama-compiler/src/ide/std_paths.rs` 366 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
+- `okkama-compiler/src/ide/std_paths.rs` 372 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
-- `okkama-compiler/src/source/mod.rs` 175 — Source text, byte spans and human-facing positions.
+- `okkama-compiler/src/source/mod.rs` 199 — Source text, byte spans and human-facing positions.
 
 ## spb — 9 files, 4970 lines
 
@@ -187,12 +187,12 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 318 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5087 lines
+## cli — 10 files, 5078 lines
 
 - `okkama-cli/src/core.rs` 58 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
-- `okkama-cli/src/lsp.rs` 927 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
+- `okkama-cli/src/lsp.rs` 918 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
 - `okkama-cli/src/main.rs` 1706 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 411 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).

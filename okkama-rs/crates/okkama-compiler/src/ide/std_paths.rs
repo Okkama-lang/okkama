@@ -339,7 +339,7 @@ fn declarations_of(doc: &crate::doc::ModuleDoc, program: &ast::Program) -> Vec<D
         }).unwrap_or_default();
         Some(Declaration {
             module: doc.path.clone(), name: item.name.clone(), kind,
-            detail: item.signature.clone(), doc: crate::doc::render::hover(&doc, item, None), cases,
+            detail: item.signature.clone(), doc: crate::doc::render::hover(doc, item, None), cases,
         })
     }).collect()
 }
