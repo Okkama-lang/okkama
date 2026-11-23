@@ -1139,9 +1139,12 @@ type Spans = Rc<[(i64, i64)]>;
 /// A parsed replacement template: (failed, error offset, literal/group tokens).
 type PreparedTemplate = Rc<(i64, i64, Vec<String>)>;
 
+/// A text and its scalars.
+type TextScalars = (Rc<str>, Rc<[u32]>);
+
 thread_local! {
     /// The text the last query was made over and its scalars (#1012).
-    static SCALARS: RefCell<Option<(Rc<str>, Rc<[u32]>)>> = const { RefCell::new(None) };
+    static SCALARS: RefCell<Option<TextScalars>> = const { RefCell::new(None) };
 }
 
 /// The scalars of `text`, shared with the last query over the same text:

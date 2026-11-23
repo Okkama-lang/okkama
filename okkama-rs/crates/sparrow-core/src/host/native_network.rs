@@ -820,7 +820,10 @@ mod tests {
     /// #1011: an IPv6 listener is dual stack only when asked.
     #[test]
     fn an_ipv6_listener_is_dual_stack_only_when_asked() {
-        let v6 = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
+        // The unspecified address: Linux makes a socket bound to a specific
+        // IPv6 address (`::1`) IPv6-only whatever the option says. Bound, not
+        // listening, so nothing is reachable.
+        let v6 = SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0));
         let Ok(single) = bound_listener(v6, true, false) else {
             return; // no IPv6 on this host
         };
