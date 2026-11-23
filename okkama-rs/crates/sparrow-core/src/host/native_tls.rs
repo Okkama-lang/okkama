@@ -11,7 +11,7 @@
 //! queue in wire order, so a cancelled operation loses no bytes. A read that
 //! completed but is cancelled before its result reaches the program puts
 //! its plaintext back (`Received`).
-use crate::host::native_network::Transport;
+use crate::host::native_network::{Busy, Transport, interrupted_by};
 use crate::host::*;
 use okkama_runtime_abi::{Native, NativeFailure};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -100,22 +100,10 @@ impl From<NativeFailure> for ProviderError {
     }
 }
 
-/// One pending operation of a kind; released when the operation ends.
-struct Busy(Rc<Cell<bool>>);
-
-impl Busy {
-    fn acquire(flag: &Rc<Cell<bool>>, n: Native, message: &str) -> Result<Self, NativeFailure> {
-        if flag.replace(true) {
-            return Err(fail(n, "resource_exhausted", message));
-        }
-        Ok(Self(flag.clone()))
-    }
-}
-
-impl Drop for Busy {
-    fn drop(&mut self) {
-        self.0.set(false);
-    }
+/// One pending operation of a kind (the stream's own guard), refused with
+/// this provider's failure domain.
+fn busy(flag: &Rc<Cell<bool>>, n: Native, message: &str) -> Result<Busy, NativeFailure> {
+    Busy::claim(flag).ok_or_else(|| fail(n, "resource_exhausted", message))
 }
 
 /// Why a TLS operation stopped.
@@ -150,12 +138,37 @@ pub(crate) struct Tls {
 }
 
 impl Tls {
+    /// A state over `socket`, before the handshake.
+    fn new(connection: Connection, socket: Rc<Transport>) -> Self {
+        Self {
+            server: matches!(connection, Connection::Server(_)),
+            connection: RefCell::new(connection),
+            socket: RefCell::new(Some(socket)),
+            incoming: RefCell::default(),
+            plain: RefCell::default(),
+            outgoing: RefCell::default(),
+            changed: tokio::sync::watch::channel(()).0,
+            negotiated: Cell::new(false),
+            authorized: Cell::new(false),
+            closing: Cell::new(false),
+            eof: Cell::new(false),
+            handshaking: Rc::default(),
+            reading: Rc::default(),
+            writing: Rc::default(),
+            shutting: Rc::default(),
+            peer: RefCell::default(),
+        }
+    }
+
     fn closed(&self) -> bool {
         self.socket.borrow().is_none()
     }
 
+    /// Close the state and wake every pending operation: they fail with
+    /// `already_closed` instead of waiting for the peer (#1011).
     fn abort(&self) {
         self.socket.borrow_mut().take();
+        self.changed.send_replace(());
     }
 
     fn socket(&self) -> Result<Rc<Transport>, Stop> {
@@ -187,6 +200,8 @@ impl Tls {
 
     /// Feed the engine one record; false at the end of the stream.
     async fn feed_record(&self) -> Result<bool, Stop> {
+        // One buffer for the whole call, allocated at the first real read.
+        let mut chunk = Vec::new();
         loop {
             let record = {
                 let mut incoming = self.incoming.borrow_mut();
@@ -215,7 +230,7 @@ impl Tls {
             }
             let socket = self.socket()?;
             socket.readable().await.map_err(|_| Stop::Io)?;
-            let mut chunk = vec![0; CHUNK];
+            chunk.resize(CHUNK, 0);
             match socket.try_read(&mut chunk) {
                 Ok(0) => {
                     let mut connection = self.connection.borrow_mut();
@@ -273,10 +288,10 @@ impl Tls {
             return Ok(Vec::new());
         }
         let mut ended = false;
+        let mut buffer = vec![0u8; limit];
         loop {
             {
                 let mut connection = self.connection.borrow_mut();
-                let mut buffer = vec![0u8; limit];
                 match connection.reader().read(&mut buffer) {
                     Ok(0) => {
                         self.eof.set(true);
@@ -321,10 +336,10 @@ impl Tls {
     async fn shutdown(&self) -> Result<(), Stop> {
         self.connection.borrow_mut().send_close_notify();
         self.flush().await?;
+        let mut sink = vec![0u8; CHUNK];
         while !self.eof.get() {
             {
                 let mut connection = self.connection.borrow_mut();
-                let mut sink = vec![0u8; CHUNK];
                 match connection.reader().read(&mut sink) {
                     Ok(0) => break,
                     Ok(_) => continue,
@@ -362,20 +377,13 @@ impl Drop for Received {
     }
 }
 
-/// Fails the operation when the state is closed under it.
+/// Fails the operation `n` when the state is closed under it.
 async fn interruptible<T>(
-    mut changed: tokio::sync::watch::Receiver<()>,
+    n: Native,
+    changed: tokio::sync::watch::Receiver<()>,
     body: impl std::future::Future<Output = Result<T, NativeFailure>>,
 ) -> Result<T, NativeFailure> {
-    let mut body = std::pin::pin!(body);
-    let mut closed = std::pin::pin!(changed.changed());
-    std::future::poll_fn(|cx| {
-        if closed.as_mut().poll(cx).is_ready() {
-            return std::task::Poll::Ready(Err(fail(Native::TlsTransportClose, "already_closed", "TLS owner is closed")));
-        }
-        body.as_mut().poll(cx)
-    })
-    .await
+    interrupted_by(changed, || fail(n, "already_closed", "TLS owner is closed"), body).await
 }
 
 /// Closes the state when an operation ends otherwise than `complete`.
@@ -493,7 +501,6 @@ impl Heap {
             TlsTransportClose => {
                 let state = self.tls_state(a[0])?;
                 state.abort();
-                state.changed.send_replace(());
                 Ok(Slot::boolean(true))
             }
             TlsTransportClosed => Ok(Slot::boolean(self.tls_state(a[0])?.closed())),
@@ -502,12 +509,12 @@ impl Heap {
                 if state.negotiated.get() {
                     return Ok(self.future_with_state(State::Ready(Ok(Slot::boolean(true))))?);
                 }
-                let busy = Busy::acquire(&state.handshaking, n, "TLS handshake already pending")?;
+                let busy = busy(&state.handshaking, n, "TLS handshake already pending")?;
                 let changed = state.changed.subscribe();
                 Ok(self.native_io(async move {
                     let _busy = busy;
                     let mut guard = Abort { state: state.clone(), complete: false };
-                    let result = interruptible(changed, async {
+                    let result = interruptible(n, changed, async {
                         state.negotiate().await.map_err(|_| {
                             if state.closed() {
                                 fail(n, "already_closed", "TLS handshake readiness closed")
@@ -544,7 +551,7 @@ impl Heap {
                     Integer::Small(v) => (v as usize).min(CHUNK),
                     Integer::Big(_) => CHUNK,
                 };
-                let busy = Busy::acquire(&state.reading, n, "TLS operation already pending")?;
+                let busy = busy(&state.reading, n, "TLS operation already pending")?;
                 if let Some(ready) = state.take_plain(limit) {
                     let ready = self.native_byte_array(ready)?;
                     return Ok(self.future_with_state(State::Ready(Ok(ready)))?);
@@ -553,7 +560,7 @@ impl Heap {
                 let keeper = state.clone();
                 Ok(self.native_io(async move {
                     let _busy = busy;
-                    interruptible(changed, async {
+                    interruptible(n, changed, async {
                         // A failed read closes the state; a cancelled one does not.
                         state.receive(limit).await.map(|bytes| Received { bytes: Some(bytes), state: keeper }).map_err(|stop| {
                             let failure = match stop {
@@ -572,14 +579,14 @@ impl Heap {
                 if state.closing.get() {
                     return Err(fail(n, "already_closed", "TLS owner is shutting down").into());
                 }
-                let busy = Busy::acquire(&state.writing, n, "TLS operation already pending")?;
+                let busy = busy(&state.writing, n, "TLS operation already pending")?;
                 let payload = self.byte_slice(a[1])?.into_owned();
                 let changed = state.changed.subscribe();
                 Ok(self.native_io(async move {
                     let _busy = busy;
                     // An unfinished write closes the state.
                     let mut guard = Abort { state: state.clone(), complete: false };
-                    let result = interruptible(changed, async {
+                    let result = interruptible(n, changed, async {
                         state.send(&payload).await.map_err(|_| io_failure(&state, n))
                     })
                     .await;
@@ -593,14 +600,14 @@ impl Heap {
                     return Err(fail(n, "resource_exhausted", "TLS shutdown requires drained operations").into());
                 }
                 let state = self.tls_verified(n, a[0])?;
-                let busy = Busy::acquire(&state.shutting, n, "TLS operation already pending")?;
+                let busy = busy(&state.shutting, n, "TLS operation already pending")?;
                 state.closing.set(true);
                 let changed = state.changed.subscribe();
                 Ok(self.native_io(async move {
                     let _busy = busy;
                     // The state closes when the shutdown ends, however it ends.
                     let _guard = Abort { state: state.clone(), complete: false };
-                    interruptible(changed, async {
+                    interruptible(n, changed, async {
                         state.shutdown().await.map_err(|_| io_failure(&state, n))
                     })
                     .await
@@ -693,24 +700,7 @@ impl Heap {
         config.alpn_protocols = names.iter().map(|name| name.chars().map(|c| c as u8).collect()).collect();
         let name = server_name(&server).ok_or_else(unavailable)?;
         let connection = ClientConnection::new(Arc::new(config), name).map_err(|_| unavailable())?;
-        let state = Tls {
-            connection: RefCell::new(Connection::Client(connection)),
-            server: false,
-            socket: RefCell::new(Some(socket)),
-            incoming: RefCell::default(),
-            plain: RefCell::default(),
-            outgoing: RefCell::default(),
-            changed: tokio::sync::watch::channel(()).0,
-            negotiated: Cell::new(false),
-            authorized: Cell::new(false),
-            closing: Cell::new(false),
-            eof: Cell::new(false),
-            handshaking: Rc::default(),
-            reading: Rc::default(),
-            writing: Rc::default(),
-            shutting: Rc::default(),
-            peer: RefCell::default(),
-        };
+        let state = Tls::new(Connection::Client(connection), socket);
         Ok(Slot { tag: HANDLE, bits: self.handles.allocate(Handle::Tls(Rc::new(state)))? })
     }
 
@@ -763,24 +753,7 @@ impl Heap {
             .map_err(|_| ProviderError::from(fail(n, "invalid_input", "invalid TLS server identity")))?;
         config.alpn_protocols = names.iter().map(|name| name.chars().map(|c| c as u8).collect()).collect();
         let connection = ServerConnection::new(Arc::new(config)).map_err(|_| unavailable())?;
-        let state = Tls {
-            connection: RefCell::new(Connection::Server(connection)),
-            server: true,
-            socket: RefCell::new(Some(socket)),
-            incoming: RefCell::default(),
-            plain: RefCell::default(),
-            outgoing: RefCell::default(),
-            changed: tokio::sync::watch::channel(()).0,
-            negotiated: Cell::new(false),
-            authorized: Cell::new(false),
-            closing: Cell::new(false),
-            eof: Cell::new(false),
-            handshaking: Rc::default(),
-            reading: Rc::default(),
-            writing: Rc::default(),
-            shutting: Rc::default(),
-            peer: RefCell::default(),
-        };
+        let state = Tls::new(Connection::Server(connection), socket);
         Ok(Slot { tag: HANDLE, bits: self.handles.allocate(Handle::Tls(Rc::new(state)))? })
     }
 
@@ -840,5 +813,55 @@ impl Heap {
             return Ok(Outcome::Value(Slot::boolean(true)));
         }
         Ok(verified)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::Future;
+    use std::time::Duration;
+
+    /// A client state over a connected localhost stream whose peer never
+    /// answers, so every read waits.
+    async fn silent_client() -> (Rc<Tls>, tokio::net::TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (client, accepted) = tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+        let provider = Arc::new(provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(Deferred(provider)))
+            .with_no_client_auth();
+        let name = server_name("localhost").unwrap();
+        let connection = ClientConnection::new(Arc::new(config), name).unwrap();
+        let socket = Rc::new(Transport::from(client.unwrap()));
+        (Rc::new(Tls::new(Connection::Client(connection), socket)), accepted.unwrap().0)
+    }
+
+    /// #1011: a close from another operation (the `Abort` guard of a failed
+    /// write, a refused `authorize`) wakes a pending read at once, and the
+    /// failure names the read, not `close`.
+    #[test]
+    fn abort_wakes_a_pending_operation_of_another_kind() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (state, _peer) = silent_client().await;
+            let reader = state.clone();
+            let n = Native::TlsTransportRead;
+            let mut pending = Box::pin(interruptible(n, state.changed.subscribe(), async move {
+                reader.receive(16).await.map_err(|_| fail(n, "invalid_data", "TLS I/O failed"))
+            }));
+            let waker = std::task::Waker::noop();
+            assert!(pending.as_mut().poll(&mut std::task::Context::from_waker(waker)).is_pending());
+            state.abort();
+            assert!(state.closed());
+            let ended = tokio::time::timeout(Duration::from_secs(1), pending).await;
+            let failure = ended.expect("the pending read must wake on abort").unwrap_err();
+            assert_eq!(failure.code, "already_closed");
+            assert_eq!(failure.operation, n.symbol());
+        });
     }
 }
