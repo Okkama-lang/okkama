@@ -1,14 +1,14 @@
-//! Native provider host. The providers of the previous engine (`sparrow-engine`
-//! `native_*`) run here with their shape intact: they see a [`Heap`] with the
-//! same methods and [`Slot`] values. A slot is a typed view of a core word, not
+//! Native provider host. The providers (`native_*`) see a [`Heap`] and
+//! [`Slot`] values. A slot is a typed view of a core word, not
 //! a copy: strings, arrays and maps are core heap objects (`bits` is the word),
 //! integers that fit i64 travel unboxed (`SMALL`), handles are ids in the
 //! host's arena. Words become slots at the call by the provider's ABI
 //! signature, and the result slot becomes a word again.
 //!
 //! A handle reaches the program as a small core object naming its arena id;
-//! the heap watches it, and when it dies the handle state is dropped. JSON
-//! nodes are traced from the live handles after each collection. Providers
+//! the heap watches it, and when it dies the handle state is dropped. After a
+//! collection that freed a JSON handle, JSON nodes are traced again from the
+//! live handles. Providers
 //! allocate only between safepoints, so slots stay valid during a call.
 #![allow(unsafe_code)]
 
@@ -899,11 +899,15 @@ pub enum Start {
 
 fn with_host<T>(runtime: &mut Runtime, tokio: bool, body: impl FnOnce(&mut Heap) -> T) -> T {
     let mut host = runtime.host.take().expect("native host");
-    host.rt = runtime;
     // Tokio resources created or polled by providers need the runtime context.
     let handle = tokio.then(|| runtime.io.tokio().handle().clone());
     let _context = handle.as_ref().map(|h| h.enter());
     let _local = tokio.then(|| runtime.io.local().enter());
+    // The raw pointer is made after the last use of `runtime` above and is
+    // the only way into it until `body` returns: `failure_new` reborrows the
+    // whole `Runtime` through it, and a use of `runtime` in between would
+    // invalidate the pointer under Stacked Borrows (#1010).
+    host.rt = runtime;
     let result = body(&mut host);
     host.rt = std::ptr::null_mut();
     runtime.host = Some(host);
