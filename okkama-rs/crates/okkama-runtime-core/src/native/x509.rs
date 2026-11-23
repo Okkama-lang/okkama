@@ -639,7 +639,10 @@ impl Reader<'_> {
                     return bad();
                 }
                 let value = self.value()?;
-                entries.insert(key, value);
+                // The canonical snapshot names each key once (#1014).
+                if entries.insert(key, value).is_some() {
+                    return bad();
+                }
                 self.skip();
                 match self.take()? {
                     '}' => return Ok(Json::Map(entries)),
@@ -660,7 +663,13 @@ impl Reader<'_> {
                     let escape = self.take()?;
                     match escape {
                         'u' => {
-                            let digits: String = self.text.get(self.at..self.at + 4).ok_or(Bad("invalid"))?.iter().collect();
+                            // Exactly four ASCII hex digits (#1014): from_str_radix
+                            // alone also takes a leading `+`.
+                            let digits = self.text.get(self.at..self.at + 4).ok_or(Bad("invalid"))?;
+                            if !digits.iter().all(char::is_ascii_hexdigit) {
+                                return bad();
+                            }
+                            let digits: String = digits.iter().collect();
                             out.push(u16::from_str_radix(&digits, 16).map_err(|_| Bad("invalid"))?);
                             self.at += 4;
                         }
@@ -669,10 +678,9 @@ impl Reader<'_> {
                         'r' => out.push(13),
                         'b' => out.push(8),
                         'f' => out.push(12),
-                        other => {
-                            let mut buffer = [0u16; 2];
-                            out.extend_from_slice(other.encode_utf16(&mut buffer));
-                        }
+                        '"' | '\\' | '/' => out.push(escape as u16),
+                        // Any other escape is not JSON (#1014).
+                        _ => return bad(),
                     }
                 } else {
                     let mut buffer = [0u16; 2];
@@ -684,32 +692,17 @@ impl Reader<'_> {
         if c == '-' {
             self.at += 1;
         }
-        // Character.isDigit: десятичные цифры Unicode (Nd).
-        while self.at < self.text.len() && crate::data::category(u32::from(self.text[self.at])) == "Nd" {
+        // ASCII digits only: the canonical snapshot is written so (#1014).
+        while self.at < self.text.len() && self.text[self.at].is_ascii_digit() {
             self.at += 1;
         }
         if self.at == start || (self.at == start + 1 && c == '-') {
             return bad();
         }
-        let spelled: String = self.text[start..self.at].iter().collect();
-        // BigInteger понимает цифры Unicode; канонический текст — ASCII.
-        let ascii: String = spelled
-            .chars()
-            .map(|ch| if ch == '-' { '-' } else { char::from(b'0' + ch.to_digit(10).map_or_else(|| unicode_digit(ch), |d| d as u8)) })
-            .collect();
+        let ascii: String = self.text[start..self.at].iter().collect();
         let value = IntValue::parse(&ascii).ok_or(Bad("invalid"))?;
         Ok(Json::Number(value.to_string()))
     }
-}
-
-fn unicode_digit(ch: char) -> u8 {
-    // Цифры Nd идут блоками по десять от нуля блока.
-    let point = u32::from(ch);
-    let mut zero = point;
-    while zero > 0 && crate::data::category(zero - 1) == "Nd" && point - (zero - 1) < 10 {
-        zero -= 1;
-    }
-    (point - zero) as u8
 }
 
 fn is_oid(text: &str) -> bool {
@@ -1030,6 +1023,9 @@ fn attribute_text(tag: u8, s: &[u8]) -> Result<String, Bad> {
                 .map(|point| char::from_u32(point).ok_or(Bad("invalid")))
                 .collect()
         }
+        // TeletexString and GeneralString read as Latin-1, as `canonical`
+        // compares them: one table of string tags (#1014).
+        20 | 27 => Ok(s.iter().map(|b| char::from(*b)).collect()),
         _ => Err(Bad("unsupported")),
     }
 }
@@ -1120,8 +1116,9 @@ fn root_files(native: Native) -> Result<Vec<String>, Error> {
         entries.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         for entry in entries {
             let (stem, suffix) = entry.split_once('.').unwrap_or((&entry, ""));
+            // `c_rehash` names in lower-case hex, as OpenSSL looks them up (#1014).
             let hashed = stem.len() == 8
-                && stem.bytes().all(|b| b.is_ascii_hexdigit())
+                && stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 && !suffix.is_empty()
                 && suffix.bytes().all(|b| b.is_ascii_digit());
             if hashed {
@@ -1371,11 +1368,7 @@ fn canonical(name: &Name) -> Vec<Vec<String>> {
                 .iter()
                 .map(|(identifier, tag, value)| {
                     let raw = unhex(value);
-                    let text = match tag {
-                        20 | 27 => Some(raw.iter().map(|b| char::from(*b)).collect::<String>()),
-                        12 | 19 | 22 | 30 | 28 => attribute_text(*tag, &raw).ok(),
-                        _ => None,
-                    };
+                    let text = attribute_text(*tag, &raw).ok();
                     match text {
                         Some(text) => {
                             let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1461,7 +1454,7 @@ fn self_signed(candidate: &Candidate) -> bool {
 
 /// Ограничения AlgorithmChecker JDK (`jdk.certpath.disabledAlgorithms`).
 fn algorithm_permitted(candidate: &Candidate) -> bool {
-    let (algorithm, _) = signature_algorithm(&candidate.parsed.algorithm);
+    let algorithm = signature_algorithm(&candidate.parsed.algorithm);
     if matches!(algorithm.as_str(), "1.2.840.113549.1.1.2" | "1.2.840.113549.1.1.4") {
         return false;
     }
@@ -1482,13 +1475,12 @@ fn key_permitted(candidate: &Candidate) -> bool {
     true
 }
 
-fn signature_algorithm(der: &[u8]) -> (String, ()) {
-    let identifier = parse(der)
+fn signature_algorithm(der: &[u8]) -> String {
+    parse(der)
         .ok()
         .and_then(|node| node.children.first().cloned())
         .and_then(|first| oid(content(der, &first)).ok())
-        .unwrap_or_default();
-    (identifier, ())
+        .unwrap_or_default()
 }
 
 /// Расширения, которые понимают checkers PKIX JDK.
@@ -1844,7 +1836,8 @@ impl<'a> Builder<'a> {
                 let path_length = if current.parsed.version < 2 {
                     if step == 1 && current.self_issued() { i64::MAX } else { -1 }
                 } else {
-                    match constraints_of(facts)? {
+                    // `self::`: a local `constraints` (the name constraints) shadows the function.
+                    match self::constraints(facts)? {
                         (true, Some(depth)) => depth,
                         (true, None) => i64::MAX,
                         (false, _) => -1,
@@ -1909,10 +1902,6 @@ impl<'a> Builder<'a> {
         }
         "invalid_chain"
     }
-}
-
-fn constraints_of(facts: &Facts) -> Result<(bool, Option<i64>), Bad> {
-    constraints(facts)
 }
 
 /// Профиль RFC 5280 под `X509_V_FLAG_X509_STRICT` OpenSSL.
@@ -2015,7 +2004,7 @@ fn verify_chain(native: Native, args: &[Value]) -> Result<Value, Error> {
         }
     } else {
         let parsed = if host.contains(':') { parse_ipv6(host).map(|a| a.to_vec()) } else { parse_ipv4(host).map(|a| a.to_vec()) };
-        address = parsed.ok_or_else(|| verify_failure(native, "invalid_data", "invalid certificate verification data"))?;
+        address = parsed.ok_or_else(|| verify_failure(native, "invalid_input", "invalid IP reference identity"))?;
     }
     let at = rational(time);
     match verified(&chain, &roots, kind, &reference, &address, &at, wanted) {
@@ -2250,6 +2239,19 @@ mod tests {
     }
 
     const AT: &str = "1893456000";
+
+    /// #1014: the canonical snapshot is strict JSON — no unknown escapes, four
+    /// ASCII hex digits after `\u`, ASCII digits, each key once.
+    #[test]
+    fn the_snapshot_reader_is_strict_json() {
+        let read = |text: &str| Reader { text: &text.chars().collect::<Vec<_>>(), at: 0, depth: 0 }.value().is_ok();
+        assert!(read(r#"{"a": [1, -2, "x\n\u0041\/"]}"#));
+        assert!(!read(r#""vers\ion""#));
+        assert!(!read(r#""\u+076""#));
+        assert!(!read("\u{0661}"));
+        assert!(!read("{\"a\": 1, \"a\": 2}"));
+        assert_eq!(attribute_text(20, b"caf\xe9").ok().as_deref(), Some("caf\u{e9}"));
+    }
 
     /// #1014: a URI under a URI constraint is compared by its host, and a name
     /// form the checker does not interpret is rejected under a constraint of
