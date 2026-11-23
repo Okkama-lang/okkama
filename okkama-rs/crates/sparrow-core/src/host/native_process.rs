@@ -48,6 +48,15 @@ impl State {
         }
         Ok(())
     }
+    /// Whether output (`slot` 1) or errors (2) moved to the async side: a
+    /// stream read asynchronously once is read so afterwards (#196, #1010).
+    fn read_asynchronously(&self, slot: usize) -> bool {
+        let moved = match slot {
+            1 => self.output_async.is_some(),
+            _ => self.errors_async.is_some(),
+        };
+        moved || self.busy[slot]
+    }
     fn cancel(&mut self) {
         self.closed = true;
         self.input_closed = true;
@@ -62,6 +71,36 @@ impl State {
 impl Drop for State {
     fn drop(&mut self) {
         let _ = self.close();
+    }
+}
+/// A stream away in a pending asynchronous read or write (#196). The guard
+/// lives in the request's future, so it is dropped both when the operation
+/// ends and when the request is cancelled (a `Within` timeout, a cancelled
+/// task): either way the stream goes back to the state and `busy` clears
+/// (#1010). Reads are cancel-safe, so nothing read is lost; a cancelled write
+/// may have written a prefix of its bytes.
+struct Away<S> {
+    owner: Rc<RefCell<State>>,
+    slot: usize,
+    stream: Option<S>,
+    give_back: fn(&mut State, S),
+}
+impl<S> Away<S> {
+    fn stream(&mut self) -> &mut S {
+        self.stream.as_mut().expect("the stream is away until the guard drops")
+    }
+}
+impl<S> Drop for Away<S> {
+    fn drop(&mut self) {
+        // The state is never borrowed across an await; if it were, the stream
+        // would go with the state, which is closing then.
+        let Ok(mut state) = self.owner.try_borrow_mut() else { return };
+        state.busy[self.slot] = false;
+        if let Some(stream) = self.stream.take()
+            && !state.closed
+        {
+            (self.give_back)(&mut state, stream);
+        }
     }
 }
 #[derive(Debug, Default)]
@@ -459,11 +498,18 @@ impl Heap {
                 }
                 use num_traits::ToPrimitive;
                 let limit = limit.to_i64().unwrap_or(i64::MAX).min(65536) as usize;
-                let pipe = if n == ProcessProcessStateOutputRead {
-                    &mut state.output
-                } else {
-                    &mut state.errors
-                };
+                // A stream read asynchronously once is read so afterwards
+                // (`Process.streams`): it has moved to the async side, and a
+                // blocking read here would take it for the end (#1010).
+                let output = n == ProcessProcessStateOutputRead;
+                if state.read_asynchronously(if output { 1 } else { 2 }) {
+                    return Err(fail(
+                        n,
+                        "invalid_input",
+                        "This stream is read asynchronously; read it through streams()",
+                    ));
+                }
+                let pipe = if output { &mut state.output } else { &mut state.errors };
                 let Some(pipe) = pipe else {
                     return Ok(self.native_byte_array(vec![])?);
                 };
@@ -498,21 +544,22 @@ impl Heap {
                         }
                         (None, None) => None,
                     };
-                    let Some(mut stream) = stream else {
+                    let Some(stream) = stream else {
                         drop(state);
                         return Ok(self.native_io(async move { Ok::<Vec<u8>, NativeFailure>(vec![]) })?);
                     };
                     state.busy[slot] = true;
                     drop(state);
-                    let owner = shared.clone();
+                    let mut away = Away {
+                        owner: shared.clone(),
+                        slot,
+                        stream: Some(stream),
+                        give_back: |state, stream| state.output_async = Some(stream),
+                    };
                     return Ok(self.native_io(async move {
                         let mut bytes = vec![0; limit];
-                        let result = stream.read(&mut bytes).await;
-                        let mut back = owner.borrow_mut();
-                        back.busy[slot] = false;
-                        if !back.closed {
-                            back.output_async = Some(stream);
-                        }
+                        let result = away.stream().read(&mut bytes).await;
+                        drop(away);
                         let size = result.map_err(|e| host(n, e))?;
                         bytes.truncate(size);
                         Ok(bytes)
@@ -525,21 +572,22 @@ impl Heap {
                     }
                     (None, None) => None,
                 };
-                let Some(mut stream) = stream else {
+                let Some(stream) = stream else {
                     drop(state);
                     return Ok(self.native_io(async move { Ok::<Vec<u8>, NativeFailure>(vec![]) })?);
                 };
                 state.busy[slot] = true;
                 drop(state);
-                let owner = shared.clone();
+                let mut away = Away {
+                    owner: shared.clone(),
+                    slot,
+                    stream: Some(stream),
+                    give_back: |state, stream| state.errors_async = Some(stream),
+                };
                 Ok(self.native_io(async move {
                     let mut bytes = vec![0; limit];
-                    let result = stream.read(&mut bytes).await;
-                    let mut back = owner.borrow_mut();
-                    back.busy[slot] = false;
-                    if !back.closed {
-                        back.errors_async = Some(stream);
-                    }
+                    let result = away.stream().read(&mut bytes).await;
+                    drop(away);
                     let size = result.map_err(|e| host(n, e))?;
                     bytes.truncate(size);
                     Ok(bytes)
@@ -566,20 +614,24 @@ impl Heap {
                 };
                 state.busy[0] = true;
                 drop(state);
-                let owner = shared.clone();
-                let mut stream = stream;
+                let mut away = Away {
+                    owner: shared.clone(),
+                    slot: 0,
+                    stream: Some(stream),
+                    give_back: |state, stream| {
+                        if !state.input_closed {
+                            state.input_async = Some(stream);
+                        }
+                    },
+                };
                 Ok(self.native_io(async move {
                     use tokio::io::AsyncWriteExt;
                     let result = async {
-                        stream.write_all(&bytes).await?;
-                        stream.flush().await
+                        away.stream().write_all(&bytes).await?;
+                        away.stream().flush().await
                     }
                     .await;
-                    let mut back = owner.borrow_mut();
-                    back.busy[0] = false;
-                    if !back.closed && !back.input_closed {
-                        back.input_async = Some(stream);
-                    }
+                    drop(away);
                     result.map_err(|e| host(n, e))?;
                     Ok(bytes.len() as i64)
                 })?)
@@ -635,5 +687,69 @@ impl Heap {
             }
             _ => Err(Error("unsupported process native".into()).into()),
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::task::{Context, Poll, Waker};
+
+    fn away(owner: &Rc<RefCell<State>>, slot: usize) -> Away<u8> {
+        owner.borrow_mut().busy[slot] = true;
+        Away {
+            owner: owner.clone(),
+            slot,
+            stream: Some(7),
+            // Marks the stream as given back.
+            give_back: |state, _| state.capturing = true,
+        }
+    }
+
+    /// #1010: a request cancelled while its stream is away (a `Within`
+    /// timeout drops the future mid-read) gives the stream back and clears
+    /// `busy`, as a finished one does.
+    #[test]
+    fn a_cancelled_operation_gives_the_stream_back() {
+        let owner = Rc::new(RefCell::new(State::default()));
+        let mut guard = away(&owner, 1);
+        let mut request = Box::pin(async move {
+            let _stream = guard.stream();
+            std::future::pending::<()>().await;
+            drop(guard);
+        });
+        assert!(request.as_mut().poll(&mut Context::from_waker(Waker::noop())) == Poll::Pending);
+        assert!(owner.borrow().busy[1], "away while the request waits");
+        drop(request);
+        let state = owner.borrow();
+        assert!(!state.busy[1] && state.capturing, "back after the cancellation");
+    }
+
+    /// #1010: a blocking read after an asynchronous one would take the moved
+    /// stream for the end; the stream is known to be on the async side.
+    #[test]
+    fn a_stream_read_asynchronously_stays_so() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_io().build().unwrap();
+        let _entered = runtime.enter();
+        let mut state = State::default();
+        assert!(!state.read_asynchronously(1) && !state.read_asynchronously(2));
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let reader = File::from(std::os::fd::OwnedFd::from(reader));
+        state.output_async = Some(process_host::async_output(reader).unwrap());
+        assert!(state.read_asynchronously(1));
+        assert!(!state.read_asynchronously(2));
+        state.busy[2] = true;
+        assert!(state.read_asynchronously(2), "a read away in a request counts too");
+    }
+
+    /// #1010: a stream that comes back to a closed process is dropped, and
+    /// `busy` still clears.
+    #[test]
+    fn a_closed_process_does_not_take_the_stream_back() {
+        let owner = Rc::new(RefCell::new(State::default()));
+        let guard = away(&owner, 0);
+        owner.borrow_mut().closed = true;
+        drop(guard);
+        let state = owner.borrow();
+        assert!(!state.busy[0] && !state.capturing);
     }
 }
