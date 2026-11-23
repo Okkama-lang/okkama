@@ -1653,6 +1653,34 @@ async test "a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN" {
     test.is(server.closed(), true);
 }
 
+async test "a TLS client that never speaks delays nobody else's handshake" {
+    let listener = await TcpListening(port: 0).listener();
+    let identity = TlsIdentity(certificates: HTTPS_TEST_CERTIFICATE, key: HTTPS_TEST_KEY);
+    let server = HttpServer(
+        listener: listener,
+        handling: EchoApplication(),
+        tls: TlsServerPolicy(identity: identity),
+        policy: ServerPolicy(),
+        clock: SystemClock()
+    ).started();
+    // Accepted first, it holds its handshake open for the whole 30 seconds of
+    // the headers timeout; a server that handshakes in its accept loop would
+    // keep the next client waiting as long.
+    let silent = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
+    let client = HttpClient(trust: PemTrustStore(HTTPS_TEST_CA), endpoints: LoopbackEndpoints());
+    let page is Within<ClientResponse> = Within(
+        origin: client.get("https://127.0.0.1:" + server::Local::port.string() + "/next"),
+        limit: Duration(seconds: 10.rat()),
+        clock: SystemClock()
+    );
+    let answer = await page.outcome();
+    test.is(await answer.text(), "GET /next ");
+    client.close();
+    silent.close();
+    await server.drain(limit: Duration(seconds: 5.rat()));
+}
+
 // A handshake that fails as a peer that hangs up does, once gate is set; it
 // sets failing just before it fails.
 hidden object HttpServerFailingHandshake {

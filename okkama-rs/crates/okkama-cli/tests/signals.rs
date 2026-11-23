@@ -232,14 +232,22 @@ fn an_https_application_stops_on_sigterm_during_tls_handshakes() {
         partial.write_all(&PARTIAL).expect("send a partial ClientHello");
         let mut hanging_up = connect();
         hanging_up.write_all(&PARTIAL).expect("send a partial ClientHello");
-        // The server takes connections one by one, in order: once it has
-        // refused this one's handshake, the three before it are handshaking.
+        // The server accepts connections in order: once it has refused this
+        // one's handshake, it has accepted the three before it, which are
+        // still handshaking. The refusal must be prompt: a whole record of no
+        // known content type is refused at once, while a plain HTTP request
+        // reads as the header of a record of 8239 bytes and waits for them
+        // until the 30-second headers timeout, when the three handshakes have
+        // timed out too.
         let mut refused = connect();
         refused.set_read_timeout(Some(Duration::from_secs(60))).expect("read timeout");
-        refused.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("send plain HTTP");
+        let started = Instant::now();
+        refused.write_all(&[0x00, 0x03, 0x03, 0x00, 0x01, 0x00]).expect("send a record of no content type");
         let mut alert = Vec::new();
         let _ = refused.read_to_end(&mut alert);
-        hanging_up.shutdown(std::net::Shutdown::Both).expect("hang up");
+        assert!(started.elapsed() < Duration::from_secs(10), "{engine}: the refusal took {:?}", started.elapsed());
+        // A peer that has already closed its side makes macOS answer ENOTCONN.
+        let _ = hanging_up.shutdown(std::net::Shutdown::Both);
         app.signal("TERM");
         let ended = app.ended(Duration::from_secs(60));
         assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
