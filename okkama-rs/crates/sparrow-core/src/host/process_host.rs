@@ -177,11 +177,6 @@ pub(crate) struct Spawned {
     pub output: Option<File>,
     pub errors: Option<File>,
 }
-fn blocking(fd: std::os::fd::OwnedFd) -> io::Result<File> {
-    let flags = rustix::fs::fcntl_getfl(&fd)?;
-    rustix::fs::fcntl_setfl(&fd, flags & !rustix::fs::OFlags::NONBLOCK)?;
-    Ok(fd.into())
-}
 pub(crate) fn launch(commands: &[Command]) -> io::Result<Vec<Spawned>> {
     tokio::runtime::Handle::try_current().map_err(|_| {
         io::Error::new(
@@ -205,20 +200,25 @@ pub(crate) fn launch(commands: &[Command]) -> io::Result<Vec<Spawned>> {
         // Buffered output goes before the child's own (#132).
         let _ = okkama_runtime_core::stdout::flush();
         let mut child = builder.spawn()?;
+        // The pipes become blocking files: Tokio's `into_owned_fd` clears
+        // O_NONBLOCK itself (tokio 1.54.1, `src/process/unix/mod.rs`,
+        // `convert_to_blocking_file`: "Ensure that the fd to be inherited is
+        // set to *blocking* mode"); `tokio_hands_child_pipes_over_blocking`
+        // pins that across upgrades.
         let input = child
             .stdin
             .take()
-            .map(|s| s.into_owned_fd().and_then(blocking))
+            .map(|s| s.into_owned_fd().map(File::from))
             .transpose()?;
         let output = child
             .stdout
             .take()
-            .map(|s| s.into_owned_fd().and_then(blocking))
+            .map(|s| s.into_owned_fd().map(File::from))
             .transpose()?;
         let errors = child
             .stderr
             .take()
-            .map(|s| s.into_owned_fd().and_then(blocking))
+            .map(|s| s.into_owned_fd().map(File::from))
             .transpose()?;
         let owner = Child::new(child);
         let output = if i + 1 < commands.len() {
@@ -413,5 +413,31 @@ pub(crate) async fn capture(
         Err(error)
     } else {
         Ok(result)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::OwnedFd;
+
+    fn nonblocking(fd: &impl std::os::fd::AsFd) -> bool {
+        rustix::fs::fcntl_getfl(fd).unwrap().contains(rustix::fs::OFlags::NONBLOCK)
+    }
+
+    /// #1006: `launch` relies on Tokio's `into_owned_fd` handing a child's
+    /// pipe back in blocking mode (the blocking reads and writes of
+    /// `Process` would otherwise fail with WouldBlock).
+    #[test]
+    fn tokio_hands_child_pipes_over_blocking() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_io().build().unwrap();
+        let _entered = runtime.enter();
+        let (reader, writer) = std::io::pipe().unwrap();
+        let input = tokio::process::ChildStdin::from_std(std::process::ChildStdin::from(OwnedFd::from(writer))).unwrap();
+        let output = tokio::process::ChildStdout::from_std(std::process::ChildStdout::from(OwnedFd::from(reader))).unwrap();
+        assert!(nonblocking(&input) && nonblocking(&output), "Tokio polls them nonblocking");
+        let input = File::from(input.into_owned_fd().unwrap());
+        let output = File::from(output.into_owned_fd().unwrap());
+        assert!(!nonblocking(&input), "stdin handed over blocking");
+        assert!(!nonblocking(&output), "stdout handed over blocking");
     }
 }

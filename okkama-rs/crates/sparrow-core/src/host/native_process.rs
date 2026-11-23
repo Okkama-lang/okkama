@@ -254,23 +254,17 @@ impl Heap {
         match self.process_execute(n, a) {
             Ok(v) => Ok(Outcome::Value(v)),
             Err(ProviderError::Engine(e)) => Err(e),
+            // An async native answers a Future in every case: its refusal is
+            // a Future that has already failed, as in `native_unix`.
             Err(ProviderError::Native(e)) => {
-                if matches!(
-                    n,
-                    Native::ProcessProcessStateExit
-                        | Native::ProcessProcessStateCapture
-                        | Native::ProcessPipelineStateCapture
-                        | Native::ProcessProcessStateOutputReadAsync
-                        | Native::ProcessProcessStateErrorsReadAsync
-                        | Native::ProcessProcessStateInputWriteAsync
-                ) {
-                    return self
-                        .native_io(async move { Err::<bool, _>(e) })
-                        .map(Outcome::Value);
+                let payload = self.native_failure_new(e)?;
+                let failure = self.failure_new(crate::host::FailureKind::Native(payload))?;
+                if n.signature().is_async {
+                    self.future_with_state(crate::host::State::Ready(Err(failure)))
+                        .map(Outcome::Value)
+                } else {
+                    Ok(Outcome::Failure(failure))
                 }
-                let p = self.native_failure_new(e)?;
-                self.failure_new(crate::host::FailureKind::Native(p))
-                    .map(Outcome::Failure)
             }
         }
     }
@@ -739,6 +733,66 @@ mod tests {
         assert!(!state.read_asynchronously(2));
         state.busy[2] = true;
         assert!(state.read_asynchronously(2), "a read away in a request counts too");
+    }
+
+    /// #1006: every async process native refuses with a Future that has
+    /// already failed (none is left out of a hand-kept list); a synchronous
+    /// one refuses with the failure itself.
+    #[test]
+    fn an_async_process_native_refuses_with_a_failed_future() {
+        use crate::host::State as Settled;
+        use okkama_sparrow::{ObjectDecl, Program, Type, TypeRef};
+        let program = Program {
+            types: vec![Type::Str],
+            objects: vec![ObjectDecl {
+                name: "NativeFailure".into(),
+                fields: ["domain", "code", "operation", "message"]
+                    .iter()
+                    .map(|name| (name.to_string(), TypeRef(0)))
+                    .collect(),
+                does: vec![],
+                destroy: None,
+                builtin: true,
+            }],
+            ..Program::default()
+        };
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        crate::host::with_host(&mut runtime, false, |heap| {
+            let Outcome::Value(state) = heap.native_process(Native::ProcessProcessStateCreate, &[]).unwrap() else {
+                panic!("process state")
+            };
+            let Outcome::Value(pipeline) = heap.native_process(Native::ProcessPipelineStateCreate, &[]).unwrap() else {
+                panic!("pipeline state")
+            };
+            let bytes = heap.native_byte_array(b"x".to_vec()).unwrap();
+            let one = Slot::small(1);
+            let calls = [
+                (Native::ProcessProcessStateExit, vec![state]),
+                (Native::ProcessProcessStateOutputReadAsync, vec![state, one]),
+                (Native::ProcessProcessStateErrorsReadAsync, vec![state, one]),
+                (Native::ProcessProcessStateInputWriteAsync, vec![state, bytes]),
+                (Native::ProcessProcessStateCapture, vec![state, bytes, one]),
+                (Native::ProcessPipelineStateCapture, vec![pipeline, bytes, one]),
+            ];
+            let asynchronous: std::collections::BTreeSet<&str> = Native::ALL
+                .iter()
+                .filter(|n| n.module() == "runtime/process" && n.signature().is_async)
+                .map(|n| n.symbol())
+                .collect();
+            let tried = calls.iter().map(|(n, _)| n.symbol()).collect();
+            assert_eq!(asynchronous, tried, "every async process native is tried");
+            for (native, arguments) in calls {
+                // A process that has not started, a pipeline without commands.
+                let Outcome::Value(future) = heap.native_process(native, &arguments).unwrap() else {
+                    panic!("{native:?} refused without a Future")
+                };
+                let cell = heap.future(future).unwrap();
+                assert!(cell.io.is_none(), "{native:?} left a request");
+                assert!(matches!(cell.state, Settled::Ready(Err(_))), "{native:?}: {:?}", cell.state);
+            }
+            let refused = heap.native_process(Native::ProcessProcessStateId, &[state]).unwrap();
+            assert!(matches!(refused, Outcome::Failure(_)), "a synchronous native: {refused:?}");
+        });
     }
 
     /// #1010: a stream that comes back to a closed process is dropped, and
