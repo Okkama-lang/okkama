@@ -387,6 +387,13 @@ keeps a failure that settled before the cancellation arrived, #663, and a
 cancelled `Within` reports its origin's failure). Fixed in std, not in the
 runtime: a cancelled operation that fails is a real cleanup failure in
 general; only the server knows a failed handshake is nobody's failure.
+#1023 makes the peer the boundary for every such race, not one site at a time:
+the server runs each peer's `run()` through `HttpServerPeerWork.settled()`,
+which absorbs the peer's `Cancelled` with whatever secondary failures its
+connection attached (idle and header reads, body reads under their idle
+timeout, the handler, writes, the upgrade, cleanups). run() already answers or
+drops every other error; a non-cancellation failure of a peer still reaches
+the server.
 
 ## Name< in an expression (#1004, lead decision, 2026-11-23)
 

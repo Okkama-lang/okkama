@@ -92,6 +92,9 @@
   caller; 13 legacy SQLite/db_capture natives are kept by name.
 - [x] #1000, #1021: an HTTPS drain no longer exits 1 when a handshake fails
   just as the drain cancels it (`HttpServerHandshake` in http/server).
+- [x] #1023: a peer the server cancels (close, drain) settles quietly
+  (`HttpServerPeerWork` in http/server): a read, write, handler or cleanup of
+  its connection that fails as the cancellation comes no longer fails `listen`.
 - [ ] Open: IDNA's UTS #46
   table (Net::IDN::UTS46) is older than 17.0; its X status keeps refusing
   17.0 characters.

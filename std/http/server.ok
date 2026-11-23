@@ -550,7 +550,7 @@ hidden object HttpServerPeer {
     }
 
     start() is void {
-        group.start(self.run());
+        group.start(HttpServerPeerWork(self.run()).settled());
     }
 
     close() is void {
@@ -1258,6 +1258,33 @@ hidden object HttpServerDeadline<T> {
     }
 }
 
+// A peer's work as the server runs it (#1023). The server cancels a peer to
+// close its connection: close(), or a drain. Whatever the connection's own
+// operations fail with on the way out is the peer's, not the server's: a read,
+// a write, a handshake or an upgrade that fails just as the cancellation comes
+// (its failure settled first, so it is kept, #663), a handler, or a cleanup of
+// the connection. run() already answers or drops every such error by itself,
+// so here they could only ride on the cancellation as secondary failures and
+// fail the server's drain; a cancelled peer settles quietly instead. A failure
+// of the peer that is not a cancellation (a panic, a runtime error) still ends
+// the run.
+hidden object HttpServerPeerWork {
+    has work is Future<bool>;
+
+    HttpServerPeerWork(work is Future<bool>) {
+        self.work = work;
+    }
+
+    async settled() is bool {
+        try {
+            await work;
+        }
+        catch e is Cancelled {
+            true;
+        };
+    }
+}
+
 // A TLS handshake as the server takes it, bounded by limit: the connection, or
 // none when the handshake fails or runs out of time. A failed handshake is the
 // peer's, not the server's: it only closes that connection. The deadline's
@@ -1781,4 +1808,156 @@ async test "the handshake under the deadline keeps a failure it already saw out 
             false;
         }
     );
+}
+
+// A peer that a drain cancels while its connection fails (#1023): it waits in
+// one of the ways a peer waits, and the connection refuses (invalid_data, no
+// close_notify) once gate is set. way 0: an idle or header read under the
+// peer's deadline; 1: a handler the peer runs in its group of handlers and
+// awaits without a deadline (a zero handling timeout); 2: a body
+// read under its own idle timeout, inside the handler's deadline; 3: a cleanup
+// of the connection that fails as the peer unwinds.
+hidden object HttpServerDrainedPeer {
+    has way is int;
+    has gate is Event;
+
+    HttpServerDrainedPeer(way is int, gate is Event) {
+        self.way = way;
+        self.gate = gate;
+    }
+
+    async refusal() is @byte {
+        let opened = gate.wait();
+        await opened;
+        throw TlsFailure.detailed(TlsPhase.reading, "invalid_data");
+    }
+
+    async body() is @byte {
+        let timed = TimedAsyncReading(
+            origin: HttpServerRefusingInput(gate),
+            limit: Duration(seconds: 30.rat()),
+            clock: SystemClock()
+        );
+        let reading = timed.bytes(16);
+        await reading;
+    }
+
+    close() is void {
+        if gate.ready() {
+            throw TlsFailure.detailed(TlsPhase.closing, "invalid_data");
+        }
+    }
+
+    async run() is bool {
+        let children is FutureGroup<@byte> = FutureGroup();
+        let cleanup = WebSocketOutputSettlement(children);
+        defer await cleanup.close();
+        let waiting = if way == 1 {
+            let handling = self.refusal();
+            children.start(handling);
+            handling;
+        }
+        else {
+            let deadline is HttpServerDeadline<@byte> = HttpServerDeadline(
+                waiting: if way == 2 {
+                    self.body();
+                }
+                else {
+                    self.refusal();
+                },
+                limit: Duration(seconds: 30.rat()),
+                clock: SystemClock()
+            );
+            deadline.outcome();
+        };
+        if way == 3 {
+            defer self.close();
+        }
+        try {
+            await waiting;
+        }
+        catch e is Cancelled {
+            throw;
+        }
+        catch e is Error {}
+        true;
+    }
+}
+
+// Input that refuses once gate is set.
+hidden object HttpServerRefusingInput does AsyncReading {
+    has gate is Event;
+
+    HttpServerRefusingInput(gate is Event) {
+        self.gate = gate;
+    }
+
+    async bytes(amount is int) is @byte {
+        let opened = gate.wait();
+        await opened;
+        throw TlsFailure.detailed(TlsPhase.reading, "invalid_data");
+    }
+}
+
+// Whether a drain that cancels peer while its connection fails ends quietly.
+hidden object HttpServerPeerDrain {
+    has peer is HttpServerDrainedPeer;
+    has gate is Event;
+
+    HttpServerPeerDrain(way is int) {
+        let opening = Event();
+        gate = opening;
+        peer = HttpServerDrainedPeer(way: way, gate: opening);
+    }
+
+    async quiet() is bool {
+        let peers is FutureGroup<bool> = FutureGroup();
+        peers.start(HttpServerPeerWork(peer.run()).settled());
+        // The connection fails, then the drain cancels the peer before it
+        // resumes.
+        gate.set();
+        peers.cancel();
+        try {
+            await peers.wait();
+            true;
+        }
+        catch e is Error {
+            false;
+        };
+    }
+}
+
+async test "a drain that cancels a peer as its connection fails ends quietly (#1023)" {
+    test.ok(await HttpServerPeerDrain(0).quiet());
+    test.ok(await HttpServerPeerDrain(1).quiet());
+    test.ok(await HttpServerPeerDrain(2).quiet());
+    test.ok(await HttpServerPeerDrain(3).quiet());
+}
+
+async test "a peer's failure that is not a cancellation still reaches the server (#1023)" {
+    let failing = HttpServerDrainedPeer(way: 0, gate: Event(ready: true)).refusal();
+    let peer = HttpServerPeerWork(HttpServerFailingWork(failing).run());
+    test.ok(
+        try {
+            await peer.settled();
+            false;
+        }
+        catch e is TlsFailure {
+            true;
+        }
+    );
+}
+
+// Work that fails as its origin does.
+hidden object HttpServerFailingWork {
+    has origin is Future<@byte>;
+
+    HttpServerFailingWork(origin is Future<@byte>) {
+        self.origin = origin;
+    }
+
+    async run() is bool {
+        await origin;
+        true;
+    }
 }
