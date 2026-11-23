@@ -96,13 +96,13 @@ extern "C" fn on_signal(number: libc::c_int) {
 
 /// Место errno текущего потока: обработчик не должен его менять.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-unsafe fn errno() -> *mut libc::c_int {
+pub(super) unsafe fn errno() -> *mut libc::c_int {
     // SAFETY: errno текущего потока.
     unsafe { libc::__errno_location() }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-unsafe fn errno() -> *mut libc::c_int {
+pub(super) unsafe fn errno() -> *mut libc::c_int {
     // SAFETY: errno текущего потока.
     unsafe { libc::__error() }
 }
@@ -346,6 +346,23 @@ fn await_watch_for(id: u64, token: Option<u64>) -> Option<usize> {
     }
 }
 
+/// What a finished `signal_arrival` wait settles its promise with: the name
+/// of the signal that came, or `already_closed` when the watch was taken off
+/// under it (#1013; the promise waited forever before). A cancelled arrival
+/// also ends with `None`, but its promise is settled already, and `settle`
+/// leaves it as it is.
+fn arrival_outcome(native: Native, received: Option<usize>) -> sched::Outcome {
+    match received {
+        Some(place) => Ok(text(SIGNALS[place].0)),
+        None => Err(Failure::new(Kind::Native(Rc::new(crate::abi::NativeFailure {
+            domain: "core.signal".into(),
+            code: "already_closed".into(),
+            operation: native.symbol().into(),
+            message: "Signal watch is closed".into(),
+        })))),
+    }
+}
+
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     match native {
         Native::SignalSignalWatch => {
@@ -379,11 +396,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let target = promise.clone();
             let op = sched::offload(
                 move || await_watch_for(id, Some(token)),
-                move |received: Option<usize>| {
-                    if let Some(place) = received {
-                        sched::settle(&target, Ok(text(SIGNALS[place].0)));
-                    }
-                },
+                move |received: Option<usize>| sched::settle(&target, arrival_outcome(native, received)),
             );
             // Исход или отмена (#940): ожидание снимается (наблюдение остаётся,
             // его снимает unwatch), и поток будят, чтобы он вышел сразу.
@@ -464,6 +477,31 @@ mod tests {
         }
         assert_eq!(arrived(id), "TERM");
         unwatch(id);
+    }
+
+    /// #1013: unwatching under a waiting arrival ends its wait, and the
+    /// arrival is refused with `already_closed` instead of never settling.
+    /// INT: the other tests fire HUP and TERM watches, which would fire this one.
+    #[test]
+    fn an_arrival_under_an_unwatch_is_refused() {
+        let watched = execute(Native::SignalSignalWatch, &[super::super::support::array(vec![text("INT")])]);
+        let Ok(id) = watched else { panic!("a watch") };
+        let Ok(Value::Future(arrival)) = execute(Native::SignalSignalArrival, std::slice::from_ref(&id)) else {
+            panic!("an arrival future")
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(arrival.running());
+        assert!(execute(Native::SignalSignalUnwatch, std::slice::from_ref(&id)).is_ok());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while arrival.running() && std::time::Instant::now() < deadline {
+            sched::pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let failure = arrival.failure().expect("the arrival is refused, not left waiting");
+        let Kind::Native(native) = &failure.kind else { panic!("a native failure") };
+        assert_eq!(native.code, "already_closed");
+        let Ok(Value::Str(name)) = arrival_outcome(Native::SignalSignalArrival, Some(2)) else { panic!("a name") };
+        assert_eq!(&*name, "HUP");
     }
 
     /// #940: a cancelled arrival (its token gone) stops waiting although the

@@ -46,7 +46,8 @@ native terminal_mode_closed(state is TerminalModeState) is bool;
 // Restores the previous mode.
 native terminal_mode_close(state is TerminalModeState) is bool;
 
-// Forgets the mode without restoring it.
+// Releases the mode out of order, as destroy does: restored at once when it is
+// the newest, otherwise when the newer ones are released.
 native terminal_mode_drop(state is TerminalModeState) is bool;
 
 // Starts listening for size changes.

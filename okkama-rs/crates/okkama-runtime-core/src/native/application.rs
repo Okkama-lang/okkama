@@ -1,7 +1,8 @@
-//! `runtime/application` (POSIX-терминал) и `runtime/account` — перенос
-//! Дескрипторы stdin/stdout/stderr
-//! или `/dev/tty`, режимы termios (стек аренд), геометрия `TIOCGWINSZ` и
-//! `SIGWINCH`; базы пользователей и групп хоста.
+//! `runtime/application` (POSIX terminal) and `runtime/account`, which Sparrow
+//! routes here (`host/native_origin.rs`): sessions on copies of
+//! stdin/stdout/stderr or on `/dev/tty`, termios modes (a stack of leases),
+//! geometry from `TIOCGWINSZ` and `SIGWINCH`; the host's user and group
+//! databases.
 #![allow(unsafe_code)]
 
 use super::support::{array, byte_array, bytes, handle, int, int_map, int_value, items, map, new_handle, string, string_array, text};
@@ -13,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const DOMAIN: &str = "core.application";
@@ -76,7 +77,7 @@ static OWNERS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 struct Mode {
     id: u32,
-    before: Vec<u8>,
+    before: libc::termios,
     released: bool,
 }
 
@@ -86,7 +87,7 @@ struct Session {
     controlling: bool,
     input_interactive: bool,
     output_interactive: bool,
-    original: Option<Vec<u8>>,
+    original: Option<libc::termios>,
     closed: bool,
     modes: Vec<Mode>,
     serial: u32,
@@ -99,10 +100,19 @@ struct Session {
     reading: Option<(sched::Future, usize)>,
     /// Input read by a cancelled read that nobody has taken yet.
     pending: Option<Vec<u8>>,
-    /// The blocking `read(2)` in flight, if any (#12): a cancelled read
-    /// cannot stop it, so the next read waits for its bytes instead of
-    /// queueing another one behind it.
+    /// The reader thread in flight, if any (#12): a cancelled read leaves it
+    /// waiting, and the next read takes it over instead of queueing another
+    /// one behind it.
     in_flight: Option<sched::Op>,
+    /// Whether a read is waiting. The reader thread reads only then: input
+    /// that comes after a read was cancelled stays in the terminal (#1013).
+    wanted: Arc<AtomicBool>,
+    /// Set when the session closes; a reader thread that starts later
+    /// leaves without touching the descriptors.
+    stopped: Arc<AtomicBool>,
+    /// The pipe that stops the reader thread when the session closes
+    /// (`[read end, write end]`, `-1` until the first read).
+    stop: [i32; 2],
 }
 
 type SessionRef = Rc<RefCell<Session>>;
@@ -121,14 +131,15 @@ struct Resizes {
     pending: Option<sched::Future>,
 }
 
+/// A copy of `fd` that children do not inherit. `F_DUPFD_CLOEXEC` sets the
+/// flag with the copy, so a `fork` on another thread cannot come between
+/// them as it could between `dup` and `fcntl(FD_CLOEXEC)` (#1013).
 fn dup(fd: i32, operation: &str) -> Result<i32, Rc<Failure>> {
-    // SAFETY: dup(2) действительного дескриптора.
-    let copy = unsafe { libc::dup(fd) };
+    // SAFETY: fcntl(2) on a descriptor number; a bad one is refused by errno.
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if copy < 0 {
         return Err(errno_failure(last_errno(), operation, "Cannot duplicate terminal descriptor"));
     }
-    // Дескриптор сессии не наследуется потомками.
-    unsafe { libc::fcntl(copy, libc::F_SETFD, libc::FD_CLOEXEC) };
     Ok(copy)
 }
 
@@ -137,22 +148,19 @@ fn tty(fd: i32) -> bool {
     unsafe { libc::isatty(fd) == 1 }
 }
 
-fn termios_size() -> usize {
-    std::mem::size_of::<libc::termios>()
-}
-
-fn snapshot(session: &Session, operation: &str) -> Result<Vec<u8>, Rc<Failure>> {
-    let mut term = vec![0u8; termios_size()];
-    // SAFETY: буфер размера struct termios.
-    if unsafe { libc::tcgetattr(session.input, term.as_mut_ptr() as *mut libc::termios) } < 0 {
+fn snapshot(session: &Session, operation: &str) -> Result<libc::termios, Rc<Failure>> {
+    // SAFETY: an all-zero termios is a valid value of this plain C struct.
+    let mut term: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr(3) fills the termios it is given.
+    if unsafe { libc::tcgetattr(session.input, &mut term) } < 0 {
         return Err(errno_failure(last_errno(), operation, "Cannot observe terminal mode"));
     }
     Ok(term)
 }
 
-fn apply(session: &Session, snapshot: &[u8], operation: &str) -> Result<(), Rc<Failure>> {
-    // SAFETY: снимок struct termios.
-    if unsafe { libc::tcsetattr(session.input, libc::TCSANOW, snapshot.as_ptr() as *const libc::termios) } < 0 {
+fn apply(session: &Session, snapshot: &libc::termios, operation: &str) -> Result<(), Rc<Failure>> {
+    // SAFETY: tcsetattr(3) reads the termios it is given.
+    if unsafe { libc::tcsetattr(session.input, libc::TCSANOW, snapshot) } < 0 {
         return Err(errno_failure(last_errno(), operation, "Cannot apply terminal mode"));
     }
     Ok(())
@@ -187,9 +195,27 @@ fn opened(mut session: Session, keys: &[String], operation: &str) -> Result<Sess
     session.input_interactive = tty(session.input);
     session.output_interactive = tty(session.output);
     if session.input_interactive {
-        session.original = Some(snapshot(&session, operation)?);
+        match snapshot(&session, operation) {
+            Ok(original) => session.original = Some(original),
+            Err(failure) => {
+                // The claims and descriptors go with the session that failed
+                // to open; they stayed forever before (#1013).
+                release_claims(&session.claims);
+                close_fds(&session);
+                return Err(failure);
+            }
+        }
     }
     Ok(Rc::new(RefCell::new(session)))
+}
+
+fn release_claims(claims: &[String]) {
+    let mut owners = OWNERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(owners) = owners.as_mut() {
+        for claim in claims {
+            owners.remove(claim);
+        }
+    }
 }
 
 fn new_session(input: i32, output: i32, controlling: bool) -> Session {
@@ -210,6 +236,9 @@ fn new_session(input: i32, output: i32, controlling: bool) -> Session {
         reading: None,
         pending: None,
         in_flight: None,
+        wanted: Arc::new(AtomicBool::new(false)),
+        stopped: Arc::new(AtomicBool::new(false)),
+        stop: [-1, -1],
     }
 }
 
@@ -241,6 +270,21 @@ fn size(session: &Session, operation: &str) -> Result<(i64, i64), Rc<Failure>> {
     Ok((i64::from(winsize.ws_col), i64::from(winsize.ws_row)))
 }
 
+/// The columns of the terminal on `fd` (`TIOCGWINSZ`); `None` when `fd` is
+/// not a terminal or reports no width. For `okkama man`, which wraps its page
+/// to the window (#1017).
+pub fn terminal_columns(fd: i32) -> Option<u16> {
+    if !tty(fd) {
+        return None;
+    }
+    let mut winsize = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
+    // SAFETY: TIOCGWINSZ writes a struct winsize.
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut winsize) } < 0 {
+        return None;
+    }
+    (winsize.ws_col > 0).then_some(winsize.ws_col)
+}
+
 fn write_fd(fd: i32, data: &[u8], operation: &str) -> Result<usize, Rc<Failure>> {
     loop {
         // SAFETY: буфер `data`.
@@ -269,6 +313,7 @@ fn close(state: &SessionRef) -> Result<(), Rc<Failure>> {
     if let Some((reading, _)) = reading {
         sched::settle(&reading, Err(terminal_failure("already_closed", &operation, "Terminal session is closed")));
     }
+    stop_reader(state);
     let mut first = None;
     let mut session = state.borrow_mut();
     if !session.cleanup.is_empty() && session.output >= 0 {
@@ -280,18 +325,19 @@ fn close(state: &SessionRef) -> Result<(), Rc<Failure>> {
             Err(failure) => first = Some(failure),
         }
     }
-    if let Some(original) = session.original.clone()
+    if let Some(original) = session.original
         && let Err(failure) = apply(&session, &original, &operation) {
             first = first.or(Some(failure));
         }
     session.modes.clear();
     close_fds(&session);
-    if let Ok(mut owners) = OWNERS.lock()
-        && let Some(owners) = owners.as_mut() {
-            for claim in &session.claims {
-                owners.remove(claim);
-            }
+    for fd in std::mem::replace(&mut session.stop, [-1, -1]) {
+        if fd >= 0 {
+            // SAFETY: the session's own stop pipe; its reader thread has left.
+            unsafe { libc::close(fd) };
         }
+    }
+    release_claims(&session.claims);
     session.claims.clear();
     match first {
         Some(failure) => Err(failure),
@@ -322,60 +368,188 @@ fn terminal_read(value: &Value, limit: &crate::IntValue) -> Value {
     }
     let promise = sched::promise();
     state.borrow_mut().reading = Some((promise.clone(), limit));
+    state.borrow().wanted.store(true, Ordering::SeqCst);
     let in_flight = state.borrow().in_flight.clone();
-    let op = match in_flight {
-        // A cancelled read's `read(2)` still waits for input: its bytes come
-        // to this read (`deliver_input`), and its operation is awaited again.
-        Some(op) => {
-            op.attach();
-            op
-        }
+    match in_flight {
+        // A cancelled read's thread still waits for input: its bytes come to
+        // this read (`deliver_input`), and its operation is awaited again.
+        Some(op) => op.attach(),
         None => start_read(&state, operation),
-    };
+    }
     let weak = Rc::downgrade(&state);
     promise.listen(move || {
-        op.detach();
         if let Some(state) = weak.upgrade() {
-            state.borrow_mut().reading = None;
+            let mut session = state.borrow_mut();
+            session.wanted.store(false, Ordering::SeqCst);
+            if let Some(op) = &session.in_flight {
+                op.detach();
+            }
+            session.reading = None;
         }
     });
     Value::Future(promise)
 }
 
-/// One blocking `read(2)` on the reader thread. Its outcome goes to whichever
-/// read is waiting when it completes, which is not necessarily the one that
-/// started it: that one may have been cancelled meanwhile (#12).
-fn start_read(state: &SessionRef, operation: String) -> sched::Op {
-    let limit = 65536;
-    let (fd, gate) = {
+/// How the reader thread ended.
+enum ReadEnd {
+    /// `read(2)` returned these bytes (empty at the end of input).
+    Data(Vec<u8>),
+    /// `read(2)` failed with this errno.
+    Failed(i32),
+    /// Input came, but no read was waiting any more: it stays unread.
+    Idle,
+    /// The session closed.
+    Stopped,
+}
+
+/// The stop pipe of the session, made on the first read; `None` when it
+/// cannot be made, and the reader then blocks in `read(2)` as before.
+fn stop_pipe(session: &mut Session) -> Option<[i32; 2]> {
+    if session.stop[0] < 0 {
+        let mut ends = [-1i32; 2];
+        // SAFETY: pipe(2) fills two descriptors.
+        if unsafe { libc::pipe(ends.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        for fd in ends {
+            // SAFETY: the pipe's own descriptors: not inherited by children.
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+        session.stop = ends;
+    }
+    Some(session.stop)
+}
+
+/// Whether `select(2)` can watch both descriptors.
+fn selectable(input: i32, stop: i32) -> bool {
+    (0..libc::FD_SETSIZE as i32).contains(&input) && (0..libc::FD_SETSIZE as i32).contains(&stop)
+}
+
+/// Wait until `input` is readable or `stop` is: `Ok(true)` for input,
+/// `Ok(false)` for stop. `select(2)`, not `poll(2)`: macOS `poll` answers
+/// `POLLNVAL` for `/dev/tty`.
+fn wait_input(input: i32, stop: i32) -> Result<bool, i32> {
+    loop {
+        // SAFETY: an all-zero fd_set is a valid, empty set.
+        let mut set: libc::fd_set = unsafe { std::mem::zeroed() };
+        // SAFETY: both descriptors are below FD_SETSIZE (`selectable`).
+        unsafe {
+            libc::FD_SET(input, &mut set);
+            libc::FD_SET(stop, &mut set);
+        }
+        // SAFETY: `set` is a valid fd_set, no timeout.
+        let count = unsafe {
+            libc::select(input.max(stop) + 1, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
+        };
+        if count < 0 {
+            let code = last_errno();
+            if code == libc::EINTR {
+                continue;
+            }
+            return Err(code);
+        }
+        // SAFETY: `set` was filled by select(2).
+        if unsafe { libc::FD_ISSET(stop, &set) } {
+            return Ok(false);
+        }
+        // SAFETY: as above.
+        if unsafe { libc::FD_ISSET(input, &set) } {
+            return Ok(true);
+        }
+    }
+}
+
+/// Stop the reader thread of a closing session and wait until it has left,
+/// so that neither `close(2)` of its descriptor nor `tcsetattr(3)` waits for
+/// input, and no input is read for a session that is gone (#1013). A reader
+/// that blocks in `read(2)` (no stop pipe) is not waited for.
+fn stop_reader(state: &SessionRef) {
+    let (stop, input, gate) = {
         let session = state.borrow();
-        (session.input, session.reader.clone())
+        session.wanted.store(false, Ordering::SeqCst);
+        session.stopped.store(true, Ordering::SeqCst);
+        if session.in_flight.is_none() {
+            return;
+        }
+        (session.stop, session.input, session.reader.clone())
+    };
+    if !selectable(input, stop[0]) || stop[1] < 0 {
+        return;
+    }
+    let byte = 1u8;
+    // SAFETY: the stop pipe's own write end and a one-byte buffer.
+    unsafe { libc::write(stop[1], &byte as *const u8 as *const libc::c_void, 1) };
+    // The reader holds the gate while it waits and reads; it leaves at once
+    // on the stop byte. A `read(2)` whose input another reader of the same
+    // terminal took first could still block, so the wait is bounded, and
+    // then the session closes under it as it did before.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while matches!(gate.try_lock(), Err(std::sync::TryLockError::WouldBlock)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// The reader thread: it waits until input comes or the session closes, and
+/// then makes one `read(2)` if a read still waits. Its outcome goes to
+/// whichever read is waiting when it completes, which is not necessarily the
+/// one that started it: that one may have been cancelled meanwhile (#12).
+fn start_read(state: &SessionRef, operation: String) {
+    let limit = 65536;
+    let (fd, gate, wanted, stopped, stop) = {
+        let mut session = state.borrow_mut();
+        let stop = stop_pipe(&mut session).map_or(-1, |ends| ends[0]);
+        (session.input, session.reader.clone(), session.wanted.clone(), session.stopped.clone(), stop)
     };
     let delivered = state.clone();
     let op = sched::offload(
         move || {
-            let _gate = gate.lock().expect("terminal reader lock");
+            let _gate = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if stopped.load(Ordering::SeqCst) {
+                return ReadEnd::Stopped;
+            }
+            if selectable(fd, stop) {
+                match wait_input(fd, stop) {
+                    Ok(true) => {}
+                    Ok(false) => return ReadEnd::Stopped,
+                    Err(code) => return ReadEnd::Failed(code),
+                }
+                if !wanted.load(Ordering::SeqCst) {
+                    return ReadEnd::Idle;
+                }
+            }
             let mut buffer = vec![0u8; limit];
             loop {
                 // SAFETY: буфер длины `limit`.
                 let count = unsafe { libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, limit) };
                 if count >= 0 {
                     buffer.truncate(count as usize);
-                    return Ok(buffer);
+                    return ReadEnd::Data(buffer);
                 }
                 let code = last_errno();
                 if code != libc::EINTR {
-                    return Err(code);
+                    return ReadEnd::Failed(code);
                 }
             }
         },
-        move |outcome: Result<Vec<u8>, i32>| {
+        move |end: ReadEnd| {
             delivered.borrow_mut().in_flight = None;
+            let outcome = match end {
+                ReadEnd::Data(data) => Ok(data),
+                ReadEnd::Failed(code) => Err(code),
+                ReadEnd::Stopped => return,
+                ReadEnd::Idle => {
+                    // A read that came after the thread looked is still waiting.
+                    let waiting = delivered.borrow().reading.as_ref().is_some_and(|(read, _)| read.running());
+                    if waiting && !delivered.borrow().closed {
+                        start_read(&delivered, operation);
+                    }
+                    return;
+                }
+            };
             deliver_input(&delivered, outcome, &operation);
         },
     );
-    state.borrow_mut().in_flight = Some(op.clone());
-    op
+    state.borrow_mut().in_flight = Some(op);
 }
 
 /// The outcome of a `read(2)`: to the waiting read, at most its limit, the
@@ -406,69 +580,47 @@ fn deliver_input(state: &SessionRef, outcome: Result<Vec<u8>, i32>, operation: &
 
 // ---- режимы ----
 
-#[cfg(target_os = "macos")]
-mod flags {
-    pub const FLAG: usize = 8;
-    pub const CC: usize = 32;
-    pub const VMIN: usize = 16;
-    pub const VTIME: usize = 17;
-    pub const ECHONL: u64 = 0x10;
-    pub const ICANON: u64 = 0x100;
-    pub const ISIG: u64 = 0x80;
-    pub const IEXTEN: u64 = 0x400;
-    pub const IXON: u64 = 0x200;
-    pub const CSIZE: u64 = 0x300;
-    pub const CS8: u64 = 0x300;
-    pub const PARENB: u64 = 0x1000;
-}
-
-#[cfg(not(target_os = "macos"))]
-mod flags {
-    pub const FLAG: usize = 4;
-    pub const CC: usize = 17;
-    pub const VMIN: usize = 6;
-    pub const VTIME: usize = 5;
-    pub const ECHONL: u64 = 0x40;
-    pub const ICANON: u64 = 0x2;
-    pub const ISIG: u64 = 0x1;
-    pub const IEXTEN: u64 = 0x8000;
-    pub const IXON: u64 = 0x400;
-    pub const CSIZE: u64 = 0x30;
-    pub const CS8: u64 = 0x30;
-    pub const PARENB: u64 = 0x100;
-}
-
-const ECHO: u64 = 0x8;
-const IGNBRK: u64 = 0x1;
-const BRKINT: u64 = 0x2;
-const PARMRK: u64 = 0x8;
-const INPCK: u64 = 0x10;
-const ISTRIP: u64 = 0x20;
-const INLCR: u64 = 0x40;
-const IGNCR: u64 = 0x80;
-const ICRNL: u64 = 0x100;
-const OPOST: u64 = 0x1;
-
-fn flag(term: &[u8], index: usize) -> u64 {
-    let at = index * flags::FLAG;
-    if flags::FLAG == 8 {
-        u64::from_ne_bytes(term[at..at + 8].try_into().expect("eight"))
+/// The terminal settings of `mode` (0 cooked, 1 cbreak, 2 raw, 3 secret),
+/// made from the current ones (`before`); cooked and secret start from the
+/// settings the session found. The fields and flags are libc's, not byte
+/// offsets of one platform's layout (#1013).
+fn mode_termios(mode: i64, before: libc::termios, original: Option<libc::termios>) -> libc::termios {
+    let mut term = if mode == 0 || mode == 3 { original.unwrap_or(before) } else { before };
+    if mode == 0 || mode == 3 {
+        term.c_lflag |= libc::ICANON | libc::ISIG;
+        term.c_iflag = (term.c_iflag & !(libc::IGNCR | libc::INLCR)) | libc::ICRNL;
+        term.c_oflag |= libc::OPOST;
+        if mode == 0 {
+            term.c_lflag |= libc::ECHO;
+        } else {
+            term.c_lflag &= !(libc::ECHO | libc::ECHONL);
+        }
     } else {
-        u64::from(u32::from_ne_bytes(term[at..at + 4].try_into().expect("four")))
+        term.c_lflag &= !(libc::ICANON | libc::ECHO);
+        if mode == 1 {
+            term.c_lflag |= libc::ISIG;
+        }
+        term.c_cc[libc::VMIN] = 1;
+        term.c_cc[libc::VTIME] = 0;
+        if mode == 2 {
+            term.c_lflag &= !(libc::ISIG | libc::IEXTEN);
+            term.c_iflag &= !(libc::IGNBRK
+                | libc::BRKINT
+                | libc::PARMRK
+                | libc::INLCR
+                | libc::IGNCR
+                | libc::ICRNL
+                | libc::INPCK
+                | libc::ISTRIP
+                | libc::IXON);
+            term.c_oflag &= !libc::OPOST;
+            term.c_cflag = (term.c_cflag & !(libc::CSIZE | libc::PARENB)) | libc::CS8;
+        }
     }
-}
-
-fn set_flag(term: &mut [u8], index: usize, value: u64) {
-    let at = index * flags::FLAG;
-    if flags::FLAG == 8 {
-        term[at..at + 8].copy_from_slice(&value.to_ne_bytes());
-    } else {
-        term[at..at + 4].copy_from_slice(&(value as u32).to_ne_bytes());
-    }
+    term
 }
 
 fn mode_open(value: &Value, mode: &crate::IntValue) -> Result<Value, Error> {
-    use flags::*;
     let operation = symbol("terminal_mode_open", 2);
     let state = session(value, &operation).map_err(as_error)?;
     let attempt = || -> Result<Value, Rc<Failure>> {
@@ -480,35 +632,7 @@ fn mode_open(value: &Value, mode: &crate::IntValue) -> Result<Value, Error> {
             return Err(terminal_failure("invalid_input", &operation, "Unknown terminal mode"));
         };
         let before = snapshot(&session, &operation)?;
-        let mut term = if mode == 0 || mode == 3 { session.original.clone().unwrap_or_else(|| before.clone()) } else { before.clone() };
-        let (mut iflag, mut oflag, mut cflag, mut lflag) = (flag(&term, 0), flag(&term, 1), flag(&term, 2), flag(&term, 3));
-        if mode == 0 || mode == 3 {
-            lflag |= ICANON | ISIG;
-            iflag = (iflag & !(IGNCR | INLCR)) | ICRNL;
-            oflag |= OPOST;
-            if mode == 0 {
-                lflag |= ECHO;
-            } else {
-                lflag &= !(ECHO | ECHONL);
-            }
-        } else {
-            lflag &= !(ICANON | ECHO);
-            if mode == 1 {
-                lflag |= ISIG;
-            }
-            term[CC + VMIN] = 1;
-            term[CC + VTIME] = 0;
-            if mode == 2 {
-                lflag &= !(ISIG | IEXTEN);
-                iflag &= !(IGNBRK | BRKINT | PARMRK | INLCR | IGNCR | ICRNL | INPCK | ISTRIP | IXON);
-                oflag &= !OPOST;
-                cflag = (cflag & !(CSIZE | PARENB)) | CS8;
-            }
-        }
-        set_flag(&mut term, 0, iflag);
-        set_flag(&mut term, 1, oflag);
-        set_flag(&mut term, 2, cflag);
-        set_flag(&mut term, 3, lflag);
+        let term = mode_termios(mode, before, session.original);
         apply(&session, &term, &operation)?;
         session.serial += 1;
         let id = session.serial;
@@ -538,7 +662,7 @@ fn mode_close(state: &SessionRef, id: u32, dropping: bool, operation: &str) -> R
         mode.released = true;
     }
     while session.modes.last().is_some_and(|mode| mode.released) {
-        let before = session.modes.last().expect("mode").before.clone();
+        let before = session.modes.last().expect("mode").before;
         apply(&session, &before, operation)?;
         session.modes.pop();
     }
@@ -555,6 +679,34 @@ struct Signals {
     changed: Condvar,
 }
 
+/// Resize waits in progress (a thread each), for the test of their exit.
+static RESIZE_WAITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Wait on a thread until the generation passes `seen` (true) or `stop` is
+/// set (false). A cancelled observation sets `stop` and wakes the waiters
+/// ([`wake_resize_waits`]), so its thread does not sleep until the next
+/// `SIGWINCH` (#1013, as #940 did for `signal_arrival`).
+fn wait_resize(seen: u64, stop: &AtomicBool) -> bool {
+    RESIZE_WAITS.fetch_add(1, Ordering::SeqCst);
+    let signals = signals();
+    let mut generation = signals.generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    while *generation <= seen && !stop.load(Ordering::SeqCst) {
+        generation = signals.changed.wait(generation).unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    let resized = *generation > seen;
+    drop(generation);
+    RESIZE_WAITS.fetch_sub(1, Ordering::SeqCst);
+    resized
+}
+
+/// Wake the resize waits after a `stop` was set. Taking the lock first means
+/// a wait between its check and its sleep cannot miss the wakeup.
+fn wake_resize_waits() {
+    let signals = signals();
+    drop(signals.generation.lock());
+    signals.changed.notify_all();
+}
+
 fn signals() -> &'static Signals {
     static SIGNALS: std::sync::OnceLock<Signals> = std::sync::OnceLock::new();
     SIGNALS.get_or_init(|| Signals {
@@ -565,64 +717,100 @@ fn signals() -> &'static Signals {
 
 static PRIOR: std::sync::OnceLock<libc::sigaction> = std::sync::OnceLock::new();
 
-extern "C" fn on_winch(signal: libc::c_int) {
+/// The `SIGWINCH` handler, installed with `SA_SIGINFO` so that it has the
+/// arguments a three-argument prior handler needs (#1013: the prior handler
+/// was always called with one).
+extern "C" fn on_winch(signal: libc::c_int, info: *mut libc::siginfo_t, context: *mut libc::c_void) {
     GENERATION.fetch_add(1, Ordering::SeqCst);
     let fd = PIPE_WRITE.load(Ordering::SeqCst);
     if fd >= 0 {
         let byte = 1u8;
-        // SAFETY: write(2) безопасен в обработчике сигнала.
-        unsafe { libc::write(fd, &byte as *const u8 as *const libc::c_void, 1) };
+        // SAFETY: write(2) is async-signal-safe; the write end does not block
+        // (a full pipe drops the byte, the generation still counts); errno is
+        // the interrupted code's and is put back.
+        unsafe {
+            let saved = *super::signal::errno();
+            libc::write(fd, &byte as *const u8 as *const libc::c_void, 1);
+            *super::signal::errno() = saved;
+        }
     }
     if let Some(prior) = PRIOR.get() {
         let handler = prior.sa_sigaction;
-        if handler != libc::SIG_DFL && handler != libc::SIG_IGN && handler != on_winch as *const () as usize {
-            // SAFETY: прежний обработчик сигнала в форме sa_handler.
+        if handler == libc::SIG_DFL || handler == libc::SIG_IGN || handler == on_winch as *const () as usize {
+            return;
+        }
+        if prior.sa_flags & libc::SA_SIGINFO != 0 {
+            // SAFETY: with SA_SIGINFO the prior handler has the sa_sigaction form.
+            let chained: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                unsafe { std::mem::transmute(handler) };
+            chained(signal, info, context);
+        } else {
+            // SAFETY: without SA_SIGINFO the prior handler has the sa_handler form.
             let chained: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(handler) };
             chained(signal);
         }
     }
 }
 
-fn install() {
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    INSTALLED.call_once(|| {
+/// Install the `SIGWINCH` handler and its thread once; false when that
+/// failed, and resize sources are refused instead of waiting forever (#1013:
+/// a failed `pipe` used up the `Once`, and every wait hung).
+fn install() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| {
         let mut fds = [0i32; 2];
-        // SAFETY: pipe(2), sigaction(2).
+        // SAFETY: pipe(2) fills two descriptors.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        // SAFETY: the pipe's own descriptors: not inherited by children, and
+        // the write end does not block the handler.
         unsafe {
-            if libc::pipe(fds.as_mut_ptr()) != 0 {
-                return;
-            }
             libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
             libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
-            PIPE_WRITE.store(fds[1], Ordering::SeqCst);
-            let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = on_winch as *const () as usize;
-            action.sa_flags = libc::SA_RESTART;
-            libc::sigemptyset(&mut action.sa_mask);
-            let mut prior: libc::sigaction = std::mem::zeroed();
-            libc::sigaction(libc::SIGWINCH, &action, &mut prior);
-            let _ = PRIOR.set(prior);
+            let flags = libc::fcntl(fds[1], libc::F_GETFL);
+            libc::fcntl(fds[1], libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
         let read = fds[0];
-        std::thread::Builder::new()
-            .name("okkama-winch".into())
-            .spawn(move || {
-                let mut byte = 0u8;
-                loop {
-                    // SAFETY: собственный конец канала.
-                    let count = unsafe { libc::read(read, &mut byte as *mut u8 as *mut libc::c_void, 1) };
-                    if count == 0 || (count < 0 && last_errno() != libc::EINTR) {
-                        return;
-                    }
-                    let signals = signals();
-                    if let Ok(mut generation) = signals.generation.lock() {
-                        *generation = GENERATION.load(Ordering::SeqCst);
-                    }
-                    signals.changed.notify_all();
+        let spawned = std::thread::Builder::new().name("okkama-winch".into()).spawn(move || {
+            let mut byte = 0u8;
+            loop {
+                // SAFETY: the pipe's own read end and a one-byte buffer.
+                let count = unsafe { libc::read(read, &mut byte as *mut u8 as *mut libc::c_void, 1) };
+                if count == 0 || (count < 0 && last_errno() != libc::EINTR) {
+                    return;
                 }
-            })
-            .expect("winch thread");
-    });
+                let signals = signals();
+                if let Ok(mut generation) = signals.generation.lock() {
+                    *generation = GENERATION.load(Ordering::SeqCst);
+                }
+                signals.changed.notify_all();
+            }
+        });
+        if spawned.is_err() {
+            // SAFETY: the pipe's own descriptors, not given to anybody.
+            unsafe {
+                libc::close(fds[0]);
+                libc::close(fds[1]);
+            }
+            return false;
+        }
+        PIPE_WRITE.store(fds[1], Ordering::SeqCst);
+        // SAFETY: sigaction(2) with a handler of the SA_SIGINFO form; the prior
+        // action is kept to chain to.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = on_winch as *const () as usize;
+            action.sa_flags = libc::SA_RESTART | libc::SA_SIGINFO;
+            libc::sigemptyset(&mut action.sa_mask);
+            let mut prior: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(libc::SIGWINCH, &action, &mut prior) != 0 {
+                return false;
+            }
+            let _ = PRIOR.set(prior);
+        }
+        true
+    })
 }
 
 fn current_generation() -> u64 {
@@ -696,15 +884,14 @@ fn resize_next(value: &Value) -> Result<Value, Error> {
     }
     // Ожидание сигнала держит программу до завершения операции.
     let waiting = source.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopping = stop.clone();
     let op = sched::offload(
-        move || {
-            let signals = signals();
-            let mut generation = signals.generation.lock().expect("winch lock");
-            while *generation <= seen {
-                generation = signals.changed.wait(generation).expect("winch lock");
+        move || wait_resize(seen, &stopping),
+        move |resized: bool| {
+            if !resized {
+                return;
             }
-        },
-        move |()| {
             let pending = waiting.borrow().pending.clone();
             if pending.is_some_and(|pending| pending.state() == sched::State::Running) && !waiting.borrow().closed {
                 deliver(&waiting);
@@ -716,6 +903,8 @@ fn resize_next(value: &Value) -> Result<Value, Error> {
     let weak = Rc::downgrade(&source);
     promise.listen(move || {
         op.detach();
+        stop.store(true, Ordering::SeqCst);
+        wake_resize_waits();
         if let Some(source) = weak.upgrade() {
             source.borrow_mut().pending = None;
         }
@@ -755,6 +944,35 @@ fn account_name(value: &str, kind: &str, operation: &str) -> Result<CString, Err
     CString::new(value).map_err(|_| as_error(fail(ACCOUNT, "invalid_input", operation, &format!("{kind} name contains a zero byte"))))
 }
 
+/// The non-empty logins of a NULL-terminated `gr_mem` list. macOS libc packs
+/// the list right after the record's strings without aligning it (#1013), so
+/// each pointer is read unaligned.
+///
+/// # Safety
+///
+/// `list` is NULL or points to a NULL-terminated sequence of pointers, each
+/// to a NUL-terminated string, all valid for the duration of the call.
+unsafe fn group_members(list: *const *mut c_char) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    if list.is_null() {
+        return names;
+    }
+    let mut member = list;
+    loop {
+        // SAFETY: by the contract, `member` is inside the list, up to its NULL
+        // end; `read_unaligned` needs no alignment.
+        let login = unsafe { member.read_unaligned() };
+        if login.is_null() {
+            return names;
+        }
+        if let Some(login) = c_text(login).filter(|login| !login.is_empty()) {
+            names.insert(login);
+        }
+        // SAFETY: the list goes on at least until its NULL end.
+        member = unsafe { member.add(1) };
+    }
+}
+
 fn group(name: &CString, operation: &str) -> Result<*const libc::group, Error> {
     // SAFETY: getgrnam(3).
     let entry = unsafe { libc::getgrnam(name.as_ptr()) };
@@ -790,18 +1008,11 @@ fn account(native: Native, name: &str, args: &[Value]) -> Result<Value, Error> {
         "account_group_users" => {
             let name = account_name(string(&args[0])?, "Group", operation)?;
             let entry = group(&name, operation)?;
-            // SAFETY: запись getgrnam, список членов завершён NULL.
+            // SAFETY: the getgrnam record stays valid until the next call; its
+            // member list ends with NULL.
             let (gid, mut names) = unsafe {
                 let entry = &*entry;
-                let mut names = std::collections::BTreeSet::new();
-                let mut member = entry.gr_mem;
-                while !member.is_null() && !(*member).is_null() {
-                    if let Some(login) = c_text(*member).filter(|login| !login.is_empty()) {
-                        names.insert(login);
-                    }
-                    member = member.add(1);
-                }
-                (entry.gr_gid, names)
+                (entry.gr_gid, group_members(entry.gr_mem))
             };
             // SAFETY: перебор базы пользователей.
             unsafe {
@@ -844,6 +1055,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 let output = match dup(if kind == 0 { 1 } else { 2 }, operation) {
                     Ok(output) => output,
                     Err(failure) => {
+                        // SAFETY: the copy made just above, owned by nobody else.
                         unsafe { libc::close(input) };
                         return Err(failure);
                     }
@@ -864,6 +1076,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 let output = match dup(fd, operation) {
                     Ok(output) => output,
                     Err(failure) => {
+                        // SAFETY: the descriptor opened just above, owned by nobody else.
                         unsafe { libc::close(fd) };
                         return Err(failure);
                     }
@@ -938,7 +1151,9 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 if !state.borrow().output_interactive {
                     return Err(terminal_failure("unsupported", operation, "Resize notifications require interactive output"));
                 }
-                install();
+                if !install() {
+                    return Err(terminal_failure("unsupported", operation, "Resize notifications cannot be installed"));
+                }
                 let source = Rc::new(RefCell::new(Resizes {
                     session: Some(state.clone()),
                     closed: false,
@@ -961,3 +1176,282 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1013: macOS libc packs `gr_mem` without alignment; the members are
+    /// read unaligned (a plain dereference panics in a debug build).
+    #[test]
+    fn group_members_read_an_unaligned_list() {
+        let (first, second, empty) = (c"daemon", c"root", c"");
+        let pointers = [first.as_ptr(), empty.as_ptr(), second.as_ptr(), first.as_ptr(), std::ptr::null()];
+        let width = std::mem::size_of::<*const c_char>();
+        let mut storage = vec![0u8; 1 + pointers.len() * width];
+        for (index, pointer) in pointers.iter().enumerate() {
+            let at = 1 + index * width;
+            storage[at..at + width].copy_from_slice(&(*pointer as usize).to_ne_bytes());
+        }
+        // SAFETY: the list is in `storage`, ends with NULL and points to live strings.
+        let names = unsafe { group_members(storage[1..].as_ptr().cast()) };
+        assert_eq!(names.into_iter().collect::<Vec<_>>(), ["daemon", "root"]);
+        // SAFETY: a NULL list is allowed.
+        assert!(unsafe { group_members(std::ptr::null()) }.is_empty());
+    }
+
+    /// The tests that wait for or raise SIGWINCH run one at a time.
+    static WINCH: Mutex<()> = Mutex::new(());
+
+    /// A pseudo-terminal: (controller, terminal) descriptors.
+    fn pty() -> (i32, i32) {
+        // SAFETY: posix_openpt(3) family; the name is copied at once.
+        unsafe {
+            let controller = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(controller >= 0, "posix_openpt");
+            assert_eq!(libc::grantpt(controller), 0);
+            assert_eq!(libc::unlockpt(controller), 0);
+            let name = CStr::from_ptr(libc::ptsname(controller)).to_owned();
+            let terminal = libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(terminal >= 0, "open the terminal side");
+            (controller, terminal)
+        }
+    }
+
+    /// A session over its own copies of the terminal descriptor.
+    fn pty_session(terminal: i32) -> SessionRef {
+        let (input, output) = (dup(terminal, "test").expect("dup"), dup(terminal, "test").expect("dup"));
+        opened(new_session(input, output, false), &[format!("test:pty:{terminal}")], "test").expect("a session")
+    }
+
+    fn put(fd: i32, data: &[u8]) {
+        // SAFETY: a live descriptor and a buffer of that length.
+        assert_eq!(unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) }, data.len() as isize);
+    }
+
+    /// What can be read from `fd` within a second (empty when nothing comes).
+    fn take(fd: i32) -> Vec<u8> {
+        let mut ready = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        // SAFETY: one pollfd.
+        if unsafe { libc::poll(&mut ready, 1, 1000) } != 1 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u8; 256];
+        // SAFETY: a buffer of that length.
+        let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+        buffer.truncate(count.max(0) as usize);
+        buffer
+    }
+
+    /// Run the scheduler's deliveries for a while.
+    fn settle_for(milliseconds: u64) {
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(milliseconds);
+        while std::time::Instant::now() < until {
+            sched::pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn close_all(fds: &[i32]) {
+        for fd in fds {
+            // SAFETY: the test's own descriptors.
+            unsafe { libc::close(*fd) };
+        }
+    }
+
+    /// #1013: closing a session whose read was cancelled neither waits for
+    /// input nor lets the cancelled read take the next line.
+    #[test]
+    fn close_after_a_cancelled_read_neither_waits_nor_eats_input() {
+        let (controller, terminal) = pty();
+        let state = pty_session(terminal);
+        let Value::Future(read) = terminal_read(&new_handle(state.clone()), &crate::IntValue::from_i64(64)) else {
+            panic!("a read future")
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sched::cancel(&read);
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            put(controller, b"first\n");
+        });
+        let started = std::time::Instant::now();
+        close(&state).expect("closed");
+        let took = started.elapsed();
+        // The reader has left before its descriptor was closed.
+        assert!(state.borrow().reader.try_lock().is_ok(), "the reader still runs");
+        writer.join().expect("the writer");
+        settle_for(100);
+        assert_eq!(String::from_utf8_lossy(&take(terminal)), "first\n", "the line stays in the terminal");
+        assert!(took < std::time::Duration::from_secs(1), "close waited {took:?}");
+        close_all(&[controller, terminal]);
+    }
+
+    /// #1013: input that comes after a read was cancelled stays in the
+    /// terminal, so a close does not lose it.
+    #[test]
+    fn input_after_a_cancelled_read_stays_in_the_terminal() {
+        let (controller, terminal) = pty();
+        let state = pty_session(terminal);
+        let Value::Future(read) = terminal_read(&new_handle(state.clone()), &crate::IntValue::from_i64(64)) else {
+            panic!("a read future")
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sched::cancel(&read);
+        put(controller, b"early\n");
+        settle_for(200);
+        assert!(state.borrow().in_flight.is_none(), "the reader left without reading");
+        close(&state).expect("closed");
+        assert_eq!(String::from_utf8_lossy(&take(terminal)), "early\n");
+        close_all(&[controller, terminal]);
+    }
+
+    /// #12 stays: the read after a cancelled one gets the input, whether it
+    /// came while the reader still waited or after it left.
+    #[test]
+    fn a_read_after_a_cancelled_read_gets_the_input() {
+        let (controller, terminal) = pty();
+        let state = pty_session(terminal);
+        let handle = new_handle(state.clone());
+        let limit = crate::IntValue::from_i64(64);
+        let read_now = |expected: &str| {
+            let Value::Future(read) = terminal_read(&handle, &limit) else { panic!("a read future") };
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while read.running() && std::time::Instant::now() < until {
+                sched::pump();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let Ok(data) = bytes(&read.value().expect("a value")) else { panic!("bytes") };
+            assert_eq!(String::from_utf8_lossy(&data), expected);
+        };
+        // The reader is still waiting when the next read comes.
+        let Value::Future(first) = terminal_read(&handle, &limit) else { panic!("a read future") };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sched::cancel(&first);
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            put(controller, b"one\n");
+        });
+        read_now("one\n");
+        writer.join().expect("the writer");
+        // The input came after the cancel, before the next read.
+        let Value::Future(second) = terminal_read(&handle, &limit) else { panic!("a read future") };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sched::cancel(&second);
+        put(controller, b"two\n");
+        settle_for(200);
+        read_now("two\n");
+        close(&state).expect("closed");
+        close_all(&[controller, terminal]);
+    }
+
+    /// #1013: a cancelled resize observation's thread leaves at once instead
+    /// of sleeping until the next SIGWINCH.
+    #[test]
+    fn a_cancelled_resize_wait_leaves() {
+        let _winch = WINCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let source = Rc::new(RefCell::new(Resizes {
+            session: None,
+            closed: false,
+            notified: false,
+            seen: current_generation(),
+            pending: None,
+        }));
+        let Ok(Value::Future(next)) = resize_next(&new_handle(source.clone())) else { panic!("a resize future") };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while RESIZE_WAITS.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(RESIZE_WAITS.load(Ordering::SeqCst), 1, "the wait started");
+        sched::cancel(&next);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while RESIZE_WAITS.load(Ordering::SeqCst) != 0 && std::time::Instant::now() < until {
+            sched::pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(RESIZE_WAITS.load(Ordering::SeqCst), 0, "the wait left");
+        settle_for(20);
+        assert!(!source.borrow().notified, "a cancel is not a resize");
+    }
+
+    /// #1013: the modes are made from libc's termios fields and flags.
+    #[test]
+    fn modes_set_the_termios_flags() {
+        // SAFETY: an all-zero termios is a valid value.
+        let mut cooked: libc::termios = unsafe { std::mem::zeroed() };
+        cooked.c_lflag = libc::ICANON | libc::ISIG | libc::ECHO | libc::IEXTEN;
+        cooked.c_iflag = libc::ICRNL | libc::IXON | libc::BRKINT;
+        cooked.c_oflag = libc::OPOST;
+        cooked.c_cflag = libc::CS7 | libc::PARENB;
+        let raw = mode_termios(2, cooked, None);
+        assert_eq!(raw.c_lflag & (libc::ICANON | libc::ISIG | libc::ECHO | libc::IEXTEN), 0);
+        assert_eq!(raw.c_iflag & (libc::ICRNL | libc::IXON | libc::BRKINT), 0);
+        assert_eq!(raw.c_oflag & libc::OPOST, 0);
+        assert_eq!(raw.c_cflag & (libc::CSIZE | libc::PARENB), libc::CS8);
+        assert_eq!((raw.c_cc[libc::VMIN], raw.c_cc[libc::VTIME]), (1, 0));
+        let cbreak = mode_termios(1, cooked, None);
+        assert_eq!(cbreak.c_lflag & (libc::ICANON | libc::ECHO), 0);
+        assert_eq!(cbreak.c_lflag & libc::ISIG, libc::ISIG);
+        assert_eq!(cbreak.c_iflag, cooked.c_iflag);
+        let secret = mode_termios(3, raw, Some(cooked));
+        assert_eq!(secret.c_lflag & (libc::ICANON | libc::ISIG | libc::ECHO), libc::ICANON | libc::ISIG);
+        assert_eq!(secret.c_cflag, cooked.c_cflag, "from the settings the session found");
+        let back = mode_termios(0, raw, None);
+        assert_eq!(back.c_lflag & (libc::ICANON | libc::ISIG | libc::ECHO), libc::ICANON | libc::ISIG | libc::ECHO);
+        assert_eq!(back.c_iflag & libc::ICRNL, libc::ICRNL);
+        assert_eq!(back.c_oflag & libc::OPOST, libc::OPOST);
+    }
+
+    /// A raw mode reaches the terminal and its lease puts the mode back.
+    #[test]
+    fn a_mode_lease_applies_and_restores_the_terminal() {
+        let (controller, terminal) = pty();
+        let state = pty_session(terminal);
+        let local = |fd: i32| {
+            // SAFETY: an all-zero termios is valid; tcgetattr fills it.
+            let mut term: libc::termios = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::tcgetattr(fd, &mut term) }, 0);
+            term.c_lflag & (libc::ICANON | libc::ECHO)
+        };
+        assert_eq!(local(terminal), libc::ICANON | libc::ECHO);
+        let lease = mode_open(&new_handle(state.clone()), &crate::IntValue::from_i64(2)).expect("a lease");
+        assert_eq!(local(terminal), 0);
+        let lease = handle::<Lease>(&lease).expect("a lease");
+        mode_close(&lease.session, lease.id, false, "test").expect("restored");
+        assert_eq!(local(terminal), libc::ICANON | libc::ECHO);
+        close(&state).expect("closed");
+        close_all(&[controller, terminal]);
+    }
+
+    static PRIOR_SAW: AtomicI32 = AtomicI32::new(0);
+
+    extern "C" fn prior_winch(signal: libc::c_int, info: *mut libc::siginfo_t, _context: *mut libc::c_void) {
+        // SAFETY: the kernel's siginfo for this delivery, when there is one.
+        let number = if info.is_null() { -1 } else { unsafe { (*info).si_signo } };
+        PRIOR_SAW.store(if number == signal { signal } else { -2 }, Ordering::SeqCst);
+    }
+
+    /// #1013: a prior SIGWINCH handler of the SA_SIGINFO form is chained with
+    /// its three arguments; the count of resizes still goes up.
+    #[test]
+    fn the_winch_handler_chains_a_siginfo_handler() {
+        let _winch = WINCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // SAFETY: sigaction(2) with a handler of the SA_SIGINFO form.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = prior_winch as *const () as usize;
+            action.sa_flags = libc::SA_SIGINFO;
+            libc::sigemptyset(&mut action.sa_mask);
+            assert_eq!(libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut()), 0);
+        }
+        assert!(install(), "installed");
+        let before = GENERATION.load(Ordering::SeqCst);
+        // SAFETY: raise(3) delivers the signal to this thread.
+        assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
+        assert!(GENERATION.load(Ordering::SeqCst) > before);
+        assert_eq!(PRIOR_SAW.load(Ordering::SeqCst), libc::SIGWINCH);
+        // The winch thread has passed the change on before the next test waits.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while current_generation() < GENERATION.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}

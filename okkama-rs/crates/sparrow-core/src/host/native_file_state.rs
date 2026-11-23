@@ -374,15 +374,14 @@ impl Heap {
             FsFileStateReadText | FsFileStateReadLine => {
                 state.prepare(n, &cwd, true, false)?;
                 let needle = encode(n, "\n", &state.encoding)?;
+                let unit = needle.len();
+                // Pending bytes already searched for the line end; a fill keeps
+                // the pending bytes where they are (it drains only before them).
+                let mut searched = 0;
                 loop {
                     if n == FsFileStateReadLine {
-                        let unit = needle.len();
                         let pending = &state.buffer[state.start..];
-                        if let Some(offset) = pending
-                            .chunks_exact(unit)
-                            .position(|v| v == needle)
-                            .map(|i| i * unit)
-                        {
+                        if let Some(offset) = first_unit(pending, &mut searched, &needle) {
                             let text = decode(n, &pending[..offset], &state.encoding);
                             state.start += offset + unit;
                             let text = text?;
@@ -407,18 +406,15 @@ impl Heap {
                 state.prepare(n, &cwd, true, false)?;
                 let target = self.int64(a[1])?.map_or(1 << 26, |v| v.clamp(1, 1 << 26)) as usize;
                 let needle = encode(n, "\n", &state.encoding)?;
-                let unit = needle.len();
                 while state.buffer.len() - state.start < target && !state.eof {
                     state.fill(n, &cwd)?;
                 }
                 // The batch ends after its last whole line; a longer line is read whole.
-                let last_end = |pending: &[u8]| {
-                    pending.chunks_exact(unit).rposition(|v| v == needle).map(|i| (i + 1) * unit)
-                };
-                let mut end = last_end(&state.buffer[state.start..]);
+                let mut searched = 0;
+                let mut end = last_unit_end(&state.buffer[state.start..], &mut searched, &needle);
                 while end.is_none() && !state.eof {
                     state.fill(n, &cwd)?;
-                    end = last_end(&state.buffer[state.start..]);
+                    end = last_unit_end(&state.buffer[state.start..], &mut searched, &needle);
                 }
                 let end = end.unwrap_or(state.buffer.len() - state.start);
                 if end == 0 {
@@ -607,5 +603,77 @@ impl Heap {
             }
             _ => Err(Error("unsupported file state native".into()).into()),
         }
+    }
+}
+
+/// The offset of the first `needle` in `pending` at or after `*searched`, a
+/// multiple of the needle's length (the encoding's code unit). Without one,
+/// `*searched` moves past the whole units searched, so the search after the
+/// next fill looks only at the new bytes: a long line cost O(L²) when every
+/// fill searched from the start again (#1013).
+fn first_unit(pending: &[u8], searched: &mut usize, needle: &[u8]) -> Option<usize> {
+    let unit = needle.len();
+    let from = *searched;
+    let found = pending[from..].chunks_exact(unit).position(|v| v == needle).map(|i| from + i * unit);
+    if found.is_none() {
+        *searched = pending.len() - pending.len() % unit;
+    }
+    found
+}
+
+/// The end of the last `needle` in `pending`, searching only at or after
+/// `*searched` (the bytes before it hold none); like [`first_unit`], it moves
+/// `*searched` when there is none.
+fn last_unit_end(pending: &[u8], searched: &mut usize, needle: &[u8]) -> Option<usize> {
+    let unit = needle.len();
+    let from = *searched;
+    let found = pending[from..].chunks_exact(unit).rposition(|v| v == needle).map(|i| from + (i + 1) * unit);
+    if found.is_none() {
+        *searched = pending.len() - pending.len() % unit;
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{first_unit, last_unit_end};
+
+    /// #1013: after a fill, the search for the line end resumes where the
+    /// last one stopped. A needle planted in the searched bytes afterwards is
+    /// not seen, which shows the old bytes are not searched again.
+    #[test]
+    fn a_line_search_resumes_after_the_searched_bytes() {
+        let mut pending = b"abcdefg".to_vec();
+        let mut searched = 0;
+        assert_eq!(first_unit(&pending, &mut searched, b"\n"), None);
+        assert_eq!(searched, 7);
+        pending[2] = b'\n';
+        pending.extend_from_slice(b"hi\njk");
+        assert_eq!(first_unit(&pending, &mut searched, b"\n"), Some(9));
+        // Two-byte units stay aligned: the odd tail waits for its pair.
+        let mut wide = b"a\0b\0c".to_vec();
+        let mut searched = 0;
+        assert_eq!(first_unit(&wide, &mut searched, b"\n\0"), None);
+        assert_eq!(searched, 4);
+        wide.extend_from_slice(b"\0\n\0");
+        assert_eq!(first_unit(&wide, &mut searched, b"\n\0"), Some(6));
+    }
+
+    /// The batch search finds the last line end; after a fill it looks only
+    /// at the new bytes.
+    #[test]
+    fn a_batch_search_finds_the_last_line_end_in_new_bytes() {
+        let mut searched = 0;
+        assert_eq!(last_unit_end(b"a\nb\nc", &mut searched, b"\n"), Some(4));
+        let mut searched = 0;
+        let mut pending = b"abc".to_vec();
+        assert_eq!(last_unit_end(&pending, &mut searched, b"\n"), None);
+        // A needle planted in the searched bytes is not seen.
+        pending[1] = b'\n';
+        pending.extend_from_slice(b"de");
+        assert_eq!(last_unit_end(&pending, &mut searched, b"\n"), None);
+        assert_eq!(searched, 5);
+        pending.extend_from_slice(b"\nf");
+        assert_eq!(last_unit_end(&pending, &mut searched, b"\n"), Some(6));
     }
 }

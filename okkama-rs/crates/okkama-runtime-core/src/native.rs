@@ -11,6 +11,7 @@ use crate::{
     heap::ArrayHeap,
 };
 pub(crate) mod application;
+pub use application::terminal_columns;
 pub(crate) mod cldr;
 pub(crate) mod collation;
 pub(crate) mod compression;
