@@ -1,7 +1,6 @@
 //! Host paths and directory snapshots, scoped to each VM's working directory.
 use crate::host::{
     Error,
-    handle::Handle,
     ProviderError,
     native_fs::{fail, host},
     *,
@@ -9,17 +8,7 @@ use crate::host::{
 use okkama_runtime_abi::Native;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-#[derive(Debug)]
-pub(crate) struct Directory {
-    path: PathBuf,
-    names: Vec<String>,
-    index: usize,
-    closed: bool,
-}
+use std::{fs, path::Path};
 fn names(path: &Path) -> std::io::Result<Vec<String>> {
     let mut out = fs::read_dir(path)?
         .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
@@ -31,8 +20,7 @@ pub(crate) fn handles(n: Native) -> bool {
     use Native::*;
     matches!(
         n,
-        FsChown
-            | FsCwd
+        FsCwd
             | FsChdir
             | FsMkdir
             | FsMkdirAll
@@ -47,10 +35,6 @@ pub(crate) fn handles(n: Native) -> bool {
             | FsChmod
             | FsStat
             | FsLstat
-            | FsOpendir
-            | FsReaddir
-            | FsRewinddir
-            | FsClosedir
             | FsDirectoryEntries
             | FsDirectoryRemoveTree
             | FsFileContent
@@ -79,15 +63,6 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
     }
 }
 impl Heap {
-    fn directory(&mut self, v: Slot) -> Result<&mut Directory, Error> {
-        if v.kind() != HANDLE {
-            return Err(Error("expected directory handle".into()));
-        }
-        match self.handles.get_mut(v.bits)? {
-            Handle::Directory(d) => Ok(d),
-            _ => Err(Error("expected directory handle".into())),
-        }
-    }
     pub(crate) fn directory_execute(
         &mut self,
         n: Native,
@@ -98,29 +73,6 @@ impl Heap {
         if n == FsCwd {
             let path = self.working_directory()?;
             return Ok(self.native_byte_array(path.to_string_lossy().as_bytes().to_vec())?);
-        }
-        if matches!(n, FsReaddir | FsRewinddir | FsClosedir) {
-            let d = self.directory(a[0])?;
-            if n == FsClosedir {
-                d.closed = true;
-                d.names.clear();
-                return Ok(yes);
-            }
-            if d.closed {
-                return Err(fail(n, "already_closed", "Directory is closed"));
-            }
-            if n == FsRewinddir {
-                d.names = names(&d.path).unwrap_or_default();
-                d.index = 0;
-                return Ok(yes);
-            }
-            let bytes = d
-                .names
-                .get(d.index)
-                .map(|s| s.as_bytes().to_vec())
-                .unwrap_or_default();
-            d.index = d.index.saturating_add(1).min(d.names.len());
-            return Ok(self.native_byte_array(bytes)?);
         }
         let path = self.fs_path(n, a[0])?;
         match n {
@@ -205,24 +157,6 @@ impl Heap {
                     return Err(fail(n, "unsupported", "Symlink creation unavailable"));
                 }
             }
-            FsChown => {
-                let owner = chown_id(&*self.bigint(a[1])?);
-                let group = chown_id(&*self.bigint(a[2])?);
-                let (Some(owner), Some(group)) = (owner, group) else {
-                    return Err(fail(n, "invalid_input", "Invalid owner or group"));
-                };
-                #[cfg(unix)]
-                if owner.is_none() && group.is_none() {
-                    fs::metadata(path).map_err(|e| host(n, e))?;
-                } else {
-                    std::os::unix::fs::chown(path, owner, group).map_err(|e| host(n, e))?;
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = (path, owner, group);
-                    return Err(fail(n, "unsupported", "POSIX ownership unavailable"));
-                }
-            }
             FsReadlink => {
                 let target = fs::read_link(path).map_err(|e| host(n, e))?;
                 return Ok(self.native_byte_array(target.to_string_lossy().as_bytes().to_vec())?);
@@ -238,19 +172,8 @@ impl Heap {
             FsFileContent => {
                 return Ok(self.native_byte_array(fs::read(path).map_err(|e| host(n, e))?)?);
             }
-            FsOpendir | FsDirectoryEntries => {
+            FsDirectoryEntries => {
                 let names = names(&path).map_err(|e| host(n, e))?;
-                if n == FsOpendir {
-                    return Ok(Slot {
-                        tag: HANDLE,
-                        bits: self.handles.allocate(Handle::Directory(Box::new(Directory {
-                            path,
-                            names,
-                            index: 0,
-                            closed: false,
-                        })))?,
-                    });
-                }
                 let values = names
                     .into_iter()
                     .map(|s| self.allocate_text(s))
@@ -305,32 +228,9 @@ impl Heap {
     }
 }
 
-/// A `chown` id: -1 keeps the current one (`Some(None)`), `0..=u32::MAX`
-/// is an id, and anything else is refused (`None`), never truncated: a mask
-/// made 2^32 + 501 uid 501 (#1010).
-fn chown_id(v: &num_bigint::BigInt) -> Option<Option<u32>> {
-    use num_traits::ToPrimitive;
-    if *v == (-1).into() {
-        return Some(None);
-    }
-    v.to_u32().map(Some)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// #1010: a chown id is -1 (keep), or fits uid_t; a larger one is
-    /// refused, not truncated to its low 32 bits.
-    #[test]
-    fn chown_ids_are_refused_not_truncated() {
-        let id = |v: i128| chown_id(&num_bigint::BigInt::from(v));
-        assert_eq!(id(-1), Some(None));
-        assert_eq!(id(0), Some(Some(0)));
-        assert_eq!(id(501), Some(Some(501)));
-        assert_eq!(id(u32::MAX as i128), Some(Some(u32::MAX)));
-        assert_eq!(id((1i128 << 32) + 501), None);
-        assert_eq!(id(-2), None);
-    }
 
     /// #122: a directory is synchronized; a file or a missing path is
     /// refused with the host's failure.

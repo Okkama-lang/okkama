@@ -262,7 +262,7 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 211), ((AbiKind::Sync, Transport::Handle), 298),
+        let expected = [((AbiKind::Sync, Transport::Data), 206), ((AbiKind::Sync, Transport::Handle), 289),
             ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 4),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
@@ -275,10 +275,10 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (all host; #638 added one, #1006 dropped signal_wait).
-        let roles_expected = [(HandleRole::None, 215), (HandleRole::Uses, 229), (HandleRole::Publishes, 93),
+        let roles_expected = [(HandleRole::None, 210), (HandleRole::Uses, 222), (HandleRole::Publishes, 91),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 252), (Effect::Stdio, 3), (Effect::Host, 305)];
+        let effects_expected = [(Effect::Pure, 252), (Effect::Stdio, 3), (Effect::Host, 291)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 

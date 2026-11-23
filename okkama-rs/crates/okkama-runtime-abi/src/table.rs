@@ -130,10 +130,6 @@ natives! {
     EnvironmentEnvironmentName = 146, "runtime/environment@1::environment_name/1", "(string) -> string";
     EnvironmentEnvironmentHome = 147, "runtime/environment@1::environment_home/1", "(%string:string) -> string";
     EnvironmentEnvironmentPathSeparator = 148, "runtime/environment@1::environment_path_separator/0", "() -> string";
-    EnvironmentEnvironmentGet = 149, "runtime/environment@1::environment_get/1", "(@byte) -> @byte";
-    EnvironmentEnvironmentSet = 150, "runtime/environment@1::environment_set/2", "(@byte, @byte) -> bool";
-    EnvironmentEnvironmentRemove = 151, "runtime/environment@1::environment_remove/1", "(@byte) -> bool";
-    EnvironmentEnvironmentAll = 152, "runtime/environment@1::environment_all/0", "() -> @@@byte";
     FormatSprintfValues = 153, "runtime/format@1::sprintf_values/2", "(string, @any) -> string";
     FsPathJoin = 154, "runtime/fs@1::path_join/2", "(@string, int) -> string";
     FsPathParent = 155, "runtime/fs@1::path_parent/2", "(string, int) -> string";
@@ -148,11 +144,7 @@ natives! {
     FsFlush = 164, "runtime/fs@1::flush/1", "(FileHandle) -> bool";
     FsTruncate = 165, "runtime/fs@1::truncate/2", "(FileHandle, int) -> bool";
     FsSync = 166, "runtime/fs@1::sync/1", "(FileHandle) -> bool";
-    FsLockShared = 167, "runtime/fs@1::lock_shared/1", "(FileHandle) -> bool";
-    FsLockExclusive = 168, "runtime/fs@1::lock_exclusive/1", "(FileHandle) -> bool";
-    FsUnlock = 169, "runtime/fs@1::unlock/1", "(FileHandle) -> bool";
     FsClose = 170, "runtime/fs@1::close/1", "(FileHandle) -> bool";
-    FsFileStateCreate = 171, "runtime/fs@1::file_state_create/4", "(@byte, int, string, bool) -> FileState";
     FsFileStateReadText = 172, "runtime/fs@1::file_state_read_text/1", "(FileState) -> string";
     FsFileStateReadLine = 173, "runtime/fs@1::file_state_read_line/1", "(FileState) -> string";
     FsFileStateRead = 174, "runtime/fs@1::file_state_read/2", "(FileState, int) -> @byte";
@@ -194,11 +186,6 @@ natives! {
     FsCwd = 210, "runtime/fs@1::cwd/0", "() -> @byte";
     FsChdir = 211, "runtime/fs@1::chdir/1", "(@byte) -> bool";
     FsChmod = 212, "runtime/fs@1::chmod/2", "(@byte, int) -> bool";
-    FsChown = 213, "runtime/fs@1::chown/3", "(@byte, int, int) -> bool";
-    FsOpendir = 214, "runtime/fs@1::opendir/1", "(@byte) -> DirectoryHandle";
-    FsReaddir = 215, "runtime/fs@1::readdir/1", "(DirectoryHandle) -> @byte";
-    FsRewinddir = 216, "runtime/fs@1::rewinddir/1", "(DirectoryHandle) -> bool";
-    FsClosedir = 217, "runtime/fs@1::closedir/1", "(DirectoryHandle) -> bool";
     FsRootFileRootOpen = 218, "runtime/fs_root@1::file_root_open/1", "(@byte) -> FileRootState";
     FsRootFileRootEntry = 219, "runtime/fs_root@1::file_root_entry/2", "(FileRootState, @string) -> RootedEntryState";
     FsRootFileRootClosed = 220, "runtime/fs_root@1::file_root_closed/1", "(FileRootState) -> bool";
@@ -517,7 +504,6 @@ natives! {
     BytesBytesJoin = 613, "runtime/bytes@1::bytes_join/3", "(@byte, int, @byte) -> @byte";
     PostgresPgPage = 614, "runtime/postgres@1::pg_page/3", "(@byte, int, @int) -> PgPageState";
     PostgresPgPageFailure = 615, "runtime/postgres@1::pg_page_failure/1", "(PgPageState) -> string";
-    PostgresPgPageRows = 616, "runtime/postgres@1::pg_page_rows/1", "(PgPageState) -> int";
     PostgresPgPageKinds = 617, "runtime/postgres@1::pg_page_kinds/1", "(PgPageState) -> @int";
     PostgresPgPageValues = 618, "runtime/postgres@1::pg_page_values/1", "(PgPageState) -> @int";
     PostgresPgPageFloats = 619, "runtime/postgres@1::pg_page_floats/1", "(PgPageState) -> @float";
@@ -571,4 +557,4 @@ natives! {
     CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
     CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 386, 387, 388, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 632, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 149, 150, 151, 152, 167, 168, 169, 171, 213, 214, 215, 216, 217, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 386, 387, 388, 441, 442, 443, 444, 445, 446, 447, 448, 449, 460, 461, 462, 463, 464, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546, 616, 632, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668

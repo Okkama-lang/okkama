@@ -24,9 +24,6 @@ native pg_page(rows is @byte, width is int, types is @int) is PgPageState;
 // Why decoding failed, or "".
 native pg_page_failure(page is PgPageState) is string;
 
-// How many rows.
-native pg_page_rows(page is PgPageState) is int;
-
 // The cell kind codes.
 native pg_page_kinds(page is PgPageState) is @int;
 

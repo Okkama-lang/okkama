@@ -14,7 +14,6 @@ pub(crate) enum Handle {
     TemporaryDirectory(Box<crate::host::native_temporary::TemporaryDirectory>),
     FileState(std::rc::Rc<std::cell::RefCell<crate::host::native_file_state::FileState>>),
     FileLock(std::rc::Rc<crate::host::native_file_state::FileLock>),
-    Directory(Box<crate::host::native_directory::Directory>),
     File(crate::host::native_file::RawFile),
     Network(crate::host::native_network::NetworkHandle),
     Db(crate::host::native_db::DbHandle),
@@ -46,7 +45,6 @@ impl Handle {
             | Self::TemporaryDirectory(_)
             | Self::FileState(_)
             | Self::FileLock(_)
-            | Self::Directory(_)
             | Self::File(_)
             | Self::Network(_)
             | Self::Db(_)

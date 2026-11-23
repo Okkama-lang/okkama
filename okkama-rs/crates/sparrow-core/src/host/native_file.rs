@@ -99,9 +99,6 @@ pub(crate) fn handles(n: Native) -> bool {
             | FsSync
             | FsTruncate
             | FsClose
-            | FsLockShared
-            | FsLockExclusive
-            | FsUnlock
     )
 }
 impl Heap {
@@ -181,42 +178,6 @@ impl Heap {
                 }
                 let size = file.write(&bytes).map_err(|e| host(n, e))?;
                 Ok(Slot::small(size as i64))
-            }
-            FsLockShared | FsLockExclusive | FsUnlock => {
-                let state = self.raw_file(a[0])?;
-                state.open(n)?;
-                #[cfg(unix)]
-                {
-                    if n == FsUnlock {
-                        if let Some(lock) = state.lock.take() {
-                            lock.release(state.file.as_ref().expect("open"))
-                                .map_err(|e| host(n, e))?;
-                        }
-                    } else {
-                        let shared = n == FsLockShared;
-                        if (shared && !state.readable) || (!shared && !state.writable) {
-                            return Err(fail(
-                                n,
-                                "invalid_input",
-                                "File mode does not permit this lock",
-                            ));
-                        }
-                        if state.lock.is_some() {
-                            return Err(fail(n, "invalid_input", "File already locked"));
-                        }
-                        state.lock = crate::host::file_lock::Lock::acquire(
-                            n,
-                            state.file.as_ref().expect("open"),
-                            shared,
-                            true,
-                        )?;
-                    }
-                    Ok(yes)
-                }
-                #[cfg(not(unix))]
-                {
-                    Err(fail(n, "unsupported", "Record locking unavailable"))
-                }
             }
             FsFlush => {
                 self.raw_file(a[0])?.writable(n)?;

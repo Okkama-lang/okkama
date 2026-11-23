@@ -14,7 +14,6 @@ use okkama_runtime_abi::Native;
 #[derive(Debug, Default)]
 pub(crate) struct PgPage {
     failure: String,
-    rows: usize,
     kinds: Vec<i64>,
     values: Vec<i64>,
     floats: Vec<f64>,
@@ -28,7 +27,6 @@ pub(crate) fn handles(native: Native) -> bool {
         native,
         PostgresPgPage
             | PostgresPgPageFailure
-            | PostgresPgPageRows
             | PostgresPgPageKinds
             | PostgresPgPageValues
             | PostgresPgPageFloats
@@ -83,7 +81,6 @@ impl PgPage {
             if cursor != end {
                 return Err("truncated");
             }
-            self.rows += 1;
             at = end;
         }
         Ok(())
@@ -169,7 +166,6 @@ impl Heap {
         use Native::*;
         match native {
             PostgresPgPageFailure => self.allocate_text(page.failure.clone()),
-            PostgresPgPageRows => Ok(Slot::small(page.rows as i64)),
             PostgresPgPageKinds => self.allocate_array(page.kinds.iter().map(|&k| Slot::small(k)).collect()),
             PostgresPgPageValues => self.allocate_array(page.values.iter().map(|&v| Slot::small(v)).collect()),
             PostgresPgPageFloats => {

@@ -23,9 +23,6 @@ native path_parts(origin is string, style is int) is @string;
 // Raw filesystem capabilities shared by every high-level filesystem module.
 native object FileHandle;
 
-// An open directory stream.
-native object DirectoryHandle;
-
 // An open file with its mode and text encoding.
 native object FileState;
 
@@ -66,25 +63,13 @@ native truncate(handle is FileHandle, size is int) is bool;
 // Flushes handle's file to the disk.
 native sync(handle is FileHandle) is bool;
 
-// Takes a shared lock on handle's file.
-native lock_shared(handle is FileHandle) is bool;
-
-// Takes an exclusive lock on handle's file.
-native lock_exclusive(handle is FileHandle) is bool;
-
-// Releases handle's lock.
-native unlock(handle is FileHandle) is bool;
-
 // Closes handle.
 native close(handle is FileHandle) is bool;
 
-// Lazy high-level file state. mode is FileMode's stable 0..4 ABI code;
-// encoding is one of the canonical portable names, or empty in binary mode.
-native file_state_create(path is @byte, mode is int, encoding is string, binary is bool) is FileState;
-
-// The same, with the mode left open: the first text or byte operation picks it
-// (#352), and an operation of the other kind then fails with invalid_input.
-// encoding applies when text is picked.
+// Lazy high-level file state. mode is FileMode's stable 0..4 ABI code. Text
+// or bytes are left open: the first text or byte operation picks them (#352),
+// and an operation of the other kind then fails with invalid_input. encoding is
+// one of the canonical portable names and applies when text is picked.
 native file_state_open(path is @byte, mode is int, encoding is string) is FileState;
 
 // The rest of state's file as text.
@@ -248,18 +233,3 @@ native chdir(path is @byte) is bool;
 
 // Sets path's permission bits to mode.
 native chmod(path is @byte, mode is int) is bool;
-
-// Sets path's owner and group.
-native chown(path is @byte, owner is int, group is int) is bool;
-
-// Opens the directory path for reading.
-native opendir(path is @byte) is DirectoryHandle;
-
-// The next name in handle; [] at the end.
-native readdir(handle is DirectoryHandle) is @byte;
-
-// Starts handle over.
-native rewinddir(handle is DirectoryHandle) is bool;
-
-// Closes handle.
-native closedir(handle is DirectoryHandle) is bool;

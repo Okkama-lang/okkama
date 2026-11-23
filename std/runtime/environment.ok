@@ -31,15 +31,3 @@ native environment_home(values is %string:string) is string;
 
 // `:` or `;`.
 native environment_path_separator() is string;
-
-// Legacy raw mutation boundary. High-level std modules must not use it.
-native environment_get(name is @byte) is @byte;
-
-// Sets name to value in this process.
-native environment_set(name is @byte, value is @byte) is bool;
-
-// Removes name from this process.
-native environment_remove(name is @byte) is bool;
-
-// Every variable of this process, as name and value bytes.
-native environment_all() is @@@byte;

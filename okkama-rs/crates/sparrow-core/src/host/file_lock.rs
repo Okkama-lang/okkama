@@ -173,7 +173,7 @@ mod tests {
     fn closing_another_descriptor_keeps_the_lock() {
         let path = scratch("close");
         let owner = open(&path);
-        let lock = Lock::acquire(Native::FsLockExclusive, &owner, false, false).unwrap().expect("free");
+        let lock = Lock::acquire(Native::FsFileStateLock, &owner, false, false).unwrap().expect("free");
         drop(File::open(&path).unwrap());
         let other = open(&path);
         assert!(busy(command(&other, libc::F_WRLCK as _, false)), "the lock survives the close");
@@ -190,11 +190,11 @@ mod tests {
     fn a_refused_lock_leaves_the_held_one_as_it_was() {
         let path = scratch("table");
         let owner = open(&path);
-        let lock = Lock::acquire(Native::FsLockExclusive, &owner, false, false).unwrap().expect("free");
+        let lock = Lock::acquire(Native::FsFileStateLock, &owner, false, false).unwrap().expect("free");
         let other = open(&path);
-        assert!(Lock::acquire(Native::FsLockShared, &other, true, false).is_err());
-        assert!(Lock::held(Native::FsLockExclusive, &other, false).unwrap(), "still exclusive");
-        assert!(!Lock::held(Native::FsLockShared, &other, true).unwrap());
+        assert!(Lock::acquire(Native::FsFileStateLock, &other, true, false).is_err());
+        assert!(Lock::held(Native::FsFileStateLocked, &other, false).unwrap(), "still exclusive");
+        assert!(!Lock::held(Native::FsFileStateLocked, &other, true).unwrap());
         lock.release(&owner).unwrap();
         let _ = std::fs::remove_file(&path);
     }

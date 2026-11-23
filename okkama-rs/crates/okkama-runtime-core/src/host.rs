@@ -109,22 +109,6 @@ pub fn environment() -> BTreeMap<String, String> {
     with(|state| state.environment.clone())
 }
 
-/// Значение одной переменной окружения программы.
-pub fn variable(name: &str) -> Option<String> {
-    with(|state| state.environment.get(name).cloned())
-}
-
-pub fn set_environment(name: &str, value: Option<&str>) {
-    with(|state| match value {
-        Some(value) => {
-            state.environment.insert(name.into(), value.into());
-        }
-        None => {
-            state.environment.remove(name);
-        }
-    });
-}
-
 /// Переносимый код отказа (`portable_code_for_errno`).
 pub fn code(error: &std::io::Error) -> &'static str {
     use std::io::ErrorKind::*;
@@ -231,7 +215,6 @@ mod tests {
         {
             let _first = enter(context("/first", "FIRST"));
             set_cwd("/elsewhere".into());
-            set_environment("LEAKED", Some("yes"));
             assert_eq!(path("file"), PathBuf::from("/elsewhere/file"));
         }
         let _second = enter(context("/second", "SECOND"));
@@ -244,7 +227,7 @@ mod tests {
         let _outer = enter(context("/outer", "OUTER"));
         {
             let _inner = enter(context("/inner", "INNER"));
-            set_environment("OUTER", Some("changed"));
+            assert_eq!(environment().keys().collect::<Vec<_>>(), ["INNER"]);
         }
         assert_eq!(cwd(), PathBuf::from("/outer"));
         assert_eq!(environment()["OUTER"], "1");
@@ -252,13 +235,12 @@ mod tests {
 
     #[test]
     fn a_session_never_changes_the_process() {
-        let before = (std::env::current_dir().unwrap(), std::env::var_os("OKKAMA_HOST_SESSION_TEST"));
+        let before = std::env::current_dir().unwrap();
         {
             let _session = session();
             set_cwd("/".into());
-            set_environment("OKKAMA_HOST_SESSION_TEST", Some("1"));
         }
-        assert_eq!((std::env::current_dir().unwrap(), std::env::var_os("OKKAMA_HOST_SESSION_TEST")), before);
+        assert_eq!(std::env::current_dir().unwrap(), before);
     }
 }
 

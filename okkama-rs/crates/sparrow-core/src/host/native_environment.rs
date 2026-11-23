@@ -21,7 +21,7 @@ fn failed(n: Native, code: &str, message: &str) -> ProviderError {
         message: message.into(),
     })
 }
-fn name(n: Native, s: &str, normalize: bool) -> Result<String, ProviderError> {
+fn name(n: Native, s: &str) -> Result<String, ProviderError> {
     if s.is_empty() {
         return Err(failed(
             n,
@@ -43,7 +43,7 @@ fn name(n: Native, s: &str, normalize: bool) -> Result<String, ProviderError> {
             "Environment name contains \"=\"",
         ));
     }
-    Ok(if normalize && cfg!(windows) {
+    Ok(if cfg!(windows) {
         s.to_uppercase()
     } else {
         s.into()
@@ -70,7 +70,7 @@ impl Heap {
         }
         let mut out = BTreeMap::new();
         for (key, content) in self.map_entries(slot)? {
-            let name = name(n, self.text(key)?, true)?;
+            let name = name(n, self.text(key)?)?;
             let content = value(n, self.text(content)?)?;
             if out.insert(name, content).is_some() {
                 return Err(failed(
@@ -106,7 +106,7 @@ impl Heap {
             EnvironmentEnvironmentSnapshot => {
                 let mut out = BTreeMap::new();
                 for (key, content) in host::environment().iter() {
-                    let key = name(n, key, true)?;
+                    let key = name(n, key)?;
                     let content = value(n, content)?;
                     if out.insert(key, content).is_some() {
                         return Err(failed(
@@ -124,17 +124,17 @@ impl Heap {
                 let mut out = self.environment_map(n, a[0])?;
                 if n == EnvironmentEnvironmentAdd {
                     out.insert(
-                        name(n, self.text(a[1])?, true)?,
+                        name(n, self.text(a[1])?)?,
                         value(n, self.text(a[2])?)?,
                     );
                 }
                 if n == EnvironmentEnvironmentDiff {
-                    out.remove(&name(n, self.text(a[1])?, true)?);
+                    out.remove(&name(n, self.text(a[1])?)?);
                 }
                 Ok(self.environment_publish(out)?)
             }
             EnvironmentEnvironmentName => {
-                Ok(self.allocate_text(name(n, self.text(a[0])?, true)?)?)
+                Ok(self.allocate_text(name(n, self.text(a[0])?)?)?)
             }
             EnvironmentEnvironmentHome => {
                 let values = self.environment_map(n, a[0])?;
@@ -160,43 +160,6 @@ impl Heap {
             }
             EnvironmentEnvironmentPathSeparator => {
                 Ok(self.allocate_text(if cfg!(windows) { ";" } else { ":" }.into())?)
-            }
-            EnvironmentEnvironmentGet
-            | EnvironmentEnvironmentSet
-            | EnvironmentEnvironmentRemove => {
-                let bytes = self.native_bytes(a[0])?;
-                let key = name(n, &String::from_utf8_lossy(&bytes), false)?;
-                match n {
-                    EnvironmentEnvironmentGet => {
-                        let bytes = host::variable(&key)
-                            .ok_or_else(|| {
-                                failed(n, "not_found", "Environment variable was not found")
-                            })?
-                            .into_bytes();
-                        Ok(self.native_byte_array(bytes)?)
-                    }
-                    EnvironmentEnvironmentSet => {
-                        let raw = self.native_bytes(a[1])?;
-                        let content = value(n, &String::from_utf8_lossy(&raw))?;
-                        host::set_environment(&key, Some(&content));
-                        Ok(Slot::boolean(true))
-                    }
-                    _ => {
-                        let present = host::variable(&key).is_some();
-                        host::set_environment(&key, None);
-                        Ok(Slot::boolean(present))
-                    }
-                }
-            }
-            EnvironmentEnvironmentAll => {
-                let values = host::environment();
-                let mut all = Vec::with_capacity(values.len());
-                for (key, value) in values {
-                    let key = self.native_byte_array(key.into_bytes())?;
-                    let value = self.native_byte_array(value.into_bytes())?;
-                    all.push(self.allocate_array(vec![key, value])?);
-                }
-                Ok(self.allocate_array(all)?)
             }
             _ => Err(Error("unsupported environment native".into()).into()),
         }

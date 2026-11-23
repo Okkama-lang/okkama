@@ -230,8 +230,7 @@ pub(crate) fn handles(n: Native) -> bool {
     use Native::*;
     matches!(
         n,
-        FsFileStateCreate
-            | FsFileStateOpen
+        FsFileStateOpen
             | FsFileStateReadText
             | FsFileStateReadLine
             | FsFileStateReadLines
@@ -269,7 +268,7 @@ impl Heap {
     ) -> Result<Slot, ProviderError> {
         use Native::*;
         let yes = Slot::boolean(true);
-        if n == FsFileStateCreate || n == FsFileStateOpen {
+        if n == FsFileStateOpen {
             let bytes = self.native_bytes(a[0])?;
             if bytes.is_empty() || bytes.contains(&0) {
                 return Err(fail(n, "invalid_input", "Invalid file path"));
@@ -282,13 +281,9 @@ impl Heap {
                 Some(4) => 1 | 2 | 4 | 16,
                 _ => return Err(fail(n, "invalid_input", "Invalid file mode")),
             };
+            // Text or bytes: the first operation decides (#352).
             let name = self.text(a[2])?.to_owned();
-            let undecided = n == FsFileStateOpen;
-            let binary = !undecided && a[3].bits != 0;
-            if binary && !name.is_empty() {
-                return Err(fail(n, "invalid_input", "Binary file cannot have encoding"));
-            }
-            if !binary && encoding(&name).is_none() {
+            if encoding(&name).is_none() {
                 return Err(fail(n, "unsupported", "Unsupported encoding"));
             }
             let state = FileState {
@@ -298,8 +293,8 @@ impl Heap {
                 path: PathBuf::from(String::from_utf8_lossy(&bytes).as_ref()),
                 flags,
                 encoding: name,
-                binary,
-                undecided,
+                binary: false,
+                undecided: true,
                 channel: None,
                 buffer: vec![],
                 start: 0,
