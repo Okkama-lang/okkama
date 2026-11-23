@@ -356,7 +356,9 @@ that may hang should bound itself with a budget or a deadline.
 A table of cases is one test with named sub-cases. `test.case(name) { … }`
 runs one row as a case of its own, in the same block shape as
 `test.throws`: a failed check or a thrown error fails that sub-case, and the
-rows after it still run.
+rows after it still run. A panic or a runtime error cannot be caught
+(Chapter 10): it fails the sub-case it happened in and ends the test, so
+the rows after it do not run and are not in the report.
 
 ```okkama
 test "postage at every boundary" {
