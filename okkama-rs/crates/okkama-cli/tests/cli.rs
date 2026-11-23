@@ -945,10 +945,8 @@ fn ir_file_and_stdin_include_module_function_and_return() {
         "\n",
         "func @main() -> int [entry] {\n",
         "^b0:\n",
-        "    %0: int = const 1\n",
-        "    %1: int = const 1\n",
-        "    %2: int = const 2\n",
-        "    ret %2\n",
+        "    %0: int = const 2\n",
+        "    ret %0\n",
         "}\n",
     );
     for output in [
@@ -965,7 +963,7 @@ fn ir_file_and_stdin_include_module_function_and_return() {
 #[test]
 fn ir_keeps_all_statements_and_nested_additions() {
     let output = run_stdin(
-        &["ir", "-"],
+        &["ir", "-", "--passes", "none"],
         b"module app v1.0.0; main() is int { 7; 1 + 2 + 3; }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -982,9 +980,9 @@ fn ir_keeps_all_statements_and_nested_additions() {
             "    %0: int = const 7\n",
             "    %1: int = const 1\n",
             "    %2: int = const 2\n",
-            "    %3: int = const 3\n",
+            "    %3: int = int.add %1, %2\n",
             "    %4: int = const 3\n",
-            "    %5: int = const 6\n",
+            "    %5: int = int.add %3, %4\n",
             "    ret %5\n",
             "}\n",
         )
@@ -1029,7 +1027,7 @@ fn ir_explicit_return_is_canonical_and_missing_imports_are_errors() {
 #[test]
 fn ir_control_flow_uses_blocks_and_parameters() {
     let output = run_stdin(
-        &["ir", "-"],
+        &["ir", "-", "--passes", "none"],
         b"module app v1.0.0; main() is int { let x = 9223372036854775808; if x > 0 { 1; } else { 2; } }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));

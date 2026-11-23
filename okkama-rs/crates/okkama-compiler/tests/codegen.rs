@@ -23,8 +23,9 @@ fn generate(module: &ir::Module) -> Result<Vec<u8>, CodegenError> {
     .map(|artifact| artifact.main().to_vec())
 }
 
+/// `1 + 1` as lowered, before the passes fold it (the tests edit its instructions).
 fn addition() -> ir::Module {
-    module("module app v1.0.0; main() is int { 1 + 1; }")
+    okkama_compiler::lowering::with_passes("none", || module("module app v1.0.0; main() is int { 1 + 1; }"))
 }
 
 #[test]
