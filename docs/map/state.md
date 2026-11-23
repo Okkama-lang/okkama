@@ -16,6 +16,12 @@
   net, text, misc, formats, host cut to their live parts), ~14.9k lines; `native::execute` refuses
   unrouted natives; a sparrow-core test keeps the ORIGIN routes and runtime-core providers equal.
 
+## Release 0.6.4 (2026-11-23)
+
+- [x] Released from release/064: hotfixes #973–#1024 (milestone "Hotfixes TBD" stays open,
+  findings after it carry no release, owner 2026-11-23); micro A/B +0.6% (55 reliable pairs),
+  async 4–6% slower → #1025; Bible editions rebuilt (249 examples checked).
+
 ## #1005 one overload identity, reserved system type names (2026-11-23, release/064)
 
 - [x] `analysis/registry.rs`: `same_overload` (name, count, resolved types, variadic; a pair

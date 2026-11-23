@@ -3848,7 +3848,7 @@ possible; NFD decomposes them; NFKC and NFKD additionally replace
 <em>compatibility</em> characters — ligatures such as "ﬃ", full-width
 letters, superscripts — by their plain equivalents. The standard
 library's <code>unicode/normalization</code> implements all four for
-Unicode 16.0.0.</p>
+Unicode 18.0.0.</p>
 <p>Okkama does not normalise implicitly, and the reason is the razor
 once more. Implicit normalisation would make equality depend on tables
 that change with Unicode versions, would make <code>length()</code> of a
@@ -4054,7 +4054,8 @@ folds the ligature <code>ﬁ</code> into <code>f</code> and <code>i</code>
 (Section 6.5). The combining marks are recognised by their Unicode
 general category, <em>nonspacing mark</em>, through
 <code>unicode/character</code>, and removed. Nothing here guesses: the
-tables are those of Unicode 16.0.0.</li>
+tables are Unicode's own, 18.0.0 for the decomposition and 17.0.0 for
+the categories.</li>
 <li><strong>Everything else separates words.</strong> ASCII letters and
 digits are kept, and any other character becomes a space.
 <code>split(" ")</code> keeps the empty fields between repeated spaces
@@ -4181,7 +4182,7 @@ backreferences, lookaround, conditionals or recursion, so a bounded
 Thompson automaton can run every pattern in linear time. Its limits are
 explicit, typed failures: 4,096 code points of expression, 256 nested
 groups, 1,024 captures and 16,384 states. Its Unicode data is pinned to
-version 16.0, the same as the string type's. A program that needs a
+version 17.0, the same as the string type's. A program that needs a
 backreference writes the check as code after the match. The cost of that
 is a few lines. The cost of a catastrophic pattern is an outage.</p>
 <h2 id="612-limits"><span class="num">6.12</span> Limits</h2>
@@ -9514,12 +9515,17 @@ and check the input:
 constructor of a stateless object.</p>
 <h2 id="125-several-constructors"><span class="num">12.5</span> Several constructors</h2>
 <p>An object may have several constructors, and they overload like
-actions: by the number of arguments, their types, and, for shorthands,
-by the names supplied. <code>Cash</code> has a full constructor taking
-<code>(int, int)</code> and a shorthand taking <code>digit</code> and
-<code>currency</code> by name, and each call picks the one that fits.
-Two candidates that fit equally well are an ambiguity error. Declaration
-order never breaks a tie.</p>
+actions (Section 13.3): by the number of parameters and their types. A
+shorthand's parameter types are those of the fields it lists, in order.
+<code>Cash</code> has a full constructor taking <code>(int, int)</code>
+and a shorthand <code>Cash(:digit, :currency)</code> taking
+<code>(int, string)</code>, and each call picks the one that fits.
+Parameter names and the choice between the full form and a shorthand do
+not tell constructors apart: a second constructor with the same types is
+an error at its declaration,
+<code>Constructor of object "Cash" has conflicting overloads with signature Cash(int, int)</code>,
+and the first one is pointed at. Two candidates that fit a call equally
+well are an ambiguity error. Declaration order never breaks a tie.</p>
 <p>A full constructor may end with a <strong>variadic</strong>
 parameter, as <code>Bag(items is ...int)</code> does. Its calls are
 positional; inside the body the parameter is unpacked with
@@ -10812,16 +10818,24 @@ are evaluated once, left to right, in the caller's scope.</li>
 <p>Variadic actions, role signatures, natives and enum payloads have no
 defaults.</p>
 <h2 id="133-overloads"><span class="num">13.3</span> Overloads</h2>
-<p>An object may declare several actions with one name. They differ by
-the number of parameters, by their types, and, for named calls, by
-parameter names. <code>describe(int)</code>,
-<code>describe(string)</code> and <code>describe(any)</code> in the
-example are three actions. The call with <code>1.5</code> takes the
-<code>any</code> one, because neither of the others accepts a float.</p>
+<p>An object may declare several actions with one name. An overload is
+its name, the number of its parameters, their types and whether the last
+one is variadic. Nothing else tells two overloads apart: not parameter
+names, not the result type, not <code>async</code>, <code>hidden</code>
+or the successor mark. Two declarations that agree on all four are one
+signature declared twice, an error at the later one:
+<code>Action "size" on object "Resizer" has conflicting overloads with signature size(int); parameter names and return types do not distinguish overloads</code>.
+The rule is the same for constructors (§12.5), role signatures and fakes
+(§14.1), and since 0.6.4 there are no exceptions to it.
+<code>describe(int)</code>, <code>describe(string)</code> and
+<code>describe(any)</code> in the example are three actions. The call
+with <code>1.5</code> takes the <code>any</code> one, because neither of
+the others accepts a float.</p>
 <p>The rules are short, and they never guess:</p>
 <ol type="1">
-<li>Candidates with the wrong arity or the wrong names drop out. Then
-argument types are checked against declared types.</li>
+<li>Candidates with the wrong arity drop out, and so do those without a
+parameter of each name a named call gives. Then argument types are
+checked against declared types.</li>
 <li>If a fixed candidate fits, variadic candidates are not
 considered.</li>
 <li>Exact concrete types beat role-compatible types, and both beat
@@ -11606,7 +11620,8 @@ It has no fields, no constructors and no bodies. (The one exception is a
 <code>fake</code> block for tests, the subject of Chapter 15.) A role
 may declare several signatures with one name, as long as their parameter
 types differ; like the overloads of an object (Section 13.3), they may
-declare different results.</p>
+declare different results. Parameter names alone do not make two
+signatures, in a role or in its fake.</p>
 <p>An object implements a role by saying so:</p>
 <pre class="okkama"><code><span class="k">object</span> <span class="t">Bottle</span> <span class="k">does</span> <span class="t">Package</span> { … }
 <span class="k">object</span> <span class="t">Wallet</span> <span class="k">does</span> <span class="t">Account</span>, <span class="t">Labelled</span> { … }</code></pre>
@@ -13218,7 +13233,7 @@ role, so the suite replaces the clock:</p>
     <span class="t">Backoff</span>(:timing, :attempts);
 
     <span class="k">async</span> fetched(source <span class="k">is</span> <span class="t">Source</span>) <span class="k">is</span> string {
-        <span class="k">await</span> <span class="k">self</span>.attempt(source, <span class="n">1</span>, <span class="t">Duration</span>(seconds: <span class="n">1</span>));
+        <span class="k">await</span> <span class="k">self</span>.attempt(source, <span class="n">1</span>, <span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
     }
 
     <span class="k">async</span> attempt(source <span class="k">is</span> <span class="t">Source</span>, number <span class="k">is</span> int, delay <span class="k">is</span> <span class="t">Duration</span>) <span class="k">is</span> string {
@@ -13239,8 +13254,8 @@ role, so the suite replaces the clock:</p>
 
     <span class="t">Recording</span>(:waits);
 
-    instant() <span class="k">is</span> <span class="t">Instant</span> { <span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>)); }
-    monotonic_instant() <span class="k">is</span> <span class="t">MonotonicInstant</span> { <span class="t">MonotonicInstant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">0</span>)); }
+    instant() <span class="k">is</span> <span class="t">Instant</span> { <span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())); }
+    monotonic_instant() <span class="k">is</span> <span class="t">MonotonicInstant</span> { <span class="t">MonotonicInstant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())); }
     <span class="k">async</span> wait(duration <span class="k">is</span> <span class="t">Duration</span>) <span class="k">is</span> void { waits.record(duration); }
 }
 
@@ -13263,8 +13278,8 @@ role, so the suite replaces the clock:</p>
     <span class="k">let</span> source = <span class="t">Scripted</span>(answers: <span class="t">Stub</span>([<span class="s">&quot;down&quot;</span>, <span class="s">&quot;down&quot;</span>, <span class="s">&quot;ready&quot;</span>]));
     <span class="k">test</span>.<span class="k">is</span>(<span class="k">await</span> backoff.fetched(source), <span class="s">&quot;ready&quot;</span>);
     <span class="k">test</span>.<span class="k">is</span>(waits.size(), <span class="n">2</span>);
-    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">0</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">1</span>));
-    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">1</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">2</span>));
+    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">0</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
+    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">1</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">2</span>.rat()));
 }
 
 <span class="k">async</span> <span class="k">test</span> <span class="s">&quot;the first answer needs no wait&quot;</span> {
@@ -18019,7 +18034,7 @@ object that owns them all. <code>async/collect</code> and
 <span class="k">import</span> <span class="s">&quot;async/collect&quot;</span> <span class="k">take</span> <span class="t">AllFutures</span>;
 <span class="k">import</span> <span class="s">&quot;async/timeout&quot;</span> <span class="k">take</span> <span class="t">Within</span>, <span class="t">TimedOut</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">SystemClock</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 <span class="k">import</span> <span class="s">&quot;collections/sequence&quot;</span> <span class="k">take</span> <span class="t">Sequencing</span>;
 
 <span class="k">object</span> <span class="t">Supplier</span> {
@@ -18056,7 +18071,7 @@ object that owns them all. <code>async/collect</code> and
     <span class="t">Stdout</span>().writeln(<span class="s">&quot;quotes: &quot;</span> + prices.size().string());
     <span class="k">let</span> bounded <span class="k">is</span> <span class="t">Within</span>&lt;int&gt; = <span class="t">Within</span>(
         origin: <span class="t">Courier</span>(never: <span class="t">Event</span>()).eta(),
-        limit: <span class="t">Duration</span>(value: <span class="n">20</span>.rat(), unit: <span class="t">DurationUnit</span>.millisecond),
+        limit: <span class="t">Duration</span>(seconds: rat(<span class="n">20</span>, <span class="n">1000</span>)),
         clock: <span class="t">SystemClock</span>(),
     );
     <span class="k">let</span> eta = <span class="k">try</span> {
@@ -19053,7 +19068,7 @@ moves only when the test calls <code>advance</code>:</p>
 <span class="k">import</span> <span class="s">&quot;async/event&quot;</span> <span class="k">take</span> <span class="t">Event</span>;
 <span class="k">import</span> <span class="s">&quot;async/timeout&quot;</span> <span class="k">take</span> <span class="t">Within</span>, <span class="t">TimedOut</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">Instant</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 <span class="k">import</span> <span class="s">&quot;testing/time&quot;</span> <span class="k">take</span> <span class="t">ManualClock</span>;
 
 <span class="k">object</span> <span class="t">Courier</span> {
@@ -19075,7 +19090,7 @@ moves only when the test calls <code>advance</code>:</p>
     <span class="k">async</span> eta() <span class="k">is</span> int {
         <span class="k">let</span> bounded <span class="k">is</span> <span class="t">Within</span>&lt;int&gt; = <span class="t">Within</span>(
             origin: <span class="t">Courier</span>(never: <span class="t">Event</span>()).eta(),
-            limit: <span class="t">Duration</span>(<span class="n">30</span>.rat(), <span class="t">DurationUnit</span>.second),
+            limit: <span class="t">Duration</span>(seconds: <span class="n">30</span>.rat()),
             clock: clock,
         );
         <span class="k">try</span> {
@@ -19088,13 +19103,13 @@ moves only when the test calls <code>advance</code>:</p>
 }
 
 <span class="k">async</span> <span class="k">test</span> <span class="s">&quot;a courier that never answers times out after thirty seconds&quot;</span> {
-    <span class="k">let</span> clock = <span class="t">ManualClock</span>(<span class="t">Instant</span>(<span class="t">Duration</span>(<span class="n">0</span>.rat(), <span class="t">DurationUnit</span>.second)));
+    <span class="k">let</span> clock = <span class="t">ManualClock</span>(<span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())));
     <span class="k">defer</span> clock.close();
     <span class="k">let</span> eta = <span class="k">spawn</span> <span class="t">Dispatch</span>(clock: clock).eta();
     <span class="k">test</span>.<span class="k">is</span>(clock.pending(), <span class="n">1</span>);
-    clock.advance(<span class="t">Duration</span>(<span class="n">29</span>.rat(), <span class="t">DurationUnit</span>.second));
+    clock.advance(<span class="t">Duration</span>(seconds: <span class="n">29</span>.rat()));
     <span class="k">test</span>.ok(!eta.done());
-    clock.advance(<span class="t">Duration</span>(<span class="n">1</span>.rat(), <span class="t">DurationUnit</span>.second));
+    clock.advance(<span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
     <span class="k">test</span>.<span class="k">is</span>(<span class="k">await</span> eta, -<span class="n">1</span>);
 }</code></pre>
 
@@ -19805,7 +19820,7 @@ can write its own:</p>
 <span class="k">import</span> <span class="s">&quot;io/stdout&quot;</span> <span class="k">take</span> <span class="t">Stdout</span>;
 <span class="k">import</span> <span class="s">&quot;os/environment&quot;</span> <span class="k">take</span> <span class="t">Environment</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">Timing</span>, <span class="t">Instant</span>, <span class="t">MonotonicInstant</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 
 <span class="c">// A clock that always reads the same instant: what a test or a replay</span>
 <span class="c">// hands to code that asks for the time.</span>
@@ -19838,7 +19853,7 @@ can write its own:</p>
 }
 
 main() <span class="k">is</span> int {
-    <span class="k">let</span> noon = <span class="t">Instant</span>(origin: <span class="t">Duration</span>(value: <span class="n">43200</span>.rat(), unit: <span class="t">DurationUnit</span>.second));
+    <span class="k">let</span> noon = <span class="t">Instant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">43200</span>.rat()));
     <span class="k">let</span> clock = <span class="t">FixedClock</span>(at: noon);
     <span class="t">Stdout</span>().writeln(<span class="t">Greeting</span>(environment: <span class="t">Environment</span>(values: [<span class="s">&quot;USER&quot;</span>: <span class="s">&quot;ada&quot;</span>]), clock: clock).text());
     <span class="t">Stdout</span>().writeln(<span class="t">Greeting</span>(environment: <span class="t">Environment</span>(values: [:]), clock: clock).text());
@@ -23182,8 +23197,8 @@ that never awaits runs its body to the end the first time it is awaited
 the only place that names PostgreSQL:</p>
 <pre class="okkama"><code><span class="k">let</span> pool = <span class="t">DbPool</span>(
     origin: <span class="t">PostgresConnector</span>(<span class="t">PostgresDatabase</span>(url: <span class="s">&quot;postgresql://notes@127.0.0.1:5432/notes&quot;</span>)),
-    options: <span class="t">PoolOptions</span>(minimum: <span class="n">0</span>, maximum: <span class="n">8</span>, idle_timeout: <span class="t">Duration</span>(minutes: <span class="n">5</span>),
-        lifetime: <span class="t">Duration</span>(minutes: <span class="n">30</span>), acquisition_timeout: <span class="t">Duration</span>(seconds: <span class="n">5</span>)),
+    options: <span class="t">PoolOptions</span>(minimum: <span class="n">0</span>, maximum: <span class="n">8</span>, idle_timeout: <span class="t">Duration</span>(seconds: (<span class="n">5</span> * <span class="n">60</span>).rat()),
+        lifetime: <span class="t">Duration</span>(seconds: (<span class="n">30</span> * <span class="n">60</span>).rat()), acquisition_timeout: <span class="t">Duration</span>(seconds: <span class="n">5</span>.rat())),
     clock: <span class="t">SystemClock</span>(),
 );
 <span class="k">defer</span> pool.close();
@@ -26281,7 +26296,16 @@ for the type, and an initializer that settles no type (<code>[]</code>,
 match enclosing object." A shorthand cannot mix <code>:field</code>
 entries with typed parameters. <code>Name() {}</code> and
 <code>Name();</code> are different forms. Full constructors take
-parameter defaults like actions.</p>
+parameter defaults like actions. Constructors and actions share one
+overload identity, the name, the parameter count, the parameter types
+and the variadic shape; a shorthand's types are those of its fields
+(§12.5, §13.3).</p>
+<p>The six system type names <code>Error</code>, <code>Maybe</code>,
+<code>Presence</code>, <code>Future</code>, <code>NativeFailure</code>
+and <code>Cancelled</code> cannot name an object, a role, an enum, a
+native object or a type parameter:
+<code>"Maybe" is the name of a system enum</code>. They remain free as
+binding names.</p>
 <pre class="text"><code>action_decl    = [ &quot;async&quot; ] LOWER_NAME parameter_list &quot;is&quot; result block ;
 result         = &quot;void&quot; | &quot;^&quot; type | type ;
 parameter_list = &quot;(&quot; [ param_group { &quot;,&quot; param_group } [ &quot;,&quot; ] ] &quot;)&quot; ;

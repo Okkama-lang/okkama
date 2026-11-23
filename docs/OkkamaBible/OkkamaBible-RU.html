@@ -3882,7 +3882,7 @@ href="#ref-uax15">UAX #15</a>]. NFC по возможности собирает
 вдобавок заменяют <em>совместимые</em> символы — лигатуры вроде «ﬃ»,
 полноширинные буквы, надстрочные знаки — их простыми эквивалентами.
 Библиотечный <code>unicode/normalization</code> реализует все четыре для
-Unicode 16.0.0.</p>
+Unicode 18.0.0.</p>
 <p>Okkama не нормализует неявно, и причина — снова бритва. Неявная
 нормализация сделала бы равенство зависимым от таблиц, меняющихся с
 версиями Unicode, сделала бы <code>length()</code> строки отличным от
@@ -4090,7 +4090,8 @@ main() <span class="k">is</span> int {
 <code>ﬁ</code> — на <code>f</code> и <code>i</code> (раздел 6.5).
 Комбинирующие знаки узнаются по общей категории Unicode, <em>nonspacing
 mark</em>, через <code>unicode/character</code>, и удаляются. Ничего не
-угадывается: таблицы — Unicode 16.0.0.</li>
+угадывается: таблицы — самого Unicode, 18.0.0 для разложения и 17.0.0
+для категорий.</li>
 <li><strong>Всё остальное разделяет слова.</strong> ASCII-буквы и цифры
 остаются, любой другой символ становится пробелом.
 <code>split(" ")</code> сохраняет пустые поля между повторными пробелами
@@ -4216,7 +4217,7 @@ href="#ref-stackexchange2016">Exchange 2016</a>].</li>
 автомат Томпсона выполняет любой шаблон за линейное время. Его пределы —
 явные типизированные отказы: 4096 кодовых точек выражения, 256 вложенных
 групп, 1024 захвата и 16 384 состояния. Данные Unicode закреплены на
-версии 16.0, той же, что у строкового типа. Программа, которой нужна
+версии 17.0, той же, что у строкового типа. Программа, которой нужна
 обратная ссылка, пишет эту проверку кодом после совпадения. Это стоит
 нескольких строк. Катастрофический шаблон стоит аварии.</p>
 <h2 id="612-ограничения"><span class="num">6.12</span> Ограничения</h2>
@@ -9614,12 +9615,18 @@ main() <span class="k">is</span> int { <span class="n">0</span>; }</code></pre>
 объекта без состояния.</p>
 <h2 id="125-несколько-конструкторов"><span class="num">12.5</span> Несколько конструкторов</h2>
 <p>У объекта может быть несколько конструкторов, и они перегружаются как
-действия: по числу аргументов, их типам и, для сокращений, по переданным
-именам. У <code>Cash</code> есть полный конструктор
-<code>(int, int)</code> и сокращение, принимающее <code>digit</code> и
-<code>currency</code> по имени, и каждый вызов выбирает подходящий. Два
-одинаково подходящих кандидата — ошибка неоднозначности. Порядок
-объявления ничью никогда не разрешает.</p>
+действия (раздел 13.3): по числу параметров и их типам. Типы параметров
+сокращения — типы перечисленных в нём полей, по порядку. У
+<code>Cash</code> есть полный конструктор <code>(int, int)</code> и
+сокращение <code>Cash(:digit, :currency)</code> с типами
+<code>(int, string)</code>, и каждый вызов выбирает подходящий. Имена
+параметров и выбор между полной формой и сокращением конструкторы не
+различают: второй конструктор с теми же типами — ошибка в его
+объявлении,
+<code>Constructor of object "Cash" has conflicting overloads with signature Cash(int, int)</code>,
+и сообщение указывает на первый. Два одинаково подходящих вызову
+кандидата — ошибка неоднозначности. Порядок объявления ничью никогда не
+разрешает.</p>
 <p>Полный конструктор может заканчиваться <strong>вариадическим</strong>
 параметром, как <code>Bag(items is ...int)</code>. Его вызовы
 позиционные, а внутри тела параметр распаковывают через
@@ -10920,16 +10927,24 @@ int 7 / string x / something else
 <p>У вариадических действий, сигнатур ролей, нативов и полезной нагрузки
 enum умолчаний нет.</p>
 <h2 id="133-перегрузки"><span class="num">13.3</span> Перегрузки</h2>
-<p>Объект может объявить несколько действий с одним именем. Они
-различаются числом параметров, их типами, а для именованных вызовов —
-именами параметров. <code>describe(int)</code>,
-<code>describe(string)</code> и <code>describe(any)</code> в примере —
-три действия. Вызов с <code>1.5</code> берёт вариант с <code>any</code>,
-потому что ни один другой не принимает число с плавающей точкой.</p>
+<p>Объект может объявить несколько действий с одним именем. Перегрузка —
+это её имя, число параметров, их типы и то, вариадический ли последний.
+Больше перегрузки ничем не различаются: ни именами параметров, ни типом
+результата, ни <code>async</code>, <code>hidden</code> или пометкой
+преемника. Два объявления, совпадающие во всех четырёх, — одна
+сигнатура, объявленная дважды, и это ошибка во втором:
+<code>Action "size" on object "Resizer" has conflicting overloads with signature size(int); parameter names and return types do not distinguish overloads</code>.
+То же правило действует для конструкторов (§12.5), сигнатур ролей и
+фейков (§14.1), и с 0.6.4 исключений из него нет.
+<code>describe(int)</code>, <code>describe(string)</code> и
+<code>describe(any)</code> в примере — три действия. Вызов с
+<code>1.5</code> берёт вариант с <code>any</code>, потому что ни один
+другой не принимает число с плавающей точкой.</p>
 <p>Правила короткие и никогда не угадывают:</p>
 <ol type="1">
-<li>Кандидаты с неверной арностью или неверными именами отсеиваются.
-Затем типы аргументов сверяются с объявленными.</li>
+<li>Отсеиваются кандидаты с неверной арностью и те, у кого нет параметра
+с каким-либо из имён именованного вызова. Затем типы аргументов
+сверяются с объявленными.</li>
 <li>Если подходит фиксированный кандидат, вариадические не
 рассматриваются.</li>
 <li>Точные конкретные типы бьют совместимые по роли, и те и другие бьют
@@ -11720,7 +11735,8 @@ alt="Рисунок 14.1. Роли номинальны: объект испол
 <code>fake</code> для тестов, тема главы 15.) Роль может объявить
 несколько сигнатур с одним именем, если их типы параметров различаются;
 как перегрузки объекта (раздел 13.3), они могут объявлять разные
-результаты.</p>
+результаты. Одни имена параметров двух сигнатур не дают — ни в роли, ни
+в её фейке.</p>
 <p>Объект реализует роль, заявив об этом:</p>
 <pre class="okkama"><code><span class="k">object</span> <span class="t">Bottle</span> <span class="k">does</span> <span class="t">Package</span> { … }
 <span class="k">object</span> <span class="t">Wallet</span> <span class="k">does</span> <span class="t">Account</span>, <span class="t">Labelled</span> { … }</code></pre>
@@ -13332,7 +13348,7 @@ PASS</code></pre>
     <span class="t">Backoff</span>(:timing, :attempts);
 
     <span class="k">async</span> fetched(source <span class="k">is</span> <span class="t">Source</span>) <span class="k">is</span> string {
-        <span class="k">await</span> <span class="k">self</span>.attempt(source, <span class="n">1</span>, <span class="t">Duration</span>(seconds: <span class="n">1</span>));
+        <span class="k">await</span> <span class="k">self</span>.attempt(source, <span class="n">1</span>, <span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
     }
 
     <span class="k">async</span> attempt(source <span class="k">is</span> <span class="t">Source</span>, number <span class="k">is</span> int, delay <span class="k">is</span> <span class="t">Duration</span>) <span class="k">is</span> string {
@@ -13353,8 +13369,8 @@ PASS</code></pre>
 
     <span class="t">Recording</span>(:waits);
 
-    instant() <span class="k">is</span> <span class="t">Instant</span> { <span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>)); }
-    monotonic_instant() <span class="k">is</span> <span class="t">MonotonicInstant</span> { <span class="t">MonotonicInstant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">0</span>)); }
+    instant() <span class="k">is</span> <span class="t">Instant</span> { <span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())); }
+    monotonic_instant() <span class="k">is</span> <span class="t">MonotonicInstant</span> { <span class="t">MonotonicInstant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())); }
     <span class="k">async</span> wait(duration <span class="k">is</span> <span class="t">Duration</span>) <span class="k">is</span> void { waits.record(duration); }
 }
 
@@ -13377,8 +13393,8 @@ PASS</code></pre>
     <span class="k">let</span> source = <span class="t">Scripted</span>(answers: <span class="t">Stub</span>([<span class="s">&quot;down&quot;</span>, <span class="s">&quot;down&quot;</span>, <span class="s">&quot;ready&quot;</span>]));
     <span class="k">test</span>.<span class="k">is</span>(<span class="k">await</span> backoff.fetched(source), <span class="s">&quot;ready&quot;</span>);
     <span class="k">test</span>.<span class="k">is</span>(waits.size(), <span class="n">2</span>);
-    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">0</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">1</span>));
-    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">1</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">2</span>));
+    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">0</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
+    <span class="k">test</span>.<span class="k">is</span>(waits.records().item(<span class="n">1</span>).value(), <span class="t">Duration</span>(seconds: <span class="n">2</span>.rat()));
 }
 
 <span class="k">async</span> <span class="k">test</span> <span class="s">&quot;the first answer needs no wait&quot;</span> {
@@ -18163,7 +18179,7 @@ href="#ref-hoare1978">Hoare 1978</a>] в виде объекта: у выбор�
 <span class="k">import</span> <span class="s">&quot;async/collect&quot;</span> <span class="k">take</span> <span class="t">AllFutures</span>;
 <span class="k">import</span> <span class="s">&quot;async/timeout&quot;</span> <span class="k">take</span> <span class="t">Within</span>, <span class="t">TimedOut</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">SystemClock</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 <span class="k">import</span> <span class="s">&quot;collections/sequence&quot;</span> <span class="k">take</span> <span class="t">Sequencing</span>;
 
 <span class="k">object</span> <span class="t">Supplier</span> {
@@ -18200,7 +18216,7 @@ href="#ref-hoare1978">Hoare 1978</a>] в виде объекта: у выбор�
     <span class="t">Stdout</span>().writeln(<span class="s">&quot;quotes: &quot;</span> + prices.size().string());
     <span class="k">let</span> bounded <span class="k">is</span> <span class="t">Within</span>&lt;int&gt; = <span class="t">Within</span>(
         origin: <span class="t">Courier</span>(never: <span class="t">Event</span>()).eta(),
-        limit: <span class="t">Duration</span>(value: <span class="n">20</span>.rat(), unit: <span class="t">DurationUnit</span>.millisecond),
+        limit: <span class="t">Duration</span>(seconds: rat(<span class="n">20</span>, <span class="n">1000</span>)),
         clock: <span class="t">SystemClock</span>(),
     );
     <span class="k">let</span> eta = <span class="k">try</span> {
@@ -19205,7 +19221,7 @@ endpoint.</p>
 <span class="k">import</span> <span class="s">&quot;async/event&quot;</span> <span class="k">take</span> <span class="t">Event</span>;
 <span class="k">import</span> <span class="s">&quot;async/timeout&quot;</span> <span class="k">take</span> <span class="t">Within</span>, <span class="t">TimedOut</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">Instant</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 <span class="k">import</span> <span class="s">&quot;testing/time&quot;</span> <span class="k">take</span> <span class="t">ManualClock</span>;
 
 <span class="k">object</span> <span class="t">Courier</span> {
@@ -19227,7 +19243,7 @@ endpoint.</p>
     <span class="k">async</span> eta() <span class="k">is</span> int {
         <span class="k">let</span> bounded <span class="k">is</span> <span class="t">Within</span>&lt;int&gt; = <span class="t">Within</span>(
             origin: <span class="t">Courier</span>(never: <span class="t">Event</span>()).eta(),
-            limit: <span class="t">Duration</span>(<span class="n">30</span>.rat(), <span class="t">DurationUnit</span>.second),
+            limit: <span class="t">Duration</span>(seconds: <span class="n">30</span>.rat()),
             clock: clock,
         );
         <span class="k">try</span> {
@@ -19240,13 +19256,13 @@ endpoint.</p>
 }
 
 <span class="k">async</span> <span class="k">test</span> <span class="s">&quot;a courier that never answers times out after thirty seconds&quot;</span> {
-    <span class="k">let</span> clock = <span class="t">ManualClock</span>(<span class="t">Instant</span>(<span class="t">Duration</span>(<span class="n">0</span>.rat(), <span class="t">DurationUnit</span>.second)));
+    <span class="k">let</span> clock = <span class="t">ManualClock</span>(<span class="t">Instant</span>(<span class="t">Duration</span>(seconds: <span class="n">0</span>.rat())));
     <span class="k">defer</span> clock.close();
     <span class="k">let</span> eta = <span class="k">spawn</span> <span class="t">Dispatch</span>(clock: clock).eta();
     <span class="k">test</span>.<span class="k">is</span>(clock.pending(), <span class="n">1</span>);
-    clock.advance(<span class="t">Duration</span>(<span class="n">29</span>.rat(), <span class="t">DurationUnit</span>.second));
+    clock.advance(<span class="t">Duration</span>(seconds: <span class="n">29</span>.rat()));
     <span class="k">test</span>.ok(!eta.done());
-    clock.advance(<span class="t">Duration</span>(<span class="n">1</span>.rat(), <span class="t">DurationUnit</span>.second));
+    clock.advance(<span class="t">Duration</span>(seconds: <span class="n">1</span>.rat()));
     <span class="k">test</span>.<span class="k">is</span>(<span class="k">await</span> eta, -<span class="n">1</span>);
 }</code></pre>
 
@@ -19970,7 +19986,7 @@ Okkama следует этой дисциплине там, где она нич
 <span class="k">import</span> <span class="s">&quot;io/stdout&quot;</span> <span class="k">take</span> <span class="t">Stdout</span>;
 <span class="k">import</span> <span class="s">&quot;os/environment&quot;</span> <span class="k">take</span> <span class="t">Environment</span>;
 <span class="k">import</span> <span class="s">&quot;time/clock&quot;</span> <span class="k">take</span> <span class="t">Timing</span>, <span class="t">Instant</span>, <span class="t">MonotonicInstant</span>;
-<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>, <span class="t">DurationUnit</span>;
+<span class="k">import</span> <span class="s">&quot;time/duration&quot;</span> <span class="k">take</span> <span class="t">Duration</span>;
 
 <span class="c">// A clock that always reads the same instant: what a test or a replay</span>
 <span class="c">// hands to code that asks for the time.</span>
@@ -20003,7 +20019,7 @@ Okkama следует этой дисциплине там, где она нич
 }
 
 main() <span class="k">is</span> int {
-    <span class="k">let</span> noon = <span class="t">Instant</span>(origin: <span class="t">Duration</span>(value: <span class="n">43200</span>.rat(), unit: <span class="t">DurationUnit</span>.second));
+    <span class="k">let</span> noon = <span class="t">Instant</span>(origin: <span class="t">Duration</span>(seconds: <span class="n">43200</span>.rat()));
     <span class="k">let</span> clock = <span class="t">FixedClock</span>(at: noon);
     <span class="t">Stdout</span>().writeln(<span class="t">Greeting</span>(environment: <span class="t">Environment</span>(values: [<span class="s">&quot;USER&quot;</span>: <span class="s">&quot;ada&quot;</span>]), clock: clock).text());
     <span class="t">Stdout</span>().writeln(<span class="t">Greeting</span>(environment: <span class="t">Environment</span>(values: [:]), clock: clock).text());
@@ -23368,8 +23384,8 @@ PostgreSQL — ещё один исполнитель той же роли, в �
 единственное место, где названа PostgreSQL:</p>
 <pre class="okkama"><code><span class="k">let</span> pool = <span class="t">DbPool</span>(
     origin: <span class="t">PostgresConnector</span>(<span class="t">PostgresDatabase</span>(url: <span class="s">&quot;postgresql://notes@127.0.0.1:5432/notes&quot;</span>)),
-    options: <span class="t">PoolOptions</span>(minimum: <span class="n">0</span>, maximum: <span class="n">8</span>, idle_timeout: <span class="t">Duration</span>(minutes: <span class="n">5</span>),
-        lifetime: <span class="t">Duration</span>(minutes: <span class="n">30</span>), acquisition_timeout: <span class="t">Duration</span>(seconds: <span class="n">5</span>)),
+    options: <span class="t">PoolOptions</span>(minimum: <span class="n">0</span>, maximum: <span class="n">8</span>, idle_timeout: <span class="t">Duration</span>(seconds: (<span class="n">5</span> * <span class="n">60</span>).rat()),
+        lifetime: <span class="t">Duration</span>(seconds: (<span class="n">30</span> * <span class="n">60</span>).rat()), acquisition_timeout: <span class="t">Duration</span>(seconds: <span class="n">5</span>.rat())),
     clock: <span class="t">SystemClock</span>(),
 );
 <span class="k">defer</span> pool.close();
@@ -26485,8 +26501,16 @@ accept parameters in v1.0.»</li>
 enclosing object.» Сокращённая форма не смешивает записи
 <code>:field</code> с типизированными параметрами.
 <code>Name() {}</code> и <code>Name();</code> — разные формы. Полные
-конструкторы принимают значения параметров по умолчанию, как
-действия.</p>
+конструкторы принимают значения параметров по умолчанию, как действия. У
+конструкторов и действий одно тождество перегрузки: имя, число
+параметров, их типы и вариадичность; типы сокращения — типы его полей
+(§12.5, §13.3).</p>
+<p>Шесть имён системных типов — <code>Error</code>, <code>Maybe</code>,
+<code>Presence</code>, <code>Future</code>, <code>NativeFailure</code> и
+<code>Cancelled</code> — не могут называть объект, роль, enum, нативный
+объект или параметр типа:
+<code>"Maybe" is the name of a system enum</code>. Именами привязок они
+остаются свободны.</p>
 <pre class="text"><code>action_decl    = [ &quot;async&quot; ] LOWER_NAME parameter_list &quot;is&quot; result block ;
 result         = &quot;void&quot; | &quot;^&quot; type | type ;
 parameter_list = &quot;(&quot; [ param_group { &quot;,&quot; param_group } [ &quot;,&quot; ] ] &quot;)&quot; ;

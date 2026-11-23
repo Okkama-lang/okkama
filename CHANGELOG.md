@@ -9,8 +9,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [0.6.4] — 2026-11-23
 
 0.6.4 is a hotfix release: every finding of reading the 0.6.3 source end to end (the milestone "Hotfixes TBD",
-#973–#1004) is fixed, tested with a mutation check, and measured over std, t/, examples and conformance; the
-few that need a decision or are refactors are filed (#1005, #1006).
+#973–#1024) is fixed, tested with a mutation check, and measured over std, t/, examples and conformance. Two
+owner decisions change the language and std: one overload identity (#1005) and one `Duration` constructor (#1018).
 - **Silent wrong results fixed.** A rebind nested in an expression was lost after a loop or in a `catch`
   (#1001); `Sample.quantiles` gave unordered cut points for sparse samples (#990); a time zone name that was a
   bundle metadata file was accepted (#990).
@@ -21,8 +21,9 @@ few that need a decision or are refactors are filed (#1005, #1006).
 - **A rule the owner settled.** A rebind takes a successor of the bound object itself, not of a constructor
   (#984).
 - Release report: micro A/B 0.6.3 → 0.6.4 (Linux containers, both built as the packages, one session,
-  interleaved candidate, base, candidate, base): Sparrow −0.4% over 51 reliable pairs, every program within the
-  noise band (−10.3% … +2.2% among reliable pairs); the new checks cost nothing measurable.
+  interleaved candidate, base, candidate, base; candidate 29c3dc84a): Sparrow +0.6% over 55 reliable pairs, no
+  program outside the noise band (−11.0% … +6.3%). The async programs are 4–6% slower in both rounds, below the
+  significance rule but consistent; #1025 bisects it.
 
 ### Changed
 - **Breaking: one overload identity (#1005, owner decision).** An overload is its name, parameter count, resolved
