@@ -24,8 +24,20 @@ impl WorkerFile {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
         let path = std::env::temp_dir().join(format!("okkama-worker-{}-{nanos}.spb", std::process::id()));
-        std::fs::write(&path, bytes)?;
-        Ok(Self(path))
+        // A new file only this user reads: a file or link planted under the
+        // name is refused, not written through (#1017).
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path)?;
+        // Made: from here on it is removed when dropped, a failed write too.
+        let made = Self(path);
+        std::io::Write::write_all(&mut file, bytes)?;
+        Ok(made)
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -76,4 +88,21 @@ pub(crate) fn report(error: sparrow_core::Error) -> String {
         text.push('\n');
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    /// #1017: the workers' bytecode is a new file only this user reads, and
+    /// it goes when dropped.
+    #[test]
+    #[cfg(unix)]
+    fn the_worker_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let file = super::WorkerFile::write(b"spb").expect("a file");
+        let path = file.path().to_path_buf();
+        assert_eq!(std::fs::read(&path).expect("read"), b"spb");
+        assert_eq!(std::fs::metadata(&path).expect("metadata").permissions().mode() & 0o777, 0o600);
+        drop(file);
+        assert!(!path.exists());
+    }
 }

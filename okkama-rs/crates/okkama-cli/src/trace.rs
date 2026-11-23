@@ -3,6 +3,7 @@
 //! Стек собирает рантайм при раскрутке отказа (`Failure::trace`): пары
 //! «функция, номер инструкции» в нумерации, сохранённой при генерации Sparrow. Здесь они
 //! превращаются в файлы, строки и колонки по отладочным сведениям OIR.
+use okkama_compiler::diagnostics::display_width;
 use okkama_compiler::{ir, source::SourceFile};
 use okkama_runtime_core::failure::{Site, frame_name, stack_text_by};
 use std::collections::HashMap;
@@ -73,22 +74,23 @@ fn snippet(source: &SourceFile, span: okkama_compiler::source::Span, cwd: Option
     let text = source.line_text(start.line);
     let gutter = start.line.to_string();
     let pad = " ".repeat(gutter.len());
+    // Columns are characters, the terminal shows cells: the carets follow
+    // display width, as the compiler's diagnostics do (#1017; a wide
+    // character before the place shifted them left).
+    let chars: Vec<char> = text.chars().collect();
+    let first = (start.column.saturating_sub(1) as usize).min(chars.len());
     let last = if end.line == start.line {
-        end.column
+        (end.column.saturating_sub(1) as usize).clamp(first, chars.len())
     } else {
-        text.chars().count() as u32 + 1
+        chars.len()
     };
-    let width = last.saturating_sub(start.column).max(1) as usize;
+    let cells = |part: &[char]| part.iter().map(|&ch| display_width(ch)).sum::<usize>();
+    let shown: String = chars.iter().map(|&ch| if ch.is_control() { ' ' } else { ch }).collect();
     let mut out = String::new();
     let _ = writeln!(out, "{pad}--> {}:{}:{}", display_path(source, cwd), start.line, start.column);
     let _ = writeln!(out, "{pad} |");
-    let _ = writeln!(out, "{gutter} | {}", text.replace('\t', " "));
-    let _ = writeln!(
-        out,
-        "{pad} | {}{}",
-        " ".repeat(start.column.saturating_sub(1) as usize),
-        "^".repeat(width)
-    );
+    let _ = writeln!(out, "{gutter} | {shown}");
+    let _ = writeln!(out, "{pad} | {}{}", " ".repeat(cells(&chars[..first])), "^".repeat(cells(&chars[first..last]).max(1)));
     out
 }
 

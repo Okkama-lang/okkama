@@ -7,7 +7,8 @@
 //! объединяются в одну проверку.
 //!
 //! Возможности: диагностики, наведение, переход к определению, структура
-//! файла. Пока файл не разбирается, наведение и переход используют
+//! файла, дополнение, подсказка сигнатуры, вхождения и подсветка, переименование
+//! и форматирование. Пока файл не разбирается, наведение и переход используют
 //! последний разобранный вариант.
 
 use std::collections::HashMap;
@@ -162,6 +163,13 @@ pub fn run() -> ExitCode {
     code
 }
 
+/// An `exit` notification that came without `shutdown` before it: the
+/// protocol ends the server with code 1 then (#1017: it ended with 0). After
+/// `shutdown`, `handle_shutdown` takes the `exit` itself and ends with 0.
+fn is_exit(message: &Message) -> bool {
+    matches!(message, Message::Notification(notification) if notification.method == "exit")
+}
+
 impl Server {
     fn serve(&mut self) -> ExitCode {
         loop {
@@ -169,11 +177,17 @@ impl Server {
                 return ExitCode::SUCCESS;
             };
             let mut dirty = Vec::new();
+            if is_exit(&message) {
+                return ExitCode::FAILURE;
+            }
             if self.handle(message, &mut dirty) {
                 return ExitCode::SUCCESS;
             }
             // Изменения подряд — одна проверка.
             while let Ok(message) = self.connection.receiver.try_recv() {
+                if is_exit(&message) {
+                    return ExitCode::FAILURE;
+                }
                 if self.handle(message, &mut dirty) {
                     return ExitCode::SUCCESS;
                 }
@@ -267,8 +281,8 @@ impl Server {
                     return;
                 };
                 if let Some(document) = self.documents.remove(uri) {
-                    for path in document.published {
-                        self.publish(&path, Vec::new(), None);
+                    for path in document.published.iter().filter(|path| !self.open_path(path)) {
+                        self.publish(path, Vec::new(), None);
                     }
                 }
                 dirty.retain(|other| other != uri);
@@ -313,7 +327,7 @@ impl Server {
             .diagnostics
             .iter()
             .any(|found| found.path != source.name())
-            .then(|| first_import_range(&document.text));
+            .then(|| first_import_range(&source));
         for found in &inspection.diagnostics {
             let mut diagnostic = lsp_diagnostic(found.range, found.severity, found.message.clone());
             if let Some(code) = &found.code {
@@ -343,12 +357,16 @@ impl Server {
                 .or_default()
                 .push(diagnostic);
         }
+        // Another open file publishes its own, fuller set (its linter, its
+        // `missing-docs`): what this file's check sees of it does not replace
+        // that (#1017: the file checked last in a batch won).
+        by_path.retain(|path, _| path == source.name() || !self.open_path(path));
         let previous = self
             .documents
             .get(uri)
             .map(|document| document.published.clone())
             .unwrap_or_default();
-        for path in previous.iter().filter(|path| !by_path.contains_key(*path)) {
+        for path in previous.iter().filter(|path| !by_path.contains_key(*path) && !self.open_path(path)) {
             self.publish(path, Vec::new(), None);
         }
         let published: Vec<String> = by_path.keys().cloned().collect();
@@ -366,6 +384,14 @@ impl Server {
             document.inspection = inspection;
             document.published = published;
         }
+    }
+
+    /// Whether `path` (a canonical file name, as diagnostics carry it) is a
+    /// document open in the editor.
+    fn open_path(&self, path: &str) -> bool {
+        self.documents.values().any(|document| {
+            std::fs::canonicalize(&document.path).unwrap_or_else(|_| document.path.clone()).as_os_str() == path
+        })
     }
 
     fn publish(&self, path: &str, diagnostics: Vec<lsp_types::Diagnostic>, version: Option<i32>) {
@@ -852,13 +878,18 @@ impl Server {
     }
 }
 
-fn first_import_range(text: &str) -> ide::Range {
+/// Where copies of other files' errors go: the first import declaration, as
+/// the syntax tree has it (#1017: the first letters `import` anywhere, in a
+/// comment too, were taken); the first line when the file does not parse.
+fn first_import_range(source: &SourceFile) -> ide::Range {
+    let text = source.text();
     let lines = LineIndex::new(text);
-    let start = text.find("import").unwrap_or(0) as u32;
-    let end = text[start as usize..]
-        .find('\n')
-        .map_or(text.len() as u32, |at| start + at as u32);
-    lines.range(okkama_compiler::Span::new(start, end))
+    let options = okkama_compiler::syntax::ParseOptions::default();
+    let span = okkama_compiler::syntax::parse(source, &options)
+        .ok()
+        .and_then(|program| program.imports.first().map(|import| import.span))
+        .unwrap_or_else(|| okkama_compiler::Span::new(0, text.find('\n').unwrap_or(text.len()) as u32));
+    lines.range(span)
 }
 
 fn lsp_position(position: ide::Position) -> lsp_types::Position {

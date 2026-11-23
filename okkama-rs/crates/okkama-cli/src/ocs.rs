@@ -650,9 +650,18 @@ impl JsonParser {
                                 && self.chars.get(self.at) == Some(&'\\')
                                 && self.chars.get(self.at + 1) == Some(&'u')
                             {
+                                // A high surrogate pairs only with a low one; any
+                                // other escape after it stands on its own, and the
+                                // lone high one becomes U+FFFD (#1017: the low part
+                                // was subtracted unchecked).
+                                let escape = self.at;
                                 self.at += 2;
                                 let low = self.hex4()?;
-                                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                if (0xDC00..0xE000).contains(&low) {
+                                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                } else {
+                                    self.at = escape;
+                                }
                             }
                             out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
                         }

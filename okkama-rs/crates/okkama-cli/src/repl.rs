@@ -33,7 +33,9 @@ const INPUT: &str = "<input>";
 const CAPACITIES: Capacities = Capacities { functions: 16_384, objects: 4_096 };
 
 const HELP: &str = "\
-Enter statements, expressions, declarations (object, enum, role) or imports.
+Enter statements, expressions, declarations (object, enum, role, const, native,
+cap, hidden ones too) or imports. An input that ends inside brackets, a fenced
+raw string or a block comment, or on an operator, goes on on the next line.
 The value of a trailing expression is dumped; variables live on between inputs.
 
     :vars     variables and their types
@@ -46,9 +48,20 @@ On a terminal: arrows move the cursor and walk the history (~/.okkama_history),
 Ctrl-R searches it. Actions (closures) and futures are not kept between inputs.
 ";
 
+/// `okkama help repl`.
+pub(crate) fn help() -> String {
+    format!("okkama repl — read-eval-print loop on Sparrow\n\nUSAGE:\n    okkama repl\n\n{HELP}")
+}
+
 struct Var {
     name: String,
+    /// The type as `:vars` shows it: the keeper's type argument.
     ty: String,
+    /// The type as the next cell writes it: names of other modules through
+    /// the namespaces of [`Var::imports`] (#1017: `import … as` hid them).
+    param: String,
+    /// `(module path, name)` of each name `param` takes from another module.
+    imports: Vec<(String, String)>,
     value: Word,
 }
 
@@ -59,6 +72,10 @@ struct Session {
     vars: Vec<Var>,
     cells: usize,
     runtime: Option<Box<Runtime>>,
+    /// The module path of each type name declared in another module, from
+    /// the last compilation; a name two modules declare, or the session's own
+    /// declarations, is not here.
+    origins: std::collections::HashMap<String, String>,
 }
 
 /// Lines from a terminal (edited, with history) or from a pipe.
@@ -229,7 +246,10 @@ impl Session {
                     eprint!("{errors}");
                 }
             }
-            "object" | "enum" | "role" | "native" | "cap" => {
+            // Tests and fakes run in test mode only (#1017: they reached the
+            // cell and failed as a statement).
+            "test" | "fake" => eprintln!("okkama: {first} declarations belong to test mode (`okkama run -t`); the REPL runs none"),
+            "object" | "enum" | "role" | "native" | "cap" | "const" | "hidden" => {
                 self.decls.push(text.to_string());
                 if let Err(errors) = self.load(None) {
                     self.decls.pop();
@@ -280,6 +300,7 @@ impl Session {
         }
         let (module, _) = lower_source(&sources, false).map_err(|outcome| shift_input_lines(&outcome.stderr))?;
         let fresh = codegen::sparrow::generate(&module).map_err(|error| format!("okkama: {error}\n"))?;
+        let origins = type_origins(&module);
         match &mut self.runtime {
             Some(runtime) => {
                 let merged = okkama_sparrow::session::extend(&runtime.loaded.program, &fresh)
@@ -291,6 +312,7 @@ impl Session {
                 self.runtime = Some(Box::new(runtime));
             }
         }
+        self.origins = origins;
         Ok(())
     }
 
@@ -312,9 +334,10 @@ impl Session {
         }
         self.cells += 1;
         let cell = format!("ReplCell{}", self.cells);
-        let params: Vec<String> = carried.iter().map(|index| format!("{} is {}", self.vars[*index].name, self.vars[*index].ty)).collect();
+        let params: Vec<String> = carried.iter().map(|index| format!("{} is {}", self.vars[*index].name, self.vars[*index].param)).collect();
         let asynchronous = text.contains("await");
-        let header = self.header();
+        let mut header = self.header();
+        header.push_str(&namespace_imports(carried.iter().flat_map(|index| self.vars[*index].imports.iter())));
         let source = |body: &str| {
             let keeps: Vec<String> = kept.iter().map(|name| format!("{KEEPER}(value: {name})")).collect();
             format!(
@@ -374,13 +397,96 @@ impl Session {
                 eprintln!("note: `{name}` ({ty}) is not kept between inputs");
                 continue;
             }
-            vars.push(Var { name, ty, value });
+            let (param, imports) = written_type(&ty, &self.origins);
+            vars.push(Var { name, ty, param, imports, value });
         }
         if let Err(error) = runtime.session_keep(values) {
             eprintln!("{}", error.0);
         }
         self.vars = vars;
     }
+}
+
+/// The module path of each type name an imported module declares, as the IR
+/// names them (`io.stdout::Stdout`, `compare::Comparing<Duration>`). A name
+/// the session declares itself, or two modules declare, is left out: it
+/// stays as written.
+fn type_origins(module: &okkama_compiler::ir::Module) -> std::collections::HashMap<String, String> {
+    let names = module.objects.iter().map(|object| object.name.as_str())
+        .chain(module.enums.iter().map(|decl| decl.name.as_str()))
+        .chain(module.variants.iter().map(|decl| decl.name.as_str()))
+        .chain(module.roles.iter().map(|decl| decl.name.as_str()));
+    let base = |name: &str| name.split('<').next().unwrap_or(name).to_string();
+    let mut origins = std::collections::HashMap::new();
+    let mut own = std::collections::HashSet::new();
+    let mut shared = std::collections::HashSet::new();
+    for name in names {
+        match name.split_once("::") {
+            Some((path, rest)) => {
+                let path = path.replace('.', "/");
+                let rest = base(rest);
+                if origins.get(&rest).is_some_and(|known| *known != path) {
+                    shared.insert(rest.clone());
+                }
+                origins.insert(rest, path);
+            }
+            None => {
+                own.insert(base(name));
+            }
+        }
+    }
+    origins.retain(|name, _| !own.contains(name) && !shared.contains(name));
+    origins
+}
+
+/// `ty` (a keeper's type argument, with plain names) as a cell writes it:
+/// each name declared in another module goes through a namespace of the
+/// cell's own (`repl_io_stdout.Stdout`), whatever the session's imports call
+/// that module; the second value lists the names taken.
+fn written_type(ty: &str, origins: &std::collections::HashMap<String, String>) -> (String, Vec<(String, String)>) {
+    let mut written = String::new();
+    let mut imports = Vec::new();
+    let mut rest = ty;
+    while let Some(start) = rest.find(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        written.push_str(&rest[..start]);
+        let word = &rest[start..];
+        let end = word.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(word.len());
+        let name = &word[..end];
+        match origins.get(name) {
+            Some(path) => {
+                written.push_str(&format!("{}.{name}", namespace(path)));
+                if !imports.iter().any(|(known, taken)| known == path && taken == name) {
+                    imports.push((path.clone(), name.to_string()));
+                }
+            }
+            None => written.push_str(name),
+        }
+        rest = &word[end..];
+    }
+    written.push_str(rest);
+    (written, imports)
+}
+
+/// The cell's namespace of the module `path`.
+fn namespace(path: &str) -> String {
+    let mut name = String::from("repl_");
+    name.extend(path.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }));
+    name
+}
+
+/// One `import "path" as namespace take …;` per module, for the header.
+fn namespace_imports<'a>(taken: impl Iterator<Item = &'a (String, String)>) -> String {
+    let mut by_module: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for (path, name) in taken {
+        let names = by_module.entry(path).or_default();
+        if !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    by_module
+        .into_iter()
+        .map(|(path, names)| format!(" import \"{path}\" as {} take {};", namespace(path), names.join(", ")))
+        .collect()
 }
 
 /// What the input holds: its top-level `let` names and its last expression.
@@ -425,34 +531,62 @@ impl Shape {
     }
 }
 
-/// The input is complete: brackets balance outside strings, characters and comments.
+/// The input is complete: brackets balance outside strings, characters and
+/// comments, and no fenced raw string or block comment is left open (#1017:
+/// a bracket inside them opened a continuation that glued the next inputs on).
 fn complete(text: &str) -> bool {
     let mut depth = 0i32;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
+    let mut rest = text;
+    // The last character outside comments and whitespace.
+    let mut last = ' ';
+    while let Some(ch) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("```") {
+            // The first following triple backtick closes it, as in the lexer.
+            match after.find("```") {
+                Some(end) => rest = &after[end + 3..],
+                None => return false,
+            }
+            last = '`';
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("/*") {
+            // Block comments do not nest.
+            match after.find("*/") {
+                Some(end) => rest = &after[end + 2..],
+                None => return false,
+            }
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("//") {
+            rest = after.find('\n').map_or("", |end| &after[end..]);
+            continue;
+        }
+        rest = &rest[ch.len_utf8()..];
+        if !ch.is_whitespace() {
+            last = ch;
+        }
         match ch {
             '"' | '\'' => {
-                while let Some(inner) = chars.next() {
+                let mut chars = rest.char_indices();
+                let mut end = rest.len();
+                while let Some((at, inner)) = chars.next() {
                     if inner == '\\' {
                         chars.next();
                     } else if inner == ch {
+                        end = at + inner.len_utf8();
                         break;
                     }
                 }
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                for inner in chars.by_ref() {
-                    if inner == '\n' {
-                        break;
-                    }
-                }
+                rest = &rest[end..];
             }
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth -= 1,
             _ => {}
         }
     }
-    depth <= 0
+    // A line that ends on an operator goes on (#1017: `let total = a +`
+    // was compiled at once).
+    depth <= 0 && !matches!(last, '+' | '-' | '*' | '/' | '%' | '=' | '<' | '>' | '&' | '|' | '^' | ',' | '.')
 }
 
 /// Line numbers of the input file as the user sees them: its first line is the header.

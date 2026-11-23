@@ -4,8 +4,9 @@
 //! files and stdin, parsing command-line options, choosing output streams
 //! and exit codes. Results go to stdout, diagnostics to stderr.
 //!
-//! Exit codes: 0 success, 1 a source/lowering/codegen error, 2 invalid command
-//! line, 3 an input/output error.
+//! Exit codes: 0 success, 1 a source/lowering/codegen error (with `run -t`, a
+//! failed test), 2 invalid command line, 3 an input/output error, 4 a test run
+//! that reached no verdict.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -69,7 +70,7 @@ USAGE:
     okkama check <FILE|->
     okkama fmt [-w|--check] <FILE|->...
     okkama lint <FILE>...
-    okkama man [MODULE [NAME | NAME.ACTION]] [--format text|markdown]
+    okkama man [MODULE [NAME | NAME.ACTION] | -k QUERY | --all] [--format FORMAT]
     okkama lsp
     okkama repl
     okkama env
@@ -157,6 +158,10 @@ RUN OPTIONS:
     --timeout SECONDS     Interrupt the run after SECONDS of wall-clock time
                           Running out exits 1: \"Execution budget exhausted:
                           steps|memory|output\" or \"Execution interrupted\".
+                          With -t the steps, memory and output budgets bound
+                          each test, which fails when it runs out; --timeout
+                          bounds the whole run (not with --workers: use
+                          --test-timeout).
                           An uncaught failure on Sparrow also
                           prints its source line and the call stack;
                           OKKAMA_TRACE=off prints the failure alone.
@@ -213,7 +218,8 @@ USAGE:
 OPTIONS:
     --format text     Output format (default: text)
     --passes LIST     Run only these IR passes: none, all, or a comma list of
-                      regions, tail-calls, fold, hoist, undef, jumps (in that order)
+                      statics, regions, tail-calls, fold, hoist, undef, jumps
+                      (in that order)
     --after PASS      The IR after PASS: the passes up to it in that order
 
 Input is a complete Okkama program: one or several source files of one module
@@ -334,13 +340,14 @@ fn core_tests(
     plan: test_report::TestPlan,
     format: test_report::ReportFormat,
     suite: &str,
+    limits: sparrow_core::budget::Limits,
 ) -> Outcome {
     use test_report::ReportFormat;
     let progress: Option<Box<dyn Write + Send>> = match format {
         ReportFormat::Human => Some(Box::new(okkama_runtime_core::stdout::Buffered)),
         ReportFormat::Json | ReportFormat::Junit => None,
     };
-    match sparrow_core::run_test_report_with(bytes, plan, progress, workers) {
+    match sparrow_core::run_test_report_limited(bytes, plan, progress, workers, limits) {
         Ok(report) => Outcome {
             stdout: match format {
                 ReportFormat::Human => String::new(),
@@ -496,6 +503,14 @@ fn run(args: &[String]) -> Outcome {
             Some("build") => Outcome::success(BUILD_HELP.to_string()),
             Some("exec") => Outcome::success(EXEC_HELP.to_string()),
             Some("man") => Outcome::success(man::HELP.to_string()),
+            // Every command `--help` lists has a page (#1017): `check` and
+            // `run` are on the main one, as their own `--help` shows.
+            Some("check" | "run") => Outcome::success(HELP.to_string()),
+            Some("fmt") => Outcome::success(FMT_HELP.to_string()),
+            Some("lint") => Outcome::success(LINT_HELP.to_string()),
+            Some("env") => Outcome::success(ENV_HELP.to_string()),
+            Some("lsp") => Outcome::success(LSP_HELP.to_string()),
+            Some("repl") => Outcome::success(repl::help()),
             Some(other) => Outcome::usage(&format!("unknown command `{other}`")),
         },
         "-V" | "--version" => Outcome::success(format!("okkama {}\n", env!("CARGO_PKG_VERSION"))),
@@ -845,8 +860,18 @@ fn ir_command(args: &[String]) -> Outcome {
     }
 }
 
-/// `okkama check`: семантический анализ программы и её импортов без lowering.
-/// Печатаются все ошибки, а не только первая.
+const LSP_HELP: &str = "okkama lsp — the language server
+
+USAGE:
+    okkama lsp
+
+Speaks the Language Server Protocol on standard input and output, for
+editors: diagnostics, hover, go to definition, completion, signature help,
+document symbols, references, highlights, rename and formatting. Open files
+are checked from the editor's buffers; std comes from OKKAMA_STDLIB_DIR or the
+`stdlibPath` initialization option.
+";
+
 const FMT_HELP: &str = "okkama fmt — format Okkama source files
 
 USAGE:
@@ -867,7 +892,8 @@ USAGE:
 
 Checks each FILE like `okkama check` (imports included; files with tests in
 test mode) and adds the lint rules: unused-import, unused-let,
-unused-hidden, unreachable, snake-case, missing-docs and unresolved-doc-link.
+unused-hidden, unreachable, snake-case, hidden-error, non-exhaustive-match,
+missing-docs and unresolved-doc-link.
 Missing public docs warn for user modules. Completed std documentation waves
 require full public declaration coverage; other std areas still warn. Prints
 `file:line:column: severity[rule]: message`; exit status 1 if anything was
@@ -1004,10 +1030,10 @@ fn fmt_command(args: &[String]) -> Outcome {
         let text = if file == "-" {
             let mut text = String::new();
             if let Err(error) = io::stdin().read_to_string(&mut text) {
-                return Outcome::failure(
-                    format!("okkama: cannot read standard input: {error}\n"),
-                    EXIT_DIAGNOSTICS,
-                );
+                // A read error is an input/output error, as for a file (#1017).
+                stderr.push_str(&format!("okkama: cannot read standard input: {error}\n"));
+                io_failed = true;
+                continue;
             }
             text
         } else {
@@ -1085,6 +1111,10 @@ fn check_command(args: &[String]) -> Outcome {
     };
     if line.help {
         return Outcome::success(HELP.to_string());
+    }
+    if line.format.is_some() {
+        // `check` has one output; `--format` was accepted and ignored (#1017).
+        return Outcome::usage("check has no --format option");
     }
     let sources = match load_all(&line) {
         Ok(sources) => sources,
@@ -1507,16 +1537,10 @@ fn run_command(args: &[String]) -> Outcome {
     let mut worker_test: Option<String> = None;
     let mut worker_result: Option<PathBuf> = None;
     let mut limits = sparrow_core::budget::Limits::default();
+    // The step, memory and output budgets as given, for test workers (#1017).
+    let mut budgets: Vec<String> = Vec::new();
     while let Some(first) = rest.first() {
         match first.as_str() {
-            // Служебный ключ процесса-воркера `spawn`: корень std родителя.
-            "--stdlib" => {
-                let Some(value) = rest.get(1) else {
-                    return Outcome::usage("--stdlib needs a directory");
-                };
-                let _ = STDLIB_OVERRIDE.set(PathBuf::from(value));
-                rest = &rest[1..];
-            }
             "-t" | "--tests" => tests = true,
             "--filter" => {
                 let Some(value) = rest.get(1) else {
@@ -1591,6 +1615,9 @@ fn run_command(args: &[String]) -> Outcome {
                     Ok(false) => return Outcome::usage(&format!("unknown option `{budget}`")),
                     Err(message) => return Outcome::usage(&message),
                 }
+                if budget != "--timeout" {
+                    budgets.extend([budget.to_owned(), value.clone()]);
+                }
                 rest = &rest[1..];
             }
             other if other.starts_with('-') && other != "-" => {
@@ -1611,6 +1638,11 @@ fn run_command(args: &[String]) -> Outcome {
     }
     if workers.is_some() && !tests {
         return Outcome::usage("--workers runs tests: use it with -t");
+    }
+    if limits.interrupt.is_some() && workers.is_some() {
+        // --timeout bounds a run in this process; a worker's run is bounded by
+        // --test-timeout (#1017: it was accepted and did nothing).
+        return Outcome::usage("--timeout bounds a run in one process: with --workers, use --test-timeout");
     }
     if test_timeout.is_some() && workers.is_none() {
         // A deadline needs a process to stop (#938): no silent isolation.
@@ -1653,7 +1685,13 @@ fn run_command(args: &[String]) -> Outcome {
     } else {
         Outcome::success(String::new())
     };
-    if docs.code != 0 { return docs; }
+    if docs.code != 0 {
+        // A syntax error is a source error, which reaches no verdict (4), as
+        // when lowering finds it; a failed example is a failed test (1).
+        // `doctest::check` parses first, so the parse is repeated only to
+        // tell the two apart (#1017).
+        return if parse_raw(&sources).is_err() { unrun(docs) } else { docs };
+    }
     if tests && !docs.stdout.is_empty() {
         let parsed = match parse_raw(&sources) { Ok(parsed) => parsed, Err(outcome) => return outcome };
         if !parsed.iter().any(okkama_compiler::ide::program_has_tests) { return docs; }
@@ -1708,7 +1746,7 @@ fn run_command(args: &[String]) -> Outcome {
         };
         let mut inputs = vec![input.clone()];
         inputs.extend(line.more_inputs.iter().cloned());
-        let pool = workers::Pool { exe, filters: filters.clone(), inputs, workers: count, deadline: test_timeout };
+        let pool = workers::Pool { exe, filters: filters.clone(), budgets, inputs, workers: count, deadline: test_timeout };
         let report = workers::run(&pool, &names, seed);
         let format = format.unwrap_or(test_report::ReportFormat::Human);
         let mut outcome = Outcome {
@@ -1756,7 +1794,7 @@ fn run_command(args: &[String]) -> Outcome {
         // waits in the stdout buffer, so a worker that `--test-timeout` kills
         // has already handed over everything the test printed (#1011).
         let _ = okkama_runtime_core::stdout::write_through();
-        return match sparrow_core::run_test_report_with(bytes, plan, Some(Box::new(io::sink())), workers) {
+        return match sparrow_core::run_test_report_limited(bytes, plan, Some(Box::new(io::sink())), workers, limits) {
             Ok(report) => match std::fs::write(result, workers::record(&report)) {
                 Ok(()) => Outcome::success(String::new()),
                 Err(error) => Outcome::failure(format!("okkama: worker report: {error}\n"), EXIT_IO),
@@ -1766,7 +1804,10 @@ fn run_command(args: &[String]) -> Outcome {
     }
     if tests {
         let format = format.unwrap_or(test_report::ReportFormat::Human);
-        let mut outcome = core_tests(bytes, workers, plan, format, input);
+        if let Some(flag) = &limits.interrupt {
+            watchdog(flag.clone());
+        }
+        let mut outcome = core_tests(bytes, workers, plan, format, input, limits);
         // Doctest results (#514) follow the human stream; a json or junit
         // stdout stays the report alone (#339), so they go to stderr.
         if format == test_report::ReportFormat::Human {
@@ -1800,13 +1841,9 @@ fn install_root() -> Option<PathBuf> {
 /// Каталог std: `OKKAMA_STDLIB_DIR`; std установки (`<prefix>/lib/okkama/std`);
 /// `std/` репозитория, если `okkama` запущен из его сборки
 /// (`okkama-rs/target/release/okkama`); иначе `/usr/local/lib/okkama/std`.
-/// Корень std, заданный родителем воркера (`--stdlib`).
-static STDLIB_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
+/// (The worker key `run --stdlib DIR` had no caller since #584 and is gone,
+/// #1017; workers inherit the environment.)
 fn stdlib_dir() -> PathBuf {
-    if let Some(dir) = STDLIB_OVERRIDE.get() {
-        return dir.clone();
-    }
     if let Some(dir) = std::env::var_os("OKKAMA_STDLIB_DIR").filter(|dir| !dir.is_empty()) {
         return PathBuf::from(dir);
     }

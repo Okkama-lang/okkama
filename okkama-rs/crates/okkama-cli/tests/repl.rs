@@ -169,3 +169,56 @@ fn a_deep_recursion_fails_and_the_session_continues() {
     assert!(err.contains("Stack overflow"), "{err}");
     assert!(out.contains("2 (int)"), "{out}");
 }
+
+/// #1017: a variable whose type comes from a module imported `as` (or as a
+/// namespace) carries into the next inputs; they failed with `Type "Stdout"
+/// is not declared` until `:reset`.
+#[test]
+fn variables_of_imported_types_carry_over() {
+    let (out, err) = repl(&[
+        "import \"io/stdout\" as out;",
+        "import \"time/duration\";",
+        "let s = out.Stdout();",
+        "let d = [\"x\": duration.Duration(seconds: 1)];",
+        "1 + 1",
+        "s.writeln(\"still here\")",
+        "d.size()",
+        ":vars",
+    ]);
+    assert_eq!(out, "2 (int)\nstill here\n1 (int)\ns: Stdout\nd: %string:Duration\n", "{err}");
+    assert!(err.is_empty(), "{err}");
+}
+
+/// #1017: a bracket inside a fenced raw string or a block comment does not
+/// leave the input open; an open raw string or comment does.
+#[test]
+fn raw_strings_and_block_comments_do_not_open_brackets() {
+    let (out, err) = repl(&[
+        "let q = ```(```;",
+        "q",
+        "/* ( */ 1 + 1",
+        "let r = ```a",
+        "b```;",
+        "r.length()",
+    ]);
+    assert_eq!(out, "\"(\" (string, 1 chars)\n2 (int)\n3 (int)\n", "{err}");
+    assert!(err.is_empty(), "{err}");
+}
+
+/// #1017: `const` and `hidden` declarations are declarations, tests and fakes
+/// get a clear answer, and an input that ends on an operator goes on.
+#[test]
+fn constants_hidden_declarations_and_continued_operators() {
+    let (out, err) = repl(&[
+        "const LIMIT = 40;",
+        "hidden object Secret { Secret(); value() is int { 2; } }",
+        "LIMIT + Secret().value()",
+        "let xs = [1, 2, 3];",
+        "let total = xs.size() +",
+        "  10;",
+        "total",
+        "test \"x\" { test.ok(true); }",
+    ]);
+    assert_eq!(out, "42 (int)\n13 (int)\n", "{err}");
+    assert_eq!(err, "okkama: test declarations belong to test mode (`okkama run -t`); the REPL runs none\n");
+}

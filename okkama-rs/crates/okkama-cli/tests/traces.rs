@@ -186,3 +186,22 @@ fn bytecode_cause_stacks_preserve_each_origin() {
         }
     }
 }
+
+/// #1017: the carets under the place of a failure count terminal cells, as
+/// the compiler's diagnostics do: a wide character before the place takes two.
+#[test]
+fn the_place_is_underlined_by_display_width() {
+    let path = std::env::temp_dir().join(format!("okkama-trace-width-{}.ok", std::process::id()));
+    let line = "main() is int { let s = \"🙂🙂\"; panic s; }";
+    std::fs::write(&path, format!("module app v1.0.0;\n{line}\n")).unwrap();
+    let output = okkama(&["run"], &path, true);
+    let _ = std::fs::remove_file(&path);
+    let text = stderr(&output);
+    let shown = format!("2 | {line}\n");
+    let at = text.find(&shown).unwrap_or_else(|| panic!("no source line in:\n{text}"));
+    let carets = text[at + shown.len()..].lines().next().unwrap();
+    let before = &line[..line.find("panic").unwrap()];
+    // Two emoji of two cells each, everything else one cell a character.
+    let cells = before.chars().count() + 2;
+    assert_eq!(carets, format!("  | {}{}", " ".repeat(cells), "^".repeat("panic s".len())), "{text}");
+}

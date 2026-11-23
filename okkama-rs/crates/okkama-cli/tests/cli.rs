@@ -184,6 +184,23 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
     }
 }
 
+/// #1017: in a request, a high surrogate escape followed by an escape that is
+/// not a low one becomes U+FFFD and the second escape stands on its own; the
+/// debug build panicked on the unchecked subtraction before.
+#[test]
+fn ocs_request_with_an_unpaired_high_surrogate_is_read() {
+    let source = TempFile::new("\u{FFFD}A-ocs-surrogate.ok", HELLO.as_bytes());
+    let slash = '\\';
+    let escaped = format!("{slash}uD800{slash}u0041");
+    let path = source.path().replace("\u{FFFD}A", &escaped);
+    let request = TempFile::new("ocs-surrogate-request.json", format!("{{\"mode\":\"parse\",\"sources\":[\"{path}\"]}}").as_bytes());
+    let response = TempFile::absent("ocs-surrogate-response.json");
+    let output = run(&["--ocs-request", request.path(), "--ocs-response", response.path()]);
+    let reply = std::fs::read_to_string(&response.0).unwrap_or_default();
+    assert_eq!(output.status.code(), Some(0), "{}{reply}", stderr(&output));
+    assert!(reply.contains("\"outcome\": \"accepted\""), "the file was found and parsed: {reply}");
+}
+
 #[test]
 fn ocs_capabilities_report_sparrow_with_every_mode() {
     // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
@@ -423,6 +440,11 @@ fn test_reports_list_every_test_and_a_seed_orders_the_run() {
     }
     let broken = TempFile::new("broken.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(missing); }\n");
     assert_eq!(run_with_std(&["run", "-t", broken.path()]).status.code(), Some(4));
+    // #1017: a syntax error is a source error too, found by the doctest pass first.
+    let unparsable = TempFile::new("unparsable.ok", b"module app v1.0.0;\ntest \"t\" { let = 1; }\n");
+    let output = run_with_std(&["run", "-t", unparsable.path()]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    assert!(stderr(&output).contains("syntax error"), "{}", stderr(&output));
     let passing = TempFile::new("passing.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(true); }\n");
     assert_eq!(run_with_std(&["run", "-t", "--report", "junit", passing.path()]).status.code(), Some(0));
 }
@@ -1904,6 +1926,114 @@ fn lsp_doc_std_completion_resolves_links_from_unsaved_public_model() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+impl DocLsp {
+    /// `request`, with the notifications that came before its response.
+    fn request_seeing(&mut self, method: &str, params: serde_json::Value) -> Vec<serde_json::Value> {
+        self.next += 1;
+        let id = self.next;
+        self.send(serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let mut seen = Vec::new();
+        loop {
+            let message = self.messages.recv_timeout(std::time::Duration::from_secs(20)).expect("LSP response within 20 seconds");
+            if message.get("id") == Some(&serde_json::json!(id)) {
+                return seen;
+            }
+            seen.push(message);
+        }
+    }
+}
+
+/// #1017: checking a file that imports an open one does not replace the open
+/// file's own diagnostics (its `missing-docs` warnings) with what the
+/// importer's check sees of it, whichever of them is checked last.
+#[test]
+fn lsp_an_importer_does_not_replace_an_open_file_diagnostics() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-importer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module a_lib;\nobject Thing {\n    Thing() {}\n    bad() is int { missing; }\n}\n";
+    let importer = "module z_app;\nimport \"a_lib\" take Thing;\nmain() is int { 0; }\n";
+    std::fs::write(dir.join("a_lib.ok"), library).unwrap();
+    std::fs::write(dir.join("z_app.ok"), importer).unwrap();
+    let library_uri = format!("file://{}", dir.join("a_lib.ok").display());
+    let importer_uri = format!("file://{}", dir.join("z_app.ok").display());
+    let mut client = DocLsp::with_stdlib(&std_dir());
+    let published = |seen: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        seen.iter()
+            .filter(|message| message["method"] == "textDocument/publishDiagnostics" && message["params"]["uri"] == library_uri.as_str())
+            .map(|message| message["params"].clone())
+            .collect()
+    };
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": library_uri, "version": 1, "text": library}}));
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": importer_uri, "version": 1, "text": importer}}));
+    let opened = published(&client.request_seeing("textDocument/documentSymbol", serde_json::json!({"textDocument": {"uri": importer_uri}})));
+    let own = opened.first().expect("the library's own diagnostics").clone();
+    assert_eq!(own["version"], 1, "{own}");
+    let count = own["diagnostics"].as_array().unwrap().len();
+    assert!(own["diagnostics"].as_array().unwrap().iter().any(|d| d["code"] == "missing-docs"), "{own}");
+    // A change of the library checks it, then (sorted later) its importer.
+    client.notify("textDocument/didChange", serde_json::json!({"textDocument": {"uri": library_uri, "version": 2}, "contentChanges": [{"text": library.replace("missing;", "missing; ")}]}));
+    let changed = published(&client.request_seeing("textDocument/documentSymbol", serde_json::json!({"textDocument": {"uri": importer_uri}})));
+    let last = changed.last().expect("the library's diagnostics again");
+    assert_eq!(last["version"], 2, "{changed:?}");
+    assert_eq!(last["diagnostics"].as_array().unwrap().len(), count, "{changed:?}");
+    assert!(opened.iter().chain(&changed).all(|params| !params["version"].is_null()), "only the library publishes its own: {opened:?} {changed:?}");
+    client.request("shutdown", serde_json::Value::Null);
+    client.notify("exit", serde_json::Value::Null);
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #1017: copies of an imported file's errors go on the importer's first
+/// import declaration, not on the first letters `import` in a comment.
+#[test]
+fn lsp_copies_of_imported_errors_go_on_the_first_import() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-first-import-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    std::fs::write(dir.join("lib.ok"), "module lib;\n// A thing.\nobject Thing {\n    // A thing.\n    Thing() {}\n    // Broken.\n    bad() is int { missing; }\n}\n").unwrap();
+    let importer = "module app;\n// It is important that this comes first.\n\nimport \"lib\" take Thing;\nmain() is int { 0; }\n";
+    std::fs::write(dir.join("app.ok"), importer).unwrap();
+    let uri = format!("file://{}", dir.join("app.ok").display());
+    let mut client = DocLsp::with_stdlib(&std_dir());
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "version": 1, "text": importer}}));
+    let seen = client.request_seeing("textDocument/documentSymbol", serde_json::json!({"textDocument": {"uri": uri}}));
+    let published = seen.iter().rev()
+        .find(|message| message["method"] == "textDocument/publishDiagnostics" && message["params"]["uri"] == uri.as_str())
+        .expect("the importer's diagnostics");
+    let copies: Vec<&serde_json::Value> = published["params"]["diagnostics"].as_array().unwrap().iter()
+        .filter(|diagnostic| diagnostic["message"].as_str().is_some_and(|text| text.starts_with("lib.ok:")))
+        .collect();
+    assert!(!copies.is_empty(), "{published}");
+    for copy in copies {
+        assert_eq!(copy["range"]["start"], serde_json::json!({"line": 3, "character": 0}), "{copy}");
+    }
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #1017: `exit` without `shutdown` ends the server with code 1; after
+/// `shutdown`, with 0.
+#[test]
+fn lsp_exit_without_shutdown_ends_with_one() {
+    for (shutdown, code) in [(false, 1), (true, 0)] {
+        let mut client = DocLsp::with_stdlib(&std_dir());
+        if shutdown {
+            client.request("shutdown", serde_json::Value::Null);
+        }
+        client.notify("exit", serde_json::Value::Null);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = client.child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(std::time::Instant::now() < deadline, "the server did not end");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(status.code(), Some(code), "shutdown first: {shutdown}");
+    }
+}
+
 impl Drop for DocLsp {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -2021,6 +2151,10 @@ fn man_refuses_unknown_modules_and_names_clearly() {
     let output = man(&["io/stdout", "Stdout.nope"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("has no public member `nope`"), "{}", stderr(&output));
+    // #1017: each member name once, though overloads of `write` are apart.
+    let listed = stderr(&output).split("; it has ").nth(1).unwrap_or_default().trim_end().to_owned();
+    let names: Vec<&str> = listed.split(", ").collect();
+    assert!(names.contains(&"write") && names.iter().filter(|name| **name == "write").count() == 1, "{listed}");
     let output = man(&["../etc/passwd"]);
     assert_eq!(output.status.code(), Some(1));
     let output = man(&["io/../../etc"]);
@@ -2694,4 +2828,43 @@ fn test_reports_show_bytes_and_chars_as_the_language_prints_them() {
     assert!(text.contains("expected 'Ы', got 'Ж'"), "{text}");
     assert!(text.contains("[200, 7]"), "{text}");
     assert!(!text.contains("-56"), "{text}");
+}
+
+/// #1017: every command `--help` lists has a `help` page, the pages name
+/// every IR pass and lint rule and the exit code 4, `check` refuses a
+/// `--format` it would ignore, and the dead worker key `--stdlib` is gone.
+#[test]
+fn help_pages_are_complete_and_check_refuses_format() {
+    for command in ["check", "run", "fmt", "lint", "env", "lsp", "repl", "exec", "man", "ir"] {
+        let output = run(&["help", command]);
+        assert_eq!(output.status.code(), Some(0), "help {command}: {}", stderr(&output));
+        assert!(!stdout(&output).is_empty(), "help {command}");
+    }
+    let main = stdout(&run(&["--help"]));
+    assert!(main.contains("okkama man [MODULE [NAME | NAME.ACTION] | -k QUERY | --all] [--format FORMAT]"), "{main}");
+    let ir = stdout(&run(&["help", "ir"]));
+    for pass in ["statics", "regions", "tail-calls", "fold", "hoist", "undef", "jumps"] {
+        assert!(ir.contains(pass), "{pass}: {ir}");
+    }
+    let lint = stdout(&run(&["help", "lint"]));
+    for rule in ["hidden-error", "non-exhaustive-match", "unresolved-doc-link"] {
+        assert!(lint.contains(rule), "{rule}: {lint}");
+    }
+    let source = TempFile::new("check-format.ok", HELLO.as_bytes());
+    let output = run(&["check", "--format", "json", source.path()]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("check has no --format option"), "{}", stderr(&output));
+    let output = run(&["run", "--stdlib", "/tmp", source.path()]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+/// #1017: standard input that cannot be read as text is an input/output
+/// error for `fmt -` (3), as an unreadable file is; it was 1.
+#[test]
+fn fmt_unreadable_standard_input_is_an_io_error() {
+    let output = run_stdin(&["fmt", "-"], b"module app v1.0.0;\n\xff\n");
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(stderr(&output).contains("cannot read standard input"), "{}", stderr(&output));
+    let file = TempFile::new("fmt-unreadable.ok", b"module app v1.0.0;\n\xff\n");
+    assert_eq!(run(&["fmt", file.path()]).status.code(), Some(3));
 }

@@ -160,12 +160,15 @@ pub(crate) fn command(args: &[String]) -> Outcome {
     Outcome { stdout: page, stderr: warnings, code: 0 }
 }
 
-/// The terminal's width from `COLUMNS`, 80 when it is not set; pages keep
-/// between 40 and 100 columns.
+/// The terminal's width: `COLUMNS` when set, else the window of standard
+/// output when it is a terminal (#1017: only `COLUMNS` was read, so an
+/// unexported one gave 80 in any window), else 80; pages keep between 40 and
+/// 100 columns.
 fn columns() -> usize {
     std::env::var("COLUMNS")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
+        .or_else(|| okkama_runtime_core::native::terminal_columns(1).map(usize::from))
         .unwrap_or(80)
         .clamp(40, 100)
 }
@@ -175,11 +178,14 @@ fn columns() -> usize {
 fn show_in_pager(setting: &str, page: &str) -> Option<()> {
     let mut words = setting.split_whitespace();
     let program = words.next()?;
-    let mut child = std::process::Command::new(program)
-        .args(words)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut command = std::process::Command::new(program);
+    command.args(words).stdin(std::process::Stdio::piped());
+    // Bold headings are ANSI codes: `less` shows them as such only with -R,
+    // so it gets R when `LESS` is not set, as git does (#1017).
+    if std::env::var_os("LESS").is_none() {
+        command.env("LESS", "R");
+    }
+    let mut child = command.spawn().ok()?;
     if let Some(mut input) = child.stdin.take() {
         // A pager that quits early closes its input: that is not an error.
         let _ = input.write_all(page.as_bytes());
@@ -296,8 +302,11 @@ fn module_page(
         Some(member) => {
             let found = item.members_named(member);
             if found.is_empty() {
-                let mut names: Vec<&str> = item.members.iter().map(|member| member.name.as_str()).collect();
-                names.dedup();
+                // Each name once, overloads apart from each other too (#1017:
+                // `dedup` dropped only adjacent repeats).
+                let mut seen = std::collections::HashSet::new();
+                let names: Vec<&str> =
+                    item.members.iter().map(|member| member.name.as_str()).filter(|name| seen.insert(*name)).collect();
                 return Err(format!(
                     "{} {} has no public member `{member}`{}",
                     doc.path,

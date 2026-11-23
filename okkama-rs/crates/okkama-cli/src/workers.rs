@@ -36,6 +36,9 @@ pub struct Pool {
     pub exe: PathBuf,
     /// Arguments every worker gets after `run -t`: the filters, then the files.
     pub filters: Vec<String>,
+    /// The step, memory and output budgets, as options: each bounds every
+    /// test, in its worker as in one process (#1017).
+    pub budgets: Vec<String>,
     pub inputs: Vec<String>,
     /// How many run at once, from 1.
     pub workers: usize,
@@ -84,7 +87,21 @@ pub fn test_timeout(text: &str) -> Result<Duration, String> {
 /// Runs the tests `names` (declaration order) in workers, in the order `seed`
 /// gives, and collects the report in declaration order.
 pub fn run(pool: &Pool, names: &[String], seed: Option<u64>) -> TestReport {
-    let scratch = scratch_dir();
+    let scratch = match scratch_dir() {
+        Ok(scratch) => scratch,
+        Err(error) => {
+            // No worker could report: each test says why (#1017: the error was
+            // swallowed and every worker "ended before it reported").
+            let how = format!("the workers' directory could not be made: {error}");
+            let cases = execution_order(names.len(), seed)
+                .into_iter()
+                .enumerate()
+                .map(|(execution, index)| ended(&names[index], index, execution, TestOutcome::Crashed(how.clone()), None));
+            let mut cases: Vec<TestCase> = cases.collect();
+            cases.sort_by_key(|case| case.position);
+            return TestReport { seed, cases };
+        }
+    };
     let mut cases: Vec<Option<TestCase>> = vec![None; names.len()];
     let mut queue = execution_order(names.len(), seed).into_iter().enumerate();
     let mut running: Vec<Running> = Vec::new();
@@ -149,12 +166,20 @@ pub fn run(pool: &Pool, names: &[String], seed: Option<u64>) -> TestReport {
     TestReport { seed, cases: cases.into_iter().flatten().collect() }
 }
 
-/// A private directory for the workers' result files.
-fn scratch_dir() -> PathBuf {
+/// A private directory for the workers' result files: made new (never an
+/// existing one or a link planted under its name), readable only by this
+/// user, as the doctest directory is.
+fn scratch_dir() -> std::io::Result<PathBuf> {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let dir = std::env::temp_dir().join(format!("okkama-workers-{}-{nanos}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir)?;
+    Ok(dir)
 }
 
 fn start(pool: &Pool, scratch: &Path, name: &str, index: usize, execution: usize) -> std::io::Result<Running> {
@@ -164,7 +189,7 @@ fn start(pool: &Pool, scratch: &Path, name: &str, index: usize, execution: usize
     for filter in &pool.filters {
         command.args(["--filter", filter]);
     }
-    command.args(&pool.inputs).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.args(&pool.budgets).args(&pool.inputs).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = command.spawn()?;
     Ok(running(child, index, execution, result))
 }
@@ -200,25 +225,15 @@ fn drain_into(mut pipe: impl Read, capture: &Capture) {
     capture.lock().expect("capture").2 = true;
 }
 
-/// Reads `pipe` to its end, keeping at most [`CAPTURE_LIMIT`] bytes.
+/// [`drain_into`] a fresh capture: what was kept and whether more came. The
+/// test checks the working path, not a copy of it (#1017).
 #[cfg(test)]
-fn drain(mut pipe: impl Read) -> (Vec<u8>, bool) {
-    let mut kept = Vec::new();
-    let mut truncated = false;
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(read) => {
-                let room = CAPTURE_LIMIT - kept.len();
-                kept.extend_from_slice(&chunk[..read.min(room)]);
-                truncated |= read > room;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
-        }
-    }
-    (kept, truncated)
+fn drain(pipe: impl Read) -> (Vec<u8>, bool) {
+    let capture: Capture = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false, false)));
+    drain_into(pipe, &capture);
+    let state = capture.lock().expect("capture");
+    assert!(state.2, "the capture reached the end");
+    (state.0.clone(), state.1)
 }
 
 /// What the worker's streams held. A reader that has not reached the end
@@ -408,6 +423,17 @@ mod tests {
             use std::os::unix::process::ExitStatusExt;
             ExitStatus::from_raw(0)
         }
+    }
+
+    /// #1017: the workers' directory is new and private to this user.
+    #[test]
+    #[cfg(unix)]
+    fn the_scratch_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir().expect("a directory");
+        let mode = std::fs::metadata(&dir).expect("metadata").permissions().mode();
+        let _ = std::fs::remove_dir(&dir);
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[test]

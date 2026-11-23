@@ -198,3 +198,46 @@ fn finished_tasks_and_their_groups_are_collected() {
     assert_eq!(output.status.code(), Some(0));
 }
 
+
+/// #1017: under `run -t`, in workers, and for `exec` of a test-profile file,
+/// the budgets bound each test as they bound main: a test that runs out fails
+/// with the budget's report (they were accepted and did nothing). `--timeout`
+/// with `--workers` is refused: a worker's deadline is `--test-timeout`.
+#[test]
+fn budgets_bound_tests() {
+    const TESTS: &str = "module app v1.0.0;\nmain() is int {\n    0;\n}\ntest \"spins\" {\n    loop { }\n}\ntest \"quick\" {\n    test.ok(true);\n}\n";
+    let report = |output: &Output| String::from_utf8_lossy(&output.stdout).into_owned();
+    for (budget, stop) in [
+        (&["-t", "--max-steps", "100000", "--timeout", "30"][..], "Execution budget exhausted: steps"),
+        (&["-t", "--timeout", "1"][..], "Execution interrupted"),
+        (&["-t", "--workers", "2", "--max-steps", "100000", "--test-timeout", "30"][..], "Execution budget exhausted: steps"),
+    ] {
+        let output = run("sparrow", TESTS, budget);
+        let text = report(&output);
+        assert_eq!(output.status.code(), Some(1), "{budget:?}: {text}{}", String::from_utf8_lossy(&output.stderr));
+        assert!(text.contains("--- FAIL: spins") && text.contains(stop), "{budget:?}: {text}");
+        assert!(text.contains("--- PASS: quick"), "{budget:?}: {text}");
+    }
+    // The test timeout only keeps a regression from hanging here.
+    let refused = run("sparrow", TESTS, &["-t", "--workers", "2", "--test-timeout", "5", "--timeout", "1"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--test-timeout"));
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source = std::env::temp_dir().join(format!("budgets-{}-tests.ok", std::process::id()));
+    let spb = source.with_extension("spb");
+    std::fs::write(&source, TESTS).unwrap();
+    let okkama = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+        command.env("OKKAMA_STDLIB_DIR", root.join("std")).env("OKKAMA_TRACE", "off");
+        command
+    };
+    let built = okkama().args(["build", "-t"]).arg(&source).arg("-o").arg(&spb).output().unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let output = okkama().args(["exec", "--max-steps", "100000", "--timeout", "30"]).arg(&spb).output().unwrap();
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_file(&spb);
+    let text = report(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("--- FAIL: spins") && text.contains("Execution budget exhausted: steps"), "{text}");
+}

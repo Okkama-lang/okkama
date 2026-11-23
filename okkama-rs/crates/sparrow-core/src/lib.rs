@@ -170,7 +170,8 @@ pub fn run_executable(
         }
         if program.has_tests() && let Some(out) = tests
         {
-            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
+            // The budgets bound each test as they bound main (#1017).
+            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
@@ -356,11 +357,26 @@ pub fn run_test_report_with(
     progress: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
 ) -> Result<test_report::TestReport, Error> {
+    run_test_report_limited(bytes, plan, progress, worker_command, budget::Limits::default())
+}
+
+/// [`run_test_report_with`] under execution budgets (#1017): every test runs
+/// on a runtime of its own with `limits`, so the step, memory and output
+/// budgets bound each test; all of them share the interrupt flag
+/// (`--timeout`). A test that exhausts a budget, or is interrupted, fails with
+/// the budget's report.
+pub fn run_test_report_limited(
+    bytes: Vec<u8>,
+    plan: test_report::TestPlan,
+    progress: Option<Box<dyn std::io::Write + Send>>,
+    worker_command: Vec<std::ffi::OsString>,
+    limits: budget::Limits,
+) -> Result<test_report::TestReport, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         match progress {
-            Some(out) => test_profile(program, plan, Some(out), worker_command),
-            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, worker_command)),
+            Some(out) => test_profile(program, plan, Some(out), worker_command, &limits),
+            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, worker_command, &limits)),
         }
     })
 }
@@ -372,9 +388,10 @@ fn test_profile(
     plan: test_report::TestPlan,
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
+    limits: &budget::Limits,
 ) -> Result<test_report::TestReport, Error> {
     match program {
-        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command),
+        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command, limits),
     }
 }
 
@@ -383,6 +400,7 @@ fn test_program(
     plan: test_report::TestPlan,
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
+    limits: &budget::Limits,
 ) -> Result<test_report::TestReport, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
@@ -403,6 +421,7 @@ fn test_program(
         let filtered = only.is_some();
         let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
         runtime.worker_command = worker_command.clone();
+        runtime.limits = limits.clone();
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
             host.test_cases = test_report::SubCaseState::new(only);
