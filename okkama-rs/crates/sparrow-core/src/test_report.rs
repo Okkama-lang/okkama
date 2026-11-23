@@ -1,7 +1,7 @@
 //! The result of a test run, apart from how it is shown (#339): every test in
 //! declaration order with its outcome, and the seed that ordered the run.
-//! Execution fills it; renderers (the human stream here, JSON and JUnit in the
-//! CLI) only read it.
+//! Execution fills it; renderers (JSON and JUnit here, the human stream in
+//! `lib.rs`: `report_suite`, `human_into`) only read it.
 
 /// How one test ended. New endings (a deadline, a crashed worker) are new
 /// variants; the fields of the others stay as they are.
@@ -392,18 +392,26 @@ fn json_text(text: &str) -> String {
 
 /// The run as JUnit XML: one `testsuite` named suite, the seed as a property,
 /// a `testcase` per test in declaration order, a `failure` with every failed
-/// check, a `skipped` with the reason.
+/// check, a `skipped` with the reason. A crashed worker is an `error`, and
+/// counted under `errors`, not `failures` (#1011).
 pub fn junit(report: &TestReport, suite: &str) -> String {
     let totals = report.totals();
+    let errors = report
+        .cases
+        .iter()
+        .flat_map(TestCase::leaves)
+        .filter(|outcome| matches!(outcome, TestOutcome::Crashed(_)))
+        .count();
+    let failures = totals.failed - errors;
     let suite = xml(suite);
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(&format!(
-        "<testsuites tests=\"{}\" failures=\"{}\" errors=\"0\" skipped=\"{}\">\n",
-        totals.tests, totals.failed, totals.skipped
+        "<testsuites tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{}\">\n",
+        totals.tests, totals.skipped
     ));
     out.push_str(&format!(
-        "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{}\" errors=\"0\" skipped=\"{}\">\n",
-        totals.tests, totals.failed, totals.skipped
+        "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{}\">\n",
+        totals.tests, totals.skipped
     ));
     if let Some(seed) = report.seed {
         out.push_str(&format!("    <properties>\n      <property name=\"seed\" value=\"{seed}\"/>\n    </properties>\n"));
@@ -732,5 +740,19 @@ mod tests {
         assert!(xml.contains("<testcase name=\"postage/20 g\" classname=\"t.ok\"/>"), "{xml}");
         assert!(!xml.contains("<testcase name=\"postage\""), "{xml}");
         assert!(xml.contains("<testcase name=\"setup/a\" classname=\"t.ok\"/>\n    <testcase name=\"setup\" classname=\"t.ok\">"), "{xml}");
+    }
+
+    /// #1011: a crashed worker is a JUnit `error` and counted as one; a failed
+    /// check and a deadline are `failure`s.
+    #[test]
+    fn junit_counts_crashes_as_errors() {
+        let mut report = sample(None);
+        report.cases[0].outcome = TestOutcome::Crashed("signal 9".into());
+        report.cases[2].outcome = TestOutcome::TimedOut(500);
+        let xml = junit(&report, "w.ok");
+        assert!(xml.contains("<testsuites tests=\"3\" failures=\"2\" errors=\"1\" skipped=\"0\">"), "{xml}");
+        assert!(xml.contains("<testsuite name=\"w.ok\" tests=\"3\" failures=\"2\" errors=\"1\" skipped=\"0\">"), "{xml}");
+        assert_eq!(xml.matches("<error ").count(), 1);
+        assert_eq!(xml.matches("<failure ").count(), 2);
     }
 }
