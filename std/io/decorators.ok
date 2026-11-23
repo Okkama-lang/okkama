@@ -26,7 +26,7 @@ module io/decorators v1.0.0;
 //
 //     let body = LimitedAsyncReading(origin: socket.input(), limit: length);
 //     let counted = CountingAsyncReading(origin: socket.input());
-//     let patient = TimedAsyncReading(origin: socket.input(), limit: Duration(seconds: 5), clock: clock);
+//     let patient = TimedAsyncReading(origin: socket.input(), limit: Duration(seconds: 5.rat()), clock: clock);
 //     let output = BufferedAsyncWriting(origin: socket.output(), capacity: 16384);
 //     await output.write(packet);
 //     await output.flush();
@@ -378,7 +378,7 @@ object TimedAsyncReading does AsyncReading {
     TimedAsyncReading(origin is AsyncReading, deadline is MonotonicInstant, clock is Timing) {
         self.origin = origin;
         each = false;
-        limit = Duration(seconds: 0);
+        limit = Duration(seconds: 0.rat());
         self.deadline = deadline;
         self.clock = clock;
     }
@@ -774,20 +774,20 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
     test.throws(InvalidArgument) {
         let negative = TimedAsyncReading(
             origin: DecoratorTestPieces([]),
-            limit: Duration(seconds: -1),
+            limit: Duration(seconds: -1.rat()),
             clock: clock
         );
     };
     let quick = TimedAsyncReading(
         origin: DecoratorTestPieces([[byte(1)]]),
-        limit: Duration(seconds: 30),
+        limit: Duration(seconds: 30.rat()),
         clock: clock
     );
     test.is(await quick.bytes(4), [byte(1)]);
     test.is((await quick.bytes(4)).size(), 0);
     let failing = TimedAsyncReading(
         origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0),
-        limit: Duration(seconds: 30),
+        limit: Duration(seconds: 30.rat()),
         clock: clock
     );
     test.is(
@@ -802,7 +802,7 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
     );
     let gate = Event();
     let held = DecoratorTestPieces(pieces: [[byte(7)], [byte(8)]], gate: gate);
-    let timed = TimedAsyncReading(origin: held, limit: Duration(milliseconds: 20), clock: clock);
+    let timed = TimedAsyncReading(origin: held, limit: Duration(seconds: rat(20, 1000)), clock: clock);
     let late = timed.bytes(4);
     test.is(
         try {
@@ -825,7 +825,7 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
         "timed out"
     );
     test.is(held.count(), 0);
-    let zero = TimedAsyncReading(origin: held, limit: Duration(seconds: 0), clock: clock);
+    let zero = TimedAsyncReading(origin: held, limit: Duration(seconds: 0.rat()), clock: clock);
     test.is(
         try {
             await zero.bytes(4);
@@ -843,7 +843,7 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
     let started = clock.monotonic_instant();
     let passed = TimedAsyncReading(
         origin: waiting,
-        deadline: started + Duration(milliseconds: 30),
+        deadline: started + Duration(seconds: rat(30, 1000)),
         clock: clock
     );
     test.is(
@@ -871,7 +871,7 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
     test.is(waiting.count(), 0);
     let ahead = TimedAsyncReading(
         origin: DecoratorTestPieces([[byte(1)], [byte(2)]]),
-        deadline: clock.monotonic_instant() + Duration(seconds: 30),
+        deadline: clock.monotonic_instant() + Duration(seconds: 30.rat()),
         clock: clock
     );
     test.is(await ahead.bytes(4), [byte(1)]);

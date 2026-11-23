@@ -192,7 +192,7 @@ object SmtpConnecting {
         client is string = "localhost",
         trust is TrustStore = SystemTrustStore(),
         resolver is Resolving = SystemResolution(),
-        timeout is Duration = Duration(minutes: 5),
+        timeout is Duration = Duration(seconds: (5 * 60).rat()),
         clock is Timing = SystemClock()
     ) {
         settings = SmtpSettings(
@@ -217,7 +217,7 @@ object SmtpConnecting {
         client is string = "localhost",
         trust is TrustStore = SystemTrustStore(),
         resolver is Resolving = SystemResolution(),
-        timeout is Duration = Duration(minutes: 5),
+        timeout is Duration = Duration(seconds: (5 * 60).rat()),
         clock is Timing = SystemClock()
     ) {
         confirm security != SmtpSecurity.plaintext
@@ -1729,7 +1729,7 @@ hidden object SmtpTestTrial {
                 host: "127.0.0.1",
                 port: listener::Local::port,
                 security: SmtpSecurity.plaintext,
-                timeout: Duration(milliseconds: 500)
+                timeout: Duration(seconds: rat(500, 1000))
             ).session();
             defer session.close();
             let state = try {
@@ -1927,7 +1927,7 @@ async test "a step over its timeout closes the session; cancelling a submission 
     ).session();
     let submit is async (MailMessage, string, Sequencing<string>) is SmtpSubmission = session.submission;
     let pending = spawn submit(message, "ada@example.test", ["grace@example.test"]);
-    await SystemClock().wait(Duration(milliseconds: 100));
+    await SystemClock().wait(Duration(seconds: rat(100, 1000)));
     pending.cancel();
     test.ok(try {
         await pending;

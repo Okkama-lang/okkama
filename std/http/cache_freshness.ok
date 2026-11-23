@@ -14,7 +14,7 @@ import "http/header" take Headers, HeaderName;
 import "http/cache_control" take CacheControl, CacheDeltaSeconds;
 import "http/date" take ParsedHttpDate;
 import "time/clock" take Instant, MonotonicInstant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // Wall time supplies Date comparison only; elapsed delay/residence is monotonic.
 object CacheResponseTiming {
@@ -71,13 +71,12 @@ object CacheFreshness {
         };
         let corrected = metadata.age().rat() + timing.delay()::Span::seconds;
         initial = Duration(
-            value: if nonnegative > corrected {
+            seconds: if nonnegative > corrected {
                 nonnegative;
             }
             else {
                 corrected;
-            },
-            unit: DurationUnit.second
+            }
         );
         lifetime = metadata.lifetime();
         reusable = metadata.reusable();
@@ -155,7 +154,7 @@ hidden object CacheFreshnessObservations {
     CacheFreshnessObservations(received is Instant) {
         date = received;
         age = 0;
-        lifetime = Duration(seconds: 0);
+        lifetime = Duration(seconds: 0.rat());
         reusable = false;
     }
 
@@ -200,7 +199,7 @@ hidden object CacheFreshnessObservations {
                 0.rat();
             }
         };
-        lifetime = Duration(value: duration, unit: DurationUnit.second);
+        lifetime = Duration(seconds: duration);
         reusable = !control.present("no-cache") && !control.present("no-store");
     }
 
@@ -228,9 +227,9 @@ enum InvalidCacheMetadata is Error = (invalid);
 enum InvalidCacheTiming is Error = (invalid);
 
 test "cache age includes monotonic response delay" {
-    let received = Instant(Duration(seconds: 100));
-    let began = MonotonicInstant(Duration(seconds: 0));
-    let ended = began.plus(Duration(seconds: 2));
+    let received = Instant(Duration(seconds: 100.rat()));
+    let began = MonotonicInstant(Duration(seconds: 0.rat()));
+    let ended = began.plus(Duration(seconds: 2.rat()));
     let value = CacheFreshness(
         headers: Headers(),
         timing: CacheResponseTiming(received, began, ended)

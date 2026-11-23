@@ -5,7 +5,7 @@ module http/client_policy v1.0.0;
 //
 //     HttpClient(
 //         limits: HttpLimits(header_bytes: 65536, line_bytes: 8192, body_bytes: 10485760),
-//         timeouts: ClientTimeouts(connection: Duration(seconds: 5), headers: Duration(seconds: 10), body_idle: Duration(seconds: 10)),
+//         timeouts: ClientTimeouts(connection: Duration(seconds: 5.rat()), headers: Duration(seconds: 10.rat()), body_idle: Duration(seconds: 10.rat())),
 //     );
 //
 // By default: 64 KiB of header, 8 KiB per line, 1 GiB of body, 30 seconds for
@@ -16,7 +16,7 @@ import "http/version" take HttpVersion, UnsupportedHttpVersion;
 import "http/endpoint" take EndpointAllowing, PublicEndpoints;
 import "collections/set" take Set, OrderedSet;
 import "compare" take Order;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "net/tls" take TlsClientPolicy;
 
 // Explicit, reusable inputs; these objects never resolve or acquire a socket.
@@ -85,7 +85,7 @@ object ClientTimeouts {
 
     // 30 seconds for each.
     ClientTimeouts() {
-        let interval = Duration(seconds: 30);
+        let interval = Duration(seconds: 30.rat());
         connection = interval;
         headers = interval;
         body_idle = interval;

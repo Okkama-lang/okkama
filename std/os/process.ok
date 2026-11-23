@@ -705,7 +705,7 @@ hidden object ProcessTestTicker {
     async run() is int {
         loop {
             last if stopped.value();
-            await SystemClock().wait(Duration(milliseconds: 10));
+            await SystemClock().wait(Duration(seconds: rat(10, 1000)));
             ticks.replace(ticks.value() + 1);
         }
         ticks.value();

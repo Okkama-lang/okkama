@@ -220,7 +220,7 @@ test "thresholds: the most specific override wins; allowed logs drop the rest" {
         for pair -> level {
             let name = LogName("app");
             allowed.write(LogRecord(
-                occurred: Instant(Duration(seconds: 0)),
+                occurred: Instant(Duration(seconds: 0.rat())),
                 level: level,
                 message: "m",
                 context: LogContext(name: name, fields: LogFields(), process: 1),
@@ -247,7 +247,7 @@ test "thresholds and filters take levels by dotted name" {
     );
     for [LogName("shop"), LogName("shop", "db")] -> name {
         filtered.write(LogRecord(
-            occurred: Instant(Duration(seconds: 0)),
+            occurred: Instant(Duration(seconds: 0.rat())),
             level: LogLevel.debug,
             message: "m",
             context: LogContext(name: name, fields: LogFields(), process: 1),

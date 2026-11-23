@@ -1152,7 +1152,7 @@ hidden object WebSocketEndpoint does Handling {
                 protocols: empty,
                 limits: WebSocketLimits(),
                 access: SameOriginWebSockets(),
-                deadline: Duration(seconds: 5),
+                deadline: Duration(seconds: 5.rat()),
             ),
             application: application,
         );

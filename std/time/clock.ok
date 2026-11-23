@@ -2,7 +2,7 @@ module time/clock v1.0.0;
 
 import "compare" take Comparing, Order;
 import "operators" take Adding, Subtracting;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/local_datetime" take LocalDateTime;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
@@ -12,7 +12,7 @@ import "runtime/time" take wall_clock, monotonic_clock, clock_domain, sleep_nano
 //
 //     let clock = SystemClock();
 //     let before = clock.monotonic_instant();
-//     await clock.wait(Duration(milliseconds: 5));
+//     await clock.wait(Duration(seconds: rat(5, 1000)));
 //     let elapsed = clock.monotonic_instant().minus(before);
 //
 // Instant is a duration from the Unix epoch and may later be interpreted by
@@ -138,8 +138,7 @@ object SystemClock does Timing {
     // The wall-clock time now.
     instant() is Instant {
         Instant(origin: Duration(
-            value: wall_clock().rat(),
-            unit: DurationUnit.nanosecond,
+            seconds: rat(wall_clock(), 1000000000),
         ));
     }
 
@@ -147,8 +146,7 @@ object SystemClock does Timing {
     monotonic_instant() is MonotonicInstant {
         MonotonicInstant(
             origin: Duration(
-                value: monotonic_clock().rat(),
-                unit: DurationUnit.nanosecond,
+                seconds: rat(monotonic_clock(), 1000000000),
             ),
             domain: clock_domain(false)
         );
@@ -195,8 +193,8 @@ test "now is the clock's instant" {
 }
 
 test "instants are durations from the epoch" {
-    let second = Duration(seconds: 1);
-    let epoch = Instant(origin: Duration(seconds: 0));
+    let second = Duration(seconds: 1.rat());
+    let epoch = Instant(origin: Duration(seconds: 0.rat()));
     let later = epoch + second;
     test.is(later.unix_duration()::Span::seconds, 1.rat());
     test.is((later - epoch)::Span::seconds, 1.rat());
@@ -205,11 +203,11 @@ test "instants are durations from the epoch" {
 }
 
 test "monotonic readings never mix domains" {
-    let tick = Duration(milliseconds: 5);
-    let start = MonotonicInstant(origin: Duration(seconds: 10));
+    let tick = Duration(seconds: rat(5, 1000));
+    let start = MonotonicInstant(origin: Duration(seconds: 10.rat()));
     test.is(start.domain(), "explicit");
     test.is((start + tick - start)::Span::seconds, 1.rat() / 200.rat());
-    let other = MonotonicInstant(origin: Duration(seconds: 10), domain: "elsewhere");
+    let other = MonotonicInstant(origin: Duration(seconds: 10.rat()), domain: "elsewhere");
     test.is(
         try {
             (start - other)::Span::seconds.string();
@@ -226,7 +224,7 @@ test "monotonic readings never mix domains" {
 }
 
 test "an instant writes itself in RFC 3339 UTC" {
-    test.is(Instant(origin: Duration(seconds: 0)).string(), "1970-01-01T00:00:00Z");
-    test.is(Instant(origin: Duration(seconds: -1)).string(), "1969-12-31T23:59:59Z");
-    test.is(Instant(origin: Duration(milliseconds: 1786451445125)).string(), "2026-08-11T12:30:45.125Z");
+    test.is(Instant(origin: Duration(seconds: 0.rat())).string(), "1970-01-01T00:00:00Z");
+    test.is(Instant(origin: Duration(seconds: -1.rat())).string(), "1969-12-31T23:59:59Z");
+    test.is(Instant(origin: Duration(seconds: rat(1786451445125, 1000))).string(), "2026-08-11T12:30:45.125Z");
 }

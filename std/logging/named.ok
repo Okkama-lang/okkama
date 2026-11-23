@@ -18,7 +18,7 @@ import "time/clock" take Timing, Instant, SystemClock;
 import "runtime/process" take process_current_id;
 import "json" take JsonField;
 import "testing/time" take ManualClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // Where a record's process id comes from.
 role LogProcessReading {
@@ -163,7 +163,7 @@ object NamedLogging does Logging {
 }
 
 test "a named logger stamps time, name and process, and merges its fields" {
-    let start = Instant(Duration(seconds: 1700000000));
+    let start = Instant(Duration(seconds: 1700000000.rat()));
     let collected = CollectedLogs();
     let logging = NamedLogging(
         name: LogName("app"),
@@ -221,7 +221,7 @@ test "a level the destination would not write builds nothing" {
     let logging = NamedLogging(
         name: LogName("shop"),
         destination: AllowedLogs(origin: kept, level: LogLevel.info),
-        clock: ManualClock(Instant(Duration(seconds: 0))),
+        clock: ManualClock(Instant(Duration(seconds: 0.rat()))),
         fields: LogFields(),
         process: process,
     );

@@ -17,7 +17,7 @@ import "io/stream" take AsyncWriting;
 import "async/scope" take FutureScope, Supervising;
 import "async/timeout" take Before;
 import "time/clock" take Timing, MonotonicInstant, SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // The start of a request: its head, and its body unless it waits for 100.
 object Http1RequestStart {
@@ -147,7 +147,7 @@ object Http1ContinueState {
 }
 
 test "ordinary request entry has no outstanding continue permission" {
-    let state = Http1ContinueState(active: false, clock: SystemClock(), limit: Duration(seconds: 1));
+    let state = Http1ContinueState(active: false, clock: SystemClock(), limit: Duration(seconds: 1.rat()));
     state = state.begun();
     test.ok(state.body_sent());
 }

@@ -11,7 +11,7 @@ module http/date v1.0.0;
 
 import "compare" take Comparing, Order;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/date" take Date, GregorianDay, InvalidDate;
 import "time/day" take TimeOfDay, InvalidTimeOfDay;
 import "time/local_datetime" take LocalDateTime;
@@ -35,7 +35,7 @@ object HttpDate does Comparing<HttpDate> {
         else {
             truncated;
         };
-        self.origin = Instant(Duration(seconds: whole));
+        self.origin = Instant(Duration(seconds: whole.rat()));
     }
 
     // The instant.

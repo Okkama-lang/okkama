@@ -509,7 +509,7 @@ async test "an access log writes one line per request" {
     let lines = Atomic(empty);
     defer lines.close();
     let probe = AroundProbe();
-    let clock = ManualClock(start: Instant(origin: Duration(seconds: 0)));
+    let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
     let table = AroundDispatch(
         WebRoutes(
             Around(AccessLog(out: AroundLines(lines), clock: clock)),

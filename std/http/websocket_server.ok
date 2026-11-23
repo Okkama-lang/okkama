@@ -4,7 +4,7 @@ module http/websocket_server v1.0.0;
 //
 //     async handling(request is Request, context is HttpRequestContext) is HandlingResult {
 //         WebSocketHandlingResult(
-//             origin: WebSocketUpgrade(protocols: [], limits: WebSocketLimits(), access: SameOriginWebSockets(), deadline: Duration(seconds: 5)),
+//             origin: WebSocketUpgrade(protocols: [], limits: WebSocketLimits(), access: SameOriginWebSockets(), deadline: Duration(seconds: 5.rat())),
 //             application: self,
 //         );
 //     }

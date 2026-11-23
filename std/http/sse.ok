@@ -6,7 +6,7 @@ module http/sse v1.0.0;
 //     Response(status: Status.ok, headers: EventStreamHeaders().headers(), body: EventBody(channel.receiving()));
 //     let sending = channel.sending();
 //     await sending.send(ServerEvent(data: "tick"));
-//     await sending.send(ServerEvent(data: "{}", event: "update", identifier: "42", retry: Duration(seconds: 3)));
+//     await sending.send(ServerEvent(data: "{}", event: "update", identifier: "42", retry: Duration(seconds: 3.rat())));
 //
 //     let events = ServerEvents(response.reading());
 //     let event = await events.event();                  // EventStreamEnded at the end
@@ -128,7 +128,7 @@ object ServerEvent {
     // The retry; MissingEventRetry when there is none.
     retry() is Duration {
         confirm milliseconds.size() == 1 else throw MissingEventRetry.missing;
-        Duration(milliseconds: milliseconds[0]);
+        Duration(seconds: rat(milliseconds[0], 1000));
     }
 
     // Its data, type, id and whether one was given, and whether it is a
@@ -789,7 +789,7 @@ test "event retry is explicit and negative delays clamp to zero" {
         true;
     });
     test.is(
-        ServerEvent(data: "x", event: "message", identifier: "", retry: Duration(seconds: -1)).retry()::Span::seconds,
+        ServerEvent(data: "x", event: "message", identifier: "", retry: Duration(seconds: -1.rat())).retry()::Span::seconds,
         0.rat()
     );
 }

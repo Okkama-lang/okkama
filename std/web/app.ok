@@ -161,7 +161,7 @@ hidden object AppStopping {
 
     async drained(server is HttpServer) is bool {
         await signals.wait();
-        await server.drain(limit: Duration(seconds: 10));
+        await server.drain(limit: Duration(seconds: 10.rat()));
         true;
     }
 
@@ -254,8 +254,8 @@ async test "a web application routes requests over loopback and drains" {
         resolver: FixedResolution(),
         policy: WebSocketPolicy(
             limits: WebSocketLimits(),
-            opening: Duration(seconds: 5),
-            closing: Duration(seconds: 2),
+            opening: Duration(seconds: 5.rat()),
+            closing: Duration(seconds: 2.rat()),
             access: LoopbackEndpoints(),
         ),
     ).connection();
@@ -276,7 +276,7 @@ async test "a web application routes requests over loopback and drains" {
     );
     await socket.close(1000, "bye");
     client.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
 }
 
 async test "a compressed reply reaches the client decoded" {
@@ -300,7 +300,7 @@ async test "a compressed reply reaches the client decoded" {
         "tea ".repeat(2000)
     );
     client.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
 }
 
 // The test CA and its certificate for 127.0.0.1 and localhost, as in http/server.
@@ -331,6 +331,6 @@ async test "a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN" {
     test.is(plain::Head::version == HttpVersion.http_1_1, true);
     test.is(await plain.text(), "Hello, Bo!");
     older.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
 }

@@ -7,7 +7,7 @@ module testing/result v1.0.0;
 //     report.exit_status();                    // 0 when nothing failed
 
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "collections/sequence" take Sequencing;
 
 // Passed, failed, skipped, timed out or crashed.
@@ -407,7 +407,7 @@ enum MissingTestPosition is Error = (missing);
 enum InvalidTestResult is Error = (because(reason is string));
 
 test "empty reports have successful exit status" {
-    let duration = Duration(seconds: 0);
+    let duration = Duration(seconds: 0.rat());
     test.is(
         TestReport(start: Instant(duration), duration: duration, seed: 42, results: []).exit_status(),
         0

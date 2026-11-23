@@ -39,7 +39,7 @@ import "db/error" take DbFailure, DbFailureKind, DbOperation, DbClosed, DbBusy, 
 import "collections/sequence" take Sequencing;
 import "encoding/utf" take Utf8Encoded;
 import "strings/parse" take Number;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
 import "async/lock" take Lock;
@@ -69,7 +69,7 @@ object SqliteOptions {
         read_only = false;
         create = true;
         foreign_keys = true;
-        busy = Duration(seconds: 0);
+        busy = Duration(seconds: 0.rat());
         journal = SqliteJournal.default_mode;
     }
 
@@ -802,13 +802,12 @@ object SqliteSession does Closing {
                 return BackupReport(copies: frame.copies(), total: frame.total());
             }
             await clock.wait(Duration(
-                value: if frame.busy() {
-                    5.rat();
+                seconds: if frame.busy() {
+                    rat(5, 1000);
                 }
                 else {
                     0.rat();
-                },
-                unit: DurationUnit.millisecond
+                }
             ));
         }
     }
@@ -1877,7 +1876,7 @@ test "SQLite rejects contradictory flags and sub-millisecond busy timeouts" {
             read_only: true,
             create: true,
             foreign_keys: true,
-            busy_timeout: Duration(seconds: 0),
+            busy_timeout: Duration(seconds: 0.rat()),
             journal: SqliteJournal.default_mode
         );
         false;
@@ -1890,7 +1889,7 @@ test "SQLite rejects contradictory flags and sub-millisecond busy timeouts" {
             read_only: false,
             create: true,
             foreign_keys: true,
-            busy_timeout: Duration(microseconds: 500),
+            busy_timeout: Duration(seconds: rat(500, 1000000)),
             journal: SqliteJournal.default_mode
         );
         false;
@@ -2023,7 +2022,7 @@ async test "scripts, blobs and an online backup" {
         target: target,
         pages: 8,
         clock: SystemClock(),
-        timeout: Duration(seconds: 5)
+        timeout: Duration(seconds: 5.rat())
     ).report();
     test.is(report.copies().string() == report.total().string(), true);
     let copy = await SqliteDatabase(path: target, options: SqliteOptions()).connection();

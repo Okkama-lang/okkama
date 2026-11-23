@@ -14,7 +14,7 @@ import "encoding/hex" take HexEncoded;
 import "encoding/base64" take Base64Encoded;
 import "json" take Json, JsonField;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "xml/name" take InvalidXml;
 import "xml/write" take EscapedXml;
 
@@ -486,7 +486,7 @@ hidden object JUnitSeconds {
 }
 
 test "empty TAP report carries an explicit skipped plan" {
-    let duration = Duration(seconds: 0);
+    let duration = Duration(seconds: 0.rat());
     test.is(
         TapTestReport(
             TestReport(start: Instant(duration), duration: duration, seed: 0, results: [])
@@ -496,7 +496,7 @@ test "empty TAP report carries an explicit skipped plan" {
 }
 
 test "JUnit empty suite preserves declaration attributes and properties" {
-    let zero = Duration(seconds: 0);
+    let zero = Duration(seconds: 0.rat());
     test.is(
         JUnitTestReport(
             origin: TestReport(start: Instant(zero), duration: zero, seed: 42, results: []),
@@ -507,7 +507,7 @@ test "JUnit empty suite preserves declaration attributes and properties" {
 }
 
 test "JUnit separates failures errors skips and escapes attributes and text" {
-    let duration = Duration(value: 1234567890.rat(), unit: DurationUnit.nanosecond);
+    let duration = Duration(seconds: rat(1234567890, 1000000000));
     let statuses = [
         TestStatus.passed,
         TestStatus.failed,
@@ -580,11 +580,11 @@ test "JUnit report text keeps controls and forbidden XML scalars printable" {
 }
 
 test "JUnit passed case keeps empty capture elements and false truncation" {
-    let zero = Duration(seconds: 0);
+    let zero = Duration(seconds: 0.rat());
     let result = TestResult(
         name: "pass",
         status: TestStatus.passed,
-        duration: Duration(value: 1.rat(), unit: DurationUnit.nanosecond),
+        duration: Duration(seconds: rat(1, 1000000000)),
         failures: [],
         output: TestOutput(output: [], errors: [], truncated: false)
     );

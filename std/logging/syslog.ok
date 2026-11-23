@@ -20,7 +20,7 @@ import "io/stream" take ByteSource, Closing, IncompleteWrite;
 import "encoding/utf" take Utf8Encoded;
 import "net/udp" take UdpConnection, DatagramTooLarge;
 import "async/scope" take Supervising;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/rfc3339" take Rfc3339;
 
 // The syslog facility.
@@ -254,7 +254,7 @@ object SyslogMessage does ByteSource {
         let priority = SyslogFacilityCode(options::Settings::facility).code() * 8 + SyslogSeverity(
             record::Entry::level
         ).code();
-        let time = Rfc3339(origin: record.time(), offset: Duration(seconds: 0)).string();
+        let time = Rfc3339(origin: record.time(), offset: Duration(seconds: 0.rat())).string();
         let parts = time.split(".");
         let timestamp = if parts.size() == 1 {
             time;
@@ -405,7 +405,7 @@ hidden object SyslogTestRecord {
 
     record() is LogRecord {
         LogRecord(
-            occurred: Instant(Duration(value: seconds, unit: DurationUnit.second)),
+            occurred: Instant(Duration(seconds: seconds)),
             level: level,
             message: "up",
             context: LogContext(name: LogName("web"), fields: LogFields(), process: process),

@@ -299,7 +299,7 @@ async test "caller cancellation settles outstanding workers before returning" {
         try {
             await Within(
                 origin: mapped.results(),
-                limit: Duration(milliseconds: 100),
+                limit: Duration(seconds: rat(100, 1000)),
                 clock: SystemClock()
             ).outcome();
             false;

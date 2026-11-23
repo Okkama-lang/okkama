@@ -44,7 +44,7 @@ import "async/scope" take FutureGroup;
 import "async/cancellation" take Cancellation;
 import "async/timeout" take Within, Before, TimedOut;
 import "time/clock" take Timing, Instant, MonotonicInstant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "error" take InvalidState;
 import "encoding/binary" take Binary, Signedness;
 import "encoding/utf" take ByteOrder, Utf8Encoded;
@@ -418,7 +418,7 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
             );
             let bounded is Within<bool> = Within(
                 origin: ticket.delivered(),
-                limit: Duration(1.rat(), DurationUnit.second),
+                limit: Duration(seconds: 1.rat()),
                 clock: clock
             );
             let pending = bounded.outcome();
@@ -1374,11 +1374,11 @@ hidden object Http2ServerTestClock does Timing {
     }
 
     instant() is Instant {
-        Instant(Duration(seconds: 100));
+        Instant(Duration(seconds: 100.rat()));
     }
 
     monotonic_instant() is MonotonicInstant {
-        MonotonicInstant(Duration(seconds: 100));
+        MonotonicInstant(Duration(seconds: 100.rat()));
     }
 
     async wait(duration is Duration) is void {
@@ -1412,7 +1412,7 @@ hidden object Http2ServerTestConnection {
     }
 
     session(input is ByteBodyInput, output is AsyncWriting) is Http2ServerSession {
-        self.session(input, output, input, Http2ServerTestClock(), Duration(seconds: 0));
+        self.session(input, output, input, Http2ServerTestClock(), Duration(seconds: 0.rat()));
     }
 
     session(
@@ -1436,10 +1436,10 @@ hidden object Http2ServerTestConnection {
                 protocols: OrderedSet([HttpVersion.http_2]),
                 limits: HttpLimits(),
                 timeouts: ServerTimeouts(
-                    headers: Duration(seconds: 0),
-                    body_idle: Duration(seconds: 0),
+                    headers: Duration(seconds: 0.rat()),
+                    body_idle: Duration(seconds: 0.rat()),
                     keep_alive: idle,
-                    handling: Duration(seconds: 0)
+                    handling: Duration(seconds: 0.rat())
                 ),
                 connections: 1,
                 ranges: 16
@@ -1576,7 +1576,7 @@ async test "an HTTP/2 server settles an immediate idle timeout and its pending r
         Http2ServerTestOutput(),
         input,
         clock,
-        Duration(seconds: 1)
+        Duration(seconds: 1.rat())
     );
     test.is(await server.serve(), true);
     test.is(input.closed(), true);
@@ -1595,7 +1595,7 @@ async test "an HTTP/2 server preserves an immediate input failure and settles" {
         Http2ServerTestOutput(),
         input,
         clock,
-        Duration(seconds: 1)
+        Duration(seconds: 1.rat())
     );
     let reason = try {
         await server.serve();
@@ -1625,7 +1625,7 @@ async test "an HTTP/2 server preserves writer failure and settles its read and t
         Http2ServerTestOutput(fail_after: 2),
         input,
         clock,
-        Duration(seconds: 1)
+        Duration(seconds: 1.rat())
     );
     let reason = try {
         await server.serve();

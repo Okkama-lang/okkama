@@ -56,8 +56,8 @@ object WebSocketPolicy {
     // The default limits, 30 seconds to open, 5 to close, public endpoints.
     WebSocketPolicy() {
         limits = WebSocketLimits();
-        opening = Duration(seconds: 30);
-        closing = Duration(seconds: 5);
+        opening = Duration(seconds: 30.rat());
+        closing = Duration(seconds: 5.rat());
         access = PublicEndpoints();
     }
 
@@ -287,7 +287,7 @@ object WebSocketOpening {
         let waiting = TcpRacing(
             origins: endpoints,
             options: TcpOptions(),
-            delay: Duration(milliseconds: 250),
+            delay: Duration(seconds: rat(250, 1000)),
             clock: clock
         ).connection();
         pending.replace([waiting]);
@@ -411,7 +411,7 @@ hidden object ShoutingEcho does Handling, WebSocketHandling {
             protocols: [],
             limits: WebSocketLimits(),
             access: AnyWebSocketOrigin(),
-            deadline: Duration(seconds: 5),
+            deadline: Duration(seconds: 5.rat()),
         );
         WebSocketHandlingResult(origin: upgrade, application: self);
     }
@@ -454,8 +454,8 @@ async test "a WebSocket client talks to a server over loopback and closes cleanl
     let url = ParsedUrl("ws://127.0.0.1:" + server::Local::port.string() + "/echo").parts();
     let policy = WebSocketPolicy(
         limits: WebSocketLimits(),
-        opening: Duration(seconds: 5),
-        closing: Duration(seconds: 2),
+        opening: Duration(seconds: 5.rat()),
+        closing: Duration(seconds: 2.rat()),
         access: AllEndpoints(),
     );
     let connection = await WebSocketConnecting(
@@ -469,5 +469,5 @@ async test "a WebSocket client talks to a server over loopback and closes cleanl
     test.is((await connection.message()).bytes(), [1.byte(), 2.byte(), 1.byte(), 2.byte()]);
     await connection.close(1000, "done");
     test.is(connection.closed(), true);
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
 }

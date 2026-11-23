@@ -31,7 +31,7 @@ import "async/scope" take FutureGroup;
 import "async/atomic" take Atomic;
 import "collections/sequence" take Sequencing;
 import "time/clock" take Timing, SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "net/endpoint" take HostEndpoint, HostName;
 import "net/dns" take Resolving, SystemResolution, FixedResolution, HostAddresses;
 
@@ -220,7 +220,7 @@ object TcpConnecting {
         await TcpEndpointRace(
             origins: endpoints,
             options: options,
-            delay: Duration(milliseconds: 250),
+            delay: Duration(seconds: rat(250, 1000)),
             clock: SystemClock()
         ).connection();
     }
@@ -571,7 +571,7 @@ object TcpEndpointRace {
     TcpEndpointRace(origins is Sequencing<IpEndpoint>) {
         endpoints = TcpRaceEndpoints(origins).items();
         options = TcpOptions();
-        delay = Duration(milliseconds: 250);
+        delay = Duration(seconds: rat(250, 1000));
         clock = SystemClock();
     }
 

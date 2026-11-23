@@ -26,7 +26,7 @@ import "net/tls" take TlsClientPolicy, TlsClientHandshake, TlsConnection;
 import "url/value" take UrlHostKind, UrlParts;
 import "crypto/x509/trust" take CertificateIdentity, DnsCertificateIdentity, IpCertificateIdentity;
 import "time/clock" take Timing, SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
 import "async/scope" take FutureGroup;
@@ -80,7 +80,7 @@ object HttpSelectedConnecting does HttpConversationConnecting {
         let waiting = TcpRacing(
             origins: endpoints,
             options: TcpOptions(),
-            delay: Duration(milliseconds: 250),
+            delay: Duration(seconds: rat(250, 1000)),
             clock: clock
         ).connection();
         pending.replace([waiting]);

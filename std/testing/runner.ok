@@ -7,7 +7,7 @@ import "testing/result" take TestReport, TestResult, TestFailure, TestPosition, 
 import "json" take Json, JsonKind, ParsedJson;
 import "strings/parse" take Number;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "encoding/base64" take Base64Decoded;
 
 // Explicit runner wire projection; arbitrary user objects are never inspected.
@@ -25,8 +25,8 @@ object RecordedTestReport {
             RecordedTestResult(entry).outcome();
         };
         report = TestReport(
-            start: Instant(Duration(nanoseconds: Number(document.text("start_ns")).int())),
-            duration: Duration(nanoseconds: Number(document.text("duration_ns")).int()),
+            start: Instant(Duration(seconds: rat(Number(document.text("start_ns")).int(), 1000000000))),
+            duration: Duration(seconds: rat(Number(document.text("duration_ns")).int(), 1000000000)),
             seed: document.int("seed"),
             results: results
         );
@@ -110,7 +110,7 @@ hidden object RecordedTestResult {
         result = TestResult(
             name: entry.text("name"),
             status: status,
-            duration: Duration(nanoseconds: Number(entry.text("duration_ns")).int()),
+            duration: Duration(seconds: rat(Number(entry.text("duration_ns")).int(), 1000000000)),
             failures: failures,
             output: TestOutput(
                 output: output,

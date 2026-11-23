@@ -13,7 +13,7 @@ import "logging/name" take LogName;
 import "json" take JsonField;
 import "testing/time" take ManualClock;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // A logger that adds fields to every record.
 object FieldLogging does Logging {
@@ -69,7 +69,7 @@ test "field logging adds its fields; a child logger extends the name" {
     let base = NamedLogging(
         name: LogName("app"),
         destination: collected,
-        clock: ManualClock(Instant(Duration(seconds: 0))),
+        clock: ManualClock(Instant(Duration(seconds: 0.rat()))),
         fields: LogFields()
     );
     let request = FieldLogging(origin: base, fields: LogFields(JsonField("request", "r-1")));

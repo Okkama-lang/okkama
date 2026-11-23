@@ -7,10 +7,10 @@ module crypto/jwt v1.0.0;
 //     let token = JwtToken(
 //         claims: Json(JsonField("sub", "user-7"), JsonField("role", "admin")),
 //         key: key,
-//         expires: Duration(minutes: 15)
+//         expires: Duration(seconds: (15 * 60).rat())
 //     ).string();
 //
-//     let verified = JwtVerified(token: token, key: key, leeway: Duration(seconds: 30));
+//     let verified = JwtVerified(token: token, key: key, leeway: Duration(seconds: 30.rat()));
 //     verified.claims().text("sub");                       // "user-7"
 //     verified.claims().maybe("role").text() else "user";
 //
@@ -745,7 +745,7 @@ object JwtVerified {
         token is string,
         key is JwtKey,
         clock is Timing = SystemClock(),
-        leeway is Duration = Duration(seconds: 0),
+        leeway is Duration = Duration(seconds: 0.rat()),
         audience is string = "",
         issuer is string = ""
     ) {
@@ -764,7 +764,7 @@ object JwtVerified {
         token is string,
         keys is JwtKeys,
         clock is Timing = SystemClock(),
-        leeway is Duration = Duration(seconds: 0),
+        leeway is Duration = Duration(seconds: 0.rat()),
         audience is string = "",
         issuer is string = ""
     ) {
@@ -948,7 +948,7 @@ hidden object JwtTestVectors {
     }
 
     clock(seconds is int) is ManualClock {
-        ManualClock(Instant(Duration(seconds: seconds)));
+        ManualClock(Instant(Duration(seconds: seconds.rat())));
     }
 
     secret() is SecretBytes {
@@ -978,7 +978,7 @@ test "JWT verifies the RFC 7515 HS256 example" {
             token: v.hs256(),
             key: v.hs256_key(),
             clock: v.clock(1300819385),
-            leeway: Duration(seconds: 6)
+            leeway: Duration(seconds: 6.rat())
         ).claims().int("exp"),
         1300819380
     );
@@ -1053,7 +1053,7 @@ test "JWT round-trips every algorithm" {
         let token = JwtToken(
             claims: Json(JsonField("sub", "user-7")),
             key: key,
-            expires: Duration(minutes: 15),
+            expires: Duration(seconds: (15 * 60).rat()),
             clock: v.clock(1700000000)
         ).string();
         let claims = JwtVerified(token: token, key: key, clock: v.clock(1700000100)).claims();
@@ -1157,7 +1157,7 @@ test "JWT checks nbf, iat, aud and iss" {
     };
     test.is(JwtVerified(token: early, key: hs, clock: v.clock(1000)).claims().int("nbf"), 1000);
     test.is(
-        JwtVerified(token: early, key: hs, clock: v.clock(995), leeway: Duration(seconds: 5)).claims().int(
+        JwtVerified(token: early, key: hs, clock: v.clock(995), leeway: Duration(seconds: 5.rat())).claims().int(
             "nbf"
         ),
         1000

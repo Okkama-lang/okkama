@@ -13,7 +13,7 @@ module http/server v1.0.0;
 //     let listener = await TcpListening(port: 8080).listener();
 //     let server = HttpServer(listener: listener, handling: Hello()).started();
 //     …
-//     await server.drain(limit: Duration(seconds: 5));
+//     await server.drain(limit: Duration(seconds: 5.rat()));
 //
 // The server speaks HTTP/1.1 under ServerPolicy() unless told otherwise; with
 // tls: it speaks HTTPS and offers its protocols by ALPN, h2 first. With url: it
@@ -689,7 +689,7 @@ hidden object HttpServerPeer {
     async finished(stream is HttpServerStream) is bool {
         let deadline is HttpServerDeadline<bool> = HttpServerDeadline(
             waiting: stream.finish(),
-            limit: Duration(seconds: 1),
+            limit: Duration(seconds: 1.rat()),
             clock: clock
         );
         let closing = deadline.outcome();
@@ -1431,7 +1431,7 @@ async test "a server answers over loopback, reads bodies, and drains" {
     test.ok(answer.value().starts_with("HTTP/1.1 200 OK\r\n"));
     test.ok(answer.value().ends_with("GET /absolute?y=2 "));
     client.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
 }
 
@@ -1466,7 +1466,7 @@ async test "a server speaks HTTP/2 over cleartext and multiplexes one connection
     test.is(await posted.text(), "POST /notes h2 body");
     test.is((await client.get(base + "/missing"))::Head::status, Status.not_found);
     client.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
 }
 
@@ -1505,7 +1505,7 @@ async test "a server answers HTTP/1.0 and keeps its connection only when asked" 
         test.ok(reply.value().contains("\r\nConnection: keep-alive\r\n"));
     }
     kept.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
 }
 
@@ -1515,10 +1515,10 @@ async test "a request body that pauses past the idle timeout is answered with 40
         protocols: OrderedSet([HttpVersion.http_1_1]),
         limits: HttpLimits(),
         timeouts: ServerTimeouts(
-            headers: Duration(seconds: 30),
-            body_idle: Duration(milliseconds: 100),
-            keep_alive: Duration(seconds: 5),
-            handling: Duration(seconds: 30)
+            headers: Duration(seconds: 30.rat()),
+            body_idle: Duration(seconds: rat(100, 1000)),
+            keep_alive: Duration(seconds: 5.rat()),
+            handling: Duration(seconds: 30.rat())
         ),
         connections: 8,
         ranges: 16
@@ -1555,7 +1555,7 @@ async test "a request body that pauses past the idle timeout is answered with 40
     slow.close();
     test.ok(refusal.value().starts_with("HTTP/1.1 408 "));
     test.ok(refusal.value().contains("\r\nConnection: close\r\n"));
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
 }
 
 // The test CA of net/tls and its server certificate for 127.0.0.1.
@@ -1600,6 +1600,6 @@ async test "a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN" {
     test.is(plain::Head::version == HttpVersion.http_1_1, true);
     test.is(await plain.text(), "GET /two ");
     older.close();
-    await server.drain(limit: Duration(seconds: 5));
+    await server.drain(limit: Duration(seconds: 5.rat()));
     test.is(server.closed(), true);
 }

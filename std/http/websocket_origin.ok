@@ -2,7 +2,7 @@ module http/websocket_origin v1.0.0;
 
 // Whether a WebSocket upgrade may come from its Origin.
 //
-//     WebSocketUpgrade(protocols: [], limits: WebSocketLimits(), access: SameOriginWebSockets(), deadline: Duration(seconds: 5));
+//     WebSocketUpgrade(protocols: [], limits: WebSocketLimits(), access: SameOriginWebSockets(), deadline: Duration(seconds: 5.rat()));
 //
 // The server's own URL, from its configuration, is what the Origin is checked
 // against; the Host field of the request is not trusted. A non-browser client

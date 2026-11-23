@@ -4,8 +4,8 @@ module db/pool v1.0.0;
 //
 //     let pool = DbPool(
 //         origin: PostgresConnecting(…),
-//         options: PoolOptions(minimum: 2, maximum: 16, idle_timeout: Duration(minutes: 5),
-//             lifetime: Duration(minutes: 30), acquisition_timeout: Duration(seconds: 5)),
+//         options: PoolOptions(minimum: 2, maximum: 16, idle_timeout: Duration(seconds: (5 * 60).rat()),
+//             lifetime: Duration(seconds: (30 * 60).rat()), acquisition_timeout: Duration(seconds: 5.rat())),
 //         clock: SystemClock(),
 //     );
 //     let db = await pool.connection();
@@ -29,7 +29,7 @@ import "db/transaction" take Transaction, TransactionOptions;
 import "db/error" take DbClosed, TransactionEnded, DbFailure, DbFailureKind, DbOperation;
 import "collections/sequence" take Sequencing;
 import "time/clock" take Timing, MonotonicInstant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
 import "async/lock" take Lock;
@@ -1077,8 +1077,8 @@ hidden object DbRetirement {
 }
 
 test "pool bounds precede physical acquisition" {
-    let zero = Duration(seconds: 0);
-    let one = Duration(seconds: 1);
+    let zero = Duration(seconds: 0.rat());
+    let one = Duration(seconds: 1.rat());
     test.ok(try {
         PoolOptions(
             minimum: 2,

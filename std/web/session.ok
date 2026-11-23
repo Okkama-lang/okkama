@@ -98,7 +98,7 @@ object MemorySessions does SessionStoring {
     has lifetime is Duration;
 
     // Sessions kept in memory for lifetime (7 days unless told).
-    MemorySessions(clock is Timing = SystemClock(), lifetime is Duration = Duration(days: 7)) {
+    MemorySessions(clock is Timing = SystemClock(), lifetime is Duration = Duration(seconds: (7 * 86400).rat())) {
         let none_yet is %string:%string:string = [:];
         entries = Atomic(none_yet);
         let no_expiry is %string:Instant = [:];
@@ -168,7 +168,7 @@ object Sessions {
         key is SecretBytes,
         store is SessionStoring = MemorySessions(),
         cookie is string = "sid",
-        lifetime is Duration = Duration(days: 7),
+        lifetime is Duration = Duration(seconds: (7 * 86400).rat()),
         random is Randomizing = SecureRandom()
     ) {
         confirm key.size() >= 16

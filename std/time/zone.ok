@@ -1,6 +1,6 @@
 module time/zone v1.0.0;
 
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/clock" take Instant, Timing, SystemClock;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
@@ -61,8 +61,7 @@ object Zone does TimeZone {
     // The offset from UTC at that moment.
     offset(at is Instant) is Duration {
         Duration(
-            value: timezone_offset(origin, at.unix_duration()::Span::seconds).rat(),
-            unit: DurationUnit.second,
+            seconds: timezone_offset(origin, at.unix_duration()::Span::seconds).rat(),
         );
     }
 
@@ -92,7 +91,7 @@ object Zone does TimeZone {
         ) > 0
             else throw MissingLocalTime.zone(origin);
         Instant(origin: Duration(
-            value: timezone_local_instant(
+            seconds: timezone_local_instant(
                 origin,
                 date::Calendar::year,
                 date::Calendar::month,
@@ -103,7 +102,6 @@ object Zone does TimeZone {
                 time::Clock::nanosecond,
                 fold == Fold.later,
             ),
-            unit: DurationUnit.second,
         ));
     }
 }
@@ -311,8 +309,8 @@ test "local times resolve to instants through a named zone" {
 }
 
 test "a zone shows an instant as local time with its offset" {
-    let summer = Instant(origin: Duration(seconds: 1792888200));
-    let winter = Instant(origin: Duration(seconds: 1792891800));
+    let summer = Instant(origin: Duration(seconds: 1792888200.rat()));
+    let winter = Instant(origin: Duration(seconds: 1792891800.rat()));
     let berlin = Zone("Europe/Berlin");
     test.is(berlin.name(), "Europe/Berlin");
     let before = ZonedDateTime(instant: summer, zone: berlin);
@@ -331,15 +329,15 @@ test "a zone shows an instant as local time with its offset" {
 }
 
 test "fixed zones have one offset and refuse bad ones" {
-    let plus_five = FixedZone(name: "UTC+5", offset: Duration(hours: 5));
-    let instant = Instant(origin: Duration(seconds: 0));
+    let plus_five = FixedZone(name: "UTC+5", offset: Duration(seconds: (5 * 3600).rat()));
+    let instant = Instant(origin: Duration(seconds: 0.rat()));
     test.is(plus_five.offset(instant)::Span::seconds, 18000.rat());
     test.is(plus_five.abbreviation(instant), "UTC+5");
     test.ok(!plus_five.daylight_saving(instant));
     test.is(ZonedDateTime(instant: instant, zone: plus_five).local_datetime().time()::Clock::hour, 5);
     test.is(
         try {
-            FixedZone(name: "far", offset: Duration(hours: 25)).name();
+            FixedZone(name: "far", offset: Duration(seconds: (25 * 3600).rat())).name();
         }
         catch error is InvalidTimeZone {
             "refused";
@@ -359,9 +357,9 @@ test "fixed zones have one offset and refuse bad ones" {
 
 test "today is the date in the zone at the clock's instant" {
     // 2026-01-01T03:00:00Z.
-    let clock = ManualClock(Instant(origin: Duration(seconds: 1767236400)));
-    test.is(Today(zone: FixedZone(name: "UTC", offset: Duration(hours: 0)), clock: clock).date().string(), "2026-01-01");
-    test.is(Today(zone: FixedZone(name: "UTC-5", offset: Duration(hours: -5)), clock: clock).date().string(), "2025-12-31");
+    let clock = ManualClock(Instant(origin: Duration(seconds: 1767236400.rat())));
+    test.is(Today(zone: FixedZone(name: "UTC", offset: Duration(seconds: 0.rat())), clock: clock).date().string(), "2026-01-01");
+    test.is(Today(zone: FixedZone(name: "UTC-5", offset: Duration(seconds: (-5 * 3600).rat())), clock: clock).date().string(), "2025-12-31");
     test.is(Today(zone: Zone("America/New_York"), clock: clock).date().string(), "2025-12-31");
     test.is(Today(zone: Zone("Asia/Tokyo"), clock: clock).date().string(), "2026-01-01");
 }

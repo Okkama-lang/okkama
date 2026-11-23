@@ -14,7 +14,7 @@ module fs/stat v1.0.0;
 // records a creation time: creation() then throws MissingCreationTime.
 
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // What an entry is.
 enum FileKind = (
@@ -242,8 +242,7 @@ hidden object EpochInstant {
 
     instant() is Instant {
         Instant(origin: Duration(
-            value: seconds.rat(),
-            unit: DurationUnit.second,
+            seconds: seconds.rat(),
         ));
     }
 }

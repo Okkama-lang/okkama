@@ -15,7 +15,7 @@ import "logging/level" take LogLevel;
 import "logging/field" take LogFields;
 import "time/clock" take Instant;
 import "json" take JsonField;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // The logger a record comes from: name, fields and process id.
 object LogContext {
@@ -125,7 +125,7 @@ test "a record keeps its moment, level, message, context and optional cause" {
         process: 42
     );
     let record = LogRecord(
-        occurred: Instant(Duration(seconds: 0)),
+        occurred: Instant(Duration(seconds: 0.rat())),
         level: LogLevel.warning,
         message: "slow",
         context: context
@@ -139,7 +139,7 @@ test "a record keeps its moment, level, message, context and optional cause" {
         record.cause();
     };
     let failed = LogRecord(
-        occurred: Instant(Duration(seconds: 0)),
+        occurred: Instant(Duration(seconds: 0.rat())),
         level: LogLevel.error,
         message: "down",
         context: context,

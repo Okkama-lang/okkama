@@ -31,7 +31,7 @@ import "encoding/single_byte" take AsciiEncoded, AsciiDecoded, InvalidAsciiByte;
 import "collections/set" take OrderedSet, Set;
 import "net/endpoint" take HostName;
 import "net/public_suffix" take PublicSuffixList;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // Something a client keeps cookies in.
 role CookieStoring {
@@ -1037,7 +1037,7 @@ hidden object CookieStoreNumber {
     }
 
     instant() is Instant {
-        Instant(Duration(value: self.rat(), unit: DurationUnit.nanosecond));
+        Instant(Duration(seconds: self.rat() * rat(1, 1000000000)));
     }
 }
 

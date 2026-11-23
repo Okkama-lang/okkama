@@ -22,7 +22,7 @@ import "net/tcp_racing" take TcpRacing;
 import "net/dns" take Resolving;
 import "net/tls" take TlsClientPolicy;
 import "time/clock" take Timing;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "url/value" take UrlParts;
 import "async/scope" take FutureGroup;
 import "async/atomic" take Atomic;
@@ -128,7 +128,7 @@ hidden object HttpProxyConnecting does HttpConversationConnecting {
         let opening = TcpRacing(
             origins: endpoints,
             options: TcpOptions(),
-            delay: Duration(milliseconds: 250),
+            delay: Duration(seconds: rat(250, 1000)),
             clock: clock
         ).connection();
         pending.replace([opening]);

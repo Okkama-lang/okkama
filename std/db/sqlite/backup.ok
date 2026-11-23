@@ -3,7 +3,7 @@ module db/sqlite/backup v1.0.0;
 // Online backups of a SQLite database to a file.
 //
 //     let report = await SqliteBackup(origin: db, target: Path("backup.db"), pages: 100,
-//         clock: SystemClock(), timeout: Duration(seconds: 30)).report();
+//         clock: SystemClock(), timeout: Duration(seconds: 30.rat())).report();
 //     report.copies();                 // pages copied
 //
 // The copy runs pages at a time, so other work goes on between steps.
@@ -13,7 +13,6 @@ import "time/clock" take Timing;
 import "time/duration" take Duration;
 import "compare" take Order;
 import "time/clock" take SystemClock;
-import "time/duration" take DurationUnit;
 
 // Something that can back itself up.
 role SqliteBackupMaking {
@@ -100,7 +99,7 @@ test "a backup report counts copied pages within the total" {
 }
 
 async test "a backup checks its step and timeout, then asks its source" {
-    let second = Duration(seconds: 1);
+    let second = Duration(seconds: 1.rat());
     let report = await SqliteBackup(
         origin: CountingBackup(),
         target: Path("copy.db"),
@@ -133,7 +132,7 @@ async test "a backup checks its step and timeout, then asks its source" {
             target: Path("copy.db"),
             pages: 1,
             clock: SystemClock(),
-            timeout: Duration(seconds: 0)
+            timeout: Duration(seconds: 0.rat())
         );
     };
 }

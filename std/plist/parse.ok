@@ -25,7 +25,7 @@ import "encoding/base64" take Base64Decoded, InvalidBase64;
 import "time/rfc3339" take Rfc3339;
 import "xml/internal/events" take XmlTokens, XmlEvents;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // A property list read from bytes.
 object ParsedPlist {
@@ -1198,8 +1198,7 @@ hidden object PlistBinaryDocument {
                             PlistDate(
                                 Instant(
                                     Duration(
-                                        value: number.rat() + 978307200.rat(),
-                                        unit: DurationUnit.second
+                                        seconds: number.rat() + 978307200.rat()
                                     )
                                 )
                             );

@@ -18,7 +18,7 @@ module http/server_policy v1.0.0;
 import "http/client_policy" take HttpLimits;
 import "http/version" take HttpVersion;
 import "collections/set" take Set, OrderedSet;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // How long a server waits.
 object ServerTimeouts {
@@ -27,10 +27,10 @@ object ServerTimeouts {
     // 30 seconds for the head, a body pause and a handler; 5 seconds of
     // keep-alive.
     ServerTimeouts() {
-        headers = Duration(seconds: 30);
-        body_idle = Duration(seconds: 30);
-        keep_alive = Duration(seconds: 5);
-        handling = Duration(seconds: 30);
+        headers = Duration(seconds: 30.rat());
+        body_idle = Duration(seconds: 30.rat());
+        keep_alive = Duration(seconds: 5.rat());
+        handling = Duration(seconds: 30.rat());
     }
 
     // The timeouts as given.
@@ -184,12 +184,12 @@ test "server policy has bounded defaults and refuses unsupported budgets" {
             ranges: 16
         );
     };
-    let second = Duration(seconds: 1);
+    let second = Duration(seconds: 1.rat());
     test.throws(InvalidServerPolicy) {
         ServerTimeouts(
             headers: second,
             body_idle: second,
-            keep_alive: Duration(seconds: -1),
+            keep_alive: Duration(seconds: -1.rat()),
             handling: second
         );
     };

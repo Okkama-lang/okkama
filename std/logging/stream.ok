@@ -21,7 +21,7 @@ import "json" take JsonField;
 import "logging/field" take LogFields;
 import "logging/name" take LogName;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // The style of one level's lines on a terminal.
 object LogStyle {
@@ -106,7 +106,7 @@ object TextStreamLogs does LogWriting {
     // Times are written in UTC unless a zone is given.
     TextStreamLogs(
         origin is Writing,
-        zone is TimeZone = FixedZone(name: "UTC", offset: Duration(seconds: 0))
+        zone is TimeZone = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()))
     ) {
         self.origin = origin;
         self.zone = zone;
@@ -203,13 +203,13 @@ object JsonTerminalLogs does LogWriting {
 
 test "stream writers put one line per record on their output" {
     let record = LogRecord(
-        occurred: Instant(Duration(seconds: 1700000000)),
+        occurred: Instant(Duration(seconds: 1700000000.rat())),
         level: LogLevel.info,
         message: "up",
         context: LogContext(name: LogName("app"), fields: LogFields(), process: 1),
     );
     let text = ByteBuffer();
-    let zone = FixedZone(name: "UTC", offset: Duration(seconds: 0));
+    let zone = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
     TextStreamLogs(origin: text.writing(), zone: zone).write(record);
     test.is(
         Utf8Decoded(text.content().bytes()).string(),

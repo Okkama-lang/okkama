@@ -4,7 +4,7 @@ module http/cookie v1.0.0;
 //
 //     Response(status: Status.ok, headers: Headers(
 //         SetCookie(name: "sid", value: token),
-//         SetCookie(name: "theme", value: "dark", max_age: Duration(days: 30)),
+//         SetCookie(name: "theme", value: "dark", max_age: Duration(seconds: (30 * 86400).rat())),
 //     ));
 //     Headers(ExpiredCookie("sid"));                     // removes it
 //
@@ -450,7 +450,7 @@ hidden object CookieFlagValues {
 // HttpOnly and SameSite=Lax, and Max-Age when it is given (#207):
 //
 //     Headers(SetCookie(name: "sid", value: token),
-//         SetCookie(name: "theme", value: "dark", max_age: Duration(days: 30)))
+//         SetCookie(name: "theme", value: "dark", max_age: Duration(seconds: (30 * 86400).rat())))
 //
 // SetCookie(cookie) sends a Cookie with exactly its own attributes.
 object SetCookie does HeaderField {
@@ -716,7 +716,7 @@ test "set-cookie fields carry safe defaults, Max-Age and expiry" {
         "sid=abc; Path=/; SameSite=Lax; Secure; HttpOnly"
     );
     test.is(
-        SetCookie(name: "theme", value: "dark", max_age: Duration(days: 30)).header().value(),
+        SetCookie(name: "theme", value: "dark", max_age: Duration(seconds: (30 * 86400).rat())).header().value(),
         "theme=dark; Path=/; SameSite=Lax; Secure; HttpOnly; Max-Age=2592000"
     );
     test.is(

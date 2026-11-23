@@ -16,7 +16,7 @@ import "http/http1_reading" take Http1ResponseHeadReading, Http1HeadRead;
 import "http/http1_continue" take Http1RequestStart, Http1ContinueState;
 import "http/http1_body_writing" take Http1BodyWriting;
 import "time/clock" take Timing, SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "http/http1_framing" take Http1RequestFraming, Http1ResponseFraming, Http1BodyKind,
     Http1BodyPlan;
 import "http/http1_body" take Http1BodyReading;
@@ -57,7 +57,7 @@ object Http1Session does Closing {
         let empty is @Http1SessionLease = [];
         current = Atomic(empty);
         clock = SystemClock();
-        continue_wait = Duration(seconds: 1);
+        continue_wait = Duration(seconds: 1.rat());
     }
 
     // The same within limits.
@@ -77,7 +77,7 @@ object Http1Session does Closing {
         let empty is @Http1SessionLease = [];
         current = Atomic(empty);
         clock = SystemClock();
-        continue_wait = Duration(seconds: 1);
+        continue_wait = Duration(seconds: 1.rat());
     }
 
     // The same, waiting continue_wait for a 100 before sending a body.

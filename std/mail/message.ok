@@ -35,7 +35,7 @@ import "time/zone" take ZonedDateTime, FixedZone, Fold;
 import "time/date" take Date, Weekday, InvalidDate;
 import "time/day" take TimeOfDay, InvalidTimeOfDay;
 import "time/local_datetime" take LocalDateTime;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "mime/media_type" take MimeItems, MimePosition;
 import "error" take InvalidArgument;
 
@@ -97,7 +97,7 @@ object MailMessage does ByteSource {
         else {
             EncodedWord(subject).string();
         };
-        let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0));
+        let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
         // A Date has whole seconds; the system clock does not (#518).
         let elapsed = clock.instant().unix_duration()::Span::seconds;
         let truncated = elapsed.int();
@@ -114,7 +114,7 @@ object MailMessage does ByteSource {
             MessageHeader(
                 name: MessageHeaderName("Date"),
                 value: MailDate(
-                    ZonedDateTime(instant: Instant(Duration(seconds: whole)), zone: utc)
+                    ZonedDateTime(instant: Instant(Duration(seconds: whole.rat())), zone: utc)
                 ).string()
             ),
             MessageHeader(
@@ -394,7 +394,7 @@ hidden object MailParsedDate {
     date_time() is ZonedDateTime {
         let zone = FixedZone(
             name: "mail",
-            offset: Duration(offset.seconds().rat(), DurationUnit.second)
+            offset: Duration(seconds: offset.seconds().rat())
         );
         ZonedDateTime(instant: zone.instant(local, Fold.earlier), zone: zone);
     }
@@ -825,7 +825,7 @@ test "mail dates preserve unknown zero offsets" {
 }
 
 test "a message from its fields sets its date, identifier and content type" {
-    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000.rat())));
     let message = MailMessage(
         from: "Ada <ada@example.test>",
         to: ["grace@example.test", "alan@example.test"],
@@ -867,7 +867,7 @@ test "a message from its fields sets its date, identifier and content type" {
 }
 
 test "a text beyond ASCII goes out quoted-printable and comes back whole (#935)" {
-    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000.rat())));
     let text = "Café à midi? = oui\r\n" + "é".repeat(60) + "\r\n";
     let message = MailMessage(
         from: "Ada <ada@example.test>",
@@ -901,7 +901,7 @@ test "a text beyond ASCII goes out quoted-printable and comes back whole (#935)"
 }
 
 test "an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#936)" {
-    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000.rat())));
     let long = "a".repeat(1200) + "\r\nshort\r\n";
     let message = MailMessage(
         from: "a@b.test",
@@ -954,7 +954,7 @@ test "an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#
 }
 
 test "a message from its fields drops the fraction of the clock's second (#518)" {
-    let late = ManualClock(Instant(Duration(seconds: 1700000000).plus(Duration(milliseconds: 750))));
+    let late = ManualClock(Instant(Duration(seconds: 1700000000.rat()).plus(Duration(seconds: rat(750, 1000)))));
     let message = MailMessage(
         from: "ada@example.test",
         to: ["grace@example.test"],
@@ -964,7 +964,7 @@ test "a message from its fields drops the fraction of the clock's second (#518)"
         random: PcgRandom(3)
     );
     test.is(message.headers().first(MessageHeaderName("Date")), "Tue, 14 Nov 2023 22:13:20 +0000");
-    let early = ManualClock(Instant(Duration(seconds: -1).plus(Duration(milliseconds: 250))));
+    let early = ManualClock(Instant(Duration(seconds: -1.rat()).plus(Duration(seconds: rat(250, 1000)))));
     let before = MailMessage(
         from: "ada@example.test",
         to: ["grace@example.test"],

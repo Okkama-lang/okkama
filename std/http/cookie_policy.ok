@@ -20,7 +20,7 @@ import "url/value" take UrlParts, UrlHostKind, ParsedUrl;
 import "net/endpoint" take HostName;
 import "net/public_suffix" take PublicSuffixList, MissingRegistrableDomain;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "collections/set" take OrderedSet, Set;
 import "encoding/utf" take Utf8Encoded;
 
@@ -429,13 +429,13 @@ hidden object CookieAttributeReading {
         else {
             path;
         };
-        let cap = reference.plus(Duration(days: 400));
+        let cap = reference.plus(Duration(seconds: (400 * 86400).rat()));
         let expires = if age.size() == 1 {
             CookieExpiry(if age[0] <= 0 {
-                Instant(Duration(seconds: -11644473600));
+                Instant(Duration(seconds: -11644473600.rat()));
             }
             else {
-                reference.plus(Duration(seconds: age[0]));
+                reference.plus(Duration(seconds: age[0].rat()));
             });
         }
         else {
@@ -553,7 +553,7 @@ test "Set-Cookie keeps explicit context and precedence" {
     let cookie = ParsedSetCookie(
         origin: "id=v; Max-Age=10; Expires=01 Jan 70 0:0:0",
         url: url,
-        reference: Instant(Duration(seconds: 0))
+        reference: Instant(Duration(seconds: 0.rat()))
     ).cookie();
     test.ok(cookie.attributes()::Attributes::path == "/a");
     test.ok(cookie.attributes().expiry().instant().unix_duration()::Span::seconds == 10.rat());

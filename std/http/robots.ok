@@ -18,7 +18,7 @@ import "http/message" take Request;
 import "http/target" take AbsoluteTarget;
 import "http/method" take Method;
 import "http/header" take Headers, Header, HeaderName, HttpAsciiLowercase;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
 import "strings/parse" take Number;
@@ -416,7 +416,7 @@ object RobotsPolicy {
             }
         }
         confirm found.value() else throw MissingCrawlDelay.missing;
-        Duration(value: seconds.value(), unit: DurationUnit.second);
+        Duration(seconds: seconds.value());
     }
 
     // The Sitemap URLs.
@@ -588,7 +588,7 @@ hidden object RobotsDelay {
     }
 
     duration() is Duration {
-        Duration(value: seconds, unit: DurationUnit.second);
+        Duration(seconds: seconds);
     }
 }
 

@@ -1,7 +1,7 @@
 module time/local_datetime v1.0.0;
 
 import "compare" take Comparing, Order;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/date" take Date, DaysBetween, GregorianDay, InvalidDate;
 import "time/day" take TimeOfDay;
 
@@ -11,7 +11,7 @@ import "time/day" take TimeOfDay;
 //         date: Date(year: 2026, month: 8, day: 11),
 //         time: TimeOfDay(hour: 23, minute: 30, second: 0, nanosecond: 0),
 //     );
-//     let finish = start.plus(Duration(hours: 2)); // 2026-08-12T01:30:00
+//     let finish = start.plus(Duration(seconds: (2 * 3600).rat())); // 2026-08-12T01:30:00
 //
 // Arithmetic treats every civil day as exactly 86,400 seconds. This object
 // does not model daylight-saving transitions, offsets, leap seconds or an
@@ -98,8 +98,7 @@ object LocalDateTime does Comparing<LocalDateTime> {
             other_time::Clock::second).rat() + rat(other_time::Clock::nanosecond, 1000000000);
 
         Duration(
-            value: (days * 86400).rat() + own_seconds - other_seconds,
-            unit: DurationUnit.second,
+            seconds: (days * 86400).rat() + own_seconds - other_seconds,
         );
     }
 
@@ -120,7 +119,7 @@ test "local date-times add whole civil days" {
         date: Date(year: 2026, month: 8, day: 11),
         time: TimeOfDay(hour: 23, minute: 30, second: 0, nanosecond: 0),
     );
-    let finish = start.plus(Duration(hours: 2));
+    let finish = start.plus(Duration(seconds: (2 * 3600).rat()));
     test.is(finish.date()::Calendar::day, 12);
     test.is(finish.time()::Clock::hour, 1);
     test.is(finish.time()::Clock::minute, 30);
@@ -130,15 +129,15 @@ test "local date-times add whole civil days" {
         date: Date(year: 2026, month: 12, day: 31),
         time: TimeOfDay(hour: 12, minute: 0, second: 0, nanosecond: 0),
     );
-    test.is(year_end.plus(Duration(days: 1)).date()::Calendar::year, 2027);
-    test.is(start.plus(Duration(days: -1)).date()::Calendar::day, 10);
+    test.is(year_end.plus(Duration(seconds: 86400.rat())).date()::Calendar::year, 2027);
+    test.is(start.plus(Duration(seconds: (-1 * 86400).rat())).date()::Calendar::day, 10);
     let final = LocalDateTime(
         date: Date(year: 9999, month: 12, day: 31),
         time: TimeOfDay(hour: 23, minute: 0, second: 0, nanosecond: 0),
     );
     test.is(
         try {
-            final.plus(Duration(hours: 2)).date()::Calendar::year;
+            final.plus(Duration(seconds: (2 * 3600).rat())).date()::Calendar::year;
         }
         catch error is InvalidDate {
             -1;

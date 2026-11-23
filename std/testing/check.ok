@@ -11,7 +11,7 @@ module testing/check v1.0.0;
 //     }
 //     async test "ready" {
 //         await Eventually(condition: () is bool { server.ready(); }, clock: SystemClock(),
-//             timeout: Duration(seconds: 2), interval: Duration(milliseconds: 20)).check();
+//             timeout: Duration(seconds: 2.rat()), interval: Duration(seconds: rat(20, 1000))).check();
 //     }
 //
 // A check fails the running test with a message; it may only run inside one.

@@ -16,7 +16,7 @@ import "fs/stat" take PermissionMode;
 import "time/local_datetime" take LocalDateTime;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 // Who owns a member: user and group names and ids.
 object ArchiveOwnership {
@@ -148,7 +148,7 @@ object ArchiveModificationFromEpoch {
     // The time as a LocalDateTime in UTC.
     local_date_time() is LocalDateTime {
         LocalDateTime(date: Date(1970, 1, 1), time: TimeOfDay(0, 0, 0, 0))
-            .plus(Duration(value: seconds, unit: DurationUnit.second));
+            .plus(Duration(seconds: seconds));
     }
 }
 

@@ -349,7 +349,7 @@ async test "selection cancellation withdraws every alternative without losing me
     test.is(await b.receiving().item(), 20);
     // Timeout drains the cancelled request before permitting reuse.
     test.is(try {
-        await Within(origin: selected.item(), limit: Duration(milliseconds: 1), clock: SystemClock()).outcome();
+        await Within(origin: selected.item(), limit: Duration(seconds: rat(1, 1000)), clock: SystemClock()).outcome();
         false;
     } catch error is TimedOut { true; }, true);
     await a.sending().send(30);
@@ -422,11 +422,11 @@ async test "Within and Before withdraw all selection registrations" {
     let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
     let clock = SystemClock();
     test.is(try {
-        await Within(origin: selected.item(), limit: Duration(milliseconds: 1), clock: clock).outcome();
+        await Within(origin: selected.item(), limit: Duration(seconds: rat(1, 1000)), clock: clock).outcome();
         false;
     } catch error is TimedOut { true; }, true);
     test.is(try {
-        await Before(origin: selected.item(), deadline: clock.monotonic_instant() + Duration(milliseconds: 1), clock: clock).outcome();
+        await Before(origin: selected.item(), deadline: clock.monotonic_instant() + Duration(seconds: rat(1, 1000)), clock: clock).outcome();
         false;
     } catch error is TimedOut { true; }, true);
     await a.sending().send(12);
@@ -483,10 +483,10 @@ async test "a committed selection wins over a timer settled before publication" 
     let b is Channel<int> = Channel(capacity: 0);
     let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
     let clock = SelectionSendingClock(output: b.sending());
-    let within = await Within(origin: selected.item(), limit: Duration(seconds: 1), clock: clock).outcome();
+    let within = await Within(origin: selected.item(), limit: Duration(seconds: 1.rat()), clock: clock).outcome();
     test.is(within.source(), 1);
     test.is(within.value(), 47);
     let before = await Before(origin: selected.item(),
-        deadline: clock.monotonic_instant() + Duration(seconds: 1), clock: clock).outcome();
+        deadline: clock.monotonic_instant() + Duration(seconds: 1.rat()), clock: clock).outcome();
     test.is(before.value(), 47);
 }

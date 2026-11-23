@@ -20,7 +20,7 @@ import "time/day" take TimeOfDay;
 import "time/local_datetime" take LocalDateTime;
 import "time/zone" take TimeZone, ZonedDateTime, FixedZone, Zone, UnknownTimeZone;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "strings/parse" take Number;
 
 // Full, long, medium or short date.

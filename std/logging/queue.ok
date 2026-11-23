@@ -15,7 +15,7 @@ import "logging/name" take LogName;
 import "logging/level" take LogLevel;
 import "logging/field" take LogFields;
 import "time/clock" take Instant;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "collections/deque" take Deque;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
@@ -381,7 +381,7 @@ hidden object QueuedRecord {
 
     record() is LogRecord {
         LogRecord(
-            occurred: Instant(Duration(seconds: 0)),
+            occurred: Instant(Duration(seconds: 0.rat())),
             level: LogLevel.info,
             message: message,
             context: LogContext(name: LogName("queue"), fields: LogFields(), process: 1),
