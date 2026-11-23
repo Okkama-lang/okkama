@@ -116,7 +116,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2347 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 34571 lines
+## sparrow — 64 files, 34654 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -173,7 +173,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_sqlite.rs` 2800 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
 - `sparrow-core/src/host/native_temporary.rs` 305 — Temporary resources use exclusive OS creation and cryptographic random names.
 - `sparrow-core/src/host/native_text.rs` 369 — Pure codecs and exact numeric parsing at the independent native boundary.
-- `sparrow-core/src/host/native_tls.rs` 764 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
+- `sparrow-core/src/host/native_tls.rs` 847 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 - `sparrow-core/src/host/native_udp.rs` 496 — Native UDP datagrams: one send/receive per request, Tokio readiness and
 - `sparrow-core/src/host/native_unix.rs` 319 — Unix streams share the TCP readiness/cancellation path. Filesystem listeners
 - `sparrow-core/src/host/native_watch.rs` 305 — Portable file-watch semantics use Tokio timers and its bounded blocking pool.

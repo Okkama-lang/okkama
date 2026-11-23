@@ -205,7 +205,13 @@ impl Tls {
         loop {
             let record = {
                 let mut incoming = self.incoming.borrow_mut();
-                if incoming.len() >= 5 {
+                if incoming.len() >= 5 && !plausible_header(&incoming[..5]) {
+                    // Not TLS (#1024): the engine refuses the header at once
+                    // with an alert, instead of this read waiting for a body
+                    // the header only seems to announce ("GET /" reads as a
+                    // record of 8239 bytes).
+                    Some(incoming.drain(..).collect::<Vec<u8>>())
+                } else if incoming.len() >= 5 {
                     let size = 5 + usize::from(u16::from_be_bytes([incoming[3], incoming[4]]));
                     (incoming.len() >= size).then(|| incoming.drain(..size).collect::<Vec<u8>>())
                 } else {
@@ -384,6 +390,14 @@ async fn interruptible<T>(
     body: impl std::future::Future<Output = Result<T, NativeFailure>>,
 ) -> Result<T, NativeFailure> {
     interrupted_by(changed, || fail(n, "already_closed", "TLS owner is closed"), body).await
+}
+
+/// Whether a record header could start a TLS record (RFC 8446 §5.1, RFC 5246
+/// §6.2.1): a content type from change_cipher_spec (20) to heartbeat (24), a
+/// major version of 3 and at most 2^14 + 2048 bytes of body.
+fn plausible_header(header: &[u8]) -> bool {
+    let size = usize::from(u16::from_be_bytes([header[3], header[4]]));
+    (20..=24).contains(&header[0]) && header[1] == 3 && size <= (1 << 14) + 2048
 }
 
 /// Closes the state when an operation ends otherwise than `complete`.
@@ -839,6 +853,104 @@ mod tests {
         let connection = ClientConnection::new(Arc::new(config), name).unwrap();
         let socket = Rc::new(Transport::from(client.unwrap()));
         (Rc::new(Tls::new(Connection::Client(connection), socket)), accepted.unwrap().0)
+    }
+
+    /// A server certificate resolver with nothing to offer: these tests end
+    /// before a ClientHello is read.
+    #[derive(Debug)]
+    struct NoCertificate;
+
+    impl rustls::server::ResolvesServerCert for NoCertificate {
+        fn resolve(&self, _hello: rustls::server::ClientHello<'_>) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            None
+        }
+    }
+
+    /// A server state over a connected localhost stream, and the client's end.
+    async fn server_side() -> (Rc<Tls>, tokio::net::TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (client, accepted) = tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(NoCertificate));
+        let connection = ServerConnection::new(Arc::new(config)).unwrap();
+        let socket = Rc::new(Transport::from(accepted.unwrap().0));
+        (Rc::new(Tls::new(Connection::Server(connection), socket)), client.unwrap())
+    }
+
+    /// `peer` sends `bytes`; the handshake over `state` must fail within a
+    /// second, and the peer then reads a TLS alert record (#1024).
+    async fn refused_at_once(state: Rc<Tls>, mut peer: tokio::net::TcpStream, bytes: &[u8]) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        peer.write_all(bytes).await.unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(1), state.negotiate()).await;
+        assert!(matches!(ended, Ok(Err(Stop::Io))), "the handshake must be refused at once");
+        drop(state);
+        // What the peer got, record by record (a client's ClientHello comes
+        // first): one of them must be an alert (21).
+        let mut received = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(1), peer.read_to_end(&mut received)).await;
+        let mut types = Vec::new();
+        let mut rest = received.as_slice();
+        while rest.len() >= 5 {
+            types.push(rest[0]);
+            let size = 5 + usize::from(u16::from_be_bytes([rest[3], rest[4]]));
+            rest = &rest[size.min(rest.len())..];
+        }
+        assert!(types.contains(&21), "the peer must get an alert, got records {types:?}");
+    }
+
+    /// #1024: plain HTTP to a TLS server is not a record header: the server
+    /// refuses it with an alert at once, not after waiting for 8239 bytes.
+    #[test]
+    fn a_server_refuses_plain_http_at_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (state, peer) = server_side().await;
+            refused_at_once(state, peer, b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").await;
+        });
+    }
+
+    /// #1024: a client whose server answers in plain HTTP refuses at once.
+    #[test]
+    fn a_client_refuses_a_plain_http_answer_at_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (state, peer) = silent_client().await;
+            refused_at_once(state, peer, b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n").await;
+        });
+    }
+
+    /// The header check's bounds (#1024).
+    #[test]
+    fn a_record_header_is_checked_by_type_version_and_size() {
+        let header = |kind: u8, major: u8, size: u16| {
+            let [high, low] = size.to_be_bytes();
+            plausible_header(&[kind, major, 3, high, low])
+        };
+        for kind in 20..=24 {
+            assert!(header(kind, 3, 512), "content type {kind}");
+        }
+        assert!(!header(19, 3, 512) && !header(25, 3, 512) && !header(b'G', 3, 512));
+        assert!(!header(22, 2, 512) && !header(22, 4, 512));
+        assert!(header(22, 3, 18432) && !header(22, 3, 18433));
+    }
+
+    /// The check does not refuse a real record that has not arrived whole: a
+    /// ClientHello's header and its first bytes keep the handshake waiting.
+    #[test]
+    fn a_partial_client_hello_keeps_the_handshake_waiting() {
+        use tokio::io::AsyncWriteExt;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (state, mut peer) = server_side().await;
+            peer.write_all(&[0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc]).await.unwrap();
+            let waited = tokio::time::timeout(Duration::from_millis(300), state.negotiate()).await;
+            assert!(waited.is_err(), "a partial record must keep the handshake waiting");
+        });
     }
 
     /// #1011: a close from another operation (the `Abort` guard of a failed

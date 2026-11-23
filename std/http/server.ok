@@ -1680,6 +1680,52 @@ async test "a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN" {
     test.is(server.closed(), true);
 }
 
+async test "plain HTTP to an HTTPS server is refused with an alert at once (#1024)" {
+    let listener = await TcpListening(port: 0).listener();
+    let identity = TlsIdentity(certificates: HTTPS_TEST_CERTIFICATE, key: HTTPS_TEST_KEY);
+    let server = HttpServer(
+        listener: listener,
+        handling: EchoApplication(),
+        tls: TlsServerPolicy(identity: identity),
+        policy: ServerPolicy(),
+        clock: SystemClock()
+    ).started();
+    let raw = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
+    await raw.output().write(Utf8Encoded("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").bytes());
+    // "GET /" is no record header: not a wait for 8239 bytes until the
+    // 30-second headers timeout, but an alert (21) and the end at once.
+    let answer is Within<@byte> = Within(
+        origin: HttpServerRawAnswer(raw).bytes(),
+        limit: Duration(seconds: 1.rat()),
+        clock: SystemClock()
+    );
+    let received = await answer.outcome();
+    test.ok(received.size() > 0 && received[0] == 21.byte());
+    raw.close();
+    await server.drain(limit: Duration(seconds: 5.rat()));
+}
+
+// Everything a raw connection receives until its end.
+hidden object HttpServerRawAnswer {
+    has connection is TcpConnection;
+
+    HttpServerRawAnswer(connection is TcpConnection) {
+        self.connection = connection;
+    }
+
+    async bytes() is @byte {
+        let empty is @byte = [];
+        let received = Atomic(empty);
+        loop {
+            let chunk = await connection.input().bytes(4096);
+            last if chunk.size() == 0;
+            received.replace(received.value() + chunk);
+        }
+        received.value();
+    }
+}
+
 async test "a TLS client that never speaks delays nobody else's handshake" {
     let listener = await TcpListening(port: 0).listener();
     let identity = TlsIdentity(certificates: HTTPS_TEST_CERTIFICATE, key: HTTPS_TEST_KEY);

@@ -395,6 +395,15 @@ timeout, the handler, writes, the upgrade, cleanups). run() already answers or
 drops every other error; a non-cancellation failure of a peer still reaches
 the server.
 
+## A TLS record header is checked before its body (#1024, 2026-11-23)
+
+`Tls::feed_record` (sparrow-core native_tls, client and server alike) feeds the
+engine one whole record at a time, so it used to wait for as many bytes as any
+five-byte header announced: "GET /" read as a record of 8239 bytes, and a plain
+HTTP client held a server's handshake until the headers timeout. A header that
+cannot start a TLS record (content type outside 20..=24, major version not 3,
+body over 2^14 + 2048) now goes to rustls at once, which answers with an alert.
+
 ## Name< in an expression (#1004, lead decision, 2026-11-23)
 
 `Name<` opens type arguments only when what follows parses as type arguments

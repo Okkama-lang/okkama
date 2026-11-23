@@ -95,6 +95,10 @@
 - [x] #1023: a peer the server cancels (close, drain) settles quietly
   (`HttpServerPeerWork` in http/server): a read, write, handler or cleanup of
   its connection that fails as the cancellation comes no longer fails `listen`.
+- [x] #1024: a TLS record header that cannot be one (content type outside
+  20..=24, major version not 3, body over 2^14 + 2048) goes to rustls at once,
+  client and server: plain HTTP to an HTTPS port gets an alert at once
+  instead of waiting out the headers timeout.
 - [ ] Open: IDNA's UTS #46
   table (Net::IDN::UTS46) is older than 17.0; its X status keeps refusing
   17.0 characters.
