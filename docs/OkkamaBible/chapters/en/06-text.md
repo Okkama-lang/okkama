@@ -164,7 +164,7 @@ Unicode defines four normalisation forms [@uax15]. NFC composes sequences
 into precomposed characters where possible; NFD decomposes them; NFKC and
 NFKD additionally replace *compatibility* characters — ligatures such as "ﬃ",
 full-width letters, superscripts — by their plain equivalents. The standard
-library's `unicode/normalization` implements all four for Unicode 16.0.0.
+library's `unicode/normalization` implements all four for Unicode 18.0.0.
 
 Okkama does not normalise implicitly, and the reason is the razor once more.
 Implicit normalisation would make equality depend on tables that change with
@@ -286,7 +286,8 @@ step is a decision that the program states.
   combining grave accent, and it folds the ligature `ﬁ` into `f` and `i`
   (Section 6.5). The combining marks are recognised by their Unicode general
   category, *nonspacing mark*, through `unicode/character`, and removed.
-  Nothing here guesses: the tables are those of Unicode 16.0.0.
+  Nothing here guesses: the tables are Unicode's own, 18.0.0 for the
+  decomposition and 16.0.0 for the categories.
 - **Everything else separates words.** ASCII letters and digits are kept,
   and any other character becomes a space. `split(" ")` keeps the empty
   fields between repeated spaces (Section 6.4), so `filter` drops them

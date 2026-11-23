@@ -4,10 +4,14 @@ module runtime/unicode_character v1.0.0;
 // calls those modules make into the host runtime. Programs use those modules
 // instead; these declarations may change with the runtime.
 //
-// Portable Unicode 16.0.0 Character Database boundary for
-// unicode/character. A backend may use vendored tables, platform libraries or
-// VM intrinsics, but it must expose the same observable Unicode 16.0.0 data.
-// Applications should use UnicodeCharacter instead of these raw actions.
+// Portable Character Database boundary for unicode/character and
+// terminal/width. Character properties (name, category, combining class,
+// numeric value) are those of Unicode 16.0.0. Display clusters are the extended
+// grapheme clusters of Unicode 17.0.0, and a cluster's width comes from the
+// Unicode 16.0.0 properties of its characters. A backend may use vendored
+// tables, platform libraries or VM intrinsics, but it must expose the same
+// observable data. Applications should use UnicodeCharacter instead of these
+// raw actions.
 
 // The Unicode name of origin.
 native character_name(origin is char) is string;
@@ -24,8 +28,9 @@ native character_is_numeric(origin is char) is bool;
 // Its numeric value.
 native character_numeric_value(origin is char) is float;
 
-// Unicode 16.0 grapheme and display-property bulk observations. Ambiguous
-// characters are narrow; emoji presentation clusters and W/F characters wide.
+// The extended grapheme clusters of origin (Unicode 17.0.0). Display widths
+// read the Unicode 16.0.0 properties of each cluster's characters: ambiguous
+// characters are narrow, emoji presentation clusters and W/F characters wide.
 native display_clusters(origin is string) is @string;
 
 // The terminal width of each grapheme cluster of origin.

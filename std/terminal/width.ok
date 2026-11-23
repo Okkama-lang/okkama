@@ -1,7 +1,10 @@
 module terminal/width v1.0.0;
 
 // How many columns text takes on a terminal, by grapheme cluster: wide East
-// Asian characters and emoji take two, combining marks none.
+// Asian characters and emoji take two, combining marks none. Clusters are the
+// extended grapheme clusters of Unicode 17.0.0; a cluster's width comes from
+// the Unicode 16.0.0 properties of its characters (East Asian Width, emoji
+// presentation, marks).
 //
 //     DisplayWidth("日本").columns();                        // 4
 //     TruncatedDisplay(origin: title, width: 20, ellipsis: "…").string();
@@ -162,4 +165,10 @@ object DisplayLines {
 test "display coordinates preserve joined emoji and combining clusters" {
     test.is(DisplayWidth("é界👩‍💻").columns(), 5);
     test.is(TruncatedDisplay(origin: "👩‍💻a", width: 2, ellipsis: "").string(), "👩‍💻");
+}
+
+test "clusters are Unicode 17.0 grapheme clusters" {
+    // U+1ADD, a combining mark of Unicode 17.0, stays with its base.
+    test.is(TruncatedDisplay(origin: "a\u{1ADD}b", width: 1, ellipsis: "").string(), "a\u{1ADD}");
+    test.is(WrappedDisplay(origin: "a\u{1ADD}b", width: 1).string(), "a\u{1ADD}\nb");
 }

@@ -17,8 +17,11 @@ import "runtime/unicode_character" take character_name, category_code, character
 // numeric_value() throws NonNumericCharacter when the character has no
 // Unicode Numeric_Value property. name() returns an empty string for
 // unassigned, private-use, control and other characters without a formal
-// Unicode name. Property values follow the Unicode 16.0.0 stdlib contract;
-// they do not vary with the operating system or selected backend.
+// Unicode name. Property values are those of Unicode 16.0.0; they do not vary
+// with the operating system or selected backend. A character assigned after
+// 16.0.0 is unassigned here, without a name, even where unicode/normalization
+// (Unicode 18.0.0) or the grapheme clusters of terminal/width (Unicode 17.0.0)
+// already know it.
 
 // The Unicode General Category of a character.
 enum UnicodeCategory = (uppercase_letter, lowercase_letter, titlecase_letter, modifier_letter, other_letter, nonspacing_mark, spacing_mark, enclosing_mark, decimal_number, letter_number, other_number, connector_punctuation, dash_punctuation, open_punctuation, close_punctuation, initial_punctuation, final_punctuation, other_punctuation, math_symbol, currency_symbol, modifier_symbol, other_symbol, space_separator, line_separator, paragraph_separator, control, format, surrogate, private_use, unassigned);
@@ -174,4 +177,14 @@ test "properties come from the Unicode database" {
         },
         -1.0
     );
+}
+
+test "properties are those of Unicode 16.0" {
+    test.is(UnicodeCharacter('\u{20C0}').name(), "SOM SIGN");
+    test.is(UnicodeCharacter('\u{20C0}').category(), UnicodeCategory.currency_symbol);
+    // U+20C1 SAUDI RIYAL SIGN and the mark U+1ADD came with Unicode 17.0.
+    test.is(UnicodeCharacter('\u{20C1}').name(), "");
+    test.is(UnicodeCharacter('\u{20C1}').category(), UnicodeCategory.unassigned);
+    test.is(UnicodeCharacter('\u{1ADD}').category(), UnicodeCategory.unassigned);
+    test.is(UnicodeCharacter('\u{1ADD}').combining_class(), 0);
 }

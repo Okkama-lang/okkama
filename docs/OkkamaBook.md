@@ -4313,8 +4313,8 @@ replace. Offsets count Unicode scalars.
 `io`, `text` and `unicode`: `Stdout().writeln(…)`, `Stdin().line()` and
 `for Stdin() -> line` (#221);
 `Indented`, `Dedented`, `Wrapped` and `Shortened` lay out text;
-`Normalized(origin:, form:)` and `UnicodeCharacter(c).name()` follow
-Unicode 16.0.0.
+`Normalized(origin:, form:)` follows Unicode 18.0.0 and
+`UnicodeCharacter(c).name()` Unicode 16.0.0.
 
 ### URL and cookie policy in the active v4 stdlib
 

@@ -4474,8 +4474,8 @@ zone:)` показывает момент в зоне: `local_datetime()`, `offs
 `io`, `text` и `unicode`: `Stdout().writeln(…)`, `Stdin().line()` и
 `for Stdin() -> line` (#221);
 `Indented`, `Dedented`, `Wrapped` и `Shortened` раскладывают текст;
-`Normalized(origin:, form:)` и `UnicodeCharacter(c).name()` следуют
-Unicode 16.0.0.
+`Normalized(origin:, form:)` следует Unicode 18.0.0, а
+`UnicodeCharacter(c).name()` — Unicode 16.0.0.
 
 ### URL и cookie policy в активной stdlib v4
 

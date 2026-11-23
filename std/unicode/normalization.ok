@@ -2,7 +2,7 @@ module unicode/normalization v1.0.0;
 
 import "runtime/unicode_normalization" take normalized_text;
 
-// Immutable Unicode 16.0.0 normalization.
+// Immutable Unicode 18.0.0 normalization.
 //
 // NFC and NFD perform canonical composition and decomposition. NFKC and NFKD
 // additionally apply compatibility mappings:
@@ -15,7 +15,10 @@ import "runtime/unicode_normalization" take normalized_text;
 //
 // Normalization never trims, case-folds or otherwise rewrites text beyond the
 // selected Unicode normalization algorithm. The source string remains
-// unchanged and normalizing an already normalized result is idempotent.
+// unchanged and normalizing an already normalized result is idempotent. The
+// normalization data is newer than the character properties of
+// unicode/character (Unicode 16.0.0): a mark added since is reordered and
+// composed by its own combining class here, yet unassigned there.
 
 // NFC and NFD compose and decompose; NFKC and NFKD also fold compatibility
 // forms such as `ﬁ`.
@@ -66,4 +69,14 @@ test "the four forms" {
     let once = Normalized(origin: decomposed, form: NormalizationForm.nfc).string();
     test.is(Normalized(origin: once, form: NormalizationForm.nfc).string(), once);
     test.is(Normalized(origin: " a ", form: NormalizationForm.nfkc).string(), " a ");
+}
+
+test "normalization data is Unicode 18.0" {
+    // U+1ADD (Unicode 17.0) has combining class 220: NFD puts it before an
+    // acute (230), and NFC composes e + acute across it.
+    test.is(Normalized(origin: "a\u{0301}\u{1ADD}", form: NormalizationForm.nfd).string(), "a\u{1ADD}\u{0301}");
+    test.is(Normalized(origin: "e\u{1ADD}\u{0301}", form: NormalizationForm.nfc).string(), "\u{00E9}\u{1ADD}");
+    // U+209D LATIN SUBSCRIPT SMALL LETTER W (Unicode 18.0) folds to w.
+    test.is(Normalized(origin: "x\u{209D}", form: NormalizationForm.nfkc).string(), "xw");
+    test.is(Normalized(origin: "x\u{209D}", form: NormalizationForm.nfc).string(), "x\u{209D}");
 }
