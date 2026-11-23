@@ -815,3 +815,75 @@ fn missing_docs_is_a_user_warning_and_ignores_private_implementation() {
     assert_eq!(found[0].range.start.line, 1);
     assert_eq!(found[1].range.start.line, 2);
 }
+
+/// #1008: a local captured by an anonymous action is the same symbol inside
+/// it, so its occurrences (and a rename) reach into the closure.
+#[test]
+fn a_captured_local_is_one_symbol_with_its_closure_uses() {
+    let text = "module app v1.0.0;\nmain() is int {\n    let base = 2;\n    let f = (x is int) is int { x + base; };\n    f(1) + base;\n}\n";
+    let inspection = inspect(text);
+    let at_definition = text.find("base").unwrap() as u32 + 1;
+    let found = inspection.occurrences(at_definition);
+    let inside = text.find("x + base").unwrap() as u32 + 4;
+    assert_eq!(found.len(), 3, "{:?}", found.iter().map(|symbol| symbol.span).collect::<Vec<_>>());
+    assert!(found.iter().any(|symbol| symbol.span.start == inside), "the closure's use is an occurrence");
+}
+
+/// #1008: same-named types from two modules keep their own members: after
+/// `b.` for a `two.Item`, completion offers `beta`, not `one.Item`'s `alpha`.
+#[test]
+fn same_named_types_of_two_modules_keep_their_members() {
+    let one = "module one v1.0.0;\nobject Item {\n    Item();\n    alpha() is int { 1; }\n}\n";
+    let two = "module two v1.0.0;\nobject Item {\n    Item();\n    beta() is int { 2; }\n}\n";
+    let text = "module app v1.0.0;\nimport \"one\";\nimport \"two\";\nmain() is int {\n    let a = one.Item();\n    let b = two.Item();\n    a.alpha() + b.beta();\n}\n";
+    let source = SourceFile::new("/app/main.ok", text).unwrap();
+    let mut loader = Memory(HashMap::from([("one".to_string(), one.to_string()), ("two".to_string(), two.to_string())]));
+    let inspection = lowering::inspect(&source, &mut loader, false);
+    let offset = text.find("b.beta").unwrap() + 2;
+    let edited = format!("{}{}", &text[..offset], &text[offset + 4..]);
+    let labels: Vec<String> = inspection.complete(text, &edited, offset as u32).into_iter().map(|c| c.label).collect();
+    assert!(labels.iter().any(|label| label == "beta"), "{labels:?}");
+    assert!(!labels.iter().any(|label| label == "alpha"), "{labels:?}");
+}
+
+/// #1008: a rename cannot produce a program that does not parse.
+#[test]
+fn rename_refuses_every_reserved_word() {
+    for word in ["as", "const", "fake", "with", "isa", "super", "finally", "abstract", "protected", "self", "none", "let"] {
+        assert!(!super::renamable_to(word), "{word}");
+    }
+    for word in ["limit", "_tmp", "asset", "constant", "x2"] {
+        assert!(super::renamable_to(word), "{word}");
+    }
+}
+
+/// #1008: snake-case reaches every local: a statement-level `loop`, a
+/// functional block's binding, a `let` inside an `if` expression and an
+/// anonymous action's parameter; a declared parameter is warned once.
+#[test]
+fn snake_case_reaches_locals_at_any_depth() {
+    let text = "module app v1.0.0;\nobject Box {\n    Box();\n    sum(itemsIn is @int) is int {\n        let topCamel = 1;\n        loop {\n            let loopCamel = 2;\n            last;\n        }\n        let doubled = itemsIn.map() -> itemCamel { itemCamel * 2; };\n        let picked = if topCamel > 0 { let blockCamel = 3; blockCamel; } else { 0; };\n        let f = (argCamel is int) is int { argCamel; };\n        doubled.size() + picked + f(1);\n    }\n}\nmain() is int { Box().sum([1]); }\n";
+    let lines: Vec<u32> = lints(text).into_iter().filter(|(code, _)| code == "snake-case").map(|(_, line)| line).collect();
+    assert_eq!(lines, [3, 4, 6, 9, 10, 11], "{lines:?}");
+}
+
+/// #1008: a comment block no declaration owns is a `doc-note` warning, not
+/// only a line in the JSON export.
+#[test]
+fn an_unowned_comment_block_is_a_doc_note() {
+    let text = "module app v1.0.0;\n\n// The app.\n\nimport \"shop/money\" take Money;\n\nmain() is int {\n    0;\n}\n\n// Left here, owned by nothing.\n";
+    let notes: Vec<u32> = lints(text).into_iter().filter(|(code, _)| code == "doc-note").map(|(_, line)| line).collect();
+    assert!(!notes.is_empty(), "{:?}", lints(text));
+}
+
+/// #1008: module constants are offered by name completion with their type.
+#[test]
+fn module_constants_are_completed() {
+    let text = "module app v1.0.0;\n\n// The most items.\nconst LIMIT = 3;\n\nmain() is int {\n    LIMIT;\n}\n";
+    let inspection = inspect(text);
+    let offset = text.rfind("LIMIT").unwrap() + 2;
+    let edited = format!("{}{}", &text[..offset], &text[offset + 3..]);
+    let found = inspection.complete(text, &edited, offset as u32);
+    let limit = found.iter().find(|completion| completion.label == "LIMIT").unwrap_or_else(|| panic!("{:?}", found.iter().map(|c| &c.label).collect::<Vec<_>>()));
+    assert_eq!(limit.detail, "const LIMIT is int");
+}

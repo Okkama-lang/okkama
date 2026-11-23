@@ -150,6 +150,15 @@ impl SourceFile {
     }
 
     /// Number of lines (a trailing LF starts one more, empty line).
+    /// The offset where 1-based `line` starts, the end of the text past the
+    /// last line; O(1) through the line index (#1008).
+    pub fn line_start(&self, line: u32) -> u32 {
+        match line.checked_sub(1) {
+            None | Some(0) => 0,
+            Some(index) => self.line_starts.get(index as usize).copied().unwrap_or(self.len()),
+        }
+    }
+
     pub fn line_count(&self) -> u32 {
         self.line_starts.len() as u32
     }
@@ -241,5 +250,26 @@ mod tests {
         assert_eq!(source.slice(Span::new(0, 1)), "");
         assert_eq!(source.slice(Span::new(0, 2)), "é");
         assert_eq!(source.slice(Span::new(5, 9)), "");
+    }
+}
+
+#[cfg(test)]
+mod line_start_tests {
+    use super::SourceFile;
+
+    /// #1008: line starts come from the index, past the end the text's length.
+    #[test]
+    fn line_starts_match_a_scan() {
+        let text = "a\nbc\n\ndef";
+        let source = SourceFile::new("t.ok", text).unwrap();
+        let scanned = |line: u32| -> u32 {
+            if line <= 1 {
+                return 0;
+            }
+            text.match_indices('\n').nth(line as usize - 2).map_or(text.len() as u32, |(at, _)| at as u32 + 1)
+        };
+        for line in 0..7 {
+            assert_eq!(source.line_start(line), scanned(line), "line {line}");
+        }
     }
 }

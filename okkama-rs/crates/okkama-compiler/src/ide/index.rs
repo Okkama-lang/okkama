@@ -38,6 +38,7 @@ pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], roo
         unnecessary: false,
     }).collect();
     diagnostics.extend(super::lint::missing_docs(&files[root], &docs.modules[root], loader));
+    diagnostics.extend(super::lint::doc_notes(&files[root], &docs.modules[root]));
     let mut builder = Builder {
         registry,
         files,
@@ -47,6 +48,7 @@ pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], roo
         symbols: Vec::new(),
         members: HashMap::new(),
         scopes: Vec::new(),
+        captures: Vec::new(),
     };
     for body in bodies.iter().filter(|body| body.module == root) {
         builder.body(body, owner_object(&body.owner));
@@ -106,6 +108,9 @@ struct Builder<'r, 'a> {
     symbols: Vec<Symbol>,
     members: HashMap<String, Vec<Completion>>,
     scopes: Vec<Scope>,
+    /// For each closure being walked: its capture locals and the declaration
+    /// span of the outer local each one stands for (#1008).
+    captures: Vec<HashMap<usize, Span>>,
 }
 
 impl<'r, 'a> Builder<'r, 'a> {
@@ -167,8 +172,12 @@ impl<'r, 'a> Builder<'r, 'a> {
             }
     }
 
+    /// A type as the root module names it: short, and qualified only when
+    /// another type of the program has the same name (#338). It is also the
+    /// key of the type's members, so same-named types from different modules
+    /// keep their own members (#1008).
     fn ty(&self, ty: &Ty) -> String {
-        self.registry.plain_type_name(ty)
+        self.registry.type_name_in(self.root, ty)
     }
 
     /// Параметры подписи `name is T`; variadic-хвост — как в исходнике, `...T`.
@@ -365,6 +374,23 @@ impl<'r, 'a> Builder<'r, 'a> {
     }
 
     /// Собственные имена модуля `module` (для `take` и `alias.`); `only` — взятые.
+    /// A module constant (#153) as a completion: its name, type and docs (#1008).
+    fn const_completion(&self, index: usize) -> Completion {
+        let info = &self.registry.consts[index];
+        let ty = match self.registry.const_state.get(index) {
+            Some(crate::analysis::registry::ConstState::Done(Some(result))) => self.ty(&result.ty),
+            _ => String::new(),
+        };
+        Completion {
+            label: info.name.clone(),
+            kind: CompletionKind::Variable,
+            detail: if ty.is_empty() { format!("const {}", info.name) } else { format!("const {} is {ty}", info.name) },
+            documentation: self.doc(info.module, info.decl.span),
+            insert: info.name.clone(),
+            snippet: false,
+        }
+    }
+
     fn module_names(&self, module: usize, only: Option<&Vec<String>>) -> Vec<Completion> {
         let names = &self.registry.modules[module].own;
         let hidden = &self.registry.modules[module].hidden;
@@ -383,6 +409,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                 .filter(|(name, _)| visible(name))
                 .map(|(_, native)| self.native_completion(*native)),
         );
+        out.extend(names.consts.iter().filter(|(name, _)| visible(name)).map(|(_, index)| self.const_completion(*index)));
         out.sort_by(|a, b| a.label.cmp(&b.label));
         out
     }
@@ -403,6 +430,14 @@ impl<'r, 'a> Builder<'r, 'a> {
                 .natives
                 .values()
                 .map(|native| self.native_completion(*native)),
+        );
+        out.extend(
+            module
+                .scope
+                .consts
+                .iter()
+                .filter(|(name, _)| !module.hidden.contains(*name))
+                .map(|(_, index)| self.const_completion(*index)),
         );
         for (name, found) in &module.scope.types {
             if module.hidden.contains(name) { continue; }
@@ -632,10 +667,16 @@ impl<'r, 'a> Builder<'r, 'a> {
                 let decl = &body.locals[local.0];
                 if self.names_at(expr.span, &decl.name) {
                     let hover = self.local_hover(body, local.0);
-                    let definition = if decl.span.is_empty() {
-                        None
+                    // A capture local has no span of its own: it is the outer
+                    // local, so references and rename reach into the closure.
+                    let declared = if decl.span.is_empty() {
+                        self.captures.last().and_then(|captured| captured.get(&local.0).copied())
                     } else {
-                        self.location(self.root, decl.span)
+                        Some(decl.span)
+                    };
+                    let definition = match declared {
+                        Some(span) => self.location(self.root, span),
+                        None => None,
                     };
                     let ty = decl.ty.clone();
                     self.push_local(expr.span, hover, definition, &ty);
@@ -764,7 +805,20 @@ impl<'r, 'a> Builder<'r, 'a> {
                     self.expr(spread, body, object);
                 }
             }
-            ExprKind::Closure { body: inner, .. } => self.body(inner, object),
+            ExprKind::Closure { body: inner, captures } => {
+                let outer = self.captures.last();
+                let spans: HashMap<usize, Span> = captures
+                    .iter()
+                    .filter_map(|(outer_local, inner_local)| {
+                        let declared = body.locals[outer_local.0].span;
+                        let span = if declared.is_empty() { outer.and_then(|map| map.get(&outer_local.0).copied())? } else { declared };
+                        Some((inner_local.0, span))
+                    })
+                    .collect();
+                self.captures.push(spans);
+                self.body(inner, object);
+                self.captures.pop();
+            }
             ExprKind::BoundRoleAction {
                 receiver,
                 role,
@@ -1007,8 +1061,10 @@ impl<'r, 'a> Builder<'r, 'a> {
         let (name, module) = (info.name.clone(), info.module);
         let case_name = info.cases[case].clone();
         let decl = self.enum_decl(id);
+        // The case's own documentation, not the whole enum's (#1008).
         let doc = decl
-            .map(|decl| self.doc(module, decl.span))
+            .and_then(|decl| decl.cases.get(case))
+            .map(|case| self.doc(module, case.span))
             .unwrap_or_default();
         let definition = decl
             .and_then(|decl| decl.cases.get(case))

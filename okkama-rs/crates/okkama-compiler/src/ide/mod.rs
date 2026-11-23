@@ -8,8 +8,8 @@
 //!
 //! Анализ мягкий ([`crate::analysis::analyze_lenient`]): тела проверяются и
 //! при ошибках, поэтому наведение работает в файле, где ещё есть ошибки
-//! типов. Синтаксическая ошибка останавливает разбор — тогда есть только
-//! диагностика.
+//! типов. Разбор восстанавливается после синтаксических ошибок (#47): есть
+//! все ошибки и структура уцелевших объявлений.
 
 mod complete;
 mod index;
@@ -18,23 +18,13 @@ pub(crate) mod outline;
 mod std_paths;
 pub use std_paths::{StdCompletion, StdKind, std_completions, std_completions_with_overlay};
 
-pub use complete::{Context, builtin_members, keywords};
+pub use complete::{Context, builtin_members, keywords, renamable_to};
 pub use index::build;
 pub use lint::lint;
 pub use outline::outline;
 
 use crate::source::{SourceFile, Span};
-use crate::syntax::{self, ParseOptions, ast};
-
-/// Корень с тестами или fakes проверяется в тестовом режиме, чтобы их тела
-/// тоже анализировались. Файл, который полностью не разбирается, — тоже:
-/// тогда синтаксическая ошибка теста не прячется производственным разбором.
-pub fn has_tests(source: &SourceFile) -> bool {
-    let Ok(program) = syntax::parse(source, &ParseOptions::default()) else {
-        return true;
-    };
-    program_has_tests(&program)
-}
+use crate::syntax::ast;
 
 /// Есть ли в разобранном файле тесты или fakes — код тестового режима (§14).
 pub fn program_has_tests(program: &ast::Program) -> bool {

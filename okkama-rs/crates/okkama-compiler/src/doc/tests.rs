@@ -624,3 +624,13 @@ fn publishing_json_conforms_to_v1_schema_and_rejects_incompatible_records() {
     value["modules"][0]["items"][0]["members"][0]["span"]["start"] = serde_json::json!(-1);
     assert!(!validate_doc_schema(&value, &schema, &schema));
 }
+
+/// #1008: a runnable example and its output fence are not the synopsis; the
+/// first other code block is.
+#[test]
+fn a_runnable_example_is_not_the_synopsis() {
+    let text = "module demo;\n\n// Writes lines.\n//\n// ```okkama,run\n// main() is int { 0; }\n// ```\n// ```output\n// ready\n// ```\n//\n//     Stdout().writeln(\"x\");\n\nobject Demo {}\n";
+    let page = module_text(&doc(text), &Style::default());
+    assert!(page.contains("SYNOPSIS\n    Stdout().writeln(\"x\");\n"), "{page}");
+    assert!(!page.contains("SYNOPSIS\n    main() is int"), "{page}");
+}

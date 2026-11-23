@@ -278,12 +278,16 @@ fn deep_index(stdlib: &Path) -> Arc<Vec<Module>> {
         return found;
     }
     let modules = Arc::new(files.into_iter().map(|path| {
+        // One read and parse per file for both (#1008).
         let file = stdlib.join(format!("{path}.ok"));
-        Module {
-            doc: module_doc(&file, &HashMap::new()),
-            declarations: declarations(&file, &HashMap::new()),
-            path,
-        }
+        let (doc, declarations) = match file_doc(&file, &HashMap::new()) {
+            Some((doc, program)) => {
+                let declarations = declarations_of(&doc, &program);
+                (doc.overview.map(|overview| overview.markdown()).unwrap_or_default(), declarations)
+            }
+            None => (String::new(), Vec::new()),
+        };
+        Module { doc, declarations, path }
     }).collect::<Vec<_>>());
     if let Ok(mut cache) = cache.lock() {
         cache.insert(stdlib.to_path_buf(), CachedIndex { stamps, modules: Arc::clone(&modules) });
@@ -317,6 +321,10 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// Public declarations and documentation come from the canonical model.
 fn declarations(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> Vec<Declaration> {
     let Some((doc, program)) = file_doc(file, overlay) else { return Vec::new(); };
+    declarations_of(&doc, &program)
+}
+
+fn declarations_of(doc: &crate::doc::ModuleDoc, program: &ast::Program) -> Vec<Declaration> {
     doc.items.iter().filter_map(|item| {
         let kind = match item.kind {
             crate::doc::ItemKind::Object => StdKind::Object,

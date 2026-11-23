@@ -10,7 +10,7 @@
 //! | `snake-case` | локальная, параметр, поле или действие не в `snake_case` |
 //! | `hidden-error` | публичное действие бросает `hidden` error enum: снаружи его не поймать по типу |
 //! | `non-exhaustive-match` | `match` по enum без payload без `else` пропускает варианты (для payload-enum это ошибка анализа) |
-//!
+//! | `doc-note` | комментарий, который не документирует ни одно объявление, или обзор модуля по обе стороны импортов |
 //! | `missing-docs` | отсутствует документация публичного объявления; ошибка только в завершённых волнах std |
 //!
 //! Правила намеренно консервативны: ложное предупреждение хуже пропущенного.
@@ -42,6 +42,7 @@ pub fn lint(
     }
     for body in bodies.iter().filter(|body| body.module == root) {
         linter.body(body);
+        linter.local_names(body);
     }
     linter.imports(registry.modules[root].program);
     linter.hidden_actions(root);
@@ -335,7 +336,32 @@ impl Linter<'_, '_> {
                 ast::Item::NativeAction(decl) => self.params(&decl.params),
                 _ => {}
             }
-            walk_lets(item, &mut |name| self.name(name, "local"));
+        }
+    }
+
+    /// `snake-case` for every local of the root module's bodies: `let`s, `for`
+    /// and functional-block bindings and anonymous-action parameters, at any
+    /// depth — inside a statement-level `loop`, an `if` or `match` expression,
+    /// a closure (#1008). Declared action parameters are checked with their
+    /// signatures.
+    fn local_names(&mut self, body: &Body) {
+        fn collect(body: &Body, declared: bool, out: &mut Vec<ast::Name>) {
+            for (index, local) in body.locals.iter().enumerate() {
+                let parameter = declared && body.params.iter().any(|param| param.0 == index);
+                if !local.span.is_empty() && !parameter {
+                    out.push(ast::Name { text: local.name.clone(), span: local.span });
+                }
+            }
+            walk_block(&body.block, &mut |expr| {
+                if let ExprKind::Closure { body, .. } = &expr.kind {
+                    collect(body, false, out);
+                }
+            });
+        }
+        let mut names = Vec::new();
+        collect(body, true, &mut names);
+        for name in &names {
+            self.name(name, "local");
         }
     }
 
@@ -398,68 +424,6 @@ fn snake(text: &str) -> String {
 }
 
 /// Имена `let` во всех телах объявления (по синтаксическому дереву).
-fn walk_lets(item: &ast::Item, visit: &mut dyn FnMut(&ast::Name)) {
-    fn block(found: &ast::Block, visit: &mut dyn FnMut(&ast::Name)) {
-        for stmt in &found.stmts {
-            match &stmt.kind {
-                ast::StmtKind::Let { name, .. } => visit(name),
-                ast::StmtKind::Block(inner) => block(inner, visit),
-                ast::StmtKind::If(found) => if_stmt(found, visit),
-                ast::StmtKind::For { body, bindings, .. } => {
-                    for binding in bindings {
-                        visit(&binding.name);
-                    }
-                    block(body, visit);
-                }
-                ast::StmtKind::Try(body) => {
-                    block(&body.body, visit);
-                    for catch in &body.catches {
-                        block(&catch.body, visit);
-                    }
-                }
-                ast::StmtKind::Match(body) => {
-                    for case in &body.cases {
-                        block(&case.body, visit);
-                    }
-                    if let Some(other) = &body.else_block {
-                        block(other, visit);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    fn if_stmt(found: &ast::IfStmt, visit: &mut dyn FnMut(&ast::Name)) {
-        block(&found.then_block, visit);
-        match &found.else_branch {
-            Some(ast::ElseBranch::Block(other)) => block(other, visit),
-            Some(ast::ElseBranch::If(next)) => if_stmt(next, visit),
-            None => {}
-        }
-    }
-    fn members(members: &[ast::ObjectMember], visit: &mut dyn FnMut(&ast::Name)) {
-        for member in members {
-            match member {
-                ast::ObjectMember::Action(action) => block(&action.body, visit),
-                ast::ObjectMember::Constructor(ctor) => match &ctor.form {
-                    ast::ConstructorForm::Full { body, .. } => block(body, visit),
-                    ast::ConstructorForm::Shorthand {
-                        body: Some(body), ..
-                    } => block(body, visit),
-                    ast::ConstructorForm::Shorthand { body: None, .. } => {}
-                },
-                ast::ObjectMember::Destroy(destroy) => block(&destroy.body, visit),
-                _ => {}
-            }
-        }
-    }
-    match item {
-        ast::Item::Object(decl) => members(&decl.members, visit),
-        ast::Item::Action(decl) => block(&decl.body, visit),
-        _ => {}
-    }
-}
-
 // ---- обход THIR ----
 
 /// Каждое выражение блока (включая вложенные блоки, но не тела closures).
@@ -882,7 +846,9 @@ fn children_of<'b>(
             out.push(callee);
             out.extend(args.iter());
         }
-        _ => {}
+        // Leaves have no children; a kind added later is walked through the
+        // shared child visitor instead of being silently skipped (#1008).
+        _ => crate::analysis::thir::each_child(expr, &mut |child| out.push(child)),
     }
 }
 
@@ -938,8 +904,6 @@ fn collect_lets(block: &thir::Block, out: &mut Vec<LocalId>) {
     }
 }
 
-/// Блоки внутри оператора (`if`, `match`, `for`, `try`, `loop`, вложенные
-/// блоки) без тел closures.
 /// Значения `throw` и `confirm ... else throw` типа варианта (вне замыканий).
 fn collect_thrown(block: &thir::Block, out: &mut Vec<(Span, crate::analysis::ty::EnumId)>) {
     for stmt in &block.stmts {
@@ -958,6 +922,8 @@ fn collect_thrown(block: &thir::Block, out: &mut Vec<(Span, crate::analysis::ty:
     }
 }
 
+/// Блоки внутри оператора (`if`, `match`, `for`, `try`, `loop`, вложенные
+/// блоки) без тел closures.
 fn for_nested_blocks(stmt: &thir::Stmt, visit: &mut dyn FnMut(&thir::Block)) {
     let mut exprs = Vec::new();
     stmt_exprs(stmt, &mut exprs);
@@ -981,6 +947,17 @@ fn nested_in_expr(expr: &thir::Expr, visit: &mut dyn FnMut(&thir::Block)) {
     }
 }
 
+
+/// The documentation model's notes (#1008): a comment block no declaration
+/// owns, an overview on both sides of the imports. They were shown only by
+/// the JSON export; here they are `doc-note` warnings.
+pub fn doc_notes(source: &SourceFile, doc: &crate::doc::ModuleDoc) -> Vec<Diagnostic> {
+    let lines = LineIndex::new(source.text());
+    doc.notes.iter().map(|note| Diagnostic {
+        path: source.name().to_string(), range: lines.range(note.span), severity: Severity::Warning,
+        message: note.message.clone(), code: Some("doc-note".into()), unnecessary: false,
+    }).collect()
+}
 
 /// Documentation coverage uses the canonical public model, not token or
 /// comment counts. Only completed std waves escalate warnings to errors.

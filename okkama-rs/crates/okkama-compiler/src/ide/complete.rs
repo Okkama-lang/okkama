@@ -810,12 +810,22 @@ fn keyword(word: &str) -> Completion {
     }
 }
 
+/// Can a local be renamed to `name`: a lower-case identifier that is none of
+/// the words the lexer reserves (the removed ones too: `with`, `isa`, …) nor a
+/// keyword completion offers (#1008).
+pub fn renamable_to(name: &str) -> bool {
+    name.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_')
+        && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && crate::syntax::token::TokenKind::keyword(name).is_none()
+        && !keywords().iter().any(|keyword| keyword.label == name)
+}
+
 pub fn keywords() -> Vec<Completion> {
     [
         "let", "if", "else", "match", "case", "for", "loop", "return", "confirm", "throw", "try",
         "catch", "defer", "await", "async", "spawn", "panic", "next", "last", "true", "false",
         "is", "object", "role", "enum", "has", "does", "import", "take", "module", "test",
-        "native", "hidden", "destroy", "cap", "void",
+        "native", "hidden", "destroy", "cap", "void", "as", "fake", "const", "self", "once",
     ]
     .iter()
     .map(|word| keyword(word))
@@ -1027,6 +1037,7 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         out.push(method("sign", &[], "int", ""));
         out.push(method("numerator", &[], "int", ""));
         out.push(method("denominator", &[], "int", ""));
+        out.push(method("pow", &["exponent is int"], "rat", ""));
     } else if key == "bool" {
         out.push(method("string", &[], "string", "\"true\" or \"false\""));
     } else if key == "char" {

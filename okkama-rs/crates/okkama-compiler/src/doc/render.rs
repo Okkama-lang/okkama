@@ -102,7 +102,7 @@ pub(super) fn overview(doc: &ModuleDoc) -> Overview {
     current.push_str(&text[cursor..]);
     flush(&mut parts, section, &mut current);
     if parts.synopsis.is_none()
-        && let Some((code, range)) = first_code_block(&parts.description)
+        && let Some((code, range)) = first_synopsis_block(&parts.description)
     {
         parts.synopsis = Some(code);
         parts.description.replace_range(range, "");
@@ -126,6 +126,33 @@ fn first_code_block(text: &str) -> Option<(String, std::ops::Range<usize>)> {
                     body.push_str(&content);
                 }
             }
+            Event::End(TagEnd::CodeBlock) if code.is_some() => break,
+            _ => {}
+        }
+    }
+    code.map(|(body, range)| (body.trim_end_matches('\n').to_string(), range))
+}
+
+/// The first code block that can stand as a synopsis: a runnable example
+/// (`okkama,run`) and its `output` fence are examples, not the synopsis (#1008).
+fn first_synopsis_block(text: &str) -> Option<(String, std::ops::Range<usize>)> {
+    let mut code = None::<(String, std::ops::Range<usize>)>;
+    let mut skipping = false;
+    for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) if code.is_none() => {
+                skipping = matches!(&kind, pulldown_cmark::CodeBlockKind::Fenced(info)
+                    if info.split(',').any(|part| matches!(part.trim(), "run" | "output")));
+                if !skipping {
+                    code = Some((String::new(), range));
+                }
+            }
+            Event::Text(content) if code.is_some() && !skipping => {
+                if let Some((body, _)) = code.as_mut() {
+                    body.push_str(&content);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) if skipping => skipping = false,
             Event::End(TagEnd::CodeBlock) if code.is_some() => break,
             _ => {}
         }

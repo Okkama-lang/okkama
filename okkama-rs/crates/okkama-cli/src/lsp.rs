@@ -763,16 +763,7 @@ impl Server {
             .get("newName")
             .and_then(Value::as_str)
             .ok_or("missing new name")?;
-        let valid = name.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_')
-            && name
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-            && !ide::keywords().iter().any(|keyword| keyword.label == name)
-            && ![
-                "self", "next", "last", "true", "false", "none", "null", "nil",
-            ]
-            .contains(&name);
-        if !valid {
+        if !ide::renamable_to(name) {
             return Err(format!("`{name}` is not a valid local name"));
         }
         let (uri, found, lines) = self

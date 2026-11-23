@@ -285,19 +285,6 @@ pub fn comment_above(source: &SourceFile, offset: u32) -> String {
     lines.above(lines.line_of(offset)).map(|text| text.text).unwrap_or_default()
 }
 
-/// The module overview of `source`, by the rule of this module; an empty
-/// string when the module has none or the source does not parse.
-pub fn module_overview(source: &SourceFile) -> String {
-    let options = ParseOptions {
-        mode: ParseMode::Production,
-        ..ParseOptions::default()
-    };
-    syntax::parse(source, &options)
-        .ok()
-        .and_then(|program| ModuleDoc::of(source, &program).overview)
-        .map(|overview| overview.text)
-        .unwrap_or_default()
-}
 
 /// The first sentence of `text`: up to the first ". " or the end of its first
 /// paragraph, on one line.
@@ -733,21 +720,10 @@ impl<'a> CommentLines<'a> {
         Span::new(start, end)
     }
 
+    /// Through the source's line index: a linear scan per comment line made
+    /// documenting a file O(comment lines × size) (#1008).
     fn offset_of_line(&self, line: u32) -> u32 {
-        let text = self.source.text();
-        if line <= 1 {
-            return 0;
-        }
-        let mut seen = 1;
-        for (index, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
-                seen += 1;
-                if seen == line {
-                    return index as u32 + 1;
-                }
-            }
-        }
-        text.len() as u32
+        self.source.line_start(line)
     }
 
     /// Whether `line` lies inside the body of a declaration: a comment there
