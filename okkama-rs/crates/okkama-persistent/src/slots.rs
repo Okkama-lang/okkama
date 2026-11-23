@@ -31,7 +31,8 @@ impl<T, const N: usize> Slots<T, N> {
     }
 
     pub(crate) fn insert(&mut self, at: usize, item: T) {
-        assert!(at <= self.len && self.len < N, "a node over its capacity");
+        assert!(at <= self.len, "an insertion past the node's end");
+        assert!(self.len < N, "a node over its capacity");
         let (len, base) = (self.len, self.base());
         // SAFETY: `at ..= len` is within the capacity; the items `at .. len`
         // move up one slot, and `at` is then written.

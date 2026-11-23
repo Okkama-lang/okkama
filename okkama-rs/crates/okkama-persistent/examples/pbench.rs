@@ -4,8 +4,8 @@
 //!
 //! Elements are `u64`, one word, as in Tomato. `flat` is today's
 //! representation: an `Rc<[u64]>` that every new version copies whole;
-//! `trie` is the 32-way trie with a tail; `frontier` the shared append-only
-//! buffer. Each measurement is the median of 7 runs; a counting allocator
+//! `trie` is the 32-way trie with a tail (the shared append-only `frontier`
+//! buffer was measured here once and removed with its unsound `fold`, #1015). Each measurement is the median of 7 runs; a counting allocator
 //! reports the bytes allocated per operation and the bytes live when every
 //! version of an append chain is kept.
 
@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Instant;
 
-use okkama_persistent::{Frontier, Trie};
+use okkama_persistent::Trie;
 
 struct Counting;
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
@@ -112,7 +112,6 @@ fn main() {
         let values: Vec<u64> = (0..n as u64).map(|i| (i * 7919 + 13) % 10007).collect();
         let flat: Rc<[u64]> = Rc::from(values.clone());
         let trie = Trie::from_vec(values.clone());
-        let frontier = Frontier::from_vec(values.clone());
         let depth = format!("depth {}", trie.depth());
 
         // ---- reads ----
@@ -126,11 +125,6 @@ fn main() {
             for _ in 0..READS { acc = acc.wrapping_add(*trie.get(spot(&mut x, n)).unwrap()); }
             acc
         }), depth.clone());
-        add("read-random", "frontier", n, READS, measure(|| {
-            let (mut x, mut acc) = (1u64, 0u64);
-            for _ in 0..READS { acc = acc.wrapping_add(frontier.get(spot(&mut x, n)).unwrap()); }
-            acc
-        }), String::new());
         add("read-random", "loop", n, READS, measure(|| {
             let (mut x, mut acc) = (1u64, 0u64);
             for _ in 0..READS { acc = acc.wrapping_add(spot(&mut x, n) as u64); }
@@ -148,11 +142,6 @@ fn main() {
             for _ in 0..passes { for i in 0..n { acc = acc.wrapping_add(*black_box(&trie).get(i).unwrap()); } }
             acc
         }), depth.clone());
-        add("read-seq-index", "frontier", n, passes * n, measure(|| {
-            let mut acc = 0u64;
-            for _ in 0..passes { for i in 0..n { acc = acc.wrapping_add(black_box(&frontier).get(i).unwrap()); } }
-            acc
-        }), String::new());
 
         add("fold", "flat", n, passes * n, measure(|| {
             (0..passes).fold(0u64, |acc, _| black_box(&flat).iter().fold(acc, |a, &x| a.wrapping_add(x)))
@@ -162,14 +151,10 @@ fn main() {
             for _ in 0..passes { black_box(&trie).for_each_chunk(|chunk| { acc = chunk.iter().fold(acc, |a, &x| a.wrapping_add(x)); }); }
             acc
         }), "leaf by leaf".into());
-        add("fold", "frontier", n, passes * n, measure(|| {
-            (0..passes).fold(0u64, |acc, _| black_box(&frontier).fold(acc, |a, &x| a.wrapping_add(x)))
-        }), String::new());
 
         // ---- builds ----
         add("build", "flat", n, n, measure(|| { let v: Rc<[u64]> = Rc::from(values.clone()); v[n - 1] }), String::new());
         add("build", "trie", n, n, measure(|| *Trie::from_vec(values.clone()).get(n - 1).unwrap()), String::new());
-        add("build", "frontier", n, n, measure(|| Frontier::from_vec(values.clone()).get(n - 1).unwrap()), String::new());
 
         // ---- writes: an append chain, each version made from the previous one ----
         if n <= 100_000 {
@@ -184,11 +169,6 @@ fn main() {
             for i in 0..n as u64 { v = v.push(i); }
             *v.get(n - 1).unwrap()
         }), String::new());
-        add("append-chain", "frontier", n, n, measure(|| {
-            let mut v = Frontier::default();
-            for i in 0..n as u64 { v = v.push(i); }
-            v.get(n - 1).unwrap()
-        }), String::new());
 
         // ---- writes: many versions of one base ----
         let k = (4_000_000 / n).max(200);
@@ -198,9 +178,6 @@ fn main() {
         add("append-branch", "trie", n, k, measure(|| {
             (0..k as u64).fold(0, |acc, j| { let v = trie.push(j); acc + v.get(n).unwrap() })
         }), String::new());
-        add("append-branch", "frontier", n, k, measure(|| {
-            (0..k as u64).fold(0, |acc, j| { let v = frontier.push(j); acc + v.get(n).unwrap() })
-        }), "a branch copies".into());
 
         // ---- writes: replace one element, each version from the previous one ----
         add("set-chain", "flat", n, k, measure(|| {
@@ -223,22 +200,13 @@ fn main() {
             add("keep-versions", "flat", n, n, (0.0, bytes), format!("{:.1} MB live", bytes as f64 / 1e6));
             drop(kept);
         }
-        for repr in ["trie", "frontier"] {
+        {
             let before = LIVE.load(Relaxed);
-            let bytes = if repr == "trie" {
-                let mut kept = vec![Trie::new()];
-                for i in 0..n as u64 { let next = kept.last().unwrap().push(i); kept.push(next); }
-                let bytes = LIVE.load(Relaxed) - before;
-                drop(kept);
-                bytes
-            } else {
-                let mut kept = vec![Frontier::default()];
-                for i in 0..n as u64 { let next = kept.last().unwrap().push(i); kept.push(next); }
-                let bytes = LIVE.load(Relaxed) - before;
-                drop(kept);
-                bytes
-            };
-            add("keep-versions", repr, n, n, (0.0, bytes), format!("{:.1} MB live", bytes as f64 / 1e6));
+            let mut kept = vec![Trie::new()];
+            for i in 0..n as u64 { let next = kept.last().unwrap().push(i); kept.push(next); }
+            let bytes = LIVE.load(Relaxed) - before;
+            drop(kept);
+            add("keep-versions", "trie", n, n, (0.0, bytes), format!("{:.1} MB live", bytes as f64 / 1e6));
         }
         // Memory of one array of n elements.
         for (repr, bytes) in [("flat", n * 8 + 16), ("trie", {

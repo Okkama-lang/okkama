@@ -20,15 +20,19 @@ enum Key {
 impl Key {
     fn rank(&self) -> u8 {
         match self {
-            Key::Small(_) | Key::Int(..) => 0,
-            Key::Text(_) => 1,
+            Key::Small(_) => 0,
+            Key::Int(..) => 1,
+            Key::Text(_) => 2,
         }
     }
 }
+// A total order, as a map key needs: kinds by rank, then within a kind. The
+// bench never builds `Int`; it only shapes the enum's size (#1015).
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Key::Small(a), Key::Small(b)) => a.cmp(b),
+            (Key::Int(a, negative_a), Key::Int(b, negative_b)) => (negative_a, a).cmp(&(negative_b, b)),
             (Key::Text(a), Key::Text(b)) => a.cmp(b),
             _ => self.rank().cmp(&other.rank()),
         }

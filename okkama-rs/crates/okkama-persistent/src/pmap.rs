@@ -393,6 +393,11 @@ impl<K: NodeKey + Clone, V: Clone> PMap<K, V> {
     /// Remove an equal key; its stored key and value.
     pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
         let root = self.root.as_mut()?;
+        // Find before copying, once at the root: a missing key changes no node,
+        // and below it every level is known to hold the key (#1015).
+        if !contains_in(&root.node, key) {
+            return None;
+        }
         let removed = remove_in(root, key)?;
         self.len -= 1;
         // A root left empty, or a branch with one child, gives way.
@@ -473,7 +478,9 @@ impl<K: NodeKey + Clone, V: Clone> PMap<K, V> {
     /// Depth, and whether every node is within bounds, sorted, and labelled
     /// with its smallest key (for tests).
     pub fn check(&self) -> Result<usize, String> {
-        fn walk<K: NodeKey + Clone, V: Clone>(node: &Node<K, V>, root: bool) -> Result<(usize, usize), String> {
+        // Depth, entries and the largest key of a subtree: a child's largest
+        // key must stay below the next child's smallest (#1015).
+        fn walk<K: NodeKey + Clone, V: Clone>(node: &Node<K, V>, root: bool) -> Result<(usize, usize, Option<K>), String> {
             if node.len() > MAX || (!root && node.len() == 0) {
                 return Err(format!("a node of {} entries", node.len()));
             }
@@ -482,7 +489,7 @@ impl<K: NodeKey + Clone, V: Clone> PMap<K, V> {
                     if keys.len() != vals.len() || keys.windows(2).any(|w| w[0] >= w[1]) {
                         return Err("a leaf out of order or out of step".into());
                     }
-                    Ok((1, keys.len()))
+                    Ok((1, keys.len(), keys.last().cloned()))
                 }
                 Node::Branch { keys, kids } => {
                     if keys.len() != kids.len() || keys.windows(2).any(|w| w[0] >= w[1]) {
@@ -490,25 +497,32 @@ impl<K: NodeKey + Clone, V: Clone> PMap<K, V> {
                     }
                     let mut depth = None;
                     let mut count = 0;
-                    for (key, child) in keys.iter().zip(kids.iter()) {
+                    let mut last = None;
+                    for (index, (key, child)) in keys.iter().zip(kids.iter()).enumerate() {
                         if child.node.first_key() != key {
                             return Err("a branch key that is not its child's smallest".into());
                         }
-                        let (d, n) = walk(&child.node, false)?;
+                        let (d, n, largest) = walk(&child.node, false)?;
+                        if let (Some(largest), Some(next)) = (&largest, keys.get(index + 1))
+                            && largest >= next
+                        {
+                            return Err("a child holding a key of the next child's range".into());
+                        }
+                        last = largest;
                         if depth.is_some_and(|depth| depth != d) {
                             return Err("leaves at different depths".into());
                         }
                         depth = Some(d);
                         count += n;
                     }
-                    Ok((depth.unwrap_or(0) + 1, count))
+                    Ok((depth.unwrap_or(0) + 1, count, last))
                 }
             }
         }
         match &self.root {
             None => Ok(0),
             Some(root) => {
-                let (depth, count) = walk(&root.node, true)?;
+                let (depth, count, _) = walk(&root.node, true)?;
                 if count != self.len {
                     return Err(format!("{count} entries for a length of {}", self.len));
                 }
@@ -590,11 +604,8 @@ fn split_branch<K: NodeKey + Clone, V: Clone>(
     })
 }
 
+/// Removes `key`, which the caller found in this subtree.
 fn remove_in<K: NodeKey + Clone, V: Clone>(rc: &mut Rc<Counted<K, V>>, key: &K) -> Option<(K, V)> {
-    // Find before copying: a missing key changes no node.
-    if !contains_in(&rc.node, key) {
-        return None;
-    }
     edit(rc, |node| match node {
         Node::Leaf { keys, vals } => match find(keys, key) {
             Ok(i) => {
