@@ -1,7 +1,8 @@
 //! Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
 //! имя и список байтовых аргументов; целые передаются десятичным ASCII.
-//! Случайность — только из аргумента-зерна (энтропию выбирает вызывающий) или
-//! явной операции `random`.
+//! Случайность: аргумент-зерно (энтропию выбирает вызывающий), явная операция
+//! `random`, а у RSA — `SystemRandom` aws-lc; аргументы энтропии RSA
+//! (`rsa-generate`, PSS, OAEP) принимаются ради ABI и не используются (#1015).
 
 use std::fmt;
 
@@ -10,6 +11,7 @@ use blake2::digest::consts::{U16, U20, U28, U32, U48, U64};
 use hmac::Mac;
 use sha2::Digest;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 /// Отказ операции: категория для переносимого кода отказа и текст.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +55,8 @@ fn arity(args: &[&[u8]], count: usize, op: &str) -> Result<()> {
     if args.len() == count {
         Ok(())
     } else {
-        Err(invalid(format!("{op} takes {count} arguments")))
+        let plural = if count == 1 { "" } else { "s" };
+        Err(invalid(format!("{op} takes {count} argument{plural}")))
     }
 }
 
@@ -282,11 +285,18 @@ fn xof_length(length: usize) -> Result<()> {
     }
 }
 
-/// Одноразовый дайджест (для операций, принимающих имя хеша).
+/// Одноразовый дайджест (для операций, принимающих имя хеша). BLAKE2 и SHAKE
+/// берут свою полную длину (64/32 байта; SHAKE — 32 и 64, по уровню
+/// стойкости), а не нулевую, на которой они всегда отказывали (#1015).
 fn digest(algorithm: &str, data: &[u8]) -> Result<Vec<u8>> {
-    let mut hasher = Hasher::new(algorithm, &[], 0)?;
+    let length = match algorithm {
+        "blake2b" | "shake256" => 64,
+        "blake2s" | "shake128" => 32,
+        _ => 0,
+    };
+    let mut hasher = Hasher::new(algorithm, &[], length)?;
     hasher.update(data);
-    hasher.finish(0)
+    hasher.finish(length)
 }
 
 // ---- операции ----
@@ -353,6 +363,17 @@ fn hkdf(hash: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     let (ikm, salt, info) = (args[0], args[1], args[2]);
     let length = number(args[3], "length")? as usize;
     let salt = if salt.is_empty() { None } else { Some(salt) };
+    // RFC 5869: at most 255 hash lengths. Checked before the buffer is
+    // allocated, or a huge length aborts the process (#1015).
+    let hash_length = match hash {
+        "sha256" => 32,
+        "sha384" => 48,
+        "sha512" => 64,
+        other => return Err(Error::Unsupported(format!("unknown HKDF hash {other}"))),
+    };
+    if length == 0 || length > 255 * hash_length {
+        return Err(invalid("HKDF output length must be 1..255 hash lengths"));
+    }
     let mut out = vec![0; length];
     let expanded = match hash {
         "sha256" => hkdf::Hkdf::<sha2::Sha256>::new(salt, ikm)
@@ -395,6 +416,8 @@ fn pbkdf2_rounds<M: Mac + hmac::digest::KeyInit + Clone>(
         let mut sum = chained.clone();
         for round in 1..rounds {
             if round.is_multiple_of(PBKDF2_POLL) && interrupted() {
+                chained.as_mut_slice().zeroize();
+                sum.as_mut_slice().zeroize();
                 return Err(Error::Failed("PBKDF2 interrupted".into()));
             }
             let mut mac = prf.clone();
@@ -405,6 +428,9 @@ fn pbkdf2_rounds<M: Mac + hmac::digest::KeyInit + Clone>(
             }
         }
         block.copy_from_slice(&sum[..block.len()]);
+        // The intermediate PRF outputs are key material (#1015).
+        chained.as_mut_slice().zeroize();
+        sum.as_mut_slice().zeroize();
     }
     Ok(())
 }
@@ -504,6 +530,12 @@ fn argon2_phc(args: &[&[u8]]) -> Result<Vec<u8>> {
     Ok(hash.to_string().into_bytes())
 }
 
+/// The largest Argon2 cost a stored hash may ask for: std's `Argon2Policy`
+/// bounds (memory 4 GiB in KiB, 1000 iterations, 255 lanes).
+const ARGON2_MAX_MEMORY_KIB: u32 = 4_194_304;
+const ARGON2_MAX_ITERATIONS: u32 = 1000;
+const ARGON2_MAX_PARALLELISM: u32 = 255;
+
 /// `argon2-verify(phc, password)` — `[1]`/`[0]`.
 fn argon2_verify(args: &[&[u8]]) -> Result<Vec<u8>> {
     use argon2::PasswordVerifier;
@@ -515,6 +547,16 @@ fn argon2_verify(args: &[&[u8]]) -> Result<Vec<u8>> {
         return Err(Error::Unsupported(
             "only argon2id PHC strings are verified".into(),
         ));
+    }
+    // The cost comes from the stored string: bound it as Argon2Policy does,
+    // or a crafted hash costs terabytes or hours to verify (#1015).
+    let params = argon2::Params::try_from(&hash)
+        .map_err(|error| invalid(format!("invalid PHC string: {error}")))?;
+    if params.m_cost() > ARGON2_MAX_MEMORY_KIB
+        || params.t_cost() > ARGON2_MAX_ITERATIONS
+        || params.p_cost() > ARGON2_MAX_PARALLELISM
+    {
+        return Err(invalid("Argon2 cost in the PHC string is beyond the policy limits"));
     }
     Ok(truth(
         argon2::Argon2::default()
@@ -563,6 +605,8 @@ fn aead(algorithm: &str, args: &[&[u8]], seal: bool) -> Result<Vec<u8>> {
 }
 
 fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
+    // The family name in messages: "ed25519-public takes 1 argument" (#1015).
+    let name = format!("ed25519-{op}");
     use ed25519_dalek::pkcs8::{
         DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey,
     };
@@ -576,22 +620,22 @@ fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     };
     match op {
         "public" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             Ok(signing(args[0])?.verifying_key().to_bytes().to_vec())
         }
         "sign" => {
-            arity(args, 2, op)?;
+            arity(args, 2, &name)?;
             Ok(signing(args[0])?.sign(args[1]).to_bytes().to_vec())
         }
         "verify" => {
-            arity(args, 3, op)?;
+            arity(args, 3, &name)?;
             let key = verifying(args[0])?;
             let signature =
                 ed25519_dalek::Signature::from_bytes(&fixed::<64>(args[2], "Ed25519 signature")?);
             Ok(truth(key.verify_strict(args[1], &signature).is_ok()))
         }
         "pkcs8" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             // PKCS#8 v1 (RFC 8410, 48 байт) без открытого ключа — как OpenSSL.
             let pair = ed25519_dalek::pkcs8::KeypairBytes {
                 secret_key: fixed::<32>(args[0], "Ed25519 seed")?,
@@ -603,20 +647,20 @@ fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
             Ok(der.as_bytes().to_vec())
         }
         "from-pkcs8" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             let key = SigningKey::from_pkcs8_der(args[0])
                 .map_err(|_| invalid("invalid Ed25519 PKCS#8 key"))?;
             Ok(key.to_bytes().to_vec())
         }
         "spki" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             let der = verifying(args[0])?
                 .to_public_key_der()
                 .map_err(|_| Error::Failed("SPKI encoding".into()))?;
             Ok(der.as_bytes().to_vec())
         }
         "from-spki" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             let key = VerifyingKey::from_public_key_der(args[0])
                 .map_err(|_| invalid("invalid Ed25519 SPKI key"))?;
             Ok(key.to_bytes().to_vec())
@@ -628,15 +672,17 @@ fn ed25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
 }
 
 fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
+    // The family name in messages: "x25519-public takes 1 argument" (#1015).
+    let name = format!("x25519-{op}");
     use x25519_dalek::{PublicKey, StaticSecret};
     match op {
         "public" => {
-            arity(args, 1, op)?;
+            arity(args, 1, &name)?;
             let secret = StaticSecret::from(fixed::<32>(args[0], "X25519 private key")?);
             Ok(PublicKey::from(&secret).as_bytes().to_vec())
         }
         "shared" => {
-            arity(args, 2, op)?;
+            arity(args, 2, &name)?;
             let secret = StaticSecret::from(fixed::<32>(args[0], "X25519 private key")?);
             let peer = PublicKey::from(fixed::<32>(args[1], "X25519 public key")?);
             let shared = secret.diffie_hellman(&peer);
@@ -659,7 +705,7 @@ fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
 /// runs on aws-lc, five times faster. Both accept a high S, as the curves do
 /// not normalize it.
 macro_rules! ecdsa_curve {
-    ($curve:ident, $point:ty, $digest:ty, $verifying:expr, $op:expr, $args:expr, $field:expr) => {{
+    ($curve:ident, $point:ty, $digest:ty, $verifying:expr, $op:expr, $args:expr) => {{
         use $curve::ecdsa::{SigningKey, VerifyingKey};
         use $curve::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
         let args = $args;
@@ -712,8 +758,7 @@ fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
             sha2::Sha256,
             &aws_lc_rs::signature::ECDSA_P256_SHA256_ASN1,
             action,
-            args,
-            32
+            args
         ),
         "p384" => ecdsa_curve!(
             p384,
@@ -721,8 +766,7 @@ fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
             sha2::Sha384,
             &aws_lc_rs::signature::ECDSA_P384_SHA384_ASN1,
             action,
-            args,
-            48
+            args
         ),
         other => Err(Error::Unsupported(format!("unknown ECDSA curve {other}"))),
     }

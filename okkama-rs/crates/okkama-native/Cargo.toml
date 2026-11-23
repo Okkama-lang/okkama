@@ -8,14 +8,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-aes-gcm = "0.11.1"
-argon2 = "0.6.0"
+aes-gcm = { version = "0.11.1", features = ["zeroize"] }
+argon2 = { version = "0.6.0", features = ["zeroize"] }
 blake2 = "0.11.0"
-chacha20poly1305 = "0.11.0"
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
 ed25519-dalek = { version = "3.0.0", features = ["pkcs8", "alloc"] }
 getrandom = "0.4.3"
 hkdf = "0.13.0"
-hmac = "0.13.0"
+hmac = { version = "0.13.0", features = ["zeroize"] }
 p256 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
 ecdsa = { version = "0.17.0", default-features = false, features = ["algorithm", "der"] }
 p384 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
@@ -30,6 +30,7 @@ shake = "0.1.0"
 spki = "0.8"
 subtle = "2.6.1"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+zeroize = "1.9.1"
 
 # unsafe разрешён только в
 # `rsa_public` (низкоуровневая проверка подписей RSA через aws-lc) и в

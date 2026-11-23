@@ -22,15 +22,23 @@ struct Tlv<'a> {
 fn tlv(source: &[u8]) -> Result<(Tlv<'_>, &[u8])> {
     let bad = || invalid("invalid DER");
     let tag = *source.first().ok_or_else(bad)?;
+    // DER, strictly (#1015): one-byte tags only (a high tag number is not used
+    // by certificates), and the shortest length encoding.
+    if tag & 0x1f == 0x1f {
+        return Err(bad());
+    }
     let first = usize::from(*source.get(1).ok_or_else(bad)?);
     let (length, header) = if first < 128 {
         (first, 2)
     } else {
         let width = first & 127;
-        if width == 0 || width > 4 || source.len() < 2 + width {
+        if width == 0 || width > 4 || source.len() < 2 + width || source[2] == 0 {
             return Err(bad());
         }
         let length = source[2..2 + width].iter().fold(0usize, |acc, b| (acc << 8) | usize::from(*b));
+        if length < 128 {
+            return Err(bad());
+        }
         (length, 2 + width)
     };
     let end = header.checked_add(length).filter(|end| *end <= source.len()).ok_or_else(bad)?;
@@ -55,16 +63,29 @@ fn children(content: &[u8]) -> Result<Vec<Tlv<'_>>> {
     Ok(out)
 }
 
-/// Текст OID из содержимого DER.
+/// Текст OID из содержимого DER; пустая строка (не совпадает ни с одним
+/// известным OID) — у неверной записи: дуга с ведущим 0x80, дуга шире 128 бит
+/// или незавершённая последняя дуга (#1015).
 fn oid(content: &[u8]) -> String {
     let mut arcs: Vec<u128> = Vec::new();
     let mut value: u128 = 0;
+    let mut open = false;
     for octet in content {
+        if !open && *octet == 0x80 {
+            return String::new();
+        }
+        if value >> 121 != 0 {
+            return String::new();
+        }
         value = (value << 7) | u128::from(octet & 127);
-        if octet & 128 == 0 {
+        open = octet & 128 != 0;
+        if !open {
             arcs.push(value);
             value = 0;
         }
+    }
+    if open {
+        return String::new();
     }
     let Some((&first, rest)) = arcs.split_first() else {
         return String::new();
@@ -320,5 +341,30 @@ pub fn verify(spki: &[u8], algorithm_der: &[u8], message: &[u8], signature: &[u8
             Ok(key.verify_strict(message, &ed25519_dalek::Signature::from_bytes(&signature)).is_ok())
         }
         other => Err(Error::Unsupported(format!("signature algorithm {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1015: non-minimal lengths and high tag numbers are not DER, and a
+    /// malformed OID reads as no OID instead of a truncated one.
+    #[test]
+    fn der_lengths_and_oids_are_strict() {
+        assert!(tlv(&[0x04, 0x01, 0xaa]).is_ok());
+        assert!(tlv(&[0x04, 0x81, 0x05, 1, 2, 3, 4, 5]).is_err(), "long form for a short length");
+        assert!(tlv(&[0x04, 0x82, 0x00, 0x80]).is_err(), "leading zero length byte");
+        assert!(tlv(&[0x1f, 0x81, 0x01, 0x00]).is_err(), "high tag number");
+        let mut long = vec![0x04, 0x81, 0x80];
+        long.extend([0u8; 128]);
+        assert!(tlv(&long).is_ok());
+        assert_eq!(oid(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d]), "1.2.840.113549");
+        assert_eq!(oid(&[0x2a, 0x80, 0x01]), "", "leading 0x80 in an arc");
+        assert_eq!(oid(&[0x2a, 0x86]), "", "unterminated arc");
+        let mut wide = vec![0x2a];
+        wide.extend([0xff; 19]);
+        wide.push(0x7f);
+        assert_eq!(oid(&wide), "", "arc wider than 128 bits");
     }
 }

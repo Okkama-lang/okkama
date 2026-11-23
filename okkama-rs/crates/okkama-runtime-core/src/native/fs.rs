@@ -1072,11 +1072,13 @@ fn cleanup_temporary(native: Native, state: &mut FileState) -> Result<(), Error>
 
 const TEMPLATE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
 
-/// Имя как у File::Temp: префикс и восемь случайных символов.
-fn temporary_name(prefix: &str) -> String {
+/// Имя как у File::Temp: префикс и восемь случайных символов. Без источника
+/// случайности — отказ, как у Sparrow, а не предсказуемое имя из нулей (#1015).
+fn temporary_name(native: Native, prefix: &str) -> Result<String, Error> {
     let mut name = prefix.to_string();
     while name.len() < prefix.len() + 8 {
-        let random = okkama_native::call("random", &[b"16"]).unwrap_or_else(|_| vec![0; 16]);
+        let random = okkama_native::call("random", &[b"16"])
+            .map_err(|_| failure(DOMAIN, "unexpected", native, "Random source unavailable"))?;
         for byte in random {
             // Равномерно по 63 символам: отбрасываем 252..255.
             if byte < 252 && name.len() < prefix.len() + 8 {
@@ -1084,7 +1086,7 @@ fn temporary_name(prefix: &str) -> String {
             }
         }
     }
-    name
+    Ok(name)
 }
 
 fn prefix(native: Native, prefix: &str) -> Result<&str, Error> {
@@ -2012,7 +2014,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let directory = path(native, &args[0])?;
             let prefix = prefix(native, string(&args[1])?)?;
             for _ in 0..100 {
-                let path = Spec::Unix.canonpath(&child(&directory, &temporary_name(prefix)));
+                let path = Spec::Unix.canonpath(&child(&directory, &temporary_name(native, prefix)?));
                 match open_channel(&path, READ | WRITE | CREATE | EXCLUSIVE, 0o600) {
                     Ok(channel) => {
                         return Ok(new_handle(Rc::new(RefCell::new(FileState {
@@ -2070,7 +2072,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let prefix = prefix(native, string(&args[1])?)?;
             use std::os::unix::fs::DirBuilderExt;
             for _ in 0..100 {
-                let path = Spec::Unix.canonpath(&child(&parent, &temporary_name(prefix)));
+                let path = Spec::Unix.canonpath(&child(&parent, &temporary_name(native, prefix)?));
                 match std::fs::DirBuilder::new().mode(0o700).create(host::path(&path)) {
                     Ok(()) => {
                         return Ok(new_handle(TemporaryDirectory {

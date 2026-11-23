@@ -488,3 +488,38 @@ fn constant_time_equality_and_entropy() {
     assert_eq!(first.len(), 32);
     assert_ne!(first, call("random", &[b"32"]).unwrap());
 }
+
+/// #1015: HKDF refuses a length past 255 hash lengths before allocating, and
+/// argon2-verify refuses a stored cost beyond the policy limits instead of
+/// running it.
+#[test]
+fn kdf_lengths_and_stored_argon2_costs_are_bounded() {
+    let hkdf = |length: &[u8]| call("hkdf-sha256", &[b"ikm", b"salt", b"info", length]);
+    assert_eq!(hkdf(b"8160").unwrap().len(), 8160);
+    assert!(hkdf(b"8161").is_err());
+    assert!(hkdf(b"9223372036854775807").is_err());
+    assert!(hkdf(b"0").is_err());
+
+    let phc = call("argon2-phc", &[b"hunter2", b"saltsaltsaltsalt", b"1024", b"1", b"1"]).unwrap();
+    let text = String::from_utf8(phc).unwrap();
+    assert_eq!(call("argon2-verify", &[text.as_bytes(), b"hunter2"]).unwrap(), [1]);
+    for (from, to) in [("m=1024", "m=4194305"), ("t=1", "t=1001"), ("p=1", "p=256")] {
+        let crafted = text.replacen(from, to, 1);
+        assert_ne!(crafted, text);
+        assert!(call("argon2-verify", &[crafted.as_bytes(), b"hunter2"]).is_err(), "{crafted}");
+    }
+}
+
+/// #1015: the one-shot `digest` operation gives BLAKE2 and SHAKE their full
+/// length instead of always failing, and a family's arity message names the
+/// family and agrees in number.
+#[test]
+fn digest_takes_variable_length_hashes_and_arity_names_the_family() {
+    assert_eq!(call("digest", &[b"blake2b", b"abc"]).unwrap(), digest("blake2b", b"abc", 64));
+    assert_eq!(call("digest", &[b"blake2s", b"abc"]).unwrap(), digest("blake2s", b"abc", 32));
+    assert_eq!(call("digest", &[b"shake128", b"abc"]).unwrap().len(), 32);
+    assert_eq!(call("digest", &[b"shake256", b"abc"]).unwrap().len(), 64);
+    assert_eq!(call("digest", &[b"sha256", b"abc"]).unwrap(), digest("sha256", b"abc", 0));
+    let message = call("ed25519-public", &[]).unwrap_err().to_string();
+    assert!(message.contains("ed25519-public takes 1 argument") && !message.contains("arguments"), "{message}");
+}
