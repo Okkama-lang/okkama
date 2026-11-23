@@ -2,18 +2,18 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 21993 lines
+## front — 36 files, 22009 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 119 — `once let` (#491): a kept value must not depend on effects. A value that
-- `okkama-compiler/src/analysis/registry.rs` 3065 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
+- `okkama-compiler/src/analysis/registry.rs` 3096 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 223 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 622 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
 - `okkama-compiler/src/analysis/check/call.rs` 2021 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
 - `okkama-compiler/src/analysis/check/collections.rs` 656 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
-- `okkama-compiler/src/analysis/check/consts.rs` 334 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
+- `okkama-compiler/src/analysis/check/consts.rs` 335 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
 - `okkama-compiler/src/analysis/check/expr.rs` 1962 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/frame.rs` 262 — Local non-escaping Cell actions (#957). One lexical walk per body, with
 - `okkama-compiler/src/analysis/check/generics.rs` 397 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
@@ -25,29 +25,29 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.
 - `okkama-compiler/src/syntax/prune.rs` 238 — Production pruning: removing test-only declarations from a parsed tree.
 - `okkama-compiler/src/syntax/token.rs` 434 — Tokens produced by the lexer.
-- `okkama-compiler/src/syntax/ast/expr.rs` 329 — Expressions.
+- `okkama-compiler/src/syntax/ast/expr.rs` 327 — Expressions.
 - `okkama-compiler/src/syntax/ast/mod.rs` 286 — The typed abstract syntax tree.
-- `okkama-compiler/src/syntax/ast/stmt.rs` 108 — Statements and blocks.
+- `okkama-compiler/src/syntax/ast/stmt.rs` 107 — Statements and blocks.
 - `okkama-compiler/src/syntax/ast/types.rs` 45 — Type expressions and action result specifications.
 - `okkama-compiler/src/syntax/lexer/mod.rs` 634 — The Okkama lexer.
 - `okkama-compiler/src/syntax/parser/decl.rs` 872 — Module items and object/role members.
-- `okkama-compiler/src/syntax/parser/expr.rs` 1046 — Expressions.
+- `okkama-compiler/src/syntax/parser/expr.rs` 1041 — Expressions.
 - `okkama-compiler/src/syntax/parser/mod.rs` 529 — The Okkama parser.
-- `okkama-compiler/src/syntax/parser/stmt.rs` 540 — Blocks and statements.
+- `okkama-compiler/src/syntax/parser/stmt.rs` 539 — Blocks and statements.
 - `okkama-compiler/src/syntax/parser/types.rs` 195 — Type expressions, result specifications and generic parameter lists.
-- `okkama-compiler/src/syntax/print/build.rs` 573 — Conversion of the typed AST into the printer [`Node`] description.
+- `okkama-compiler/src/syntax/print/build.rs` 566 — Conversion of the typed AST into the printer [`Node`] description.
 - `okkama-compiler/src/syntax/print/json.rs` 189 — The `json` format: deterministic, pretty-printed JSON.
 - `okkama-compiler/src/syntax/print/mod.rs` 92 — AST and token printers.
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11763 lines
+## lower — 14 files, 11766 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1588 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 194 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 354 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 807 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
+- `okkama-compiler/src/lowering/mod.rs` 810 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
@@ -58,13 +58,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3112 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7599 lines
+## ir — 12 files, 7433 lines
 
-- `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
+- `okkama-compiler/src/ir/cfg.rs` 524 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
 - `okkama-compiler/src/ir/linearity.rs` 255 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
-- `okkama-compiler/src/ir/mod.rs` 1597 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
+- `okkama-compiler/src/ir/mod.rs` 1480 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
 - `okkama-compiler/src/ir/ownership.rs` 943 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 304 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
 - `okkama-compiler/src/ir/print.rs` 913 — Канонический текст OIR-1 (§18 спецификации).
@@ -73,14 +73,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/statics.rs` 429 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
 - `okkama-compiler/src/ir/verify.rs` 1930 — Верификатор OIR-1 (§17 спецификации).
 
-## codegen — 4 files, 1315 lines
+## codegen — 4 files, 1345 lines
 
-- `okkama-compiler/src/codegen/mod.rs` 79 — Выбор backend и генерация выходного артефакта из IR.
+- `okkama-compiler/src/codegen/mod.rs` 106 — Выбор backend и генерация выходного артефакта из IR.
 - `okkama-compiler/src/codegen/sparrow/check.rs` 225 — Независимая проверка распределения регистров (H-10): `registers` красит
-- `okkama-compiler/src/codegen/sparrow/mod.rs` 732 — Проверенный IR → программа Sparrow (SPB).
+- `okkama-compiler/src/codegen/sparrow/mod.rs` 735 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 16 files, 6210 lines
+## compiler — 16 files, 6221 lines
 
 - `okkama-compiler/src/lib.rs` 12 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
@@ -91,7 +91,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/doc/publish.rs` 222 — Publishing from the canonical public doc model (#515): man(7), standalone
 - `okkama-compiler/src/doc/render.rs` 673 — Reference pages from the documentation model (#512): terminal text and
 - `okkama-compiler/src/ide/complete.rs` 957 — Дополнение и подсказка сигнатуры.
-- `okkama-compiler/src/ide/index.rs` 1156 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
+- `okkama-compiler/src/ide/index.rs` 1167 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
 - `okkama-compiler/src/ide/lint.rs` 882 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
 - `okkama-compiler/src/ide/mod.rs` 249 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
 - `okkama-compiler/src/ide/outline.rs` 288 — Структура файла по синтаксическому дереву (без анализа).

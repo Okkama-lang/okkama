@@ -16,6 +16,26 @@
   net, text, misc, formats, host cut to their live parts), ~14.9k lines; `native::execute` refuses
   unrouted natives; a sparrow-core test keeps the ORIGIN routes and runtime-core providers equal.
 
+## #1005 one overload identity, reserved system type names (2026-11-23, release/064)
+
+- [x] `analysis/registry.rs`: `same_overload` (name, count, resolved types, variadic; a pair
+  with an error type is skipped) for object actions, fakes and role signatures;
+  `check_ctor_overloads` after `infer_field_types` for full and shorthand constructors;
+  one error at the later declaration, one note at the first (`first_declared`).
+- [x] `reserved_type_name`: Error, Maybe, Presence, Future, NativeFailure, Cancelled for
+  objects, roles, enums, native objects (`register_names`) and type parameters
+  (`new_params`); `Future` always resolves to the system type.
+- [x] Corpus audit: only Duration's unit constructors broke the rule (#1018).
+
+## #1006 compiler leftovers (2026-11-23, release/064)
+
+- [x] One dominator implementation (`cfg::dominators_by`); `operands`/`operands_mut`
+  from one macro; unread AST fields dropped; constant uses recorded in
+  `Registry::const_uses` for IDE hover/definition; codegen errors placed through
+  `DebugInfo`; a `dce` pass drops unread constants after fold/hoist.
+- [ ] Runtime part (SQLite text and kind, Unicode versions, async natives, blocking,
+  dead natives) with an agent; formatter header comments, width, std fmt-clean + gate.
+
 ## #1018 one Duration constructor (2026-11-23, feature/1018-duration, part of #1005)
 
 - [x] `std/time/duration.ok`: only `Duration(seconds is rat)` (whole nanoseconds or

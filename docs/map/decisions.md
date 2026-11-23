@@ -381,3 +381,20 @@ every declaration is open (#1005, owner decision).
   (`(15 * 60).rat()`, not `900.rat()`); `value * rat(1, 1000)` where the value
   was already a rat. The printed form `Duration(origin: 2)` (test failure text)
   is the field, not a constructor call, and stays.
+
+## One overload identity (#1005, owner decision 2026-11-23)
+
+- An overload is name + parameter count + resolved parameter types + variadic
+  shape, for actions, role signatures, fakes and constructors; a shorthand
+  constructor's types are its fields' (declared or inferred), so the check runs
+  after field inference. Names, results, async, hidden, successor do not count.
+- Reported once at the later declaration with a note at the first, as module
+  duplicates already were (no separate note kind in diagnostics).
+- The six system type names are reserved for every nominal declaration and type
+  parameter; binding names stay free.
+
+## dce after fold (#1006, 2026-11-23)
+
+- A separate, switchable pass (`dce` in OKKAMA_IR_PASSES), not a widened `undef`:
+  it drops only unread `const` (and `undef`), renumbering values as `undef` does.
+  Listing tests that check lowering use the values they inspect.
