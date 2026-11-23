@@ -6,11 +6,19 @@ import json
 from pathlib import Path
 import re
 
+from okkama_fmt import formatted
+
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source', type=Path, default=ROOT / 'tools/data/cldr-46.1')
 parser.add_argument('--output', type=Path, default=ROOT / 'std/locale/internal/plurals.ok')
 args = parser.parse_args()
+
+
+def write(path, text):
+    """Writes a generated module in the shape `okkama fmt` gives it (#1006)."""
+    path.write_text(formatted(text, path.name))
+
 manifest = json.loads((args.source / 'manifest.json').read_text())
 for name, digest in manifest['sha256'].items():
     if hashlib.sha256((args.source / name).read_bytes()).hexdigest() != digest:
@@ -76,7 +84,7 @@ let parent=if explicit!="" {explicit;} else {if parts.size()==1 {"root";} else {
 self.rule_key(parent,rules,parents,depth+1);
 }''', '}'])
 args.output.parent.mkdir(parents=True, exist_ok=True)
-args.output.write_text('\n'.join(output)+'\n')
+write(args.output, '\n'.join(output)+'\n')
 print(f'compiled {len(groups)} rule groups for {len(models[0])} cardinal / {len(models[1])} ordinal locales')
 # Root is a CLDR data coordinate, not a BCP 47 language; CLDR JSON spells its
 # parent value 'und'. Keep that distinction at the public data-key boundary.
@@ -87,7 +95,7 @@ from cldr_data import Tables
 tables = Tables('locales')
 for tag, value in sorted(parents.items()):
     tables.add('parent', tag, [value])
-(args.output.parent / 'parents.ok').write_text('''module locale/internal/parents v1.0.0;
+write(args.output.parent / 'parents.ok', '''module locale/internal/parents v1.0.0;
 
 // Generated from SHA-checked CLDR 46.1.0 parentLocales.json by
 // tools/generate-cldr.py. The table is runtime data (cldr-locales.dat, #223).
@@ -116,7 +124,7 @@ if any('|' in value for value in list(likely) + list(likely.values())):
     raise ValueError('unsafe table delimiter')
 for key in keys:
     tables.add('likely', key, [likely[key]])
-(args.output.parent / 'likely.ok').write_text('''module locale/internal/likely v1.0.0;
+write(args.output.parent / 'likely.ok', '''module locale/internal/likely v1.0.0;
 
 // Generated from SHA-checked CLDR 46.1.0 likelySubtags.json by
 // tools/generate-cldr.py. The table is runtime data (cldr-locales.dat, #223).
@@ -178,7 +186,7 @@ for key in list_keys:
 for profile, index in profiles.items():
     tables.add('list_profile', index, list(profile))
 data, records, size = tables.save()
-(args.output.parent / 'lists.ok').write_text('''module locale/internal/lists v1.0.0;
+write(args.output.parent / 'lists.ok', '''module locale/internal/lists v1.0.0;
 
 // Generated from SHA-checked CLDR 46.1.0 list patterns by
 // tools/generate-cldr.py. Profiles store pair/start/middle/end as prefix,

@@ -35,7 +35,7 @@ MODULE_GREGORIAN='''module locale/internal/gregorian v1.0.0;
 // Generated from SHA-checked CLDR 46.1.0 Gregorian standard styles by
 // tools/generate-cldr-dates.py. The tables are runtime data
 // (cldr-dates.dat, #223).
-import "runtime/cldr" take cldr_fields;
+import "runtime/cldr" take cldr_fields, cldr_field, cldr_size;
 import "strings/parse" take Number;
 
 // CLDR Gregorian calendar patterns and names by locale.
@@ -58,6 +58,16 @@ object CldrGregorian {
     // date-time combinations.
     fields(id is int) is @string {
         cldr_fields("dates.fields", id.string());
+    }
+
+    // One of those fields (#943: a format reads a few of the 179).
+    field(id is int, index is int) is string {
+        cldr_field("dates.fields", id.string(), index);
+    }
+
+    // How many fields the profile has.
+    size(id is int) is int {
+        cldr_size("dates.fields", id.string());
     }
 
     // A compiled date or time pattern; empty for an unknown id.

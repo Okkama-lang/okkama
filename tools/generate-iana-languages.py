@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from okkama_fmt import formatted
+
 root = Path(__file__).resolve().parents[1]
 cli = argparse.ArgumentParser(description=__doc__)
 cli.add_argument('--source',type=Path,default=root/'tools/data/iana-language-2026-09-17')
@@ -116,5 +118,5 @@ hidden const IANA_EXTLANG_PREFIXES = @@EXTLANGS@@;
 for key,value in [('@@DATE@@',manifest['file_date']),('@@ALIAS_CONSTS@@',alias_consts.rstrip('\n')),('@@ALIASES@@',alias_cases),('@@GRANDFATHERED@@',literal(grandfathered)),('@@WHOLE@@',literal(whole_tags)),('@@EXTLANGS@@',literal(extlangs))]:
     text=text.replace(key,value)
 args.output.parent.mkdir(parents=True,exist_ok=True)
-args.output.write_text(text)
+args.output.write_text(formatted(text, args.output.name))  # in the formatter's shape (#1006)
 print(f'compiled {len(preferred)} preferred values, {len(grandfathered)} grandfathered tags, {len(extlangs)} extlangs')
