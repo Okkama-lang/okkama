@@ -149,8 +149,10 @@ fn equivalent(function: &Function) {
         assert_eq!(actual, legacy_successors(function, node), "{} node {node}", function.symbol);
         actual
     }).collect();
-    if let Ok(order) = reverse_postorder(function) {
-        assert_eq!(order, legacy_rpo(function), "{} production RPO", function.symbol);
+    // The production walk over start/body nodes numbers them as the legacy one.
+    let (_, production) = dominators_by(edges.len(), |node| node_successors(function, node));
+    for (index, node) in legacy_rpo(function).into_iter().enumerate() {
+        assert_eq!(production[node], index, "{} production RPO", function.symbol);
     }
     let (idom, rpo) = dominators(&edges);
     for (index, node) in legacy_rpo(function).into_iter().enumerate() {

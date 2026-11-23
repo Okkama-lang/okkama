@@ -365,31 +365,6 @@ fn node_successors(function: &Function, node: usize) -> impl Iterator<Item = usi
     std::iter::from_fn(move || targets[0].take().or_else(|| targets[1].take()))
 }
 
-fn reverse_postorder(function: &Function) -> Result<Vec<usize>, String> {
-    let count = function.blocks.len() * 2;
-    let mut order = Vec::with_capacity(count);
-    let mut visited = vec![false; count];
-    // Итеративный DFS с явным стеком: глубина CFG не ограничена стеком потока.
-    let mut stack = vec![(0usize, node_successors(function, 0))];
-    visited[0] = true;
-    while let Some((node, targets)) = stack.last_mut() {
-        if let Some(target) = targets.next() {
-            if !visited[target] {
-                visited[target] = true;
-                stack.push((target, node_successors(function, target)));
-            }
-        } else {
-            order.push(*node);
-            stack.pop();
-        }
-    }
-    if let Some(node) = visited.iter().position(|seen| !seen) {
-        return Err(format!("block ^b{} is unreachable", node / 2));
-    }
-    order.reverse(); // reverse postorder
-    Ok(order)
-}
-
 /// Дерево доминаторов узлов «начало»/«тело» (Cooper–Harvey–Kennedy).
 /// Требует, чтобы все цели существовали и все блоки были достижимы.
 #[derive(Clone, Debug)]
@@ -404,49 +379,10 @@ pub struct Dominators {
 impl Dominators {
     pub fn compute(function: &Function) -> Result<Self, String> {
         let count = function.blocks.len() * 2;
-        let order = reverse_postorder(function)?;
-        let mut rpo_index = vec![0; count];
-        for (position, node) in order.iter().enumerate() {
-            rpo_index[*node] = position;
-        }
-        let mut predecessors = vec![Vec::new(); count];
-        for node in 0..count {
-            for target in node_successors(function, node) {
-                predecessors[target].push(node);
-            }
-        }
-        let mut idom: Vec<Option<usize>> = vec![None; count];
-        idom[0] = Some(0);
-        let intersect = |idom: &[Option<usize>], mut left: usize, mut right: usize| {
-            while left != right {
-                while rpo_index[left] > rpo_index[right] {
-                    left = idom[left].expect("processed node has an idom");
-                }
-                while rpo_index[right] > rpo_index[left] {
-                    right = idom[right].expect("processed node has an idom");
-                }
-            }
-            left
-        };
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for node in order.iter().skip(1) {
-                let mut new_idom: Option<usize> = None;
-                for predecessor in &predecessors[*node] {
-                    if idom[*predecessor].is_none() {
-                        continue;
-                    }
-                    new_idom = Some(match new_idom {
-                        None => *predecessor,
-                        Some(current) => intersect(&idom, *predecessor, current),
-                    });
-                }
-                if new_idom.is_some() && idom[*node] != new_idom {
-                    idom[*node] = new_idom;
-                    changed = true;
-                }
-            }
+        let (idom, _) = dominators_by(count, |node| node_successors(function, node));
+        // The first node no walk from the entry reaches, in block order.
+        if let Some(node) = idom.iter().position(Option::is_none) {
+            return Err(format!("block ^b{} is unreachable", node / 2));
         }
         let idom: Vec<usize> = idom
             .into_iter()
@@ -571,20 +507,35 @@ pub(crate) fn cycles(edges: &[Vec<usize>]) -> Vec<Option<usize>> {
 /// Immediate dominators of the graph `edges` from node 0 (Cooper, Harvey and
 /// Kennedy), with each node's reverse postorder number; `None` — unreachable.
 pub(crate) fn dominators(edges: &[Vec<usize>]) -> (Vec<Option<usize>>, Vec<usize>) {
-    let count = edges.len();
-    let mut order = Vec::new();
+    dominators_by(edges.len(), |node| edges[node].iter().copied())
+}
+
+/// The one Cooper–Harvey–Kennedy implementation (#1006): immediate dominators
+/// of the `count` nodes reachable from node 0 through `successors`, and each
+/// node's reverse postorder number (`usize::MAX` when unreachable). The walk
+/// takes successors in the order given, so the order is deterministic.
+pub(crate) fn dominators_by<I: Iterator<Item = usize>>(
+    count: usize,
+    successors: impl Fn(usize) -> I,
+) -> (Vec<Option<usize>>, Vec<usize>) {
+    let mut order = Vec::with_capacity(count);
     let mut seen = vec![false; count];
-    let mut stack = vec![(0usize, 0usize)];
+    let mut idom: Vec<Option<usize>> = vec![None; count];
+    if count == 0 {
+        return (idom, Vec::new());
+    }
+    // An explicit stack: the depth of the graph is not bounded by the thread's.
+    let mut stack = vec![(0usize, successors(0))];
     seen[0] = true;
-    while let Some((node, next)) = stack.pop() {
-        if let Some(&target) = edges[node].get(next) {
-            stack.push((node, next + 1));
+    while let Some((node, targets)) = stack.last_mut() {
+        if let Some(target) = targets.next() {
             if !seen[target] {
                 seen[target] = true;
-                stack.push((target, 0));
+                stack.push((target, successors(target)));
             }
         } else {
-            order.push(node);
+            order.push(*node);
+            stack.pop();
         }
     }
     order.reverse();
@@ -594,11 +545,10 @@ pub(crate) fn dominators(edges: &[Vec<usize>]) -> (Vec<Option<usize>>, Vec<usize
     }
     let mut preds = vec![Vec::new(); count];
     for &node in &order {
-        for &target in &edges[node] {
+        for target in successors(node) {
             preds[target].push(node);
         }
     }
-    let mut idom: Vec<Option<usize>> = vec![None; count];
     idom[0] = Some(0);
     let mut changed = true;
     while changed {
