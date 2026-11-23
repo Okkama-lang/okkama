@@ -137,11 +137,13 @@ fn check_function(function: &Function) -> Result<(), String> {
     if values.is_empty() {
         return Ok(());
     }
-    // A region passed between blocks as a parameter is out of this check's reach.
+    // A region passed between blocks as a parameter is out of this check's
+    // reach. Lowering never makes one; if it starts to, say so instead of
+    // silently checking nothing (#1007).
     let regions_in_params = function.blocks.iter().flat_map(|block| &block.params)
         .any(|param| function.values[param.0] == Type::Region);
     if regions_in_params {
-        return Ok(());
+        return Err("a region passed as a block parameter is not supported by the linearity check".into());
     }
     // Every value an instruction below can put in a state: the tracked ones,
     // and the operands of closes (outside them only in invalid IR).
@@ -260,7 +262,7 @@ fn check_function(function: &Function) -> Result<(), String> {
                 _ => Ok(()),
             };
             if let Err(error) = result {
-                errors.push(error);
+                errors.push(((block_index, index), error));
             }
         }
         match &block.term.kind {
@@ -273,7 +275,7 @@ fn check_function(function: &Function) -> Result<(), String> {
             TermKind::Ret(_) | TermKind::Raise(_) | TermKind::Throw(_) => {
                 for (value, &bits) in keys.values.iter().zip(&state.0) {
                     if bits & OPEN != 0 {
-                        errors.push(format!("{value} may still be open when block {block_index} leaves the function"));
+                        errors.push(((block_index, usize::MAX), format!("{value} may still be open when block {block_index} leaves the function")));
                     }
                 }
             }
@@ -284,10 +286,12 @@ fn check_function(function: &Function) -> Result<(), String> {
             }
         }
     }
+    // The first error in program order (block, then instruction, the exit
+    // after the instructions), not the first by text (#1007).
     errors.sort();
     errors.dedup();
     match errors.first() {
-        Some(error) => Err(error.clone()),
+        Some((_, error)) => Err(error.clone()),
         None => Ok(()),
     }
 }

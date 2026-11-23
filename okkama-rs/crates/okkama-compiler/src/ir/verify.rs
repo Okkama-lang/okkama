@@ -130,7 +130,12 @@ pub fn verify(module: &Module) -> Result<()> {
     }
     for role in &module.roles {
         for method in &role.methods {
-            for ty in &method.params {
+            // The result is a type of the module too (#1007).
+            let result = match &method.result {
+                ResultType::Value(ty) => Some(ty),
+                ResultType::Void => None,
+            };
+            for ty in method.params.iter().chain(result) {
                 check_type(module, ty)
                     .map_err(|message| module_error(format!("role {}: {message}", role.name)))?;
             }
@@ -246,8 +251,23 @@ fn check_type(module: &Module, ty: &Type) -> std::result::Result<(), String> {
             if !untagged && !key.is_map_key() {
                 return Err(format!("map key type {key} is not a key type"));
             }
+            check_type(module, key)?;
             check_type(module, value)
         }
+        // Function values and futures name types too (#1007).
+        Type::Fn(sig) => {
+            for param in &sig.params {
+                check_type(module, param)?;
+            }
+            match &sig.result {
+                ResultType::Value(ty) => check_type(module, ty),
+                ResultType::Void => Ok(()),
+            }
+        }
+        Type::Future(result) => match &**result {
+            ResultType::Value(ty) => check_type(module, ty),
+            ResultType::Void => Ok(()),
+        },
         _ => Ok(()),
     }
 }
@@ -1675,9 +1695,11 @@ impl<'a> FunctionVerifier<'a> {
                 Type::Int
             }
             InstKind::Undef => {
+                // The message names the violation (#1007).
                 return match result {
                     Some(result) if !self.ty(result)?.is_builder() => Ok(()),
-                    _ => Err("`undef` defines a non-builder value".to_string()),
+                    Some(_) => Err("`undef` must not define a builder".to_string()),
+                    None => Err("`undef` must define a value".to_string()),
                 };
             }
             InstKind::RegionEnter => {

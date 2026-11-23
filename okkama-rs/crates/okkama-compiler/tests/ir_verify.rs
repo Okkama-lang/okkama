@@ -627,3 +627,38 @@ fn variant_instructions_follow_the_case_layouts() {
     module.variants[0].cases[0].1 = ir::ObjectId(1);
     rejects(&module, "must be a plain layout of one case");
 }
+
+/// #1007: a role method's result and the types inside a function value or a
+/// future are checked like any other type of the module.
+#[test]
+fn role_results_and_nested_types_must_exist() {
+    let missing = || Type::Object(ir::ObjectId(9));
+    let mut role = diamond();
+    role.roles.push(ir::Role {
+        name: "Shape".into(),
+        methods: vec![ir::RoleMethod { name: "area".into(), params: Vec::new(), result: ResultType::Value(missing()) }],
+        builtin: false,
+        span: Span::empty(0),
+    });
+    rejects(&role, "missing object #9");
+
+    for nested in [
+        Type::Fn(Box::new(ir::FnSig { params: vec![missing()], result: ResultType::Void })),
+        Type::Fn(Box::new(ir::FnSig { params: Vec::new(), result: ResultType::Value(missing()) })),
+        Type::Future(Box::new(ResultType::Value(missing()))),
+    ] {
+        let mut module = diamond();
+        module.functions[0].values.push(nested.clone());
+        module.functions[0].blocks[0].insts.push(inst(4, InstKind::Undef));
+        rejects(&module, "missing object #9");
+    }
+}
+
+/// #1007: `undef` of a builder says what is wrong.
+#[test]
+fn undef_of_a_builder_names_the_violation() {
+    let mut module = diamond();
+    module.functions[0].values.push(Type::Builder(Box::new(Type::Int)));
+    module.functions[0].blocks[0].insts.push(inst(4, InstKind::Undef));
+    rejects(&module, "`undef` must not define a builder");
+}
