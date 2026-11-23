@@ -148,7 +148,8 @@ object SqliteDatabase {
 
     // A new connection; DbFailure when it cannot be opened.
     async connection() is SqliteConnection {
-        await SqliteOpening(path: path_encode(path.string()), memory: false, options: options).connection();
+        await SqliteOpening(path: path_encode(path.string()), memory: false, options: options)
+            .connection();
     }
 }
 
@@ -335,7 +336,8 @@ hidden object SqliteTaskCleanup<T> {
 }
 
 // A connection to a SQLite database.
-object SqliteConnection does DbConnection, DbExecuting, DbPreparing, DbPreparedOpening, SqliteBlobOpening, SqliteScripting, SqliteBackupMaking, Closing {
+object SqliteConnection does DbConnection, DbExecuting, DbPreparing, DbPreparedOpening,
+    SqliteBlobOpening, SqliteScripting, SqliteBackupMaking, Closing {
     has origin is SqliteSession;
 
     // The connection over origin.
@@ -387,7 +389,12 @@ object SqliteConnection does DbConnection, DbExecuting, DbPreparing, DbPreparedO
     }
 
     // Copies the database to target, pages at a time, within timeout.
-    async backup(target is Path, pages is int, clock is Timing, timeout is Duration) is BackupReport {
+    async backup(
+        target is Path,
+        pages is int,
+        clock is Timing,
+        timeout is Duration
+    ) is BackupReport {
         await origin.backup(target, pages, clock, timeout);
     }
 
@@ -411,7 +418,10 @@ object SqliteConnection does DbConnection, DbExecuting, DbPreparing, DbPreparedO
     }
 
     // Begins a transaction in mode.
-    async transaction(options is TransactionOptions, mode is SqliteTransactionMode) is SqliteTransaction {
+    async transaction(
+        options is TransactionOptions,
+        mode is SqliteTransactionMode
+    ) is SqliteTransaction {
         await origin.begin(options, mode);
     }
 
@@ -664,7 +674,10 @@ object SqliteSession does Closing {
 
     // A cancelled or failed request has settled (a cancellation reaches the
     // native request, which withdraws it) before the worker barrier runs.
-    async reply(waiting is Future<sqlite.SqliteReplyState>, operation is DbOperation) is SqliteFrame {
+    async reply(
+        waiting is Future<sqlite.SqliteReplyState>,
+        operation is DbOperation
+    ) is SqliteFrame {
         let reply = try {
             await waiting;
         }
@@ -718,11 +731,11 @@ object SqliteSession does Closing {
         !self.closed()
             && blob.value() == id
             && (if token == 0 {
-                transaction.value() == 0;
-            }
-            else {
-                self.active(token);
-            });
+            transaction.value() == 0;
+        }
+        else {
+            self.active(token);
+        });
     }
 
     // Closes BLOB id.
@@ -777,7 +790,12 @@ object SqliteSession does Closing {
     }
 
     // Backs up to target; DbBusy while rows or a BLOB are open.
-    async backup(target is Path, pages is int, clock is Timing, timeout is Duration) is BackupReport {
+    async backup(
+        target is Path,
+        pages is int,
+        clock is Timing,
+        timeout is Duration
+    ) is BackupReport {
         confirm !self.closed() else throw DbClosed.closed;
         let guard = await lock.guard();
         defer guard.close();
@@ -943,8 +961,8 @@ object SqliteSession does Closing {
                 && (kind == DbFailureKind.connection
                 || kind == DbFailureKind.timeout
                 || kind == DbFailureKind.cancelled) {
-                    throw IndeterminateCommit.indeterminate;
-                }
+                throw IndeterminateCommit.indeterminate;
+            }
             confirmed.set();
             throw;
         }
@@ -1573,7 +1591,10 @@ hidden object SqliteOrigin {
         origin = connection;
     }
 
-    async transaction(options is TransactionOptions, mode is SqliteTransactionMode) is SqliteTransaction {
+    async transaction(
+        options is TransactionOptions,
+        mode is SqliteTransactionMode
+    ) is SqliteTransaction {
         await origin.transaction(options, mode);
     }
 }
@@ -1614,7 +1635,8 @@ hidden object SqliteBeginCleanup {
 }
 
 // An open SQLite transaction.
-object SqliteTransaction does Transaction, DbExecuting, DbPreparing, SqliteBlobOpening, SqliteScripting {
+object SqliteTransaction does Transaction, DbExecuting, DbPreparing, SqliteBlobOpening,
+    SqliteScripting {
     has owner is SqliteSession;
     has token is int;
     has outcome is Atomic<int>;
@@ -1779,7 +1801,13 @@ hidden object SqliteBlobHandle does SqliteBlob, Closing {
     has writable is bool;
     has stopped is Event;
 
-    SqliteBlobHandle(owner is SqliteSession, id is int, size is int, writable is bool, token is int) {
+    SqliteBlobHandle(
+        owner is SqliteSession,
+        id is int,
+        size is int,
+        writable is bool,
+        token is int
+    ) {
         self.owner = owner;
         self.id = id;
         self.size = size;
@@ -1960,7 +1988,8 @@ async test "queries read one row, maybe a row, a bounded list and a stream" {
         await Query(origin: connection, statement: Statement("SELECT id FROM t")).one();
     };
     test.throws(NoRows) {
-        await Query(origin: connection, statement: Statement("SELECT id FROM t WHERE id > 9")).one();
+        await Query(origin: connection, statement: Statement("SELECT id FROM t WHERE id > 9"))
+            .one();
     };
     let missing = await Query(
         origin: connection,
@@ -1993,7 +2022,9 @@ async test "prepared statements, transactions and acquisitions" {
     lookup.close();
 
     let undone = await connection.transaction(TransactionOptions());
-    await undone.execution(Statement(text: "INSERT INTO t(name) VALUES (?)", values: [DbText("x")]));
+    await undone.execution(
+        Statement(text: "INSERT INTO t(name) VALUES (?)", values: [DbText("x")])
+    );
     await undone.rollback();
     test.is(undone.active(), false);
     test.throws(TransactionEnded) {
@@ -2003,9 +2034,10 @@ async test "prepared statements, transactions and acquisitions" {
     await kept.execution(Statement(text: "INSERT INTO t(name) VALUES (?)", values: [DbText("c")]));
     await kept.commit();
     test.is(
-        (await Query(origin: connection, statement: Statement("SELECT count(*) AS n FROM t")).one()).int(
-            "n"
-        ),
+        (await Query(origin: connection, statement: Statement("SELECT count(*) AS n FROM t")).one())
+            .int(
+                "n"
+            ),
         3
     );
 
@@ -2053,9 +2085,10 @@ async test "scripts, blobs and an online backup" {
     test.is(report.copies().string() == report.total().string(), true);
     let copy = await SqliteDatabase(path: target, options: SqliteOptions()).connection();
     test.is(
-        (await Query(origin: copy, statement: Statement("SELECT hex(data) AS h FROM b")).one()).text(
-            "h"
-        ),
+        (await Query(origin: copy, statement: Statement("SELECT hex(data) AS h FROM b")).one())
+            .text(
+                "h"
+            ),
         "00070800"
     );
     copy.close();

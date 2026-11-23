@@ -124,7 +124,8 @@ object MboxArchive does ByteSource {
     // The records, within the default limits.
     MboxArchive(records is Sequencing<MboxRecord>) {
         let bounds = MboxLimits();
-        self.records = MboxRecordsSnapshot(origin: records, maximum: bounds::Limits::messages).values();
+        self.records = MboxRecordsSnapshot(origin: records, maximum: bounds::Limits::messages)
+            .values();
         limits = bounds;
     }
 
@@ -132,13 +133,15 @@ object MboxArchive does ByteSource {
     MboxArchive(records is ...MboxRecord) {
         let listed is @MboxRecord = records...;
         let bounds = MboxLimits();
-        self.records = MboxRecordsSnapshot(origin: listed, maximum: bounds::Limits::messages).values();
+        self.records = MboxRecordsSnapshot(origin: listed, maximum: bounds::Limits::messages)
+            .values();
         limits = bounds;
     }
 
     // The records within limits.
     MboxArchive(records is Sequencing<MboxRecord>, limits is MboxLimits) {
-        self.records = MboxRecordsSnapshot(origin: records, maximum: limits::Limits::messages).values();
+        self.records = MboxRecordsSnapshot(origin: records, maximum: limits::Limits::messages)
+            .values();
         self.limits = limits;
     }
 

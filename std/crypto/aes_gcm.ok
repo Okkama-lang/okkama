@@ -51,12 +51,18 @@ object AesGcm does Sealing {
     // plaintext encrypted and authenticated with aad, under nonce; never reuse
     // a nonce with the same key.
     sealed(nonce is @byte, aad is @byte, plaintext is @byte) is @byte {
-        HostOperation(operation: "aead-seal:" + self.algorithm(), arguments: [key.export_bytes(), nonce, aad, plaintext]).bytes();
+        HostOperation(
+            operation: "aead-seal:" + self.algorithm(),
+            arguments: [key.export_bytes(), nonce, aad, plaintext]
+        ).bytes();
     }
 
     // The plaintext of sealed; AuthenticationFailed when it or aad was changed.
     opened(nonce is @byte, aad is @byte, sealed is @byte) is @byte {
-        HostOperation(operation: "aead-open:" + self.algorithm(), arguments: [key.export_bytes(), nonce, aad, sealed]).bytes();
+        HostOperation(
+            operation: "aead-open:" + self.algorithm(),
+            arguments: [key.export_bytes(), nonce, aad, sealed]
+        ).bytes();
     }
 
     // Text, as UTF-8: cipher.sealed(nonce, "record 7", "balance: 42").

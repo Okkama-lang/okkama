@@ -36,21 +36,39 @@ object CsvStream does Closing {
     CsvStream(origin is Reading) {
         self.origin = origin;
         upstream = Maybe<AsyncReading>.none;
-        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
+        state = CsvScanner(
+            bytes: 4194304,
+            input: 1048576,
+            field: 65536,
+            rows: 10000,
+            columns: 1024
+        );
     }
 
     // Rows of CSV text, read one at a time: CsvStream(text: "id,total\r\n1,10\r\n").
     CsvStream(text is string) {
         origin = ByteBuffer(text).reading();
         upstream = Maybe<AsyncReading>.none;
-        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
+        state = CsvScanner(
+            bytes: 4194304,
+            input: 1048576,
+            field: 65536,
+            rows: 10000,
+            columns: 1024
+        );
     }
 
     // Reads origin, which may block, within the same limits.
     CsvStream(origin is AsyncReading) {
         self.origin = ByteBuffer("").reading();
         upstream = Maybe.some(origin);
-        state = CsvScanner(bytes: 4194304, input: 1048576, field: 65536, rows: 10000, columns: 1024);
+        state = CsvScanner(
+            bytes: 4194304,
+            input: 1048576,
+            field: 65536,
+            rows: 10000,
+            columns: 1024
+        );
     }
 
     // The same within these limits.
@@ -449,8 +467,8 @@ hidden object CsvScanner {
                     || (lead == 237 && second >= 160)
                     || (lead == 240 && second < 144)
                     || (lead == 244 && second >= 144) {
-                        return self.failed("utf8", used);
-                    }
+                    return self.failed("utf8", used);
+                }
                 for 2..size -> tail {
                     if int(data[index + tail]) < 128 || int(data[index + tail]) > 191 {
                         return self.failed("utf8", used);
@@ -662,7 +680,9 @@ hidden object CsvTestUpload does AsyncReading {
 
 async test "rows stream from an upload with for await" {
     let seen = Atomic("");
-    for await CsvStream(origin: CsvTestUpload("a,b\r\n\"x,y\",\"say \"\"hi\"\"\"\r\nя,😀\r\n")) -> row {
+    for await CsvStream(
+        origin: CsvTestUpload("a,b\r\n\"x,y\",\"say \"\"hi\"\"\"\r\nя,😀\r\n")
+    ) -> row {
         seen.replace(seen.value() + row.join("|") + ";");
     }
     test.is(seen.value(), "a|b;x,y|say \"hi\";я|😀;");
@@ -839,7 +859,11 @@ test "CSV stream each decoded limit rejects excess and remains stable" {
     let kinds = ["input", "field", "rows", "columns"];
     for 0..4 -> index {
         let stream = CsvStream(
-            origin: CsvBoundarySource(data: Utf8Encoded("\"é\"\"😀\"\r\n").bytes(), cut: 1, width: 1),
+            origin: CsvBoundarySource(
+                data: Utf8Encoded("\"é\"\"😀\"\r\n").bytes(),
+                cut: 1,
+                width: 1
+            ),
             maximum_bytes: 12,
             maximum_input: if index == 0 {
                 7;

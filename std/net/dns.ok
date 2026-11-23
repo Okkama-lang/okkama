@@ -155,7 +155,11 @@ object SystemResolution does Resolving {
             let pending = network.dns_addresses(origin.host().ascii(), origin::Parts::port);
             let records = await pending;
             let result is @IpEndpoint = records.map() -> record {
-                IpEndpoint(address: IpAddress(record[0]), port: origin::Parts::port, zone: record[2]);
+                IpEndpoint(
+                    address: IpAddress(record[0]),
+                    port: origin::Parts::port,
+                    zone: record[2]
+                );
             };
             result;
         }
@@ -262,7 +266,8 @@ hidden object DnsAddressSnapshot {
         let ordered = Sorted(indexed);
         let positions is @int = (0..count).filter() -> index {
             index == 0
-                || ordered.item(index).address().order(ordered.item(index - 1).address()) != Order.equal;
+                || ordered.item(index).address().order(ordered.item(index - 1).address()) !=
+                Order.equal;
         };
         let kept is @DnsIndexedAddress = positions.map() -> index {
             ordered.item(index);
@@ -316,16 +321,20 @@ enum UnknownAddress is Error = (address(address is string));
 enum ResolutionLimitExceeded is Error = (kind(kind is string));
 
 async test "fixed lookup preserves requested port without a system resolver" {
-    let resolver = FixedResolution(HostAddresses(host: HostName("example.com"), addresses: [IpAddress("192.0.2.1")])
+    let resolver = FixedResolution(
+        HostAddresses(host: HostName("example.com"), addresses: [IpAddress("192.0.2.1")])
     );
     test.is(
-        (await resolver.addresses(HostEndpoint(host: HostName("EXAMPLE.com"), port: 443))).item(0)::Parts::port,
+        (await resolver.addresses(HostEndpoint(host: HostName("EXAMPLE.com"), port: 443)))
+            .item(0)::Parts::port,
         443
     );
 }
 
 async test "system lookup cancellation before start launches no worker" {
-    let pending = SystemResolution().addresses(HostEndpoint(host: HostName("unused.invalid"), port: 80));
+    let pending = SystemResolution().addresses(
+        HostEndpoint(host: HostName("unused.invalid"), port: 80)
+    );
     pending.cancel();
     test.ok(try {
         await pending;

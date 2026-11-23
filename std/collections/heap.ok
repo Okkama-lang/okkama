@@ -274,8 +274,11 @@ test "draining a heap yields ascending order" {
         };
     };
     let source = Heap(values: [5, 3, 9, 1, 3, 8]);
-    test.is((0..6).map() -> index {
-        after(source, index).top().string();
-    }.join(" "), "1 3 3 5 8 9");
+    test.is(
+        (0..6).map() -> index {
+            after(source, index).top().string();
+        }.join(" "),
+        "1 3 3 5 8 9"
+    );
     test.is(after(source, 6).size(), 0);
 }

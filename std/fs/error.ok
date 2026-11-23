@@ -15,13 +15,24 @@ module fs/error v1.0.0;
 
 // Everything that goes wrong with files, directories and paths; each case names
 // the path or says what failed.
-enum FileError is Error = (not_found(path is string), already_exists(path is string), permission_denied(
-    path is string
-), not_empty(path is string), not_symbolic_link(path is string), invalid_hard_link_source(
-    path is string
-), invalid_text(path is string), invalid_operation(message is string), unsupported_encoding(
-    name is string
-), failed(code is string, message is string));
+enum FileError is Error = (
+    not_found(path is string),
+    already_exists(path is string),
+    permission_denied(
+        path is string
+    ),
+    not_empty(path is string),
+    not_symbolic_link(path is string),
+    invalid_hard_link_source(
+        path is string
+    ),
+    invalid_text(path is string),
+    invalid_operation(message is string),
+    unsupported_encoding(
+        name is string
+    ),
+    failed(code is string, message is string)
+);
 
 // A runtime failure turned into the FileError it means; std uses it.
 object FileFailure {

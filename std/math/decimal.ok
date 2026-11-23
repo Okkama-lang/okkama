@@ -136,7 +136,10 @@ object Decimal does Comparing<Decimal> {
         if shift >= 0 {
             return self;
         }
-        let quotient = DecimalQuotient(dividend: mine.whole(), divisor: DecimalShift(shift).power());
+        let quotient = DecimalQuotient(
+            dividend: mine.whole(),
+            divisor: DecimalShift(shift).power()
+        );
         DecimalParts(coefficient: quotient.rounded(rounding), exponent: -scale).decimal();
     }
 
@@ -387,7 +390,9 @@ test "decimals divide and round as asked" {
         "3.8e-1"
     );
     test.is(
-        Decimal("4.5").divided(by: Decimal("0.15"), scale: 0, rounding: Rounding.toward_zero).string(),
+        Decimal("4.5")
+            .divided(by: Decimal("0.15"), scale: 0, rounding: Rounding.toward_zero)
+            .string(),
         "3e1"
     );
     test.is(Decimal("2.675").rounded(scale: 2, rounding: Rounding.half_up).string(), "2.68");
@@ -397,7 +402,9 @@ test "decimals divide and round as asked" {
     test.is(Decimal("2.5").rounded(scale: 5, rounding: Rounding.floor).string(), "2.5");
     test.is(
         try {
-            Decimal(1).divided(by: Decimal("0.00"), scale: 2, rounding: Rounding.half_even).string();
+            Decimal(1)
+                .divided(by: Decimal("0.00"), scale: 2, rounding: Rounding.half_even)
+                .string();
         }
         catch DecimalDivisionByZero.dividend(dividend) {
             "by zero: " + dividend;

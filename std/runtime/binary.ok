@@ -50,4 +50,10 @@ native binary_float_from_bytes(origin is @byte, width is int, order is string) i
 
 // Exact stringwise repeated four-octet mask, bounded to 65536 output bytes.
 // Offset is the phase at origin[0]; start advances that phase. No input consumed.
-native binary_masked_slice(origin is @byte, mask is @byte, offset is int, start is int, size is int) is @byte;
+native binary_masked_slice(
+    origin is @byte,
+    mask is @byte,
+    offset is int,
+    start is int,
+    size is int
+) is @byte;

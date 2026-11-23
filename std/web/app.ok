@@ -78,7 +78,8 @@ object WebApplication {
         else {
             host.string();
         };
-        let own = ParsedUrl("http://" + literal + ":" + listener::Local::port.string() + "/").parts();
+        let own = ParsedUrl("http://" + literal + ":" + listener::Local::port.string() + "/")
+            .parts();
         HttpServer(
             listener: listener,
             handling: routes.table(),
@@ -112,7 +113,8 @@ object WebApplication {
         else {
             host.string();
         };
-        let own = ParsedUrl("https://" + literal + ":" + listener::Local::port.string() + "/").parts();
+        let own = ParsedUrl("https://" + literal + ":" + listener::Local::port.string() + "/")
+            .parts();
         let both is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_1, HttpVersion.http_2]);
         let secured = ServerPolicy(
             protocols: both,
@@ -185,7 +187,8 @@ hidden object Greetings {
 
     async hello(request is WebRequest) is Responding {
         TextReply(
-            "Hello, " + request.path().text("name") + (request.query().maybe("mark").text() else "") + "!"
+            "Hello, " + request.path().text("name") +
+                (request.query().maybe("mark").text() else "") + "!"
         );
     }
 

@@ -198,9 +198,10 @@ hidden object PlistWireSession {
         self.capacity(value.length());
         let scalars = Utf32Encoded(origin: value, order: ByteOrder.big).bytes();
         for (0..value.length()) -> index {
-            let code = Binary(bytes: scalars.slice(index * 4, index * 4 + 4), order: ByteOrder.big).int(
-                Signedness.unsigned
-            );
+            let code = Binary(bytes: scalars.slice(index * 4, index * 4 + 4), order: ByteOrder.big)
+                .int(
+                    Signedness.unsigned
+                );
             confirm code == 9
                 || code == 10
                 || code == 13
@@ -437,7 +438,8 @@ hidden object PlistWireValue does PlistWriting {
             self.end(
                 session.record(
                     [byte(51)],
-                    FloatBytes(value: number, width: FloatWidth.bits64, order: ByteOrder.big).bytes()
+                    FloatBytes(value: number, width: FloatWidth.bits64, order: ByteOrder.big)
+                        .bytes()
                 )
             );
         }

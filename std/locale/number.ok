@@ -981,7 +981,11 @@ object NumberPrinting {
         }
         else {
             "";
-        }) + data.template(pattern.prefix(negative_frame), plus, per_mille) + rendered.text() + data.template(
+        }) + data.template(
+            pattern.prefix(negative_frame),
+            plus,
+            per_mille
+        ) + rendered.text() + data.template(
             pattern.suffix(negative_frame),
             plus,
             per_mille
@@ -1122,39 +1126,41 @@ object NumberPrinting {
         );
         let spelling = number.ascii(format.precision()::Digits::minimum_fraction);
         confirm spelling.length() <= 1024
-            else throw InvalidLocalizedNumber.because("compact plural operand exceeds 1024 scalars");
+            else throw InvalidLocalizedNumber.because(
+                "compact plural operand exceeds 1024 scalars"
+            );
         let exact = number.magnitude();
         let category = if exact.coefficient().string() == "1"
             && exact.exponent() == 0.rat()
             && entries.has(bucket.string() + ":1") {
-                "1";
-            }
-            else {
-                match PluralCategoryOf(
-                    origin: PluralNumber(spelling),
-                    locale: locale,
-                    kind: PluralKind.cardinal
-                ).category() {
-                    case PluralCategory.zero {
-                        "zero";
-                    }
-                    case PluralCategory.one {
-                        "one";
-                    }
-                    case PluralCategory.two {
-                        "two";
-                    }
-                    case PluralCategory.few {
-                        "few";
-                    }
-                    case PluralCategory.many {
-                        "many";
-                    }
-                    else {
-                        "other";
-                    }
+            "1";
+        }
+        else {
+            match PluralCategoryOf(
+                origin: PluralNumber(spelling),
+                locale: locale,
+                kind: PluralKind.cardinal
+            ).category() {
+                case PluralCategory.zero {
+                    "zero";
                 }
-            };
+                case PluralCategory.one {
+                    "one";
+                }
+                case PluralCategory.two {
+                    "two";
+                }
+                case PluralCategory.few {
+                    "few";
+                }
+                case PluralCategory.many {
+                    "many";
+                }
+                else {
+                    "other";
+                }
+            }
+        };
         let chosen = bucket.string() + ":" + category;
         let final = if entries.has(chosen) {
             entries.value(chosen);
@@ -1180,11 +1186,12 @@ object NumberPrinting {
         };
         if percent {
             NumberRendered(
-                text: data.template(selected_pattern.prefix(false), false, per_mille) + numeric + data.template(
-                    selected_pattern.suffix(false),
-                    false,
-                    per_mille
-                ),
+                text: data.template(selected_pattern.prefix(false), false, per_mille) + numeric +
+                    data.template(
+                        selected_pattern.suffix(false),
+                        false,
+                        per_mille
+                    ),
                 number: number
             );
         }
@@ -1223,7 +1230,8 @@ object LocalizedDecimal {
     // The text.
     string() is string {
         NumberPrinting(
-            origin: DecimalNumberMagnitude(origin: origin, shift: 0, negative_zero: false).magnitude(),
+            origin: DecimalNumberMagnitude(origin: origin, shift: 0, negative_zero: false)
+                .magnitude(),
             locale: locale,
             format: format,
             percent: false,
@@ -1370,11 +1378,11 @@ object LocalizedSpecialNumber {
         else {
             if origin == NumberSpecial.positive_infinity
                 && (sign == NumberSign.always || sign == NumberSign.except_zero) {
-                    data.symbol(2);
-                }
-                else {
-                    "";
-                }
+                data.symbol(2);
+            }
+            else {
+                "";
+            }
         }) + data.symbol(8);
     }
 }
@@ -1450,9 +1458,9 @@ hidden object NumberAffixReading {
         }
         if origin.slice(0, prefix.length()) != prefix
             || origin.slice(origin.length() - suffix.length(), origin.length()) != suffix {
-                let empty is @string = [];
-                return empty;
-            }
+            let empty is @string = [];
+            return empty;
+        }
         [origin.slice(prefix.length(), origin.length() - suffix.length())];
     }
 }
@@ -1493,7 +1501,11 @@ hidden object NumberIntegerReading {
     has data is NumberRenderingData;
     has grouping is NumberGrouping;
 
-    NumberIntegerReading(origin is string, data is NumberRenderingData, grouping is NumberGrouping) {
+    NumberIntegerReading(
+        origin is string,
+        data is NumberRenderingData,
+        grouping is NumberGrouping
+    ) {
         self.origin = origin;
         self.data = data;
         self.grouping = grouping;
@@ -1557,7 +1569,9 @@ hidden object NumberReading {
             else throw InvalidLocalizedNumber.because("input must be 1..4096 scalars");
         let notation = format::Style::notation;
         confirm notation != NumberNotation.compact_short && notation != NumberNotation.compact_long
-            else throw InvalidLocalizedNumber.because("compact notation has no unambiguous inverse");
+            else throw InvalidLocalizedNumber.because(
+                "compact notation has no unambiguous inverse"
+            );
         let data = NumberLocaleData(locale);
         let scientific = notation == NumberNotation.scientific
             || notation == NumberNotation.engineering;
@@ -1747,7 +1761,9 @@ test "digits follow the locale's numbering system both ways" {
     test.is(arabic, "١٬٢٣٤٬٥٦٧٫٥٠");
     test.is(devanagari, "१२,३४,५६७.५०");
     test.is(
-        LocalizedDecimalFromString(origin: arabic, locale: Locale("ar-EG"), format: format).decimal().string(),
+        LocalizedDecimalFromString(origin: arabic, locale: Locale("ar-EG"), format: format)
+            .decimal()
+            .string(),
         "1.2345675e6"
     );
     test.is(

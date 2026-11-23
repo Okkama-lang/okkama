@@ -336,7 +336,9 @@ object EnvironmentMaybeValue {
 enum MissingEnvironmentVariable is Error = (name(name is string));
 
 // A variable whose value is not what its reader expects.
-enum InvalidEnvironmentValue is Error = (named(name is string, value is string, expected is string));
+enum InvalidEnvironmentValue is Error = (
+    named(name is string, value is string, expected is string)
+);
 
 // A name that is empty or has `=` or NUL in it, or a value with NUL.
 enum InvalidEnvironmentVariable is Error = (because(message is string));

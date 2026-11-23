@@ -1523,8 +1523,8 @@ hidden object CsvScanner {
                     || (lead == 237 && second >= 160)
                     || (lead == 240 && second < 144)
                     || (lead == 244 && second >= 144) {
-                        return self.failed("utf8", used);
-                    }
+                    return self.failed("utf8", used);
+                }
                 for 2..size -> tail {
                     if int(data[index + tail]) < 128 || int(data[index + tail]) > 191 {
                         return self.failed("utf8", used);
@@ -1951,9 +1951,10 @@ test "custom grammar has independent wire fixtures" {
     let dialect = CsvDialect(delimiter: "\t", quote: "'", line_ending: "\n");
     let rows is @@string = [["a,b", "x\ty", "say 'hi'", ""]];
     test.is(CsvString(rows: rows, dialect: dialect).string(), "a,b\t'x\ty'\t'say ''hi'''\t\n");
-    let parsed is @@string = CsvRows(origin: "a,b\t'x\ty'\t'say ''hi'''\t\n", dialect: dialect).map() -> row {
-        row;
-    };
+    let parsed is @@string = CsvRows(origin: "a,b\t'x\ty'\t'say ''hi'''\t\n", dialect: dialect)
+        .map() -> row {
+            row;
+        };
     test.is(parsed, rows);
     test.is(
         CsvString(
@@ -2139,7 +2140,9 @@ hidden object CsvTestUpload does AsyncReading {
 
 async test "records stream from an upload as they come" {
     let seen = Atomic("");
-    for await CsvRecords(origin: CsvTestUpload("name,age,name\r\nAda,36,x\r\n\"Zoë, Q\",41,y\r\n")) -> record {
+    for await CsvRecords(
+        origin: CsvTestUpload("name,age,name\r\nAda,36,x\r\n\"Zoë, Q\",41,y\r\n")
+    ) -> record {
         seen.replace(seen.value() + record.text("name") + "/" + record.int("age").string() + ";");
     }
     test.is(seen.value(), "Ada/36;Zoë, Q/41;");

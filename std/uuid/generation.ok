@@ -211,7 +211,12 @@ test "named UUIDs match RFC 4122 vectors" {
 test "custom UUIDs place their bits and refuse what does not fit" {
     let custom = Uuid8(high: 0, middle: 0, low: 0);
     test.is(custom.string(), "00000000-0000-8000-8000-000000000000");
-    test.is(UuidText(origin: Uuid8(high: 281474976710655, middle: 4095, low: 4611686018427387903).string()).version(), 8);
+    test.is(
+        UuidText(
+            origin: Uuid8(high: 281474976710655, middle: 4095, low: 4611686018427387903).string()
+        ).version(),
+        8
+    );
     test.is(
         Uuid8(high: 0x0123456789ab, middle: 0xcde, low: 0x3fedcba987654321).string(),
         "01234567-89ab-8cde-bfed-cba987654321"

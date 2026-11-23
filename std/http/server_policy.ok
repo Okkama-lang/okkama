@@ -106,9 +106,10 @@ object ServerPolicy {
             && ranges > 0
             && ranges <= 128
             else throw InvalidServerPolicy.because("protocol or resource budget");
-        let selected is @HttpVersion = [HttpVersion.http_1_1, HttpVersion.http_2].filter() -> value {
-            protocols.membership(value);
-        };
+        let selected is @HttpVersion = [HttpVersion.http_1_1, HttpVersion.http_2]
+            .filter() -> value {
+                protocols.membership(value);
+            };
         confirm selected.size() == count
             else throw InvalidServerPolicy.because("unsupported protocol identity");
         let snapshot is Set<HttpVersion> = OrderedSet(selected);

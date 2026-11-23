@@ -120,7 +120,8 @@ object OpenedControllingTerminal {
 
 // One owning session. Its input/output/mode/resize capabilities are borrowed;
 // closing or dropping the session revokes all children and restores host state.
-object TerminalSession does Closing, TerminalModeApplying, TerminalScreenApplying, TerminalResizeOpening {
+object TerminalSession does Closing, TerminalModeApplying, TerminalScreenApplying,
+    TerminalResizeOpening {
     has state is TerminalState;
     has observation is TerminalObservation;
     has reading is TerminalInput;

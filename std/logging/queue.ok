@@ -207,7 +207,8 @@ hidden object LogQueueState {
             self.check();
             let current = inflight.value();
             let items = queued.value();
-            let working = current.size() > 0 && current[0].sequence().order(target) != Order.greater;
+            let working = current.size() > 0
+                && current[0].sequence().order(target) != Order.greater;
             let pending = items.size() > 0
                 && items.first().sequence().order(target) != Order.greater;
             last if !working && !pending;
@@ -477,7 +478,8 @@ hidden object FailingQueueRun {
 test "queue options keep their bounds" {
     test.is(LogQueueOptions(capacity: 1, overflow: LogOverflow.reject)::Limits::capacity, 1);
     test.is(
-        LogQueueOptions(capacity: 65536, overflow: LogOverflow.drop_oldest)::Limits::overflow == LogOverflow.drop_oldest,
+        LogQueueOptions(capacity: 65536, overflow: LogOverflow.drop_oldest)::Limits::overflow ==
+            LogOverflow.drop_oldest,
         true
     );
     test.throws(InvalidLogQueue) {

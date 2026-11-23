@@ -54,9 +54,13 @@ object HttpResponseObservation {
 }
 
 // The connection reset, closed or broke off before any response.
-enum HttpPeerGoneBeforeResponse is Error = (reset(cause is NetworkFailure), closed(
-    cause is NetworkClosed
-), truncated(cause is InvalidHttpMessage));
+enum HttpPeerGoneBeforeResponse is Error = (
+    reset(cause is NetworkFailure),
+    closed(
+        cause is NetworkClosed
+    ),
+    truncated(cause is InvalidHttpMessage)
+);
 
 hidden object HttpObservedReading does AsyncReading {
     has origin is AsyncReading;
@@ -88,9 +92,10 @@ hidden object HttpObservedReading does AsyncReading {
                 case NetworkFailure.detailed(_, kind, _) {
                     if observation.active()
                         && !observation.received()
-                        && (kind == NetworkFailureKind.reset || kind == NetworkFailureKind.aborted) {
-                            throw HttpPeerGoneBeforeResponse.reset(e);
-                        }
+                        && (kind == NetworkFailureKind.reset
+                        || kind == NetworkFailureKind.aborted) {
+                        throw HttpPeerGoneBeforeResponse.reset(e);
+                    }
                     throw;
                 }
             }
@@ -128,9 +133,10 @@ hidden object HttpObservedWriting does AsyncWriting {
                 case NetworkFailure.detailed(_, kind, _) {
                     if observation.active()
                         && !observation.received()
-                        && (kind == NetworkFailureKind.reset || kind == NetworkFailureKind.aborted) {
-                            throw HttpPeerGoneBeforeResponse.reset(e);
-                        }
+                        && (kind == NetworkFailureKind.reset
+                        || kind == NetworkFailureKind.aborted) {
+                        throw HttpPeerGoneBeforeResponse.reset(e);
+                    }
                     throw;
                 }
             }

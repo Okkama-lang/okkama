@@ -120,17 +120,17 @@ object DetectedTerminalCapabilities {
                 || (environment.membership("COLORTERM")
                 && (environment.text("COLORTERM") == "truecolor"
                 || environment.text("COLORTERM") == "24bit")) {
-                    TerminalColorDepth.true_color;
+                TerminalColorDepth.true_color;
+            }
+            else {
+                if native_depth == TerminalColorDepth.indexed
+                    || term.contains("256color") {
+                    TerminalColorDepth.indexed;
                 }
                 else {
-                    if native_depth == TerminalColorDepth.indexed
-                        || term.contains("256color") {
-                            TerminalColorDepth.indexed;
-                        }
-                        else {
-                            TerminalColorDepth.basic;
-                        }
+                    TerminalColorDepth.basic;
                 }
+            }
         };
         let width = if columns > 0 {
             columns;

@@ -556,7 +556,10 @@ test "title case: words, digraphs, ligatures, Greek and Georgian" {
     );
     test.is(LocalizedCase(text: "ßa \u{FB01}sh", locale: english).title(), "Ssa Fish");
     test.is(LocalizedCase(text: "ΟΔΟΣ ΑΣ", locale: Locale("el")).title(), "Οδος Ας");
-    test.is(LocalizedCase(text: "\u{1FB3}\u{3A3}", locale: Locale("el")).title(), "\u{1FBC}\u{3C2}");
+    test.is(
+        LocalizedCase(text: "\u{1FB3}\u{3A3}", locale: Locale("el")).title(),
+        "\u{1FBC}\u{3C2}"
+    );
     test.is(LocalizedCase(text: "ქართული ენა", locale: Locale("ka")).title(), "ქართული ენა");
     test.is(LocalizedCase(text: "\u{301}abc", locale: english).title(), "\u{301}Abc");
     test.is(LocalizedCase(text: "", locale: english).title(), "");

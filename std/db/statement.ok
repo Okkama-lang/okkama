@@ -148,7 +148,10 @@ hidden object DbSqlText {
         confirm origin.length() <= limits::Limits::sql_bytes
             && Utf8Encoded(origin).bytes().size() <= limits::Limits::sql_bytes
             else throw DbBoundaryLimit.kind("SQL bytes");
-        let stripped = origin.replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "");
+        let stripped = origin.replace(" ", "")
+            .replace("\t", "")
+            .replace("\r", "")
+            .replace("\n", "");
         confirm stripped != "" && origin.split(Utf8Decoded([0.byte()]).string()).size() == 1
             else throw InvalidStatement.invalid;
         self.origin = origin;

@@ -404,18 +404,19 @@ hidden object TimePattern {
             // read each where it stands, write the pattern again and compare.
             // Any doubt goes to the exact reading below. It pays from about
             // eight fields; shorter patterns are read part by part at once.
-            let places = (1..parts.size()).reduce([parts[0].length(), -1, -1, -1, -1, -1, -1, -1]) -> found, index {
-                let field = self.field(parts[index].slice(0, 1));
-                let width = self.width(field);
-                let at = found[0];
-                let marked = if found[field + 1] < 0 {
-                    found.replaced(field + 1, at);
-                }
-                else {
-                    found;
+            let places = (1..parts.size())
+                .reduce([parts[0].length(), -1, -1, -1, -1, -1, -1, -1]) -> found, index {
+                    let field = self.field(parts[index].slice(0, 1));
+                    let width = self.width(field);
+                    let at = found[0];
+                    let marked = if found[field + 1] < 0 {
+                        found.replaced(field + 1, at);
+                    }
+                    else {
+                        found;
+                    };
+                    marked.replaced(0, at + width + parts[index].length() - 1);
                 };
-                marked.replaced(0, at + width + parts[index].length() - 1);
-            };
             if places[0] == origin.length() {
                 let values is @int = (0..7).map() -> field {
                     let at = places[field + 1];
@@ -423,19 +424,22 @@ hidden object TimePattern {
                         -1;
                     }
                     else {
-                        origin.slice(at, at + self.width(field)).characters().reduce(0) -> total, character {
-                            let code = character.code();
-                            if total < 0 || code < 48 || code > 57 {
-                                -1;
-                            }
-                            else {
-                                total * 10 + code - 48;
-                            }
-                        };
+                        origin.slice(at, at + self.width(field))
+                            .characters()
+                            .reduce(0) -> total, character {
+                                let code = character.code();
+                                if total < 0 || code < 48 || code > 57 {
+                                    -1;
+                                }
+                                else {
+                                    total * 10 + code - 48;
+                                }
+                            };
                     }
                 };
                 if !values.contains(-1) || self.complete(values, places) {
-                    if self.replaced(plain, true, values).replace(1.char().string(), "%") == origin {
+                    if self.replaced(plain, true, values)
+                        .replace(1.char().string(), "%") == origin {
                         return [-1] + values.take(6) + [if values[6] < 0 {
                             0;
                         }
@@ -562,7 +566,8 @@ test "patterns format and read dates and local date-times" {
     let read = FormattedDate(text: "11/08/2026", pattern: "%d/%m/%Y");
     test.is(read.date().order(date), Order.equal);
     test.is(read.string(), "11/08/2026");
-    let local = FormattedLocalDateTime(text: "2026-08-11 12:30:45", pattern: "%Y-%m-%d %H:%M:%S").local_date_time();
+    let local = FormattedLocalDateTime(text: "2026-08-11 12:30:45", pattern: "%Y-%m-%d %H:%M:%S")
+        .local_date_time();
     test.is(FormattedLocalDateTime(origin: local, pattern: "%H.%M").string(), "12.30");
     test.ok(try {
         FormattedDate(text: "11-08-2026", pattern: "%d/%m/%Y").date();

@@ -514,7 +514,8 @@ hidden object RobotsPattern {
             origin;
         };
         let compiled = try {
-            UrlComponentText(origin: body.replace("$", "%24"), component: UrlComponent.query).string();
+            UrlComponentText(origin: body.replace("$", "%24"), component: UrlComponent.query)
+                .string();
         }
         catch e is Error {
             throw InvalidRobots.because("path encoding");

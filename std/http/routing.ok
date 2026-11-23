@@ -235,7 +235,8 @@ object RoutePattern {
         }
         for (0..fixed) -> index {
             let part = parts[index];
-            if part::Segment::kind == RouteSegmentKind.literal && part::Segment::text != path[index] {
+            if part::Segment::kind == RouteSegmentKind.literal
+                && part::Segment::text != path[index] {
                 return false;
             }
             if part::Segment::kind == RouteSegmentKind.parameter && path[index] == "" {
@@ -274,21 +275,21 @@ object RoutePattern {
             let peer = right[index];
             if left::Segment::kind == RouteSegmentKind.wildcard
                 || peer::Segment::kind == RouteSegmentKind.wildcard {
-                    return true;
-                }
+                return true;
+            }
             if left::Segment::kind == RouteSegmentKind.literal
                 && peer::Segment::kind == RouteSegmentKind.literal
                 && left::Segment::text != peer::Segment::text {
-                    return false;
-                }
+                return false;
+            }
             if (left::Segment::kind == RouteSegmentKind.parameter
                 && peer::Segment::kind == RouteSegmentKind.literal
                 && peer::Segment::text == "")
                 || (peer::Segment::kind == RouteSegmentKind.parameter
                 && left::Segment::kind == RouteSegmentKind.literal
                 && left::Segment::text == "") {
-                    return false;
-                }
+                return false;
+            }
         }
         if parts.size() == right.size() {
             return true;
@@ -487,7 +488,11 @@ object Routes does Handling {
     }
 
     // Runs handler with request and context.
-    async invoke(handler is Handling, request is Request, context is HttpRequestContext) is HandlingResult {
+    async invoke(
+        handler is Handling,
+        request is Request,
+        context is HttpRequestContext
+    ) is HandlingResult {
         let pending = handler.handling(request, context);
         await pending;
     }
@@ -496,7 +501,8 @@ object Routes does Handling {
     async handling(request is Request, context is HttpRequestContext) is HandlingResult {
         context.cancelling().check();
         let target = request::Head::target;
-        if target.kind() != RequestTargetKind.origin && target.kind() != RequestTargetKind.absolute {
+        if target.kind() != RequestTargetKind.origin
+            && target.kind() != RequestTargetKind.absolute {
             return await self.invoke(fallback, request, context);
         }
         let raw = if target.kind() == RequestTargetKind.origin {
@@ -589,7 +595,11 @@ object Routes does Handling {
 
     // The route's captures over the parameters an outer table has set. An empty
     // array when they pass the budget of 128 names and 8192 characters.
-    hidden parameters(route is Route, path is @string, existing is %string:string) is @%string:string {
+    hidden parameters(
+        route is Route,
+        path is @string,
+        existing is %string:string
+    ) is @%string:string {
         let captured is @%string:string = try {
             [RouteCapture(parts: route.pattern().parts(), path: path).parameters()];
         }
@@ -1079,7 +1089,11 @@ hidden object RouteDispatch {
 
 async test "a literal wins over a parameter, and a parameter over a wildcard" {
     let routes is @Route = [
-        Route(method: Method.get, pattern: RoutePattern("/users/:id"), handling: RouteProbe("user")),
+        Route(
+            method: Method.get,
+            pattern: RoutePattern("/users/:id"),
+            handling: RouteProbe("user")
+        ),
         Route(method: Method.get, pattern: RoutePattern("/users/me"), handling: RouteProbe("me")),
         Route(
             method: Method.get,
@@ -1116,7 +1130,11 @@ async test "a pattern without the method gives way to the next one" {
             pattern: RoutePattern("/users/me"),
             handling: RouteProbe("update me")
         ),
-        Route(method: Method.get, pattern: RoutePattern("/users/:id"), handling: RouteProbe("user")),
+        Route(
+            method: Method.get,
+            pattern: RoutePattern("/users/:id"),
+            handling: RouteProbe("user")
+        ),
         Route(method: Method.get, pattern: RoutePattern("/a/b/c"), handling: RouteProbe("abc")),
         Route(method: Method.get, pattern: RoutePattern("/a/:x/d"), handling: RouteProbe("axd")),
         Route(

@@ -596,8 +596,8 @@ hidden object TomlReader {
                 || (code >= 48 && code <= 57)
                 || code == 95
                 || code == 45) {
-                    return at;
-                }
+                return at;
+            }
         }
         size;
     }
@@ -622,8 +622,8 @@ hidden object TomlReader {
                 || (code == 92 && quote == 34)
                 || (code < 32 && code != 9)
                 || code == 127 {
-                    return at;
-                }
+                return at;
+            }
         }
         size;
     }
@@ -669,9 +669,10 @@ hidden object TomlReader {
                 confirm count.value() <= 5 else throw TomlStop.at(at, "too many closing quotes");
                 position.replace(at + count.value());
                 if count.value() >= 3 {
-                    return (parts.value() + [origin.slice(run.value(), at + count.value() - 3)]).join(
-                        ""
-                    );
+                    return (parts.value() + [origin.slice(run.value(), at + count.value() - 3)])
+                        .join(
+                            ""
+                        );
                 }
             }
             else if code == 10 || code == 13 {
@@ -840,8 +841,8 @@ hidden object TomlReader {
             && self.code(start + 7) == 45
             && self.digits(start + 8, 2)
             && self.digits(start + 11, 2) {
-                position.replace(start + 11);
-            }
+            position.replace(start + 11);
+        }
         let end = self.token(position.value());
         position.replace(end);
         // The grammars start apart: dates, times and numbers with a digit or
@@ -900,8 +901,8 @@ hidden object TomlReader {
                 || code == 93
                 || code == 125
                 || code == 35 {
-                    return at;
-                }
+                return at;
+            }
         }
         size;
     }

@@ -1425,7 +1425,7 @@ test "maybe members read as the given fallback when absent or null" {
         doc.maybe("name").present()
             && !doc.maybe("nick").present()
             && !doc.maybe("missing").present(),
-            true
+        true
     );
     test.is(
         try {
@@ -1958,7 +1958,9 @@ async test "items stream from an array or from lines (#136)" {
     }
     test.is(names.value(), "Zoë;a,]\"b;чай;");
     let total = Atomic(0);
-    for await JsonItems(origin: JsonTestUpload("{\"n\": 1}\n{\"n\": 20}\n\n{\"n\": 300}\n")) -> item {
+    for await JsonItems(
+        origin: JsonTestUpload("{\"n\": 1}\n{\"n\": 20}\n\n{\"n\": 300}\n")
+    ) -> item {
         total.replace(total.value() + item.int("n"));
     }
     test.is(total.value(), 321);

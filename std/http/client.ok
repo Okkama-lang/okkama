@@ -324,8 +324,8 @@ hidden object DecodingExchanging does Exchanging {
             || request::Head::method == Method.head
             || code == 204
             || code == 304 {
-                return page;
-            }
+            return page;
+        }
         let response = page::Exchange::response;
         let headers = HeadersWithout(
             origin: response::Head::headers,
@@ -454,7 +454,10 @@ object HttpTransport does Exchanging, Closing {
             );
             let operation = mixed[0].operation();
             let published = Event();
-            let cleanup = HttpSharedClientStartupCleanup(operation: operation, published: published);
+            let cleanup = HttpSharedClientStartupCleanup(
+                operation: operation,
+                published: published
+            );
             defer await cleanup.close();
             let connecting is HttpConversationConnecting = if routing.size() == 1 {
                 routing[0].connecting(direct.url());
@@ -557,7 +560,10 @@ object HttpTransport does Exchanging, Closing {
             );
             let operation = h2[0].operation();
             let published = Event();
-            let cleanup = HttpSharedClientStartupCleanup(operation: operation, published: published);
+            let cleanup = HttpSharedClientStartupCleanup(
+                operation: operation,
+                published: published
+            );
             defer await cleanup.close();
             let reserving = operation.acquisition(
                 HttpClientKey(direct.url()).string(),

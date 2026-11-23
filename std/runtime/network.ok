@@ -144,10 +144,20 @@ native stream_shutdown(origin is SocketState, output is bool) is bool;
 native stream_half_closed(origin is SocketState, output is bool) is bool;
 
 // Connects to address (scope zone) with the keep-alive and no-delay options.
-native async tcp_connect(address is @byte, zone is string, keep_alive is bool, no_delay is bool) is SocketState;
+native async tcp_connect(
+    address is @byte,
+    zone is string,
+    keep_alive is bool,
+    no_delay is bool
+) is SocketState;
 
 // A TCP socket bound to address, with address reuse and dual-stack options.
-native tcp_bound(address is @byte, zone is string, reuse is bool, dual_stack is bool) is TcpListenerState;
+native tcp_bound(
+    address is @byte,
+    zone is string,
+    reuse is bool,
+    dual_stack is bool
+) is TcpListenerState;
 
 // Starts listening with backlog.
 native tcp_start_listening(origin is TcpListenerState, backlog is int) is bool;
@@ -159,7 +169,11 @@ native tcp_listener_endpoint(origin is TcpListenerState) is @string;
 native tcp_endpoint(origin is SocketState, peer is bool) is @string;
 
 // The next connection, with the keep-alive and no-delay options.
-native async tcp_accept(origin is TcpListenerState, keep_alive is bool, no_delay is bool) is SocketState;
+native async tcp_accept(
+    origin is TcpListenerState,
+    keep_alive is bool,
+    no_delay is bool
+) is SocketState;
 
 // Closes the listener.
 native tcp_listener_close(origin is TcpListenerState) is bool;

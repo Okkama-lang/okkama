@@ -100,7 +100,12 @@ object ParsedPrivateKey {
     // Which algorithm it is for.
     algorithm() is KeyAlgorithm {
         KeyAlgorithmName(
-            Utf8Decoded(HostOperation(operation: "pkcs8-algorithm", arguments: [self.pkcs8().export_bytes()]).bytes()).string()
+            Utf8Decoded(
+                HostOperation(
+                    operation: "pkcs8-algorithm",
+                    arguments: [self.pkcs8().export_bytes()]
+                ).bytes()
+            ).string()
         ).algorithm();
     }
 
@@ -111,7 +116,10 @@ object ParsedPrivateKey {
             case KeyAlgorithm.ed25519 {
                 Ed25519PrivateKey(
                     seed: SecretBytes(
-                        HostOperation(operation: "ed25519-from-pkcs8", arguments: [key.export_bytes()]).bytes()
+                        HostOperation(
+                            operation: "ed25519-from-pkcs8",
+                            arguments: [key.export_bytes()]
+                        ).bytes()
                     )
                 );
             }
@@ -151,7 +159,9 @@ object ParsedPublicKey {
     // Which algorithm it is for.
     algorithm() is KeyAlgorithm {
         KeyAlgorithmName(
-            Utf8Decoded(HostOperation(operation: "spki-algorithm", arguments: [self.spki()]).bytes()).string()
+            Utf8Decoded(
+                HostOperation(operation: "spki-algorithm", arguments: [self.spki()]).bytes()
+            ).string()
         ).algorithm();
     }
 
@@ -160,7 +170,9 @@ object ParsedPublicKey {
         let spki = self.spki();
         match self.algorithm() {
             case KeyAlgorithm.ed25519 {
-                Ed25519PublicKey(HostOperation(operation: "ed25519-from-spki", arguments: [spki]).bytes());
+                Ed25519PublicKey(
+                    HostOperation(operation: "ed25519-from-spki", arguments: [spki]).bytes()
+                );
             }
             case KeyAlgorithm.ecdsa_p256 {
                 EcdsaPublicKey(curve: EcdsaCurve.p256, spki: spki);
@@ -206,7 +218,8 @@ test "OpenSSL Ed25519 and P-256 keys and signatures interoperate" {
         "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEILmznXjfrPnt4ER4da3s+SVFZyxPzXMcIAazX8bXBS01\n-----END PRIVATE KEY-----\n"
     );
     test.is(
-        PublicKeyPem(Ed25519PublicKey(ed_private.signing_key().public_key().bytes().slice(12, 44))).string(),
+        PublicKeyPem(Ed25519PublicKey(ed_private.signing_key().public_key().bytes().slice(12, 44)))
+            .string(),
         "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAigREzzduCyebc+NFzycZPZorxURCPJ/PUBcIYWCzXO4=\n-----END PUBLIC KEY-----\n"
     );
     let ec = ParsedPublicKey(

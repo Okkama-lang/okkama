@@ -207,8 +207,14 @@ async test "input is written whole and closed; arguments are never split" {
     let printed = await CommandCapture(origin: echo, limit: 64).completion();
     test.is(printed::Captured::output, "a b|c;d");
     test.ok(printed.exit().success());
-    let cat = Command(program: Path("cat"), arguments: [], environment: Environment(), directory: WorkingDirectory());
-    let copied = await CommandCapture(origin: cat, input: [byte(104), byte(105)], limit: 64).completion();
+    let cat = Command(
+        program: Path("cat"),
+        arguments: [],
+        environment: Environment(),
+        directory: WorkingDirectory()
+    );
+    let copied = await CommandCapture(origin: cat, input: [byte(104), byte(105)], limit: 64)
+        .completion();
     test.is(copied::Bytes::output, [byte(104), byte(105)]);
 }
 
@@ -272,4 +278,3 @@ async test "standard input can be text" {
     test.is(copied::Captured::output, "hé\n");
     test.is(copied::Bytes::output, [byte(104), byte(195), byte(169), byte(10)]);
 }
-

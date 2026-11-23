@@ -298,7 +298,8 @@ object GregorianLocaleData {
         else {
             1;
         };
-        let tick = (time::Clock::hour * 3600 + time::Clock::minute * 60 + time::Clock::second) * 1000000000 + time::Clock::nanosecond;
+        let tick = (time::Clock::hour * 3600 + time::Clock::minute * 60 + time::Clock::second) *
+            1000000000 + time::Clock::nanosecond;
         let selected = if flexible {
             (0..(rules.size() / 4).int()).reduce(-1) -> chosen, index {
                 if chosen >= 0 {
@@ -454,7 +455,11 @@ object LocalizedZoneName {
     has wide is bool;
 
     // The name of origin in data, long or short.
-    LocalizedZoneName(origin is LocalizedZoneObservation, data is GregorianLocaleData, wide is bool) {
+    LocalizedZoneName(
+        origin is LocalizedZoneObservation,
+        data is GregorianLocaleData,
+        wide is bool
+    ) {
         self.origin = origin;
         self.data = data;
         self.wide = wide;
@@ -498,7 +503,8 @@ object LocalizedZoneName {
         // FixedZone.name is a free label. A known name may select CLDR names
         // only when its offset/daylight state agrees with that named zone.
         if !self.compatible(canonical, zone, specific != "") {
-            return LocalizedGmtOffset(offset: origin.offset(), data: data, table: table, wide: wide).string();
+            return LocalizedGmtOffset(offset: origin.offset(), data: data, table: table, wide: wide)
+                .string();
         }
         if specific != "" {
             return specific;
@@ -634,16 +640,16 @@ object LocalizedGmtOffset {
                 data.number(minute, 2)
             ).replace("ss", data.number(second, 2)) + (if second != 0
                 && !pattern.contains("s") {
-                    (if separator == "" {
-                        ":";
-                    }
-                    else {
-                        separator;
-                    }) + data.number(second, 2);
+                (if separator == "" {
+                    ":";
                 }
                 else {
-                    "";
-                });
+                    separator;
+                }) + data.number(second, 2);
+            }
+            else {
+                "";
+            });
         };
         let symbols = data.numbers();
         let signed = body.replace("+", symbols.symbol(2)).replace("-", symbols.symbol(3));
@@ -728,7 +734,20 @@ hidden object GregorianPrinting {
                 }
             }
             case "roman-month" {
-                ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"][self.date()::Calendar::month - 1];
+                [
+                    "i",
+                    "ii",
+                    "iii",
+                    "iv",
+                    "v",
+                    "vi",
+                    "vii",
+                    "viii",
+                    "ix",
+                    "x",
+                    "xi",
+                    "xii"
+                ][self.date()::Calendar::month - 1];
             }
             case "d" {
                 data.number(self.date()::Calendar::day, width);
@@ -898,7 +917,12 @@ object LocalizedInstant {
     has style is DateTimeStyle;
 
     // origin in zone as locale writes it in style.
-    LocalizedInstant(origin is Instant, zone is TimeZone, locale is Locale, style is DateTimeStyle) {
+    LocalizedInstant(
+        origin is Instant,
+        zone is TimeZone,
+        locale is Locale,
+        style is DateTimeStyle
+    ) {
         self.origin = origin;
         self.zone = zone;
         self.locale = locale;

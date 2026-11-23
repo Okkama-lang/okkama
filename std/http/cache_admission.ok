@@ -28,7 +28,8 @@ hidden object CacheAdmissionKey {
         writer.write(
             ByteSnapshot(
                 Latin1Encoded(
-                    MethodName(request::Head::method).string() + "\n" + request::Head::target.string() + "\n"
+                    MethodName(request::Head::method).string() + "\n" +
+                        request::Head::target.string() + "\n"
                 ).bytes()
             )
         );

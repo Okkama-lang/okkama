@@ -383,12 +383,12 @@ object WebSocketOpening {
             let status = received.head()::Head::status;
             if StatusCode(status).class() == StatusClass.informational
                 && status != Status.switching_protocols {
-                    confirm count.value() < 16
-                        else throw WebSocketFailure.because("informational handshake limit");
-                    count.replace(count.value() + 1);
-                    prefix.replace(received.remainder());
-                    next;
-                }
+                confirm count.value() < 16
+                    else throw WebSocketFailure.because("informational handshake limit");
+                count.replace(count.value() + 1);
+                prefix.replace(received.remainder());
+                next;
+            }
             handshake.selected(received.head().response(EmptyBody()));
             return received.remainder();
         }
@@ -428,7 +428,9 @@ hidden object ShoutingEcho does Handling, WebSocketHandling {
                     await connection.send(TextWebSocketMessage(message.text().upper()));
                 }
                 else {
-                    await connection.send(BinaryWebSocketMessage(message.bytes() + message.bytes()));
+                    await connection.send(
+                        BinaryWebSocketMessage(message.bytes() + message.bytes())
+                    );
                 }
             }
         }

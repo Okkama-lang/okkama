@@ -130,14 +130,24 @@ object Http2StreamLife {
     // After we reset it.
     local_reset() is ^Http2StreamLife {
         confirm state != Http2StreamState.idle
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "reset on idle stream");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                1,
+                0,
+                "reset on idle stream"
+            );
         ^state = Http2StreamState.closed;
     }
 
     // After the peer resets it.
     remote_reset() is ^Http2StreamLife {
         confirm state != Http2StreamState.idle
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "reset on idle stream");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                1,
+                0,
+                "reset on idle stream"
+            );
         ^state = Http2StreamState.closed;
     }
 }
@@ -155,16 +165,16 @@ hidden object Http2LifeEnding {
         if origin == Http2StreamState.closed
             || (local && origin == Http2StreamState.remote_ended)
             || (!local && origin == Http2StreamState.local_ended) {
-                Http2StreamState.closed;
+            Http2StreamState.closed;
+        }
+        else {
+            if local {
+                Http2StreamState.local_ended;
             }
             else {
-                if local {
-                    Http2StreamState.local_ended;
-                }
-                else {
-                    Http2StreamState.remote_ended;
-                }
+                Http2StreamState.remote_ended;
             }
+        }
     }
 }
 

@@ -321,9 +321,12 @@ test "sorted orders values by their own comparison" {
     test.is(numbers.first(), 1);
     test.is(numbers.last(), 3);
     test.is(numbers.item(2), 2);
-    test.is(numbers.map() -> number {
-        number.string();
-    }.join(","), "1,1,2,3");
+    test.is(
+        numbers.map() -> number {
+            number.string();
+        }.join(","),
+        "1,1,2,3"
+    );
     let nothing is @int = [];
     test.is(Sorted(nothing).size(), 0);
     test.is(
@@ -351,11 +354,16 @@ test "sorted orders values by their own comparison" {
 test "sorted by a key keeps equal keys in input order" {
     let words = SortedBy(
         origin: ["ccc", "a", "bb", "d", "ee"],
-        key: (word is string) is int { word.length(); },
+        key: (word is string) is int {
+            word.length();
+        },
     );
-    test.is(words.map() -> word {
-        word;
-    }.join(","), "a,d,bb,ee,ccc");
+    test.is(
+        words.map() -> word {
+            word;
+        }.join(","),
+        "a,d,bb,ee,ccc"
+    );
     test.is(words.first(), "a");
     test.is(words.last(), "ccc");
     test.is(words.item(3), "ee");

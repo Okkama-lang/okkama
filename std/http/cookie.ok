@@ -200,21 +200,21 @@ object CookieAttributes {
             "; Path=" + path;
         }) + date + site +
             (if secure {
-                "; Secure";
-            }
-            else {
-                "";
-            }) + (if http_only {
-                "; HttpOnly";
-            }
-            else {
-                "";
-            }) + (if partitioned {
-                "; Partitioned";
-            }
-            else {
-                "";
-            });
+            "; Secure";
+        }
+        else {
+            "";
+        }) + (if http_only {
+            "; HttpOnly";
+        }
+        else {
+            "";
+        }) + (if partitioned {
+            "; Partitioned";
+        }
+        else {
+            "";
+        });
     }
 
     // The Domain, the Path and SameSite.
@@ -344,8 +344,8 @@ hidden object CookieValueWire {
         if origin.length() >= 2
             && origin.starts_with("\"")
             && origin.ends_with("\"") {
-                return CookieValueOctets(origin.slice(1, origin.length() - 1)).valid();
-            }
+            return CookieValueOctets(origin.slice(1, origin.length() - 1)).valid();
+        }
         CookieValueOctets(origin).valid();
     }
 }
@@ -575,7 +575,8 @@ object RequestCookies {
 
     // Names and values in turn, parsed once.
     hidden pairs() is @string {
-        once let parsed = CookieFieldPairs(request::Head::headers.values(HeaderName("Cookie"))).pairs();
+        once let parsed = CookieFieldPairs(request::Head::headers.values(HeaderName("Cookie")))
+            .pairs();
         parsed;
     }
 }
@@ -696,10 +697,12 @@ test "cookie prefix and wire policy" {
         flags: OrderedSet([CookieFlag.secure])
     );
     test.ok(
-        Cookie(name: "__Host-id", value: "secret", attributes: attrs).string() == "__Host-id=secret; Path=/; SameSite=None; Secure"
+        Cookie(name: "__Host-id", value: "secret", attributes: attrs).string() ==
+            "__Host-id=secret; Path=/; SameSite=None; Secure"
     );
     test.ok(
-        Cookie(name: "id", value: "secret", attributes: CookieAttributes()).diagnostic() == "cookie id=<redacted>"
+        Cookie(name: "id", value: "secret", attributes: CookieAttributes()).diagnostic() ==
+            "cookie id=<redacted>"
     );
     test.ok(try {
         Cookie(name: "__secure-id", value: "secret", attributes: CookieAttributes());
@@ -716,7 +719,9 @@ test "set-cookie fields carry safe defaults, Max-Age and expiry" {
         "sid=abc; Path=/; SameSite=Lax; Secure; HttpOnly"
     );
     test.is(
-        SetCookie(name: "theme", value: "dark", max_age: Duration(seconds: (30 * 86400).rat())).header().value(),
+        SetCookie(name: "theme", value: "dark", max_age: Duration(seconds: (30 * 86400).rat()))
+            .header()
+            .value(),
         "theme=dark; Path=/; SameSite=Lax; Secure; HttpOnly; Max-Age=2592000"
     );
     test.is(

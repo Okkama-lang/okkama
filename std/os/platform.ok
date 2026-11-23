@@ -137,8 +137,10 @@ enum UnavailableHostInformation is Error = (because(message is string));
 test "the platform names a known system, an architecture and a byte order" {
     let platform = Platform();
     let system = platform.operating_system();
-    test.ok(system == OperatingSystem.linux || system == OperatingSystem.macos
-        || system == OperatingSystem.windows || system == OperatingSystem.freebsd
+    test.ok(system == OperatingSystem.linux
+        || system == OperatingSystem.macos
+        || system == OperatingSystem.windows
+        || system == OperatingSystem.freebsd
         || system == OperatingSystem.other);
     test.ok(!platform.architecture().empty());
     let order = platform.byte_order();

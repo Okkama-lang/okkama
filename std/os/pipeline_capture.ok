@@ -195,7 +195,12 @@ async test "a pipeline passes output along; each command's errors are kept apart
     let env = Environment();
     let here = WorkingDirectory();
     let pipeline is @Commanding = [
-        Command(program: Path("sh"), arguments: ["-c", "printf 'b\\na\\n'; printf one >&2"], environment: env, directory: here),
+        Command(
+            program: Path("sh"),
+            arguments: ["-c", "printf 'b\\na\\n'; printf one >&2"],
+            environment: env,
+            directory: here
+        ),
         Command(program: Path("sort"), arguments: [], environment: env, directory: here),
         Command(program: Path("tr"), arguments: ["a-z", "A-Z"], environment: env, directory: here),
     ];
@@ -215,9 +220,15 @@ async test "input feeds the first command; every exit is reported" {
     let here = WorkingDirectory();
     let pipeline is @Commanding = [
         Command(program: Path("cat"), arguments: [], environment: env, directory: here),
-        Command(program: Path("sh"), arguments: ["-c", "cat; exit 4"], environment: env, directory: here),
+        Command(
+            program: Path("sh"),
+            arguments: ["-c", "cat; exit 4"],
+            environment: env,
+            directory: here
+        ),
     ];
-    let done = await PipelineCapture(commands: pipeline, input: [byte(120)], limit: 16).completion();
+    let done = await PipelineCapture(commands: pipeline, input: [byte(120)], limit: 16)
+        .completion();
     test.is(done::Bytes::output, [byte(120)]);
     test.ok(done.exits()[0].success());
     test.is(done.exits()[1].code(), 4);
@@ -233,7 +244,14 @@ async test "an empty pipeline and a zero limit are refused" {
         true;
     };
     test.ok(refused);
-    let one is @Commanding = [Command(program: Path("true"), arguments: [], environment: Environment(), directory: WorkingDirectory())];
+    let one is @Commanding = [
+        Command(
+            program: Path("true"),
+            arguments: [],
+            environment: Environment(),
+            directory: WorkingDirectory()
+        )
+    ];
     let zero = try {
         await PipelineCapture(commands: one, limit: 0).completion();
         false;

@@ -87,8 +87,8 @@ hidden object Http1OutgoingFraming {
     headers() is Headers {
         if origin.membership(HeaderName("Content-Length"))
             || origin.membership(HeaderName("Transfer-Encoding")) {
-                return origin;
-            }
+            return origin;
+        }
         let known is @int = try {
             [body.length()];
         }

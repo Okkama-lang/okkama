@@ -314,7 +314,8 @@ hidden object SmtpReplyLine {
             && digits[2].int() >= 48
             && digits[2].int() <= 57
             else throw InvalidSmtpReply.located(offset, "invalid reply code");
-        let code = (digits[0].int() - 48) * 100 + (digits[1].int() - 48) * 10 + digits[2].int() - 48;
+        let code = (digits[0]
+            .int() - 48) * 100 + (digits[1].int() - 48) * 10 + digits[2].int() - 48;
         if origin.length() > 3 {
             let separator = origin.slice(3, 4);
             confirm separator == " " || separator == "-"

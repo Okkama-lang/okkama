@@ -1335,10 +1335,12 @@ hidden object XmlRpcDateText {
         ).string() + XmlRpcPadded(
             value: date::Calendar::day,
             width: 2
-        ).string() + "T" + XmlRpcPadded(value: time::Clock::hour, width: 2).string() + ":" + XmlRpcPadded(
-            value: time::Clock::minute,
-            width: 2
-        ).string() + ":" + XmlRpcPadded(value: time::Clock::second, width: 2).string();
+        ).string() + "T" + XmlRpcPadded(value: time::Clock::hour, width: 2)
+            .string() + ":" + XmlRpcPadded(
+                value: time::Clock::minute,
+                width: 2
+            )
+            .string() + ":" + XmlRpcPadded(value: time::Clock::second, width: 2).string();
     }
 }
 
@@ -1544,11 +1546,11 @@ hidden object XmlRpcParsing {
             let token = self.token();
             if token.kind() == "skip"
                 || (token.kind() == "text" && PlistXmlText(token.text()).stripped() == "") {
-                    position.replace(token.end());
-                }
-                else {
-                    return token;
-                }
+                position.replace(token.end());
+            }
+            else {
+                return token;
+            }
         }
     }
 
@@ -2294,7 +2296,8 @@ test "every value reads as its own kind and refuses the others (#517)" {
             "text";
         }
         catch WrongXmlRpcValue.kind(expected, actual) {
-            if expected == XmlRpcKind.text && actual == values[index].kind(): "refused" else: "wrong";
+            if expected == XmlRpcKind.text
+                && actual == values[index].kind(): "refused" else: "wrong";
         };
     };
     test.is(read.join(","), "refused,refused,text,refused,refused,refused,refused");

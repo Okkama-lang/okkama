@@ -99,7 +99,10 @@ enum UnrepresentableLatin1Character is Error = (at(offset is int));
 enum InvalidAsciiByte is Error = (at(offset is int));
 
 test "ascii round-trips and refuses everything above 127" {
-    test.is(AsciiEncoded(origin: "hello").bytes(), [byte(104), byte(101), byte(108), byte(108), byte(111)]);
+    test.is(
+        AsciiEncoded(origin: "hello").bytes(),
+        [byte(104), byte(101), byte(108), byte(108), byte(111)]
+    );
     test.is(AsciiDecoded(origin: [byte(104), byte(105)]).string(), "hi");
     test.is(
         try {

@@ -16,10 +16,37 @@ module db/error v1.0.0;
 // strings never appear in them.
 
 // What went wrong, across databases.
-enum DbFailureKind = (connection, constraint, syntax, data, permission, busy, deadlock, serialization, timeout, cancelled, resource, unsupported, unexpected);
+enum DbFailureKind = (
+    connection,
+    constraint,
+    syntax,
+    data,
+    permission,
+    busy,
+    deadlock,
+    serialization,
+    timeout,
+    cancelled,
+    resource,
+    unsupported,
+    unexpected
+);
 
 // What was being done.
-enum DbOperation = (connecting, preparing, executing, fetching, committing, rolling_back, closing, opening_blob, reading_blob, writing_blob, backing_up, script);
+enum DbOperation = (
+    connecting,
+    preparing,
+    executing,
+    fetching,
+    committing,
+    rolling_back,
+    closing,
+    opening_blob,
+    reading_blob,
+    writing_blob,
+    backing_up,
+    script
+);
 
 // Provider-controlled diagnostics only. A caller supplying its own message is
 // responsible for that explicit text; drivers never forward SQL/bindings/DSNs.

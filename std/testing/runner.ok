@@ -25,8 +25,12 @@ object RecordedTestReport {
             RecordedTestResult(entry).outcome();
         };
         report = TestReport(
-            start: Instant(Duration(seconds: rat(Number(document.text("start_ns")).int(), 1000000000))),
-            duration: Duration(seconds: rat(Number(document.text("duration_ns")).int(), 1000000000)),
+            start: Instant(
+                Duration(seconds: rat(Number(document.text("start_ns")).int(), 1000000000))
+            ),
+            duration: Duration(
+                seconds: rat(Number(document.text("duration_ns")).int(), 1000000000)
+            ),
             seed: document.int("seed"),
             results: results
         );
@@ -77,24 +81,24 @@ hidden object RecordedTestResult {
             let positions is @TestPosition = if index < details.size()
                 && details[index].has("position")
                 && details[index].get("position").has("source_name") {
-                    let position = details[index].get("position");
-                    if position.get("line").kind() == JsonKind.number_value
-                        && position.get("column").kind() == JsonKind.number_value {
-                            [
-                                TestPosition(
-                                    source: position.text("source_name"),
-                                    line: position.int("line"),
-                                    column: position.int("column")
-                                )
-                            ];
-                        }
-                        else {
-                            [];
-                        }
+                let position = details[index].get("position");
+                if position.get("line").kind() == JsonKind.number_value
+                    && position.get("column").kind() == JsonKind.number_value {
+                    [
+                        TestPosition(
+                            source: position.text("source_name"),
+                            line: position.int("line"),
+                            column: position.int("column")
+                        )
+                    ];
                 }
                 else {
                     [];
-                };
+                }
+            }
+            else {
+                [];
+            };
             let causes is @TestFailure = if index < details.size() && details[index].has("cause") {
                 [RecordedTestCause(origin: details[index].get("cause"), depth: 0).failure()];
             }

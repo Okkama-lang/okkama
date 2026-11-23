@@ -201,7 +201,8 @@ object IpNetwork {
     // Its last address.
     broadcast() is IpAddress {
         IpAddress(
-            PackedIpText(IpNetworkBytes(origin: base.bytes(), prefix: length, upper: true).bytes()).string()
+            PackedIpText(IpNetworkBytes(origin: base.bytes(), prefix: length, upper: true).bytes())
+                .string()
         );
     }
 
@@ -211,7 +212,8 @@ object IpNetwork {
             false;
         }
         else {
-            IpNetworkBytes(origin: address.bytes(), prefix: length, upper: false).bytes() == base.bytes();
+            IpNetworkBytes(origin: address.bytes(), prefix: length, upper: false).bytes() ==
+                base.bytes();
         }
     }
 

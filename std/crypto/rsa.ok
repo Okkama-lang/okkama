@@ -57,7 +57,10 @@ object RsaPrivateKey {
 
     // The key in a DER PKCS#8 document.
     RsaPrivateKey(pkcs8 is SecretBytes) {
-        let algorithm = HostOperation(operation: "pkcs8-algorithm", arguments: [pkcs8.export_bytes()]).bytes();
+        let algorithm = HostOperation(
+            operation: "pkcs8-algorithm",
+            arguments: [pkcs8.export_bytes()]
+        ).bytes();
         confirm Utf8Decoded(algorithm).string() == "1.2.840.113549.1.1.1"
             else throw InvalidCryptoInput.because("PKCS#8 key is not an RSA key");
         key = pkcs8;
@@ -68,7 +71,10 @@ object RsaPrivateKey {
         confirm bits == 2048 || bits == 3072 || bits == 4096
             else throw InvalidCryptoInput.because("RSA modulus must be 2048, 3072 or 4096 bits");
         key = SecretBytes(
-            HostOperation(operation: "rsa-generate", arguments: [DecimalArgument(bits).bytes(), entropy.bytes(32)]).bytes()
+            HostOperation(
+                operation: "rsa-generate",
+                arguments: [DecimalArgument(bits).bytes(), entropy.bytes(32)]
+            ).bytes()
         );
     }
 
@@ -79,7 +85,9 @@ object RsaPrivateKey {
 
     // Its public key.
     public_key() is RsaPublicKey {
-        RsaPublicKey(HostOperation(operation: "rsa-public", arguments: [key.export_bytes()]).bytes());
+        RsaPublicKey(
+            HostOperation(operation: "rsa-public", arguments: [key.export_bytes()]).bytes()
+        );
     }
 }
 
@@ -102,7 +110,9 @@ object RsaPublicKey does PublicKey {
 
     // The modulus size.
     bits() is int {
-        Number(Utf8Decoded(HostOperation(operation: "rsa-bits", arguments: [origin]).bytes()).string()).int();
+        Number(
+            Utf8Decoded(HostOperation(operation: "rsa-bits", arguments: [origin]).bytes()).string()
+        ).int();
     }
 }
 
@@ -275,11 +285,17 @@ test "RSA signatures and OAEP round-trip" {
     let pkcs1 = RsaPkcs1Signing(key: RsaPrivateKey(pkcs8: key.pkcs8()), hash: RsaHash.sha512);
     test.is(pkcs1.signature([1.byte()]), pkcs1.signature([1.byte()]));
     test.ok(pkcs1.public_key().verified([1.byte()], pkcs1.signature([1.byte()])));
-    let sealed = RsaOaepEncryption(key: key.public_key(), hash: RsaHash.sha256, entropy: Entropy.fake()).encrypted(
+    let sealed = RsaOaepEncryption(
+        key: key.public_key(),
+        hash: RsaHash.sha256,
+        entropy: Entropy.fake()
+    ).encrypted(
         [7.byte(), 8.byte()]
     );
     test.is(
-        RsaOaepDecryption(key: key, hash: RsaHash.sha256, entropy: Entropy.fake()).decrypted(sealed).export_bytes(),
+        RsaOaepDecryption(key: key, hash: RsaHash.sha256, entropy: Entropy.fake())
+            .decrypted(sealed)
+            .export_bytes(),
         [7.byte(), 8.byte()]
     );
     test.throws(InvalidCryptoInput) {

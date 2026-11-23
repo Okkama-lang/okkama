@@ -102,7 +102,12 @@ object HpackStaticTable {
     // The field at index, from 1.
     field(index is int) is HpackField {
         confirm index >= 1 && index <= 61
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "invalid static index");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                9,
+                0,
+                "invalid static index"
+            );
         // Materialize only the requested row, not all 61 on each connection (#943).
         HpackField(name: names[index - 1], value: values[index - 1]);
     }

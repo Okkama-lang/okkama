@@ -330,14 +330,16 @@ object TestReport {
             results.item(index);
         };
         let bytes = snapshot.reduce(0) -> total, result {
-            total + result.output()::Captured::output.size() + result.output()::Captured::errors.size();
+            total + result.output()::Captured::output.size() +
+                result.output()::Captured::errors.size();
         };
         let scalars = snapshot.reduce(0) -> total, result {
             let failures = result.failures();
             let messages = (0..failures.size()).reduce(0) -> sum, index {
                 sum + TestFailureText(failures.item(index)).string().length();
             };
-            total + result::Outcome::name.length() + result::Outcome::skip_reason.length() + messages;
+            total + result::Outcome::name.length() + result::Outcome::skip_reason.length() +
+                messages;
         };
         confirm bytes <= 16777216 && scalars <= 1048576
             else throw InvalidTestResult.because("aggregate report budget");
@@ -409,7 +411,8 @@ enum InvalidTestResult is Error = (because(reason is string));
 test "empty reports have successful exit status" {
     let duration = Duration(seconds: 0.rat());
     test.is(
-        TestReport(start: Instant(duration), duration: duration, seed: 42, results: []).exit_status(),
+        TestReport(start: Instant(duration), duration: duration, seed: 42, results: [])
+            .exit_status(),
         0
     );
 }

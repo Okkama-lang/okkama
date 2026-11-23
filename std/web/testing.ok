@@ -73,10 +73,18 @@ object WebTestClient {
     async response(request is Request) is ClientResponse {
         // Cookies follow requests for paths (origin-form targets) on the site http://127.0.0.1.
         let pathed = request::Head::target.kind() == RequestTargetKind.origin;
-        let site = ParsedUrl("http://127.0.0.1" + (if pathed: request::Head::target.string() else: "/")).parts();
-        let cookie_context = CookieContext(site: site, top_level: true, method: request::Head::method);
+        let site = ParsedUrl(
+            "http://127.0.0.1" + (if pathed: request::Head::target.string() else: "/")
+        ).parts();
+        let cookie_context = CookieContext(
+            site: site,
+            top_level: true,
+            method: request::Head::method
+        );
         let caller_cookie = request::Head::headers.membership(HeaderName("Cookie"));
-        let pairs = if pathed && !caller_cookie: TestCookiePairs(cookies.cookies(site, cookie_context)).string() else: "";
+        let pairs = if pathed && !caller_cookie: TestCookiePairs(
+            cookies.cookies(site, cookie_context)
+        ).string() else: "";
         let sent = if pairs == "" {
             request;
         }
@@ -142,8 +150,14 @@ object WebTestClient {
     }
 
     // POST body to target.
-    async post(target is string, body is Content, headers is Headers = Headers()) is ClientResponse {
-        await self.response(TestRequest(target: target, method: Method.post).request(body, headers));
+    async post(
+        target is string,
+        body is Content,
+        headers is Headers = Headers()
+    ) is ClientResponse {
+        await self.response(
+            TestRequest(target: target, method: Method.post).request(body, headers)
+        );
     }
 
     // PUT body to target.
@@ -152,7 +166,11 @@ object WebTestClient {
     }
 
     // PATCH body to target.
-    async patch(target is string, body is Content, headers is Headers = Headers()) is ClientResponse {
+    async patch(
+        target is string,
+        body is Content,
+        headers is Headers = Headers()
+    ) is ClientResponse {
         await self.response(
             TestRequest(target: target, method: Method.patch).request(body, headers)
         );
@@ -189,11 +207,11 @@ hidden object TestRequest {
         };
         let fields = if typed.membership(HeaderName("Content-Length"))
             || typed.membership(HeaderName("Transfer-Encoding")) {
-                typed;
-            }
-            else {
-                typed.addition(Header(name: "Content-Length", value: opening.length().string()));
-            };
+            typed;
+        }
+        else {
+            typed.addition(Header(name: "Content-Length", value: opening.length().string()));
+        };
         Request(
             target: ParsedRequestTarget(origin: target, method: method).target(),
             method: method,
@@ -241,7 +259,10 @@ hidden object TestNotes {
     }
 
     async login(request is WebRequest) is Responding {
-        TextReply(text: "in", headers: Headers(Header(name: "Set-Cookie", value: "sid=abc123; Path=/; HttpOnly")));
+        TextReply(
+            text: "in",
+            headers: Headers(Header(name: "Set-Cookie", value: "sid=abc123; Path=/; HttpOnly"))
+        );
     }
 
     async me(request is WebRequest) is Responding {
@@ -256,7 +277,10 @@ hidden object TestNotes {
     }
 
     async logout(request is WebRequest) is Responding {
-        TextReply(text: "out", headers: Headers(Header(name: "Set-Cookie", value: "sid=; Path=/; Max-Age=0")));
+        TextReply(
+            text: "out",
+            headers: Headers(Header(name: "Set-Cookie", value: "sid=; Path=/; Max-Age=0"))
+        );
     }
 
     async show(request is WebRequest) is Responding {
@@ -375,7 +399,10 @@ async test "every method sends headers (#650)" {
         )
     );
     let accept = Headers(Header(name: "Accept", value: "text/plain"));
-    test.is(await (await client.get(target: "/accept", headers: accept)).text(), "accept text/plain");
+    test.is(
+        await (await client.get(target: "/accept", headers: accept)).text(),
+        "accept text/plain"
+    );
     test.is(await (await client.get("/accept")).text(), "accept none");
     let guarded = WebTestClient(
         WebRoutes(
@@ -389,7 +416,10 @@ async test "every method sends headers (#650)" {
     test.is(await (await guarded.get(target: "/notes?page=4", headers: bearer)).text(), "page 4");
     test.is((await guarded.head(target: "/notes", headers: bearer))::Head::code, 200);
     test.is((await guarded.delete("/notes"))::Head::code, 401);
-    test.is(await (await guarded.delete(target: "/notes?page=5", headers: bearer)).text(), "page 5");
+    test.is(
+        await (await guarded.delete(target: "/notes?page=5", headers: bearer)).text(),
+        "page 5"
+    );
     // No route serves OPTIONS: the table answers 405, headers or not.
     test.is((await guarded.options(target: "/notes", headers: bearer))::Head::code, 405);
 }
@@ -407,7 +437,10 @@ async test "a client with a jar carries the cookies replies set (#650)" {
     test.is(await (await browser.get("/me")).text(), "session abc123");
     // A Cookie field the caller sets goes instead of the jar's.
     test.is(
-        await (await browser.get(target: "/me", headers: Headers(Header(name: "Cookie", value: "sid=mine")))).text(),
+        await (await browser.get(
+            target: "/me",
+            headers: Headers(Header(name: "Cookie", value: "sid=mine"))
+        )).text(),
         "session mine"
     );
     test.is(await (await browser.post("/logout", TextBody(""))).text(), "out");

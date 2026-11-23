@@ -34,7 +34,16 @@ role TrustStore {
 }
 
 // Why a chain was not trusted.
-enum CertificateFailure = (untrusted, invalid_signature, invalid_name, invalid_purpose, unknown_critical_extension, invalid_chain, not_yet_valid, expired);
+enum CertificateFailure = (
+    untrusted,
+    invalid_signature,
+    invalid_name,
+    invalid_purpose,
+    unknown_critical_extension,
+    invalid_chain,
+    not_yet_valid,
+    expired
+);
 
 // A DNS name or an IP address.
 enum CertificateIdentityKind = (dns, ip);

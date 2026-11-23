@@ -128,44 +128,44 @@ hidden object ImapSelectionProgress {
         let name = response.name();
         if response.kind() == ImapResponseKind.untagged
             && (name == "EXISTS" || name == "RECENT" || name == "EXPUNGE") {
-                let values = ParsedImapData(response).entries();
-                confirm values.size() == 3 && values.item(1).kind() == ImapValueKind.atom
-                    else throw InvalidImapData.because("invalid numeric mailbox update");
-                let number = ImapUnsigned(
-                    origin: values.item(1).string(),
-                    nonzero: name == "EXPUNGE"
-                ).int();
-                if name == "EXISTS" {
-                    confirm count < 0 || number >= count
-                        else throw InvalidImapData.because("EXISTS cannot decrease without EXPUNGE");
-                    ^count = number;
+            let values = ParsedImapData(response).entries();
+            confirm values.size() == 3 && values.item(1).kind() == ImapValueKind.atom
+                else throw InvalidImapData.because("invalid numeric mailbox update");
+            let number = ImapUnsigned(
+                origin: values.item(1).string(),
+                nonzero: name == "EXPUNGE"
+            ).int();
+            if name == "EXISTS" {
+                confirm count < 0 || number >= count
+                    else throw InvalidImapData.because("EXISTS cannot decrease without EXPUNGE");
+                ^count = number;
+            }
+            else {
+                if name == "RECENT" {
+                    ^recent = number;
                 }
                 else {
-                    if name == "RECENT" {
-                        ^recent = number;
+                    confirm count >= number
+                        else throw InvalidImapData.because(
+                            "EXPUNGE sequence exceeds mailbox size"
+                        );
+                    ^count = count - 1;
+                    if recent > 0 {
+                        ^recent = -1;
                     }
-                    else {
-                        confirm count >= number
-                            else throw InvalidImapData.because(
-                                "EXPUNGE sequence exceeds mailbox size"
-                            );
-                        ^count = count - 1;
-                        if recent > 0 {
-                            ^recent = -1;
+                    if unseen.size() > 0 {
+                        if unseen[0].number() == number {
+                            ^unseen = [];
                         }
-                        if unseen.size() > 0 {
-                            if unseen[0].number() == number {
-                                ^unseen = [];
-                            }
-                            else {
-                                if unseen[0].number() > number {
-                                    ^unseen = [ImapSequence(unseen[0].number() - 1)];
-                                }
+                        else {
+                            if unseen[0].number() > number {
+                                ^unseen = [ImapSequence(unseen[0].number() - 1)];
                             }
                         }
                     }
                 }
             }
+        }
         if response.kind() == ImapResponseKind.untagged && name == "FLAGS" {
             let values = ParsedImapData(response).entries();
             confirm values.size() == 3 else throw InvalidImapData.because("invalid FLAGS response");
@@ -181,45 +181,46 @@ hidden object ImapSelectionProgress {
             || name == "BAD"
             || name == "PREAUTH"
             || name == "BYE" {
-                let code = ImapStatusCode(response);
-                if code.present() {
-                    let key = code.name();
-                    let arguments = code.arguments();
-                    if key == "UIDVALIDITY" || key == "UIDNEXT" || key == "UNSEEN" {
-                        confirm arguments.size() == 1
-                            && arguments.item(0).kind() == ImapValueKind.atom
-                            else throw InvalidImapData.because("invalid numeric response code");
-                        let number = ImapUnsigned(origin: arguments.item(0).string(), nonzero: true).int();
-                        if key == "UIDVALIDITY" {
-                            if validity.size() > 0 && validity[0].string() != number.string() {
-                                ^following_uid = [];
-                                ^unseen = [];
-                            }
-                            ^validity = [ImapUidValidity((number))];
+            let code = ImapStatusCode(response);
+            if code.present() {
+                let key = code.name();
+                let arguments = code.arguments();
+                if key == "UIDVALIDITY" || key == "UIDNEXT" || key == "UNSEEN" {
+                    confirm arguments.size() == 1
+                        && arguments.item(0).kind() == ImapValueKind.atom
+                        else throw InvalidImapData.because("invalid numeric response code");
+                    let number = ImapUnsigned(origin: arguments.item(0).string(), nonzero: true)
+                        .int();
+                    if key == "UIDVALIDITY" {
+                        if validity.size() > 0 && validity[0].string() != number.string() {
+                            ^following_uid = [];
+                            ^unseen = [];
                         }
-                        if key == "UIDNEXT" {
-                            ^following_uid = [ImapUid((number))];
-                        }
-                        if key == "UNSEEN" {
-                            ^unseen = [ImapSequence(number)];
-                        }
+                        ^validity = [ImapUidValidity((number))];
                     }
-                    if key == "READ-ONLY" {
-                        confirm arguments.size() == 0
-                            else throw InvalidImapData.because("READ-ONLY has arguments");
-                        ^readonly = true;
+                    if key == "UIDNEXT" {
+                        ^following_uid = [ImapUid((number))];
                     }
-                    if key == "READ-WRITE" {
-                        confirm arguments.size() == 0
-                            else throw InvalidImapData.because("READ-WRITE has arguments");
-                        // EXAMINE's read-only request cannot be relaxed by the server.
-                        ^readonly = forced_readonly;
-                    }
-                    if key == "UIDNOTSTICKY" {
-                        ^persistent = false;
+                    if key == "UNSEEN" {
+                        ^unseen = [ImapSequence(number)];
                     }
                 }
+                if key == "READ-ONLY" {
+                    confirm arguments.size() == 0
+                        else throw InvalidImapData.because("READ-ONLY has arguments");
+                    ^readonly = true;
+                }
+                if key == "READ-WRITE" {
+                    confirm arguments.size() == 0
+                        else throw InvalidImapData.because("READ-WRITE has arguments");
+                    // EXAMINE's read-only request cannot be relaxed by the server.
+                    ^readonly = forced_readonly;
+                }
+                if key == "UIDNOTSTICKY" {
+                    ^persistent = false;
+                }
             }
+        }
     }
 
     validate() is void {

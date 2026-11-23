@@ -30,10 +30,20 @@ native async sqlite_connect(state is SqliteState) is SqliteReplyState;
 // path: kinds 0..6 are null, boolean, integer, floating, decimal, text,
 // bytes, and values are their text (bytes as is); std binds with the
 // *_cells natives below.
-native async sqlite_execution(state is SqliteState, sql is @byte, kinds is @int, values is @@byte) is SqliteReplyState;
+native async sqlite_execution(
+    state is SqliteState,
+    sql is @byte,
+    kinds is @int,
+    values is @@byte
+) is SqliteReplyState;
 
 // Runs sql with values and starts a cursor; the reply says how it went.
-native async sqlite_rows(state is SqliteState, sql is @byte, kinds is @int, values is @@byte) is SqliteReplyState;
+native async sqlite_rows(
+    state is SqliteState,
+    sql is @byte,
+    kinds is @int,
+    values is @@byte
+) is SqliteReplyState;
 
 // The next page of at most maximum rows of cursor id.
 native async sqlite_fetch(state is SqliteState, id is int, maximum is int) is SqliteReplyState;
@@ -92,7 +102,12 @@ native async sqlite_prepared_execution(
 
 // Runs prepared statement id with values and starts a cursor; the reply says
 // how it went.
-native async sqlite_prepared_rows(state is SqliteState, id is int, kinds is @int, values is @@byte) is SqliteReplyState;
+native async sqlite_prepared_rows(
+    state is SqliteState,
+    id is int,
+    kinds is @int,
+    values is @@byte
+) is SqliteReplyState;
 
 // Finalizes prepared statement id.
 native sqlite_unprepare(state is SqliteState, id is int) is bool;
@@ -108,10 +123,20 @@ native async sqlite_blob_open(
 ) is SqliteReplyState;
 
 // Reads limit bytes of BLOB id from offset; the reply says how it went.
-native async sqlite_blob_read(state is SqliteState, id is int, offset is string, limit is int) is SqliteReplyState;
+native async sqlite_blob_read(
+    state is SqliteState,
+    id is int,
+    offset is string,
+    limit is int
+) is SqliteReplyState;
 
 // Writes source to BLOB id at offset; the reply says how it went.
-native async sqlite_blob_write(state is SqliteState, id is int, offset is string, source is @byte) is SqliteReplyState;
+native async sqlite_blob_write(
+    state is SqliteState,
+    id is int,
+    offset is string,
+    source is @byte
+) is SqliteReplyState;
 
 // Closes BLOB id.
 native sqlite_blob_close(state is SqliteState, id is int) is bool;
@@ -141,11 +166,19 @@ native async sqlite_control(state is SqliteState, sql is @byte) is SqliteReplySt
 native sqlite_reply_cells(reply is SqliteReplyState, row is int) is @DbCellState;
 
 // Typed request/reply boundary: no text encoding of numeric parameters or metadata.
-native async sqlite_execution_cells(state is SqliteState, sql is string, values is @DbCellState) is SqliteReplyState;
+native async sqlite_execution_cells(
+    state is SqliteState,
+    sql is string,
+    values is @DbCellState
+) is SqliteReplyState;
 
 // Runs sql with cells as values and starts a cursor; the reply says how it
 // went.
-native async sqlite_rows_cells(state is SqliteState, sql is string, values is @DbCellState) is SqliteReplyState;
+native async sqlite_rows_cells(
+    state is SqliteState,
+    sql is string,
+    values is @DbCellState
+) is SqliteReplyState;
 
 // Runs prepared statement id with cells; the reply says how it went.
 native async sqlite_prepared_execution_cells(
@@ -156,7 +189,11 @@ native async sqlite_prepared_execution_cells(
 
 // Runs prepared statement id with cells and starts a cursor; the reply says how
 // it went.
-native async sqlite_prepared_rows_cells(state is SqliteState, id is int, values is @DbCellState) is SqliteReplyState;
+native async sqlite_prepared_rows_cells(
+    state is SqliteState,
+    id is int,
+    values is @DbCellState
+) is SqliteReplyState;
 
 // Whether the operation succeeded.
 native sqlite_reply_ok(reply is SqliteReplyState) is bool;

@@ -158,7 +158,10 @@ test "wrap packs whole words and shorten keeps a placeholder" {
     test.is(Wrapped(origin: "one two three", width: 7).string(), "one two\nthree");
     test.is(Wrapped(origin: "  spaced   out  ", width: 20).string(), "spaced out");
     test.is(Wrapped(origin: "unbreakable word", width: 4).string(), "unbreakable\nword");
-    test.is(Shortened(origin: "one two three", width: 10, placeholder: "...").string(), "one two...");
+    test.is(
+        Shortened(origin: "one two three", width: 10, placeholder: "...").string(),
+        "one two..."
+    );
     test.is(Shortened(origin: "one two", width: 10, placeholder: "...").string(), "one two");
     for [0, -1] -> width {
         test.is(

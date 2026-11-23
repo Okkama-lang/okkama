@@ -285,16 +285,33 @@ test "local times resolve to instants through a named zone" {
             time: TimeOfDay(hour: hour, minute: minute, second: 0, nanosecond: 0),
         );
     };
-    let unix = (instant is Instant) is rat { instant.unix_duration()::Span::seconds; };
+    let unix = (instant is Instant) is rat {
+        instant.unix_duration()::Span::seconds;
+    };
     let york = Zone("America/New_York");
-    test.is(unix(Zoned(local: at(2026, 7, 1, 12, 0), zone: york, fold: Fold.earlier).instant()), 1782921600.rat());
+    test.is(
+        unix(Zoned(local: at(2026, 7, 1, 12, 0), zone: york, fold: Fold.earlier).instant()),
+        1782921600.rat()
+    );
     let berlin = Zone("Europe/Berlin");
-    test.is(unix(Zoned(local: at(2026, 1, 15, 12, 0), zone: berlin, fold: Fold.later).instant()), 1768474800.rat());
+    test.is(
+        unix(Zoned(local: at(2026, 1, 15, 12, 0), zone: berlin, fold: Fold.later).instant()),
+        1768474800.rat()
+    );
     // 02:30 happens twice when summer time ends, and never when it starts.
-    test.is(unix(Zoned(local: at(2026, 10, 25, 2, 30), zone: berlin, fold: Fold.earlier).instant()), 1792888200.rat());
-    test.is(unix(Zoned(local: at(2026, 10, 25, 2, 30), zone: berlin, fold: Fold.later).instant()), 1792891800.rat());
+    test.is(
+        unix(Zoned(local: at(2026, 10, 25, 2, 30), zone: berlin, fold: Fold.earlier).instant()),
+        1792888200.rat()
+    );
+    test.is(
+        unix(Zoned(local: at(2026, 10, 25, 2, 30), zone: berlin, fold: Fold.later).instant()),
+        1792891800.rat()
+    );
     test.is(unix(berlin.instant(at(2026, 10, 25, 2, 30))), 1792888200.rat());
-    test.is(unix(berlin.instant(local: at(2026, 10, 25, 2, 30), fold: Fold.later)), 1792891800.rat());
+    test.is(
+        unix(berlin.instant(local: at(2026, 10, 25, 2, 30), fold: Fold.later)),
+        1792891800.rat()
+    );
     test.is(berlin.instant(at(2026, 12, 1, 9, 0)).string(), "2026-12-01T08:00:00Z");
     test.is(
         try {
@@ -334,7 +351,10 @@ test "fixed zones have one offset and refuse bad ones" {
     test.is(plus_five.offset(instant)::Span::seconds, 18000.rat());
     test.is(plus_five.abbreviation(instant), "UTC+5");
     test.ok(!plus_five.daylight_saving(instant));
-    test.is(ZonedDateTime(instant: instant, zone: plus_five).local_datetime().time()::Clock::hour, 5);
+    test.is(
+        ZonedDateTime(instant: instant, zone: plus_five).local_datetime().time()::Clock::hour,
+        5
+    );
     test.is(
         try {
             FixedZone(name: "far", offset: Duration(seconds: (25 * 3600).rat())).name();
@@ -358,8 +378,19 @@ test "fixed zones have one offset and refuse bad ones" {
 test "today is the date in the zone at the clock's instant" {
     // 2026-01-01T03:00:00Z.
     let clock = ManualClock(Instant(origin: Duration(seconds: 1767236400.rat())));
-    test.is(Today(zone: FixedZone(name: "UTC", offset: Duration(seconds: 0.rat())), clock: clock).date().string(), "2026-01-01");
-    test.is(Today(zone: FixedZone(name: "UTC-5", offset: Duration(seconds: (-5 * 3600).rat())), clock: clock).date().string(), "2025-12-31");
+    test.is(
+        Today(zone: FixedZone(name: "UTC", offset: Duration(seconds: 0.rat())), clock: clock)
+            .date()
+            .string(),
+        "2026-01-01"
+    );
+    test.is(
+        Today(
+            zone: FixedZone(name: "UTC-5", offset: Duration(seconds: (-5 * 3600).rat())),
+            clock: clock
+        ).date().string(),
+        "2025-12-31"
+    );
     test.is(Today(zone: Zone("America/New_York"), clock: clock).date().string(), "2025-12-31");
     test.is(Today(zone: Zone("Asia/Tokyo"), clock: clock).date().string(), "2026-01-01");
 }

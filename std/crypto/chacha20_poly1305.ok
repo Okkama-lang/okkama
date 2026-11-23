@@ -39,12 +39,18 @@ object ChaCha20Poly1305 does Sealing {
     // plaintext encrypted and authenticated with aad, under nonce; never reuse
     // a nonce with the same key.
     sealed(nonce is @byte, aad is @byte, plaintext is @byte) is @byte {
-        HostOperation(operation: "aead-seal:chacha20-poly1305", arguments: [key.export_bytes(), nonce, aad, plaintext]).bytes();
+        HostOperation(
+            operation: "aead-seal:chacha20-poly1305",
+            arguments: [key.export_bytes(), nonce, aad, plaintext]
+        ).bytes();
     }
 
     // The plaintext of sealed; AuthenticationFailed when it or aad was changed.
     opened(nonce is @byte, aad is @byte, sealed is @byte) is @byte {
-        HostOperation(operation: "aead-open:chacha20-poly1305", arguments: [key.export_bytes(), nonce, aad, sealed]).bytes();
+        HostOperation(
+            operation: "aead-open:chacha20-poly1305",
+            arguments: [key.export_bytes(), nonce, aad, sealed]
+        ).bytes();
     }
 
     // Text, as UTF-8: cipher.sealed(nonce, "record 7", "balance: 42").
@@ -87,12 +93,18 @@ object XChaCha20Poly1305 does Sealing {
     // plaintext encrypted and authenticated with aad, under nonce; never reuse
     // a nonce with the same key.
     sealed(nonce is @byte, aad is @byte, plaintext is @byte) is @byte {
-        HostOperation(operation: "aead-seal:xchacha20-poly1305", arguments: [key.export_bytes(), nonce, aad, plaintext]).bytes();
+        HostOperation(
+            operation: "aead-seal:xchacha20-poly1305",
+            arguments: [key.export_bytes(), nonce, aad, plaintext]
+        ).bytes();
     }
 
     // The plaintext of sealed; AuthenticationFailed when it or aad was changed.
     opened(nonce is @byte, aad is @byte, sealed is @byte) is @byte {
-        HostOperation(operation: "aead-open:xchacha20-poly1305", arguments: [key.export_bytes(), nonce, aad, sealed]).bytes();
+        HostOperation(
+            operation: "aead-open:xchacha20-poly1305",
+            arguments: [key.export_bytes(), nonce, aad, sealed]
+        ).bytes();
     }
 
     // Text, as UTF-8: cipher.sealed(nonce, "record 7", "balance: 42").
@@ -149,11 +161,31 @@ test "XChaCha20-Poly1305 round-trips and authenticates" {
 }
 
 test "a cipher seals and opens text" {
-    let cipher = ChaCha20Poly1305(SecretBytes((0..32).map() -> index { byte(index); }));
-    let nonce is @byte = (0..12).map() -> index { byte(index); };
+    let cipher = ChaCha20Poly1305(SecretBytes((0..32).map() -> index {
+        byte(index);
+    }));
+    let nonce is @byte = (0..12).map() -> index {
+        byte(index);
+    };
     let sealed = cipher.sealed(nonce, "record 7", "balance: 42 é");
     test.is(cipher.opened_text(nonce, "record 7", sealed), "balance: 42 é");
-    test.is(cipher.opened(nonce, "record 7", sealed), cipher.opened(nonce, [114.byte(), 101.byte(), 99.byte(), 111.byte(), 114.byte(), 100.byte(), 32.byte(), 55.byte()], sealed));
+    test.is(
+        cipher.opened(nonce, "record 7", sealed),
+        cipher.opened(
+            nonce,
+            [
+                114.byte(),
+                101.byte(),
+                99.byte(),
+                111.byte(),
+                114.byte(),
+                100.byte(),
+                32.byte(),
+                55.byte()
+            ],
+            sealed
+        )
+    );
     test.throws(AuthenticationFailed) {
         cipher.opened_text(nonce, "record 8", sealed);
     };

@@ -169,7 +169,11 @@ object Regex {
     }
 
     // A first, prefix or entire match within range; the searches use it.
-    observation(origin is string, range is RegexRange, mode is RegexQuery) is RegexQueryObservation {
+    observation(
+        origin is string,
+        range is RegexRange,
+        mode is RegexQuery
+    ) is RegexQueryObservation {
         let query = regex_query_create(
             state,
             origin,
@@ -288,7 +292,12 @@ object RegexMatchObservation {
     has mode is RegexQuery;
 
     // Looks for regex in origin within range.
-    RegexMatchObservation(origin is string, regex is Regex, range is RegexRange, mode is RegexQuery) {
+    RegexMatchObservation(
+        origin is string,
+        regex is Regex,
+        range is RegexRange,
+        mode is RegexQuery
+    ) {
         source = origin;
         pattern = regex;
         selected = range;
@@ -444,7 +453,9 @@ test "ignore_case matches whole simple case folding classes (#550)" {
     test.ok(Regex(expression: "[a-z]+", flags: [RegexFlag.ignore_case]).found("\u{17F}"));
     test.ok(Regex(expression: "σ", flags: [RegexFlag.ignore_case]).found("ς"));
     test.ok(!Regex(expression: "i", flags: [RegexFlag.ignore_case]).found("ı"));
-    test.ok(!Regex(expression: "k", flags: [RegexFlag.ignore_case, RegexFlag.ascii]).found("\u{212A}"));
+    test.ok(
+        !Regex(expression: "k", flags: [RegexFlag.ignore_case, RegexFlag.ascii]).found("\u{212A}")
+    );
 }
 
 test "a regex answers the common questions itself" {

@@ -198,8 +198,8 @@ object CookiePathMatch {
         if cookie == ""
             || request.length() <= cookie.length()
             || request.slice(0, cookie.length()) != cookie {
-                return false;
-            }
+            return false;
+        }
         cookie.ends_with("/")
             || request.slice(cookie.length(), cookie.length() + 1) == "/";
     }
@@ -226,7 +226,8 @@ object CookieDomainMatch {
         !address
             && cookie != ""
             && request.length() > cookie.length()
-            && request.slice(request.length() - cookie.length() - 1, request.length()) == "." + cookie;
+            && request.slice(request.length() - cookie.length() - 1, request.length()) ==
+            "." + cookie;
     }
 }
 
@@ -369,7 +370,12 @@ hidden object CookieAttributeReading {
         }
     }
 
-    cookie(name is string, value is string, endpoint is CookieOrigin, reference is Instant) is Cookie {
+    cookie(
+        name is string,
+        value is string,
+        endpoint is CookieOrigin,
+        reference is Instant
+    ) is Cookie {
         let selected is @CookieFlag = [
             CookieFlag.secure,
             CookieFlag.http_only,
@@ -440,12 +446,13 @@ hidden object CookieAttributeReading {
         }
         else {
             if expiry.persistent()
-                && expiry.instant().unix_duration()::Span::seconds > cap.unix_duration()::Span::seconds {
-                    CookieExpiry(cap);
-                }
-                else {
-                    expiry;
-                }
+                && expiry.instant().unix_duration()::Span::seconds >
+                cap.unix_duration()::Span::seconds {
+                CookieExpiry(cap);
+            }
+            else {
+                expiry;
+            }
         };
         Cookie(
             name: name,

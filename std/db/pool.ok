@@ -461,10 +461,12 @@ object DbPoolState {
             );
             defer await anchor.close();
             let expired = (options.lifetime()::Span::seconds > 0.rat()
-                && clock.monotonic_instant().minus(physical.born())::Span::seconds >= options.lifetime()::Span::seconds)
+                && clock.monotonic_instant().minus(physical.born())::Span::seconds >=
+                options.lifetime()::Span::seconds)
                 || (candidates.size() > 0
                 && options.idle_timeout()::Span::seconds > 0.rat()
-                && clock.monotonic_instant().minus(previous[0].since())::Span::seconds >= options.idle_timeout()::Span::seconds);
+                && clock.monotonic_instant().minus(previous[0].since())::Span::seconds >=
+                options.idle_timeout()::Span::seconds);
             if expired || connection.closed() || !(await health.healthy(connection)) {
                 self.discard(physical, connection);
                 await connection.settled();
@@ -575,7 +577,8 @@ object DbPoolState {
     // Puts a connection back as idle.
     recycle(physical is DbPhysical, connection is DbConnection) is void {
         let expired = options.lifetime()::Span::seconds > 0.rat()
-            && clock.monotonic_instant().minus(physical.born())::Span::seconds >= options.lifetime()::Span::seconds;
+            && clock.monotonic_instant().minus(physical.born())::Span::seconds >=
+            options.lifetime()::Span::seconds;
         if self.closed() || connection.closed() || expired {
             self.discard(physical, connection);
         }
@@ -852,7 +855,11 @@ object PooledTransaction does Transaction, DbExecuting, DbPreparing {
     has preparation is @DbPreparing;
 
     // origin, ending when the lease does.
-    PooledTransaction(origin is Transaction, lease_closed is Event, readers is Atomic<@RowReading>) {
+    PooledTransaction(
+        origin is Transaction,
+        lease_closed is Event,
+        readers is Atomic<@RowReading>
+    ) {
         self.origin = origin;
         self.lease_closed = lease_closed;
         self.readers = readers;

@@ -668,7 +668,8 @@ hidden object HttpServerPeer {
             }
         };
         let deadline is HttpServerDeadline<TlsConnection> = HttpServerDeadline(
-            waiting: TlsServerHandshake(origin: connection, policy: tls[0], protocols: offered).connection(),
+            waiting: TlsServerHandshake(origin: connection, policy: tls[0], protocols: offered)
+                .connection(),
             limit: policy.timeouts().headers_timeout(),
             clock: clock
         );
@@ -757,7 +758,8 @@ hidden object HttpServerPeer {
         // HTTP/2 when ALPN chose it, or in cleartext when the policy is HTTP/2
         // only (prior knowledge).
         let chosen = stream.protocol();
-        if chosen == "h2" || (chosen == "" && !policy.protocols().membership(HttpVersion.http_1_1)) {
+        if chosen == "h2"
+            || (chosen == "" && !policy.protocols().membership(HttpVersion.http_1_1)) {
             return await self.h2_requests(stream);
         }
         let limits = policy.limits().http1();
@@ -816,49 +818,52 @@ hidden object HttpServerPeer {
                 && (expectations.size() != 1
                 || HttpAsciiLowercase(expectations.item(0)).string() != "100-continue"
                 || head::Head::version != HttpVersion.http_1_1) {
-                    let response = Response(
-                        status: Status.expectation_failed,
-                        headers: Headers(Header(name: HeaderName("Connection"), value: "close"))
-                    );
-                    let pending = Http1ResponseWriting(
-                        origin: stream.output(),
-                        response: response,
-                        method: head::Head::method,
-                        limits: limits
-                    ).output();
-                    await pending;
-                    return true;
-                }
+                let response = Response(
+                    status: Status.expectation_failed,
+                    headers: Headers(Header(name: HeaderName("Connection"), value: "close"))
+                );
+                let pending = Http1ResponseWriting(
+                    origin: stream.output(),
+                    response: response,
+                    method: head::Head::method,
+                    limits: limits
+                ).output();
+                await pending;
+                return true;
+            }
             // A request without a body has nothing to read or drain (#100).
             let incoming is HttpServerIncoming = if plan::Plan::kind == Http1BodyKind.empty
                 && !expected {
-                    HttpServerNoBody(received.remainder());
-                }
-                else {
-                    let continuing = HttpServerContinueInput(
-                        origin: stream.input(),
-                        output: stream.output(),
-                        expected: expected
-                    );
-                    HttpServerStreamedBody(
-                        continuing: continuing,
-                        body: Http1BodyReading(
-                            origin: HttpServerTimedInput(
-                                continuing,
-                                policy.timeouts().body_idle_timeout(),
-                                clock
-                            ),
-                            owner: HttpServerBodyLease(),
-                            plan: plan,
-                            prefix: received.remainder(),
-                            head: head.headers(),
-                            limits: limits
-                        )
-                    );
-                };
+                HttpServerNoBody(received.remainder());
+            }
+            else {
+                let continuing = HttpServerContinueInput(
+                    origin: stream.input(),
+                    output: stream.output(),
+                    expected: expected
+                );
+                HttpServerStreamedBody(
+                    continuing: continuing,
+                    body: Http1BodyReading(
+                        origin: HttpServerTimedInput(
+                            continuing,
+                            policy.timeouts().body_idle_timeout(),
+                            clock
+                        ),
+                        owner: HttpServerBodyLease(),
+                        plan: plan,
+                        prefix: received.remainder(),
+                        head: head.headers(),
+                        limits: limits
+                    )
+                );
+            };
             let request = head.request(incoming.opening());
             let details = stream.details(head::Head::version);
-            let context = HttpRequestContext(details: details, cancellation: cancelled.cancelling());
+            let context = HttpRequestContext(
+                details: details,
+                cancellation: cancelled.cancelling()
+            );
             phase.replace(1);
             let handlers is FutureGroup<HandlingResult> = FutureGroup();
             let handler_cleanup = WebSocketOutputSettlement(handlers);
@@ -974,8 +979,8 @@ hidden object HttpServerPeer {
             if server.stopping_acceptance()
                 || !plan::Plan::reuse_after_eof
                 || !outgoing::Plan::reuse_after_eof {
-                    return true;
-                }
+                return true;
+            }
             let rest = await incoming.drained();
             prefix.replace(rest);
             completed.replace(completed.value() + 1);
@@ -1096,8 +1101,8 @@ hidden object HttpServerFraming {
             || code == 304
             || headers.membership(HeaderName("Content-Length"))
             || headers.membership(HeaderName("Transfer-Encoding")) {
-                return origin;
-            }
+            return origin;
+        }
         let body = origin.body();
         let length is @int = try {
             [body.length()];
@@ -1417,7 +1422,8 @@ async test "a server answers over loopback, reads bodies, and drains" {
     let posted = await client.post(url: base + "/notes", body: TextBody(text: "héllo"));
     test.is(await posted.text(), "POST /notes héllo");
     // A server accepts the absolute form too (RFC 9112 §3.2.2).
-    let raw = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    let raw = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
     await raw.output().write(Utf8Encoded(
         "GET " + base + "/absolute?y=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
     ).bytes());
@@ -1479,7 +1485,8 @@ async test "a server answers HTTP/1.0 and keeps its connection only when asked" 
         clock: SystemClock()
     ).started();
     // No Host and no keep-alive: the answer says close, and the server closes.
-    let plain = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    let plain = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
     await plain.output().write("GET /old HTTP/1.0\r\n\r\n");
     let answer = Atomic("");
     loop {
@@ -1492,7 +1499,8 @@ async test "a server answers HTTP/1.0 and keeps its connection only when asked" 
     test.ok(answer.value().contains("\r\nConnection: close\r\n"));
     test.ok(answer.value().ends_with("GET /old "));
     // Asked for keep-alive: a second request goes over the same connection.
-    let kept = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    let kept = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
     for ["/one", "/two"] -> path {
         await kept.output().write("GET " + path + " HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
         let reply = Atomic("");
@@ -1530,7 +1538,8 @@ async test "a request body that pauses past the idle timeout is answered with 40
         clock: SystemClock()
     ).started();
     // A body that keeps coming is read whole.
-    let quick = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    let quick = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
     await quick.output().write(
         "POST /quick HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
     );
@@ -1544,7 +1553,8 @@ async test "a request body that pauses past the idle timeout is answered with 40
     test.ok(answer.value().starts_with("HTTP/1.1 200 OK\r\n"));
     test.ok(answer.value().ends_with("POST /quick hello"));
     // Three bytes of ten, then silence: 408, and the connection closes.
-    let slow = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    let slow = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port)
+        .connection();
     await slow.output().write("POST /slow HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nabc");
     let refusal = Atomic("");
     loop {

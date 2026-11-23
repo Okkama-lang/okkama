@@ -22,7 +22,11 @@ object Http1RequestHeadWriting {
     }
 
     // The same within limits.
-    Http1RequestHeadWriting(origin is AsyncWriting, head is Http1RequestHead, limits is Http1Limits) {
+    Http1RequestHeadWriting(
+        origin is AsyncWriting,
+        head is Http1RequestHead,
+        limits is Http1Limits
+    ) {
         pending = Http1HeadOutput().request(origin, head, limits);
     }
 
@@ -112,7 +116,11 @@ object Http1ResponseHeadWriting {
 hidden object Http1HeadOutput {
     Http1HeadOutput();
 
-    request(origin is AsyncWriting, head is Http1RequestHead, limits is Http1Limits) is Future<AsyncWriting> {
+    request(
+        origin is AsyncWriting,
+        head is Http1RequestHead,
+        limits is Http1Limits
+    ) is Future<AsyncWriting> {
         self.writing(origin, self.request_wire(head, limits));
     }
 
@@ -123,9 +131,10 @@ hidden object Http1HeadOutput {
 
     // The bytes of a head whose framing is already checked.
     request_bytes(head is Http1RequestHead, limits is Http1Limits) is @byte {
-        let start = MethodName(head::Head::method).string() + " " + head.target().string() + " " + Http1VersionText(
-            head::Head::version
-        ).string();
+        let start = MethodName(head::Head::method).string() + " " + head.target().string() + " " +
+            Http1VersionText(
+                head::Head::version
+            ).string();
         // The wire is built from checked parts within the limits; it is not
         // parsed back (#113).
         Http1HeadWire(start: start, fields: head.headers(), limits: limits).bytes();
@@ -200,6 +209,7 @@ hidden object Http1HeadWire {
 }
 
 test "extension response status keeps mandatory reason separator" {
-    let wire = Http1HeadWire(start: "HTTP/1.1 299 ", fields: Headers(), limits: Http1Limits()).bytes();
+    let wire = Http1HeadWire(start: "HTTP/1.1 299 ", fields: Headers(), limits: Http1Limits())
+        .bytes();
     test.is(Latin1Decoded(wire).string(), "HTTP/1.1 299 \r\n\r\n");
 }

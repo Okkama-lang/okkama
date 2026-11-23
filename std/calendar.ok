@@ -337,16 +337,17 @@ object IsoWeek does Comparing<IsoWeek> {
             else throw InvalidIsoWeek.because("ISO week year must be within 1..9999");
         // Day numbers count from 0001-01-01, a Monday, as GregorianDay does.
         let prior = year - 1;
-        let before is int = prior * 365 + (prior / 4).int() - (prior / 100).int() + (prior / 400).int();
+        let before is int = prior * 365 + (prior / 4).int() - (prior / 100).int() +
+            (prior / 400).int();
         let january_index is int = before % 7;
         let leap is bool = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
         let maximum is int = if january_index == 3
             || (january_index == 2 && leap) {
-                53;
-            }
-            else {
-                52;
-            };
+            53;
+        }
+        else {
+            52;
+        };
         confirm week >= 1 && week <= maximum
             else throw InvalidIsoWeek.because("ISO week is outside its week-year");
         let first_ordinal is int = before + 4 - (january_index + 3) % 7 + (week - 1) * 7;
@@ -473,10 +474,14 @@ test "a month lists its own dates and compares by year, then month" {
     test.is(august.first()::Calendar::day, 1);
     test.is(august.last()::Calendar::day, 31);
     test.is(august.item(9)::Calendar::day, 10);
-    let days is @int = august.map() -> date { date::Calendar::day; };
+    let days is @int = august.map() -> date {
+        date::Calendar::day;
+    };
     test.is(days.size(), 31);
     test.ok(YearMonth(year: 2026, month: 12).order(YearMonth(year: 2027, month: 1)) == Order.less);
-    test.ok(YearMonth(year: 2026, month: 8).order(YearMonth(year: 2026, month: 3)) == Order.greater);
+    test.ok(
+        YearMonth(year: 2026, month: 8).order(YearMonth(year: 2026, month: 3)) == Order.greater
+    );
     test.throws(InvalidYearMonth) {
         YearMonth(year: 2026, month: 13);
     };
@@ -486,16 +491,28 @@ test "a month lists its own dates and compares by year, then month" {
 }
 
 test "a calendar month is whole weeks from the chosen first weekday" {
-    let grid = CalendarMonth(origin: YearMonth(year: 2026, month: 8), first_weekday: Weekday.monday);
+    let grid = CalendarMonth(
+        origin: YearMonth(year: 2026, month: 8),
+        first_weekday: Weekday.monday
+    );
     test.is(grid.size(), 6);
     test.is(IsoDate(origin: grid.first().first()).string(), "2026-07-27");
     test.is(IsoDate(origin: grid.last().last()).string(), "2026-09-06");
-    let sundays = CalendarMonth(origin: YearMonth(year: 2026, month: 8), first_weekday: Weekday.sunday);
+    let sundays = CalendarMonth(
+        origin: YearMonth(year: 2026, month: 8),
+        first_weekday: Weekday.sunday
+    );
     test.is(IsoDate(origin: sundays.first().first()).string(), "2026-07-26");
     test.is(sundays.size(), 6);
-    let rows is @int = grid.map() -> week { week.size(); };
+    let rows is @int = grid.map() -> week {
+        week.size();
+    };
     test.is(rows, [7, 7, 7, 7, 7, 7]);
-    test.is(CalendarMonth(origin: YearMonth(year: 2026, month: 2), first_weekday: Weekday.sunday).size(), 4);
+    test.is(
+        CalendarMonth(origin: YearMonth(year: 2026, month: 2), first_weekday: Weekday.sunday)
+            .size(),
+        4
+    );
     test.throws(InvalidCalendarMonth) {
         CalendarMonth(origin: YearMonth(year: 1, month: 1), first_weekday: Weekday.tuesday).size();
     };

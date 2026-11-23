@@ -222,7 +222,8 @@ object TemporaryFile does Reading, Writing, WritingText, Closing {
         catch failure is NativeFailure {
             throw FileError.failed(
                 "not_durable",
-                target + " is replaced, but its directory was not synchronized: " + failure.message(),
+                target + " is replaced, but its directory was not synchronized: " +
+                    failure.message(),
             );
         }
     }
@@ -319,9 +320,11 @@ test "a temporary file is written, named under its directory and gone after clos
     let path = temporary.path();
     test.is(path.parent(), scratch.path());
     test.ok(
-        path.string().slice(scratch.path().string().length() + 1, path.string().length()).starts_with(
-            "upload-"
-        )
+        path.string()
+            .slice(scratch.path().string().length() + 1, path.string().length())
+            .starts_with(
+                "upload-"
+            )
     );
     temporary.write([byte(1), byte(2), byte(3)]);
     temporary.flush();

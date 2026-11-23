@@ -108,7 +108,9 @@ object LevelThresholds does LogAllowing {
 
     // The level of the longest override that is a prefix of name.
     hidden threshold(name is LogName) is LogLevel {
-        let choice = overrides.reduce(LogThresholdChoice(level: fallback, size: 0)) -> old, override {
+        let choice = overrides.reduce(
+            LogThresholdChoice(level: fallback, size: 0)
+        ) -> old, override {
             let prefix = override.name().segments();
             let actual = name.segments();
             let matches = if prefix.size() > actual.size() {

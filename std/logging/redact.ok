@@ -90,7 +90,8 @@ object RedactedCauseLogs does LogWriting {
             [];
         };
         origin.write(
-            ChangedLogRecord(origin: record, fields: record.context().fields(), causes: causes).record()
+            ChangedLogRecord(origin: record, fields: record.context().fields(), causes: causes)
+                .record()
         );
     }
 

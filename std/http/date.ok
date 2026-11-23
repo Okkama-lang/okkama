@@ -147,9 +147,11 @@ object ParsedHttpDate {
         let reference = HttpDateLocal(HttpDate(references[0]).instant()).local();
         let latest = reference.date()::Calendar::year + 50;
         let candidate = (latest / 100).int() * 100 + short;
-        let suffix = month * 100000000 + day * 1000000 + time::Clock::hour * 10000 + time::Clock::minute * 100 + time::Clock::second;
-        let current = reference.date()::Calendar::month * 100000000 + reference.date()::Calendar::day * 1000000 +
-            reference.time()::Clock::hour * 10000 + reference.time()::Clock::minute * 100 + reference.time()::Clock::second;
+        let suffix = month * 100000000 + day * 1000000 + time::Clock::hour * 10000 +
+            time::Clock::minute * 100 + time::Clock::second;
+        let current = reference.date()::Calendar::month * 100000000 +
+            reference.date()::Calendar::day * 1000000 + reference.time()::Clock::hour * 10000 +
+            reference.time()::Clock::minute * 100 + reference.time()::Clock::second;
         let year = if candidate > latest || (candidate == latest && suffix > current) {
             candidate - 100;
         }

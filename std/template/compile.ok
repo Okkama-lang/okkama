@@ -549,7 +549,12 @@ hidden object TemplateScanner {
 
     hidden failure(offset is int, message is string) is TemplateFailure {
         let lines = source.slice(0, offset).replace("\r\n", "\n").split("\n");
-        TemplateFailure.located(offset, lines.size(), lines[lines.size() - 1].length() + 1, message);
+        TemplateFailure.located(
+            offset,
+            lines.size(),
+            lines[lines.size() - 1].length() + 1,
+            message
+        );
     }
 }
 
@@ -652,7 +657,8 @@ test "plain templates validate syntax and byte bounds" {
 }
 
 test "Okkama template program yields immutable ordered instructions" {
-    let nodes = TemplateProgram(source: "é{{ x }}!", maximum_input: 20, maximum_nodes: 3).instructions();
+    let nodes = TemplateProgram(source: "é{{ x }}!", maximum_input: 20, maximum_nodes: 3)
+        .instructions();
     test.is(nodes.size(), 3);
     test.is(nodes[0].text(), "é");
     test.is(nodes[0].variable(), false);
@@ -674,7 +680,9 @@ test "Okkama template program standalone comments and escapes" {
     test.is(nodes.size(), 1);
     test.is(nodes[0].text(), "a\nb{{x}}");
     test.is(
-        TemplateProgram(source: " {{!only}}", maximum_input: 20, maximum_nodes: 0).instructions().size(),
+        TemplateProgram(source: " {{!only}}", maximum_input: 20, maximum_nodes: 0)
+            .instructions()
+            .size(),
         0
     );
 }
@@ -714,23 +722,33 @@ test "Okkama template program preserves failure coordinates and bounds" {
 
 test "Okkama template program delimiter and comment boundaries" {
     test.is(
-        TemplateProgram(source: "{{{{{{x}}}}}}", maximum_input: 100, maximum_nodes: 3).instructions().size(),
+        TemplateProgram(source: "{{{{{{x}}}}}}", maximum_input: 100, maximum_nodes: 3)
+            .instructions()
+            .size(),
         3
     );
     test.is(
-        TemplateProgram(source: "{{{{{{x}}}}}}", maximum_input: 100, maximum_nodes: 3).instructions()[2].text(),
+        TemplateProgram(source: "{{{{{{x}}}}}}", maximum_input: 100, maximum_nodes: 3)
+            .instructions()[2]
+            .text(),
         "}}"
     );
     test.is(
-        TemplateProgram(source: "a{{!inline}}b", maximum_input: 100, maximum_nodes: 1).instructions()[0].text(),
+        TemplateProgram(source: "a{{!inline}}b", maximum_input: 100, maximum_nodes: 1)
+            .instructions()[0]
+            .text(),
         "ab"
     );
     test.is(
-        TemplateProgram(source: " {{!a}}\n\t{{!b}}\r\n", maximum_input: 100, maximum_nodes: 0).instructions().size(),
+        TemplateProgram(source: " {{!a}}\n\t{{!b}}\r\n", maximum_input: 100, maximum_nodes: 0)
+            .instructions()
+            .size(),
         0
     );
     test.is(
-        TemplateProgram(source: "a\r{{!b}}\nc", maximum_input: 100, maximum_nodes: 1).instructions()[0].text(),
+        TemplateProgram(source: "a\r{{!b}}\nc", maximum_input: 100, maximum_nodes: 1)
+            .instructions()[0]
+            .text(),
         "a\r\nc"
     );
     for ["{{}}", "{{ }}", "{{.}}", "{{a..b}}", "{{#a}}", "}}", "{{{x}}}"] -> text {

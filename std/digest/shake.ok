@@ -31,7 +31,9 @@ object Shake128 does Digesting {
     // Text, as UTF-8.
     Shake128(length is int, text is string) {
         confirm length >= 1 && length <= 1048576 else throw InvalidShakeLength.length(length);
-        digest = HostDigest(algorithm: "shake128", key: [], width: length).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "shake128", key: [], width: length).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The output.
@@ -76,7 +78,9 @@ object Shake256 does Digesting {
     // Text, as UTF-8.
     Shake256(length is int, text is string) {
         confirm length >= 1 && length <= 1048576 else throw InvalidShakeLength.length(length);
-        digest = HostDigest(algorithm: "shake256", key: [], width: length).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "shake256", key: [], width: length).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The output.
@@ -114,7 +118,10 @@ test "SHAKE matches FIPS 202 empty-message outputs" {
         HexEncoded(Shake256(32).bytes()).string(),
         "46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f"
     );
-    test.is(Shake128(length: 64, origin: [1.byte()]).bytes().slice(0, 32), Shake128(length: 32, origin: [1.byte()]).bytes());
+    test.is(
+        Shake128(length: 64, origin: [1.byte()]).bytes().slice(0, 32),
+        Shake128(length: 32, origin: [1.byte()]).bytes()
+    );
     test.ok(try {
         Shake256(0);
         false;

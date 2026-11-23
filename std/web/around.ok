@@ -221,7 +221,8 @@ hidden object CorsPreflight does Handling {
             allowed;
         }
         else {
-            let requested = request::Head::headers.maybe("Access-Control-Request-Headers").text() else "";
+            let requested = request::Head::headers.maybe("Access-Control-Request-Headers")
+                .text() else "";
             let named is @Header = if requested == "" {
                 [];
             }
@@ -386,8 +387,8 @@ object Compression does Surrounding {
             || code == 204
             || code == 206
             || code == 304 {
-                return "";
-            }
+            return "";
+        }
         let headers = response::Head::headers;
         if headers.membership(HeaderName("Content-Encoding")) {
             return "";
@@ -574,7 +575,10 @@ async test "cors answers preflights and marks replies to its origin" {
             headers: Headers(
                 Header(name: "Origin", value: "https://app.example"),
                 Header(name: "Access-Control-Request-Method", value: "POST"),
-                Header(name: "Access-Control-Request-Headers", value: "authorization, content-type"),
+                Header(
+                    name: "Access-Control-Request-Headers",
+                    value: "authorization, content-type"
+                ),
             )
         ),
         context
@@ -752,7 +756,8 @@ async test "replies are compressed for clients that accept it" {
             gathered.replace(gathered.value() + chunk);
         }
         test.is(
-            Utf8Decoded(BrotliDecompressed(origin: gathered.value(), limit: 10000).bytes()).string(),
+            Utf8Decoded(BrotliDecompressed(origin: gathered.value(), limit: 10000).bytes())
+                .string(),
             "{\"tea\": 1}".repeat(300)
         );
     }

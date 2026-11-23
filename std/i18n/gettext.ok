@@ -857,7 +857,8 @@ object GettextPluralRule {
         confirm count >= 1 && count <= 16
             else throw InvalidCatalog.located(0, "nplurals must be 1..16");
         amount = count;
-        expression = GettextExpressionParsing(GettextAscii(fields.capture(2).text()).trim()).expression();
+        expression = GettextExpressionParsing(GettextAscii(fields.capture(2).text()).trim())
+            .expression();
     }
 
     // nplurals.
@@ -1241,7 +1242,8 @@ object PoDocument {
             let notes = (0..comments.size()).reduce(0) -> sum, index {
                 sum + comments.item(index)::Comment::text.length();
             };
-            total + entry::Entry::context.length() + entry::Entry::identity.length() + entry::Entry::plural.length() + translations + notes;
+            total + entry::Entry::context.length() + entry::Entry::identity.length() +
+                entry::Entry::plural.length() + translations + notes;
         };
         confirm amount <= 1048576
             else throw InvalidCatalog.located(
@@ -1396,7 +1398,8 @@ hidden object PoQuoted {
                             ).code();
                         }
                         else {
-                            PoNumericEscape(origin: escape, base: 8, offset: offset + 1 + at).code();
+                            PoNumericEscape(origin: escape, base: 8, offset: offset + 1 + at)
+                                .code();
                         }
                     }
                 };
@@ -1571,12 +1574,14 @@ hidden object PoEscaped {
                                     let bytes = Utf8Encoded(scalar).bytes();
                                     if bytes.size() == 1
                                         && (bytes[0].int() < 32 || bytes[0].int() == 127) {
-                                            let value = bytes[0].int();
-                                            "\\" + ((value / 64).int()).string() + (((value / 8).int()) % 8).string() + (value % 8).string();
-                                        }
-                                        else {
-                                            scalar;
-                                        }
+                                        let value = bytes[0].int();
+                                        "\\" + ((value / 64).int()).string() +
+                                            (((value / 8).int()) % 8).string() +
+                                            (value % 8).string();
+                                    }
+                                    else {
+                                        scalar;
+                                    }
                                 }
                             }
                         }
@@ -1827,7 +1832,13 @@ hidden object PoLineStrings {
         octets;
     }
 
-    hidden gap(characters is @string, start is int, end is int, offset is int, reason is string) is void {
+    hidden gap(
+        characters is @string,
+        start is int,
+        end is int,
+        offset is int,
+        reason is string
+    ) is void {
         for (start..end) -> index {
             confirm GettextSpace(characters[index]).matches()
                 else throw InvalidCatalog.located(offset + index, reason);
@@ -2074,17 +2085,17 @@ hidden object PoParsing {
             let index = start.value();
             if index >= raw.length()
                 || (raw.slice(index, index + 1) != " " && raw.slice(index, index + 1) != "\t") {
-                    last;
-                }
+                last;
+            }
             start.replace(index + 1);
         }
         let end = raw.length() - (if raw.length() > 0
             && raw.ends_with("\r") {
-                1;
-            }
-            else {
-                0;
-            });
+            1;
+        }
+        else {
+            0;
+        });
         if start.value() >= end {
             return;
         }
@@ -2107,11 +2118,11 @@ hidden object PoParsing {
                 || marker == ","
                 || marker == "="
                 || marker == "|" {
-                    2;
-                }
-                else {
-                    1;
-                };
+                2;
+            }
+            else {
+                1;
+            };
             let gap = from < text.length() && text.slice(from, from + 1) == " ";
             let content = text.slice(
                 from + (if gap {
@@ -2245,13 +2256,14 @@ hidden object PoParsing {
         }
         confirm fields.value().size() < 19 else throw InvalidCatalog.located(at, "PO field count");
         let empty is List<string> = EmptyList();
-        let field = PoField(name: name, index: index, offset: at, pieces: empty, amount: 0).following(
-            PoLineStrings(
-                origin: text.slice(position.value(), text.length()),
-                offset: at + position.value(),
-                charset: charset
-            ).octets()
-        );
+        let field = PoField(name: name, index: index, offset: at, pieces: empty, amount: 0)
+            .following(
+                PoLineStrings(
+                    origin: text.slice(position.value(), text.length()),
+                    offset: at + position.value(),
+                    charset: charset
+                ).octets()
+            );
         fields.replace(fields.value().prefix(field));
     }
 }
@@ -2773,7 +2785,10 @@ test "PO scanner accepts adjacent strings, tabs and two-digit plural indexes" {
     test.is(entry::Entry::plural, "ab's");
     test.is(entry::Entry::translations, ["one", "many"]);
     test.is(
-        ParsedPo("  \t\r\n#\nmsgid \"a\"\nmsgstr \"\\1012\\x0042z\"\n").document().entries().item(0)::Entry::translations,
+        ParsedPo("  \t\r\n#\nmsgid \"a\"\nmsgstr \"\\1012\\x0042z\"\n")
+            .document()
+            .entries()
+            .item(0)::Entry::translations,
         ["A2Bz"]
     );
 }
@@ -2845,15 +2860,21 @@ test "PO scanner reports exact scalar offsets and grammar errors" {
 
 test "PO scanner joins encoded bytes across strings and continuations" {
     test.is(
-        ParsedPo("msgid \"a\"\nmsgstr \"\\303\" \"\\xA9\"\n\"\\360\\237\"\n\"\\230\\200\"\n").document().entries().item(
-            0
-        )::Entry::translations,
+        ParsedPo("msgid \"a\"\nmsgstr \"\\303\" \"\\xA9\"\n\"\\360\\237\"\n\"\\230\\200\"\n")
+            .document()
+            .entries()
+            .item(
+                0
+            )::Entry::translations,
         ["é😀"]
     );
     test.is(
-        ParsedPo(origin: "msgid \"é\"\nmsgstr \"\\351\"\n", charset: "latin1").document().entries().item(
-            0
-        )::Entry::translations,
+        ParsedPo(origin: "msgid \"é\"\nmsgstr \"\\351\"\n", charset: "latin1")
+            .document()
+            .entries()
+            .item(
+                0
+            )::Entry::translations,
         ["é"]
     );
     test.is(
@@ -2873,7 +2894,10 @@ test "PO scanner keeps fragment and numeric escape budgets" {
         "\"\"";
     };
     test.is(
-        ParsedPo("msgid \"a\"\nmsgstr " + quotes.join("")).document().entries().item(0)::Entry::translations,
+        ParsedPo("msgid \"a\"\nmsgstr " + quotes.join(""))
+            .document()
+            .entries()
+            .item(0)::Entry::translations,
         [""]
     );
     test.is(
@@ -2890,7 +2914,10 @@ test "PO scanner keeps fragment and numeric escape budgets" {
         "0";
     };
     test.is(
-        ParsedPo("msgid \"a\"\nmsgstr \"\\x" + zeros.join("") + "41\"").document().entries().item(0)::Entry::translations,
+        ParsedPo("msgid \"a\"\nmsgstr \"\\x" + zeros.join("") + "41\"")
+            .document()
+            .entries()
+            .item(0)::Entry::translations,
         ["A"]
     );
     test.is(

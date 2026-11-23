@@ -17,13 +17,15 @@ object TemplatePath does Comparing<TemplatePath> {
 
     // The parts, none empty; at most 64 parts and 4096 characters.
     TemplatePath(segments is Sequencing<string>) {
-        origin = TemplatePathSnapshot(source: segments, maximum_segments: 64, maximum_length: 4096).items();
+        origin = TemplatePathSnapshot(source: segments, maximum_segments: 64, maximum_length: 4096)
+            .items();
     }
 
     // The same, one argument per part: TemplatePath(a, b).
     TemplatePath(segments is ...string) {
         let listed is @string = segments...;
-        origin = TemplatePathSnapshot(source: listed, maximum_segments: 64, maximum_length: 4096).items();
+        origin = TemplatePathSnapshot(source: listed, maximum_segments: 64, maximum_length: 4096)
+            .items();
     }
 
     // The parts within these limits.

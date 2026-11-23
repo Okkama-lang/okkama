@@ -188,9 +188,10 @@ object LogFileState does Writing, Closing {
     hidden open() is fs.FileHandle {
         confirm !self.closed() else throw ClosedLogFile.closed;
         let mode = options.permissions();
-        let bits = LogPermissionBits(mode.owner()).bits() * 64 + LogPermissionBits(mode.group()).bits() * 8 + LogPermissionBits(
-            mode.others()
-        ).bits() + mode.special() * 512;
+        let bits = LogPermissionBits(mode.owner()).bits() * 64 +
+            LogPermissionBits(mode.group()).bits() * 8 + LogPermissionBits(
+                mode.others()
+            ).bits() + mode.special() * 512;
         try {
             fs.open(fs.path_encode(path.string()), 22, bits);
         }

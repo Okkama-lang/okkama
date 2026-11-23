@@ -92,7 +92,19 @@ test "archive path preserves spelling and returns immutable components" {
 }
 
 test "archive path rejects traversal and malformed separators" {
-    for ["", "/", "//server/share", "a/", "a//b", ".", "a/./b", "..", "a/../b", "a\\b", "C:foo"] -> raw {
+    for [
+        "",
+        "/",
+        "//server/share",
+        "a/",
+        "a//b",
+        ".",
+        "a/./b",
+        "..",
+        "a/../b",
+        "a\\b",
+        "C:foo"
+    ] -> raw {
         test.ok(try {
             ArchivePath(raw);
             false;

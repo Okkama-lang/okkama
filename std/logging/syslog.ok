@@ -276,7 +276,8 @@ object SyslogMessage does ByteSource {
             record.context().process().string();
         };
         let header = Utf8Encoded(
-            "<" + priority.string() + ">1 " + timestamp + " " + options::Settings::host + " " + options::Settings::application + " " + process + " - - "
+            "<" + priority.string() + ">1 " + timestamp + " " + options::Settings::host + " " +
+                options::Settings::application + " " + process + " - - "
         ).bytes();
         let message = Utf8Encoded(JsonLogLine(record).string()).bytes();
         let bom is @byte = [239.byte(), 187.byte(), 191.byte()];
@@ -464,11 +465,15 @@ test "a syslog message is an RFC 5424 header, a BOM and the JSON line" {
         application: "api",
         maximum_payload: 1024
     );
-    let record = SyslogTestRecord(seconds: 1700000000.rat(), level: LogLevel.info, process: 7).record();
+    let record = SyslogTestRecord(seconds: 1700000000.rat(), level: LogLevel.info, process: 7)
+        .record();
     let bytes = SyslogMessage(record: record, options: options).bytes();
     let header = "<134>1 2023-11-14T22:13:20Z web1 api 7 - - ";
     test.is(Utf8Encoded(header).bytes(), bytes.slice(0, header.length()));
-    test.is(bytes.slice(header.length(), header.length() + 3), [239.byte(), 187.byte(), 191.byte()]);
+    test.is(
+        bytes.slice(header.length(), header.length() + 3),
+        [239.byte(), 187.byte(), 191.byte()]
+    );
     test.is(
         Utf8Encoded(JsonLogLine(record).string()).bytes(),
         bytes.slice(header.length() + 3, bytes.size())

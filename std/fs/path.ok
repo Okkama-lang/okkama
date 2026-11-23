@@ -457,7 +457,10 @@ test "windows paths keep their drive and share as the anchor" {
     test.is(report.parts(), ["C:\\", "Users", "alice", "report.docx"]);
     test.is(report.stem(), "report");
     test.is(report.extension_replaced("pdf").string(), "C:\\Users\\alice\\report.pdf");
-    test.is(report.relative_to(Path("C:\\Users", PathStyle.windows)).string(), "alice\\report.docx");
+    test.is(
+        report.relative_to(Path("C:\\Users", PathStyle.windows)).string(),
+        "alice\\report.docx"
+    );
     test.is(Path("C:\\a\\..\\b\\.\\c", PathStyle.windows).normalized().string(), "C:\\b\\c");
     test.is(
         Path("\\\\server\\share\\dir\\f.txt", PathStyle.windows).parts(),

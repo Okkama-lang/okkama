@@ -39,10 +39,14 @@ object FormUrlEncoded {
     }
 
     hidden field(text is string) is string {
-        PercentEncoded(origin: text, component: UrlComponent.data).string().replace("%20", "+").replace("%2A", "*").replace(
-            "~",
-            "%7E"
-        );
+        PercentEncoded(origin: text, component: UrlComponent.data)
+            .string()
+            .replace("%20", "+")
+            .replace("%2A", "*")
+            .replace(
+                "~",
+                "%7E"
+            );
     }
 }
 
@@ -70,7 +74,12 @@ object ParsedForm {
     // The fields; InvalidFormEncoding when the body is not a form.
     parameters() is QueryParameters {
         try {
-            ParameterParsing(origin: origin, form: true, maximum_parameters: maximum_parameters, maximum_bytes: maximum_bytes).parameters();
+            ParameterParsing(
+                origin: origin,
+                form: true,
+                maximum_parameters: maximum_parameters,
+                maximum_bytes: maximum_bytes
+            ).parameters();
         }
         catch InvalidQueryEncoding.located(offset, _) {
             throw InvalidFormEncoding.at(offset);

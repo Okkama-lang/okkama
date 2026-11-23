@@ -62,7 +62,11 @@ object CookieExchanging does Exchanging {
 
     // Sends through origin with jar; a caller's Cookie field is
     // CallerCookieConflict.
-    CookieExchanging(origin is Exchanging, jar is CookieStoring, contexts is CookieContextualizing) {
+    CookieExchanging(
+        origin is Exchanging,
+        jar is CookieStoring,
+        contexts is CookieContextualizing
+    ) {
         self.origin = origin;
         self.jar = jar;
         self.contexts = contexts;
@@ -95,7 +99,8 @@ object CookieExchanging does Exchanging {
             request::Head::headers;
         }
         else {
-            let selected = CookieRequestPairs(jar.cookies(request::Head::target.url(), context)).string();
+            let selected = CookieRequestPairs(jar.cookies(request::Head::target.url(), context))
+                .string();
             let clean = HeadersWithout(
                 origin: request::Head::headers,
                 names: [HeaderName("Cookie")]
@@ -131,7 +136,8 @@ object CookieExchanging does Exchanging {
             );
         }
         let same_hop = result::Exchange::history.size() == 0
-            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string();
+            && result::Exchange::request::Head::target.url().string() ==
+            request::Head::target.url().string();
         let effective_context = if same_hop {
             context;
         }

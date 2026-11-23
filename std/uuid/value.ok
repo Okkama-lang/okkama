@@ -186,7 +186,12 @@ test "text is read strictly and kept as bytes" {
     test.ok(id.variant() == UuidVariant.rfc);
     test.is(id.bytes().size(), 16);
     test.ok(id == UuidText(origin: "550e8400-e29b-41d4-a716-446655440000"));
-    for ["550e8400e29b41d4a716446655440000", "{550e8400-e29b-41d4-a716-446655440000}", " 550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-44665544000g"] -> bad {
+    for [
+        "550e8400e29b41d4a716446655440000",
+        "{550e8400-e29b-41d4-a716-446655440000}",
+        " 550e8400-e29b-41d4-a716-446655440000",
+        "550e8400-e29b-41d4-a716-44665544000g"
+    ] -> bad {
         test.throws(InvalidUuid) {
             UuidText(origin: bad);
         };
@@ -198,9 +203,15 @@ test "bytes make the same UUID; the variant follows the bit prefix" {
     let bytes = UuidBytes(origin: text.bytes());
     test.is(bytes.string(), text.string());
     test.ok(bytes.order(text) == Order.equal);
-    test.ok(UuidText(origin: "00000000-0000-0000-0000-000000000000").variant() == UuidVariant.reserved);
-    test.ok(UuidText(origin: "00000000-0000-0000-c000-000000000000").variant() == UuidVariant.microsoft);
-    test.ok(UuidText(origin: "00000000-0000-0000-e000-000000000000").variant() == UuidVariant.future);
+    test.ok(
+        UuidText(origin: "00000000-0000-0000-0000-000000000000").variant() == UuidVariant.reserved
+    );
+    test.ok(
+        UuidText(origin: "00000000-0000-0000-c000-000000000000").variant() == UuidVariant.microsoft
+    );
+    test.ok(
+        UuidText(origin: "00000000-0000-0000-e000-000000000000").variant() == UuidVariant.future
+    );
     test.ok(UuidText(origin: "00000000-0000-0000-0000-000000000000").order(text) == Order.less);
     test.throws(InvalidUuid) {
         UuidBytes(origin: [byte(1)]);

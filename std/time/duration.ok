@@ -41,7 +41,8 @@ import "strings/parse" take Number;
 // stdlib type is always introduced through its explicit constructor.
 
 // An exact length of time, nanosecond resolution: `Duration(seconds: 30.rat())`.
-object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtracting<Duration, Duration>, Negating<Duration> {
+object Duration does Comparing<Duration>, Adding<Duration, Duration>,
+    Subtracting<Duration, Duration>, Negating<Duration> {
     has origin is rat;
 
     // Exactly `seconds` long; InvalidDuration unless that is a whole number of
@@ -181,7 +182,12 @@ test "511 duration nanoseconds preserve large signed ints" {
 }
 
 test "finer than a nanosecond is InvalidDuration, without rounding" {
-    for [rat(1, 3), rat(1, 2000000000), rat(-1, 3000000000), rat(1000000001, 10000000000)] -> seconds {
+    for [
+        rat(1, 3),
+        rat(1, 2000000000),
+        rat(-1, 3000000000),
+        rat(1000000001, 10000000000)
+    ] -> seconds {
         test.ok(try {
             Duration(seconds: seconds);
             false;

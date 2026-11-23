@@ -177,7 +177,12 @@ object Http2Frame {
     // header with payload; their lengths must agree.
     Http2Frame(header is Http2FrameHeader, payload is @byte) {
         confirm payload.size() == header.length()
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 6, 0, "frame payload length");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                6,
+                0,
+                "frame payload length"
+            );
         self.header = header;
         self.payload = payload;
     }
@@ -237,7 +242,12 @@ object Http2HeaderRules {
         }
         if kind == 2 {
             confirm length == 5
-                else throw Http2Fault.detailed(Http2FaultScope.stream, 6, stream, "priority length");
+                else throw Http2Fault.detailed(
+                    Http2FaultScope.stream,
+                    6,
+                    stream,
+                    "priority length"
+                );
         }
         if kind == 3 || kind == 8 {
             confirm length == 4
@@ -306,7 +316,8 @@ object Http2FrameRules {
         let data = origin.payload();
         let length = data.size();
         if kind == 8 {
-            let increment = Binary(bytes: data, order: ByteOrder.big).int(Signedness.unsigned) & 2147483647;
+            let increment = Binary(bytes: data, order: ByteOrder.big).int(Signedness.unsigned) &
+                2147483647;
             let scope = if stream == 0 {
                 Http2FaultScope.connection;
             }
@@ -386,7 +397,8 @@ test "a frame header is nine bytes and refuses impossible coordinates" {
         ).check();
     };
     let fault = try {
-        Http2HeaderRules(Http2FrameHeader(kind: 0.byte(), flags: 0.byte(), stream: 0, length: 0)).check();
+        Http2HeaderRules(Http2FrameHeader(kind: 0.byte(), flags: 0.byte(), stream: 0, length: 0))
+            .check();
         "";
     }
     catch error is Http2Fault {

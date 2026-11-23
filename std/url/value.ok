@@ -140,7 +140,8 @@ object UrlComponentText {
                 else {
                     "%" + digits.upper();
                 };
-                escape + PercentEncoded(origin: part.slice(2, part.length()), component: component).string();
+                escape + PercentEncoded(origin: part.slice(2, part.length()), component: component)
+                    .string();
             }
         };
         pieces.join("");
@@ -161,34 +162,34 @@ object UrlComponentText {
                 let code = codes[index].code();
                 if (index >= 1 && codes[index - 1].code() == 37)
                     || (index >= 2 && codes[index - 2].code() == 37) {
-                        true;
+                    true;
+                }
+                else {
+                    if code == 37 {
+                        index + 2 < size
+                            && self.capital(codes[index + 1].code())
+                            && self.capital(codes[index + 2].code())
+                            && !self.unreserved(
+                                self.hex(codes[index + 1].code()) * 16 + self.hex(
+                                    codes[index + 2].code()
+                                )
+                            );
                     }
                     else {
-                        if code == 37 {
-                            index + 2 < size
-                                && self.capital(codes[index + 1].code())
-                                && self.capital(codes[index + 2].code())
-                                && !self.unreserved(
-                                    self.hex(codes[index + 1].code()) * 16 + self.hex(
-                                        codes[index + 2].code()
-                                    )
-                                );
+                        if code >= 128 {
+                            false;
                         }
                         else {
-                            if code >= 128 {
-                                false;
+                            if self.unreserved(code) {
+                                true;
                             }
                             else {
-                                if self.unreserved(code) {
-                                    true;
-                                }
-                                else {
-                                    let text = codes[index].string();
-                                    PercentEncoded(origin: text, component: component).string() == text;
-                                }
+                                let text = codes[index].string();
+                                PercentEncoded(origin: text, component: component).string() == text;
                             }
                         }
                     }
+                }
             }
         };
     }
@@ -250,8 +251,8 @@ object UrlComponentText {
         if (code >= 160 && code <= 55295)
             || (code >= 63744 && code <= 64975)
             || (code >= 65008 && code <= 65519) {
-                return true;
-            }
+            return true;
+        }
         if code >= 65536 && code <= 917501 && code % 65536 <= 65533 {
             return true;
         }
@@ -530,11 +531,11 @@ hidden object UrlAuthority {
             "";
         }) + hosts[0].string() +
             (if port.present() {
-                ":" + port.string();
-            }
-            else {
-                "";
-            });
+            ":" + port.string();
+        }
+        else {
+            "";
+        });
     }
 }
 
@@ -567,7 +568,10 @@ hidden object ParsedUrlAuthority {
             let raw = brackets[0].slice(1, brackets[0].length());
             let tail = brackets[1];
             confirm tail == "" || tail.starts_with(":")
-                else throw InvalidUrl.located(brackets[0].length() + 1, "invalid IP literal suffix");
+                else throw InvalidUrl.located(
+                    brackets[0].length() + 1,
+                    "invalid IP literal suffix"
+                );
             let port = if tail == "" {
                 UrlPort();
             }
@@ -576,19 +580,19 @@ hidden object ParsedUrlAuthority {
             };
             let host is UrlHost = if raw.length() > 0
                 && (raw.starts_with("v") || raw.starts_with("V")) {
-                    FutureUrlHost(raw);
+                FutureUrlHost(raw);
+            }
+            else {
+                let address = try {
+                    IpAddress(raw);
                 }
-                else {
-                    let address = try {
-                        IpAddress(raw);
-                    }
-                    catch failure is InvalidIpAddress {
-                        throw InvalidUrl.located(1, "invalid IPv6 literal");
-                    };
-                    confirm address.version() == IpVersion.v6
-                        else throw InvalidUrl.located(1, "bracketed literal must be IPv6");
-                    AddressUrlHost(address);
+                catch failure is InvalidIpAddress {
+                    throw InvalidUrl.located(1, "invalid IPv6 literal");
                 };
+                confirm address.version() == IpVersion.v6
+                    else throw InvalidUrl.located(1, "bracketed literal must be IPv6");
+                AddressUrlHost(address);
+            };
             return UrlAuthority(host: host, userinfo: userinfo, port: port);
         }
         let fields = host_port.split(":");
@@ -729,16 +733,16 @@ hidden object UrlPieces {
             "";
         }) + canonical +
             (if query.present() {
-                "?" + query.string();
-            }
-            else {
-                "";
-            }) + (if fragment.present() {
-                "#" + fragment.string();
-            }
-            else {
-                "";
-            });
+            "?" + query.string();
+        }
+        else {
+            "";
+        }) + (if fragment.present() {
+            "#" + fragment.string();
+        }
+        else {
+            "";
+        });
         confirm complete.length() <= 8192
             else throw InvalidUrl.located(8192, "canonical URL output limit exceeded");
     }
@@ -776,16 +780,16 @@ hidden object UrlPieces {
             "";
         }) + path +
             (if query.present() {
-                "?" + query.string();
-            }
-            else {
-                "";
-            }) + (if fragment.present() {
-                "#" + fragment.string();
-            }
-            else {
-                "";
-            });
+            "?" + query.string();
+        }
+        else {
+            "";
+        }) + (if fragment.present() {
+            "#" + fragment.string();
+        }
+        else {
+            "";
+        });
     }
 }
 
@@ -801,7 +805,10 @@ hidden object UrlReading {
             else throw InvalidUrl.located(8192, "URL source limit exceeded");
         let fragments = origin.split("#");
         confirm fragments.size() <= 2
-            else throw InvalidUrl.located(fragments[0].length() + 1, "multiple fragment separators");
+            else throw InvalidUrl.located(
+                fragments[0].length() + 1,
+                "multiple fragment separators"
+            );
         let fragment = if fragments.size() == 2 {
             try {
                 UrlFragment(fragments[1]);
@@ -1257,8 +1264,12 @@ object UrlParts {
             total;
         };
         let encoded is @string = (0..plain.size()).map() -> index {
-            let segment = PercentEncoded(origin: plain[index], component: UrlComponent.path_segment).string();
-            if index == 0 && path_text == "" && scheme_text == "" && host_text == Maybe<string>.none {
+            let segment = PercentEncoded(origin: plain[index], component: UrlComponent.path_segment)
+                .string();
+            if index == 0
+                && path_text == ""
+                && scheme_text == ""
+                && host_text == Maybe<string>.none {
                 segment.split(":").join("%3A");
             }
             else {
@@ -1745,7 +1756,8 @@ test "appending a query keeps what is there, in order, and adds encoded paramete
     );
     let empty_query = ParsedUrl("https://example.org/search?").parts();
     test.is(
-        empty_query.query_appended(QueryParameters(QueryParameter(name: "page", value: "2"))).string(),
+        empty_query.query_appended(QueryParameters(QueryParameter(name: "page", value: "2")))
+            .string(),
         "https://example.org/search?page=2"
     );
     let none_added is @QueryParameter = [];

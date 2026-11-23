@@ -212,24 +212,29 @@ hidden object MatchingBlocks {
                 if current.size() > 0
                     && current.first().left() + current.first().size() == edit::Line::left
                     && current.first().right() + current.first().size() == edit::Line::right {
-                        let previous = current.first();
-                        blocks.replace(
-                            current.tail().prefix(
-                                MatchingBlock(
-                                    left: previous.left(),
-                                    right: previous.right(),
-                                    size: previous.size() + 1
-                                )
+                    let previous = current.first();
+                    blocks.replace(
+                        current.tail().prefix(
+                            MatchingBlock(
+                                left: previous.left(),
+                                right: previous.right(),
+                                size: previous.size() + 1
                             )
-                        );
-                    }
-                    else {
-                        blocks.replace(current.prefix(MatchingBlock(left: edit::Line::left, right: edit::Line::right, size: 1)));
-                    }
+                        )
+                    );
+                }
+                else {
+                    blocks.replace(
+                        current.prefix(
+                            MatchingBlock(left: edit::Line::left, right: edit::Line::right, size: 1)
+                        )
+                    );
+                }
             }
         }
         values = DiffListValues(
-            origin: blocks.value().prefix(MatchingBlock(script.left_size(), script.right_size(), 0)),
+            origin: blocks.value()
+                .prefix(MatchingBlock(script.left_size(), script.right_size(), 0)),
             reverse: true
         ).values();
     }
@@ -281,7 +286,9 @@ hidden object DiffHunks {
                 let current = spans.value();
                 if current.size() > 0 && current.first().end() >= start {
                     let previous = current.first();
-                    spans.replace(current.tail().prefix(DiffSpan(start: previous.start(), end: end)));
+                    spans.replace(
+                        current.tail().prefix(DiffSpan(start: previous.start(), end: end))
+                    );
                 }
                 else {
                     spans.replace(current.prefix(DiffSpan(start: start, end: end)));
@@ -371,7 +378,8 @@ hidden object DiffPrinting {
             let new_range = DiffRange(start: first::Line::right, amount: right);
             if context_style {
                 let rows = DiffContextRows(edits: edits, span: span).values();
-                "***************\n*** " + old_range.context() + " ****\n" + rows[0] + "--- " + new_range.context() + " ----\n" + rows[1];
+                "***************\n*** " + old_range.context() + " ****\n" + rows[0] + "--- " +
+                    new_range.context() + " ----\n" + rows[1];
             }
             else {
                 let rows is @string = (span.start()..span.end()).map() -> index {
@@ -428,8 +436,8 @@ hidden object DiffContextRows {
                 loop {
                     if position.value() >= span.end()
                         || edits[position.value()]::Line::kind == DiffEditKind.equal {
-                            last;
-                        }
+                        last;
+                    }
                     position.replace(position.value() + 1);
                 }
                 let removed = (start..position.value()).reduce(false) -> found, index {
@@ -570,7 +578,10 @@ test "the ratio is twice the matched lines over all lines" {
     test.is(Diff(left: ["a"], right: ["b"]).ratio(), 0.0);
     let nothing is @string = [];
     test.is(Diff(left: nothing, right: nothing).ratio(), 1.0);
-    test.is(Diff(left: nothing, right: ["a"]).unified(), "--- left\n+++ right\n@@ -0,0 +1 @@\n+a\n");
+    test.is(
+        Diff(left: nothing, right: ["a"]).unified(),
+        "--- left\n+++ right\n@@ -0,0 +1 @@\n+a\n"
+    );
 }
 
 test "edits walk both sides in order with their indexes" {
@@ -590,48 +601,97 @@ test "edits walk both sides in order with their indexes" {
     test.is(shown, ["-a00", "=b10", "+c21"]);
 }
 
-
 test "repeated lines keep the native LCS tie order" {
     let edits = Diff(left: ["a", "b", "a"], right: ["b", "a", "b"]).edits();
-    test.is(edits.map() -> edit { edit::Line::kind; }, [DiffEditKind.removed, DiffEditKind.equal, DiffEditKind.equal, DiffEditKind.added]);
-    test.is(edits.map() -> edit { edit::Line::text; }, ["a", "b", "a", "b"]);
-    test.is(edits.map() -> edit { edit::Line::left; }, [0, 1, 2, 3]);
-    test.is(edits.map() -> edit { edit::Line::right; }, [0, 0, 1, 2]);
-    test.is(Diff(left: ["", "ж\r", "🙂"], right: ["", "x", "🙂"]).unified(0),
-        "--- left\n+++ right\n@@ -2 +2 @@\n-ж\r\n+x\n");
+    test.is(
+        edits.map() -> edit {
+            edit::Line::kind;
+        },
+        [DiffEditKind.removed, DiffEditKind.equal, DiffEditKind.equal, DiffEditKind.added]
+    );
+    test.is(
+        edits.map() -> edit {
+            edit::Line::text;
+        },
+        ["a", "b", "a", "b"]
+    );
+    test.is(
+        edits.map() -> edit {
+            edit::Line::left;
+        },
+        [0, 1, 2, 3]
+    );
+    test.is(
+        edits.map() -> edit {
+            edit::Line::right;
+        },
+        [0, 0, 1, 2]
+    );
+    test.is(
+        Diff(left: ["", "ж\r", "🙂"], right: ["", "x", "🙂"]).unified(0),
+        "--- left\n+++ right\n@@ -2 +2 @@\n-ж\r\n+x\n"
+    );
 }
 
 test "line count accepts 512 and rejects 513 on either side" {
     let nothing is @string = [];
-    let limit is @string = (0..512).map() -> i { ""; };
+    let limit is @string = (0..512).map() -> i {
+        "";
+    };
     test.is(Diff(left: limit, right: nothing).edits().size(), 512);
     test.is(Diff(left: nothing, right: limit).edits().size(), 512);
-    test.throws(InvalidDiff) { Diff(left: limit + [""], right: nothing).edits(); };
-    test.throws(InvalidDiff) { Diff(left: nothing, right: limit + [""]).edits(); };
+    test.throws(InvalidDiff) {
+        Diff(left: limit + [""], right: nothing).edits();
+    };
+    test.throws(InvalidDiff) {
+        Diff(left: nothing, right: limit + [""]).edits();
+    };
 }
 
 test "lines accept 4096 Unicode scalars and CR but reject LF" {
     let limit = "🙂".repeat(4096);
     test.is(Diff(left: [limit, "\r"], right: [limit, "\r"]).ratio(), 1.0);
-    test.throws(InvalidDiff) { Diff(left: [limit + "x"], right: [""]).edits(); };
-    test.throws(InvalidDiff) { Diff(left: [""], right: [limit + "x"]).edits(); };
-    test.throws(InvalidDiff) { Diff(left: ["a\nb"], right: [""]).edits(); };
-    test.throws(InvalidDiff) { Diff(left: [""], right: ["\n"]).edits(); };
+    test.throws(InvalidDiff) {
+        Diff(left: [limit + "x"], right: [""]).edits();
+    };
+    test.throws(InvalidDiff) {
+        Diff(left: [""], right: [limit + "x"]).edits();
+    };
+    test.throws(InvalidDiff) {
+        Diff(left: ["a\nb"], right: [""]).edits();
+    };
+    test.throws(InvalidDiff) {
+        Diff(left: [""], right: ["\n"]).edits();
+    };
 }
 
 test "aggregate scalar limit is per input and inclusive" {
     let line = "x".repeat(4096);
-    let limit is @string = (0..256).map() -> i { line; };
+    let limit is @string = (0..256).map() -> i {
+        line;
+    };
     test.is(Diff(left: limit, right: limit).edits().size(), 256);
-    test.throws(InvalidDiff) { Diff(left: limit + ["x"], right: limit).edits(); };
-    test.throws(InvalidDiff) { Diff(left: limit, right: limit + ["x"]).edits(); };
+    test.throws(InvalidDiff) {
+        Diff(left: limit + ["x"], right: limit).edits();
+    };
+    test.throws(InvalidDiff) {
+        Diff(left: limit, right: limit + ["x"]).edits();
+    };
 }
 
 test "rendering refuses output beyond the scalar budget" {
-    let left is @string = (0..256).map() -> i { "a".repeat(4096); };
-    let right is @string = (0..256).map() -> i { "b".repeat(4096); };
+    let left is @string = (0..256).map() -> i {
+        "a".repeat(4096);
+    };
+    let right is @string = (0..256).map() -> i {
+        "b".repeat(4096);
+    };
     let changes = Diff(left: left, right: right);
     test.is(changes.edits().size(), 512);
-    test.throws(DiffLimitExceeded) { changes.unified(); };
-    test.throws(DiffLimitExceeded) { changes.contextual(); };
+    test.throws(DiffLimitExceeded) {
+        changes.unified();
+    };
+    test.throws(DiffLimitExceeded) {
+        changes.contextual();
+    };
 }

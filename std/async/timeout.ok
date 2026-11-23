@@ -91,7 +91,11 @@ async test "time wins over a future that never settles" {
         },
         "timed out"
     );
-    let before is Before<Event> = Before(origin: Event().wait(), deadline: clock.monotonic_instant() + short, clock: clock);
+    let before is Before<Event> = Before(
+        origin: Event().wait(),
+        deadline: clock.monotonic_instant() + short,
+        clock: clock
+    );
     test.is(
         try {
             await before.outcome();
@@ -107,11 +111,15 @@ async test "time wins over a future that never settles" {
 async test "a settled future wins and a negative limit is refused" {
     let clock = SystemClock();
     let long = Duration(seconds: 30.rat());
-    test.ok((await Within(origin: Event(ready: true).wait(), limit: long, clock: clock).outcome()).ready());
+    test.ok((await Within(origin: Event(ready: true).wait(), limit: long, clock: clock).outcome())
+        .ready());
     test.is(
         try {
-            let refused is Within<Event> = Within(origin: Event(ready: true).wait(),
-                limit: Duration(seconds: -1.rat()), clock: clock);
+            let refused is Within<Event> = Within(
+                origin: Event(ready: true).wait(),
+                limit: Duration(seconds: -1.rat()),
+                clock: clock
+            );
             "accepted";
         }
         catch error is InvalidArgument {

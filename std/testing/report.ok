@@ -81,19 +81,19 @@ object ReportText {
                                 || (bytes.size() == 2
                                 && bytes[0].int() == 194
                                 && bytes[1].int() <= 159) {
+                                "\\x" + HexEncoded(bytes).string();
+                            }
+                            else {
+                                if bytes.size() == 3
+                                    && bytes[0].int() == 226
+                                    && bytes[1].int() == 128
+                                    && (bytes[2].int() == 168 || bytes[2].int() == 169) {
                                     "\\x" + HexEncoded(bytes).string();
                                 }
                                 else {
-                                    if bytes.size() == 3
-                                        && bytes[0].int() == 226
-                                        && bytes[1].int() == 128
-                                        && (bytes[2].int() == 168 || bytes[2].int() == 169) {
-                                            "\\x" + HexEncoded(bytes).string();
-                                        }
-                                        else {
-                                            scalar;
-                                        }
+                                    scalar;
                                 }
+                            }
                         }
                     }
                 }
@@ -141,13 +141,15 @@ object HumanTestReport {
                     result.output()::Captured::errors
                 ) +
                 (if result.output()::Captured::truncated {
-                    "  captured output truncated\n";
-                }
-                else {
-                    "";
-                });
+                "  captured output truncated\n";
+            }
+            else {
+                "";
+            });
         };
-        "seed=" + origin.seed().string() + "\n" + records.join("") + counts::Counts::passes.string() + " passed, " + counts::Counts::failures.string() + " failed, " + counts::Counts::skips.string() + " skipped\n";
+        "seed=" + origin.seed().string() + "\n" + records.join("") +
+            counts::Counts::passes.string() + " passed, " + counts::Counts::failures.string() +
+            " failed, " + counts::Counts::skips.string() + " skipped\n";
     }
 
     hidden line(text is string) is string {
@@ -211,26 +213,30 @@ object TapTestReport {
                 "\\#"
             ) +
                 (if status == TestStatus.skipped {
-                    " # SKIP" + (if result::Outcome::skip_reason != "" {
-                        " " + ReportText(result::Outcome::skip_reason).string();
-                    }
-                    else {
-                        "";
-                    });
-                }
-                else {
-                    "";
-                }) + "\n" + diagnostics.join("") +
-                "# status=" + TestStatusName(status).string() + " duration_ns=" + result.duration().nanoseconds().string() + "\n" +
-                "# stdout(hex)=" + HexEncoded(result.output()::Captured::output).string() + "\n# stderr(hex)=" + HexEncoded(
-                    result.output()::Captured::errors
-                ).string() + "\n" +
-                (if result.output()::Captured::truncated {
-                    "# captured output truncated\n";
+                " # SKIP" + (if result::Outcome::skip_reason != "" {
+                    " " + ReportText(result::Outcome::skip_reason).string();
                 }
                 else {
                     "";
                 });
+            }
+            else {
+                "";
+            }) + "\n" + diagnostics.join("") +
+                "# status=" + TestStatusName(status).string() + " duration_ns=" + result.duration()
+                .nanoseconds()
+                .string() + "\n" +
+                "# stdout(hex)=" + HexEncoded(result.output()::Captured::output)
+                .string() + "\n# stderr(hex)=" + HexEncoded(
+                    result.output()::Captured::errors
+                )
+                .string() + "\n" +
+                (if result.output()::Captured::truncated {
+                "# captured output truncated\n";
+            }
+            else {
+                "";
+            });
         };
         "TAP version 13\n1.." + results.size().string() + (if results.size() == 0 {
             " # SKIP empty report";
@@ -392,7 +398,8 @@ object JUnitTestReport {
             let failure = failures.item(index);
             (if failure.located() {
                 let place = failure.position();
-                JUnitReportText(place::Position::source).string() + ":" + place::Position::line.string() + ":" + place::Position::column.string() + ": ";
+                JUnitReportText(place::Position::source).string() + ":" +
+                    place::Position::line.string() + ":" + place::Position::column.string() + ": ";
             }
             else {
                 "";
@@ -404,7 +411,8 @@ object JUnitTestReport {
         }
         else {
             if status == TestStatus.skipped {
-                "<skipped xmlns=\"\" message=\"" + self.attribute(result::Outcome::skip_reason) + "\"/>";
+                "<skipped xmlns=\"\" message=\"" + self.attribute(result::Outcome::skip_reason) +
+                    "\"/>";
             }
             else {
                 let label = TestStatusName(status).string();
@@ -433,13 +441,15 @@ object JUnitTestReport {
             "\" time=\"" + JUnitSeconds(result.duration()).string() + "\">" +
             terminal + "<properties xmlns=\"\">" +
             self.property("captured-output-truncated", if output::Captured::truncated {
-                "true";
-            }
-            else {
-                "false";
-            }) +
-            "</properties><system-out xmlns=\"\">" + Base64Encoded(output::Captured::output).string() +
-            "</system-out><system-err xmlns=\"\">" + Base64Encoded(output::Captured::errors).string() +
+            "true";
+        }
+        else {
+            "false";
+        }) +
+            "</properties><system-out xmlns=\"\">" + Base64Encoded(output::Captured::output)
+            .string() +
+            "</system-out><system-err xmlns=\"\">" + Base64Encoded(output::Captured::errors)
+            .string() +
             "</system-err></testcase>";
     }
 }

@@ -21,7 +21,26 @@ import "io/buffer" take ByteBuffer;
 import "error" take InvalidArgument;
 
 // The capabilities std knows by name.
-enum ImapFeature = (imap4rev1, imap4rev2, start_tls, login_disabled, idle, uid_plus, move, enable, utf8_accept, utf8_only, literal_plus, literal_minus, sasl_ir, condstore, qresync, namespace, unselect, binary);
+enum ImapFeature = (
+    imap4rev1,
+    imap4rev2,
+    start_tls,
+    login_disabled,
+    idle,
+    uid_plus,
+    move,
+    enable,
+    utf8_accept,
+    utf8_only,
+    literal_plus,
+    literal_minus,
+    sasl_ir,
+    condstore,
+    qresync,
+    namespace,
+    unselect,
+    binary
+);
 
 // How large a capability list may be.
 object ImapCapabilityLimits {

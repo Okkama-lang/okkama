@@ -172,9 +172,12 @@ test "a list is built by prefixing and shares its tail" {
     test.is(two.first(), "two");
     test.is(two.tail().first(), "one");
     test.is(one.first(), "one");
-    test.is(two.map() -> name {
-        name;
-    }.join(","), "two,one");
+    test.is(
+        two.map() -> name {
+            name;
+        }.join(","),
+        "two,one"
+    );
     test.is(LinkedList(value: "x", following: empty, size: 1).first(), "x");
     test.is(
         try {

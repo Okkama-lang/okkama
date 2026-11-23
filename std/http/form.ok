@@ -551,11 +551,11 @@ hidden object MultipartState {
             limits::Limits::fields;
         }
             else throw FormLimitExceeded.kind(if file {
-                "files";
-            }
-            else {
-                "fields";
-            });
+            "files";
+        }
+        else {
+            "fields";
+        });
         if file {
             files.replace(count);
         }
@@ -695,11 +695,11 @@ hidden object MultipartFormPart does FormPart {
     charge(count is int) is void {
         confirm count <= maximum - used.value()
             else throw FormLimitExceeded.kind(if details.file() {
-                "file_bytes";
-            }
-            else {
-                "field_bytes";
-            });
+            "file_bytes";
+        }
+        else {
+            "field_bytes";
+        });
         used.replace(used.value() + count);
     }
 }
@@ -804,7 +804,8 @@ hidden object FormDispositionRules {
                 start.replace(index + 1);
             }
             if !quoted.value() && code == 61 {
-                let name = Header(name: HeaderName("x"), value: origin.slice(start.value(), index)).value();
+                let name = Header(name: HeaderName("x"), value: origin.slice(start.value(), index))
+                    .value();
                 confirm !name.contains("*")
                     else throw InvalidMultipartForm.because(
                         "extended disposition parameters are forbidden"

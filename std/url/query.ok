@@ -149,7 +149,8 @@ object QueryParameters {
         let encoded is @string = origin.map() -> entry {
             let name = PercentEncoded(origin: entry.name(), component: UrlComponent.data).string();
             if entry.assigned() {
-                name + "=" + PercentEncoded(origin: entry.value(), component: UrlComponent.data).string();
+                name + "=" +
+                    PercentEncoded(origin: entry.value(), component: UrlComponent.data).string();
             }
             else {
                 name;
@@ -301,7 +302,12 @@ object ParameterParsing {
     has maximum_parameters, maximum_bytes is int;
 
     // Reads origin as a form (`+` is a space) or a query, within the limits.
-    ParameterParsing(origin is @byte, form is bool, maximum_parameters is int, maximum_bytes is int) {
+    ParameterParsing(
+        origin is @byte,
+        form is bool,
+        maximum_parameters is int,
+        maximum_bytes is int
+    ) {
         confirm maximum_parameters >= 0 && maximum_bytes >= 0
             else throw InvalidArgument.because("query limits must be nonnegative");
         self.origin = origin;
@@ -542,7 +548,8 @@ test "parameters read like json values" {
         name == "bad" && expected == "true or false";
     });
     test.is(
-        QueryParameters(QueryParameter(name: "q", value: "a b&c"), QueryParameter(name: "flag")).string(),
+        QueryParameters(QueryParameter(name: "q", value: "a b&c"), QueryParameter(name: "flag"))
+            .string(),
         "q=a%20b%26c&flag"
     );
 }

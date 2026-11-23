@@ -53,7 +53,9 @@ object Blake2b does Digesting {
             || length == 48
             || length == 64
             else throw InvalidBlake2Length.length(length);
-        digest = HostDigest(algorithm: "blake2b", key: [], width: length).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "blake2b", key: [], width: length).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.
@@ -101,7 +103,9 @@ object Blake2s does Digesting {
     Blake2s(length is int, text is string) {
         confirm length == 16 || length == 20 || length == 28 || length == 32
             else throw InvalidBlake2Length.length(length);
-        digest = HostDigest(algorithm: "blake2s", key: [], width: length).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "blake2s", key: [], width: length).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.
@@ -138,12 +142,16 @@ object Blake2bMac does Digesting {
 
     // The MAC of these bytes.
     Blake2bMac(key is SecretBytes, origin is @byte) {
-        digest = HostDigest(algorithm: "blake2b-mac", key: key.export_bytes(), width: 0).appended(origin);
+        digest = HostDigest(algorithm: "blake2b-mac", key: key.export_bytes(), width: 0).appended(
+            origin
+        );
     }
 
     // Text, as UTF-8.
     Blake2bMac(key is SecretBytes, text is string) {
-        digest = HostDigest(algorithm: "blake2b-mac", key: key.export_bytes(), width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "blake2b-mac", key: key.export_bytes(), width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The tag.
@@ -180,12 +188,16 @@ object Blake2sMac does Digesting {
 
     // The MAC of these bytes.
     Blake2sMac(key is SecretBytes, origin is @byte) {
-        digest = HostDigest(algorithm: "blake2s-mac", key: key.export_bytes(), width: 0).appended(origin);
+        digest = HostDigest(algorithm: "blake2s-mac", key: key.export_bytes(), width: 0).appended(
+            origin
+        );
     }
 
     // Text, as UTF-8.
     Blake2sMac(key is SecretBytes, text is string) {
-        digest = HostDigest(algorithm: "blake2s-mac", key: key.export_bytes(), width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "blake2s-mac", key: key.export_bytes(), width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The tag.
@@ -224,7 +236,12 @@ test "BLAKE2 matches RFC 7693 abc examples" {
         HexEncoded(Blake2s(length: 32, origin: abc).bytes()).string(),
         "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982"
     );
-    test.ok(Blake2b(length: 32, origin: abc).bytes() != Blake2b(length: 64, origin: abc).bytes().slice(0, 32));
+    test.ok(
+        Blake2b(length: 32, origin: abc).bytes() != Blake2b(length: 64, origin: abc).bytes().slice(
+            0,
+            32
+        )
+    );
     test.ok(try {
         Blake2s(64);
         false;

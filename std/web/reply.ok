@@ -330,7 +330,8 @@ object FileReply does Responding {
 }
 
 test "a text reply declares its representation and keeps the given fields" {
-    let response = TextReply(text: "Привет", headers: Headers(Header(name: "X-Trace", value: "t1"))).response();
+    let response = TextReply(text: "Привет", headers: Headers(Header(name: "X-Trace", value: "t1")))
+        .response();
     test.is(response::Head::status, Status.ok);
     test.is(response::Head::headers.entries().size(), 3);
     test.is(response::Head::headers.first(HeaderName("Content-Type")), "text/plain; charset=utf-8");
@@ -384,7 +385,8 @@ test "bytes and streams declare their media type" {
     let sized = StreamReply(body: ByteBody(png), media_type: "application/octet-stream").response();
     test.is(sized::Head::headers.int("Content-Length"), 4);
     let channel is Channel<ServerEvent> = Channel(capacity: 1);
-    let open = StreamReply(body: EventBody(channel.receiving()), media_type: "text/plain").response();
+    let open = StreamReply(body: EventBody(channel.receiving()), media_type: "text/plain")
+        .response();
     test.ok(!open::Head::headers.membership(HeaderName("Content-Length")));
     channel.receiving().close();
 }

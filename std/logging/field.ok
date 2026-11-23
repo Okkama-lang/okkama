@@ -212,7 +212,10 @@ test "log fields keep member order, reject bad names and merge by name" {
         "{\"id\":8,\"trace\":\"t1\"}"
     );
     test.is(
-        CombinedLogFields(base: fields, added: EmptyLogFields().fields()).fields().values().string(),
+        CombinedLogFields(base: fields, added: EmptyLogFields().fields())
+            .fields()
+            .values()
+            .string(),
         fields.values().string()
     );
     test.is(LogFields(fields.members()).values().string(), fields.values().string());

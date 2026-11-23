@@ -43,7 +43,11 @@ hidden object Http2PrefaceOperation {
     has output is AsyncWriting;
     has settings is Http2Settings;
 
-    Http2PrefaceOperation(input is AsyncReading, output is AsyncWriting, settings is Http2Settings) {
+    Http2PrefaceOperation(
+        input is AsyncReading,
+        output is AsyncWriting,
+        settings is Http2Settings
+    ) {
         self.input = input;
         self.output = output;
         self.settings = settings;
@@ -61,7 +65,8 @@ hidden object Http2PrefaceOperation {
             header: Http2FrameHeader(4.byte(), 0.byte(), 0, payload.size()),
             payload: payload
         ).bytes();
-        let prefix = HttpWireBytes(chunks: [magic, frame], maximum: magic.size() + frame.size()).bytes();
+        let prefix = HttpWireBytes(chunks: [magic, frame], maximum: magic.size() + frame.size())
+            .bytes();
         await self.emit(prefix);
         let peer = try {
             await Http2FrameReading(origin: input, maximum: settings::Settings::frame_size).frame();

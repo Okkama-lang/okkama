@@ -48,7 +48,8 @@ object PropertyReproduction {
 
     // All of it as text.
     string() is string {
-        "seed=" + seed.string() + " case=" + case_index.string() + " size=" + size.string() + " value=" + value;
+        "seed=" + seed.string() + " case=" + case_index.string() + " size=" + size.string() +
+            " value=" + value;
     }
 }
 
@@ -185,7 +186,8 @@ object Property<T> does Checking {
             let result = self.observe(candidate.value());
             if result.typed_error() {
                 test.fail(
-                    "typed error during shrinking: " + candidate.string() + " " + result.description()
+                    "typed error during shrinking: " + candidate.string() + " " +
+                        result.description()
                 );
                 return origin;
             }
@@ -314,7 +316,8 @@ object AsyncProperty<T> does AsyncChecking {
             let result = await observe(candidate.value());
             if result.typed_error() {
                 test.fail(
-                    "typed error during shrinking: " + candidate.string() + " " + result.description()
+                    "typed error during shrinking: " + candidate.string() + " " +
+                        result.description()
                 );
                 return origin;
             }

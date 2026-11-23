@@ -38,7 +38,9 @@ import "runtime/number_text" take int_parse;
 import "async/atomic" take Atomic;
 
 // An integer of any size; it holds an int, so arithmetic is exact and fast.
-object BigInt does Comparing<BigInt>, Adding<BigInt, BigInt>, Subtracting<BigInt, BigInt>, Multiplying<BigInt, BigInt>, Dividing<BigInt, BigInt>, Remaindering<BigInt, BigInt>, Negating<BigInt> {
+object BigInt does Comparing<BigInt>, Adding<BigInt, BigInt>, Subtracting<BigInt, BigInt>,
+    Multiplying<BigInt, BigInt>, Dividing<BigInt, BigInt>, Remaindering<BigInt, BigInt>,
+    Negating<BigInt> {
     has value is int;
 
     // Parses decimal digits with an optional minus; anything else is

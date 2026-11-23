@@ -98,8 +98,16 @@ test "patterns match inside one segment; ** crosses segments; results are sorted
         Directory(path: root.child(name)).create();
     }
     for [
-        "src/main.ok", "src/util.ok", "src/util-test.ok", "src/net/tcp.ok", "src/net/tcp-test.ok",
-        "src/.hidden.ok", "README.md", "logs/2025-01-a.log", "logs/2025-10-b.log", "logs/2027-02-c.log",
+        "src/main.ok",
+        "src/util.ok",
+        "src/util-test.ok",
+        "src/net/tcp.ok",
+        "src/net/tcp-test.ok",
+        "src/.hidden.ok",
+        "README.md",
+        "logs/2025-01-a.log",
+        "logs/2025-10-b.log",
+        "logs/2027-02-c.log",
     ] -> name {
         File(path: Path(root.string() + "/" + name), mode: FileMode.writing).text().write("");
     }
@@ -108,9 +116,24 @@ test "patterns match inside one segment; ** crosses segments; results are sorted
             path.string().slice(root.string().length() + 1, path.string().length());
         };
     };
-    test.is(found("src/*.ok"), ["src/.hidden.ok", "src/main.ok", "src/util-test.ok", "src/util.ok"]);
+    test.is(
+        found("src/*.ok"),
+        ["src/.hidden.ok", "src/main.ok", "src/util-test.ok", "src/util.ok"]
+    );
     test.is(found("**/*-test.ok"), ["src/net/tcp-test.ok", "src/util-test.ok"]);
-    test.is(found("src/**"), ["src", "src/.hidden.ok", "src/main.ok", "src/net", "src/net/tcp-test.ok", "src/net/tcp.ok", "src/util-test.ok", "src/util.ok"]);
+    test.is(
+        found("src/**"),
+        [
+            "src",
+            "src/.hidden.ok",
+            "src/main.ok",
+            "src/net",
+            "src/net/tcp-test.ok",
+            "src/net/tcp.ok",
+            "src/util-test.ok",
+            "src/util.ok"
+        ]
+    );
     test.is(found("src/????.ok"), ["src/main.ok", "src/util.ok"]);
     test.is(found("logs/202[4-6]-[!0]?-*.log"), ["logs/2025-10-b.log"]);
     test.is(found("logs/202[4-6]-*.log"), ["logs/2025-01-a.log", "logs/2025-10-b.log"]);

@@ -119,7 +119,8 @@ object MailMessage does ByteSource {
             ),
             MessageHeader(
                 name: MessageHeaderName("Message-ID"),
-                value: MessageId("<" + HexEncoded(random.bytes(16)).string() + "@" + domain + ">").string()
+                value: MessageId("<" + HexEncoded(random.bytes(16)).string() + "@" + domain + ">")
+                    .string()
             ),
             MessageHeader(name: MessageHeaderName("MIME-Version"), value: "1.0"),
             MessageHeader(
@@ -370,13 +371,13 @@ hidden object MailDatePrinting {
         else {
             "+";
         };
-        calendar.weekday(date.weekday()) + ", " + calendar.padded(date::Calendar::day) + " " + calendar.month(
-            date::Calendar::month
-        ) + " " + date::Calendar::year.string() + " " +
-            calendar.padded(time::Clock::hour) + ":" + calendar.padded(time::Clock::minute) + ":" + calendar.padded(
+        calendar.weekday(date.weekday()) + ", " + calendar.padded(date::Calendar::day) + " " +
+            calendar.month(
+                date::Calendar::month
+            ) + " " + date::Calendar::year.string() + " " + calendar.padded(time::Clock::hour) +
+            ":" + calendar.padded(time::Clock::minute) + ":" + calendar.padded(
                 time::Clock::second
-            ) + " " +
-            sign + calendar.padded((magnitude / 3600).int()) + calendar.padded(
+            ) + " " + sign + calendar.padded((magnitude / 3600).int()) + calendar.padded(
                 ((magnitude % 3600) / 60).int()
             );
     }
@@ -602,7 +603,10 @@ hidden object MailDateTokens {
                             else throw InvalidMail.located(index, "invalid mail date character");
                         if value == 92 && depth.index() > 0 {
                             confirm index + 1 < size
-                                else throw InvalidMail.located(index, "unterminated comment escape");
+                                else throw InvalidMail.located(
+                                    index,
+                                    "unterminated comment escape"
+                                );
                             let code = characters[index + 1].code();
                             confirm code == 9 || (code >= 32 && code <= 126)
                                 else throw InvalidMail.located(
@@ -779,7 +783,8 @@ hidden object MailIdentifier {
             else {
                 // Letters, digits and the punctuation ! # $ % & ' * + - / = ? ^ _ ` { | } ~.
                 let allowed = match value {
-                    case 33, 35, 36, 37, 38, 39, 42, 43, 45, 47, 61, 63, 94, 95, 96, 123, 124, 125, 126 {
+                    case 33, 35, 36, 37, 38, 39, 42, 43, 45, 47, 61, 63, 94, 95, 96, 123, 124, 125,
+                        126 {
                         true;
                     }
                     else {
@@ -954,7 +959,9 @@ test "an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#
 }
 
 test "a message from its fields drops the fraction of the clock's second (#518)" {
-    let late = ManualClock(Instant(Duration(seconds: 1700000000.rat()).plus(Duration(seconds: rat(750, 1000)))));
+    let late = ManualClock(
+        Instant(Duration(seconds: 1700000000.rat()).plus(Duration(seconds: rat(750, 1000))))
+    );
     let message = MailMessage(
         from: "ada@example.test",
         to: ["grace@example.test"],
@@ -964,7 +971,9 @@ test "a message from its fields drops the fraction of the clock's second (#518)"
         random: PcgRandom(3)
     );
     test.is(message.headers().first(MessageHeaderName("Date")), "Tue, 14 Nov 2023 22:13:20 +0000");
-    let early = ManualClock(Instant(Duration(seconds: -1.rat()).plus(Duration(seconds: rat(250, 1000)))));
+    let early = ManualClock(
+        Instant(Duration(seconds: -1.rat()).plus(Duration(seconds: rat(250, 1000))))
+    );
     let before = MailMessage(
         from: "ada@example.test",
         to: ["grace@example.test"],

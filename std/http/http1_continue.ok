@@ -55,7 +55,8 @@ object Http1RequestStart {
             pending = scope.outcome();
         }
         else {
-            pending = Http1RequestWriting(origin: origin, request: request, limits: limits).output();
+            pending = Http1RequestWriting(origin: origin, request: request, limits: limits)
+                .output();
         }
         expectation = present;
     }
@@ -133,7 +134,9 @@ object Http1ContinueState {
     }
 
     // The response head, sending the body on 100 or when the wait ends.
-    reading(origin is Future<Http1HeadRead<Http1ResponseHead>>) is Future<Http1HeadRead<Http1ResponseHead>> {
+    reading(
+        origin is Future<Http1HeadRead<Http1ResponseHead>>
+    ) is Future<Http1HeadRead<Http1ResponseHead>> {
         if active && !sent {
             let bounded is Before<Http1HeadRead<Http1ResponseHead>> = Before(
                 origin: origin,
@@ -147,7 +150,11 @@ object Http1ContinueState {
 }
 
 test "ordinary request entry has no outstanding continue permission" {
-    let state = Http1ContinueState(active: false, clock: SystemClock(), limit: Duration(seconds: 1.rat()));
+    let state = Http1ContinueState(
+        active: false,
+        clock: SystemClock(),
+        limit: Duration(seconds: 1.rat())
+    );
     state = state.begun();
     test.ok(state.body_sent());
 }

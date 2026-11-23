@@ -181,12 +181,12 @@ hidden object AuthenticationChallengeScanning {
                 || (boundary < width
                 && bytes[boundary].int() == 44
                 && (boundary == scheme.end() || !self.assignment(after))) {
-                    result = result.following(
-                        AuthenticationChallenge(scheme: scheme.text(), parameters: [], token68: "")
-                    );
-                    position = position.separator(after);
-                    next;
-                }
+                result = result.following(
+                    AuthenticationChallenge(scheme: scheme.text(), parameters: [], token68: "")
+                );
+                position = position.separator(after);
+                next;
+            }
             confirm after > scheme.end()
                 else throw InvalidAuthenticationChallenge.because("scheme separator");
             if !self.assignment(after) {

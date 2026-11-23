@@ -96,8 +96,19 @@ test "stream digests equal digests of the whole input" {
         (i % 256).byte();
     };
     let whole = Digesting.fake().state(input).bytes();
-    test.is(ReadDigest(origin: ByteBuffer(input).reading(), digest: Digesting.fake(), chunk: 7).digest().bytes(), whole);
-    test.is(ReadDigest(origin: ByteBuffer().reading(), digest: Digesting.fake()).digest().bytes().size(), 0);
+    test.is(
+        ReadDigest(origin: ByteBuffer(input).reading(), digest: Digesting.fake(), chunk: 7)
+            .digest()
+            .bytes(),
+        whole
+    );
+    test.is(
+        ReadDigest(origin: ByteBuffer().reading(), digest: Digesting.fake())
+            .digest()
+            .bytes()
+            .size(),
+        0
+    );
     test.throws(InvalidArgument) {
         ReadDigest(origin: ByteBuffer().reading(), digest: Digesting.fake(), chunk: 0);
     };

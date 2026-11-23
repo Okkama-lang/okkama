@@ -184,6 +184,9 @@ test "IPv6 endpoint formatting keeps scope outside the bare address" {
 }
 
 test "hostnames canonicalize through nontransitional IDNA before endpoint formatting" {
-    test.is(HostEndpoint(host: HostName("BÜCHER.example"), port: 443).string(), "xn--bcher-kva.example:443");
+    test.is(
+        HostEndpoint(host: HostName("BÜCHER.example"), port: 443).string(),
+        "xn--bcher-kva.example:443"
+    );
     test.is(HostName("faß.de").unicode(), "faß.de");
 }

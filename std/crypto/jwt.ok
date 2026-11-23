@@ -1009,7 +1009,8 @@ test "JWT signs the RFC 8037 Ed25519 example" {
     let key = JwtEd25519Key(
         signing: Ed25519PrivateKey(
             seed: SecretBytes(
-                HexDecoded("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60").bytes()
+                HexDecoded("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                    .bytes()
             )
         )
     );
@@ -1129,16 +1130,19 @@ test "JWT checks the shape of a token" {
         JwtVerified(token: "x".repeat(8193), key: hs).claims();
     };
     test.throws(InvalidJwt) {
-        JwtVerified(token: v.forged("{\"alg\":\"HS256\",\"alg\":\"none\"}", "{}", hs), key: hs).claims();
+        JwtVerified(token: v.forged("{\"alg\":\"HS256\",\"alg\":\"none\"}", "{}", hs), key: hs)
+            .claims();
     };
     test.throws(InvalidJwt) {
-        JwtVerified(token: v.forged("{\"alg\":\"HS256\",\"crit\":[\"b64\"]}", "{}", hs), key: hs).claims();
+        JwtVerified(token: v.forged("{\"alg\":\"HS256\",\"crit\":[\"b64\"]}", "{}", hs), key: hs)
+            .claims();
     };
     test.throws(InvalidJwt) {
         JwtVerified(token: v.forged("{\"alg\":\"HS256\"}", "[1]", hs), key: hs).claims();
     };
     test.throws(InvalidJwt) {
-        JwtVerified(token: v.forged("{\"alg\":\"HS256\"}", "{\"exp\":\"soon\"}", hs), key: hs).claims();
+        JwtVerified(token: v.forged("{\"alg\":\"HS256\"}", "{\"exp\":\"soon\"}", hs), key: hs)
+            .claims();
     };
     test.throws(InvalidJwt) {
         JwtVerified(token: v.forged("{\"alg\":256}", "{}", hs), key: hs).claims();
@@ -1157,9 +1161,11 @@ test "JWT checks nbf, iat, aud and iss" {
     };
     test.is(JwtVerified(token: early, key: hs, clock: v.clock(1000)).claims().int("nbf"), 1000);
     test.is(
-        JwtVerified(token: early, key: hs, clock: v.clock(995), leeway: Duration(seconds: 5.rat())).claims().int(
-            "nbf"
-        ),
+        JwtVerified(token: early, key: hs, clock: v.clock(995), leeway: Duration(seconds: 5.rat()))
+            .claims()
+            .int(
+                "nbf"
+            ),
         1000
     );
     let future = v.forged("{\"alg\":\"HS256\"}", "{\"iat\":2000}", hs);
@@ -1178,7 +1184,8 @@ test "JWT checks nbf, iat, aud and iss" {
         JwtVerified(token: aud, key: hs, issuer: "other").claims();
     };
     test.throws(JwtAudienceMismatch) {
-        JwtVerified(token: v.forged("{\"alg\":\"HS256\"}", "{}", hs), key: hs, audience: "web").claims();
+        JwtVerified(token: v.forged("{\"alg\":\"HS256\"}", "{}", hs), key: hs, audience: "web")
+            .claims();
     };
 }
 
@@ -1190,9 +1197,11 @@ test "JWT chooses keys by kid" {
     let token = JwtToken(claims: Json(JsonField("k", "b")), key: b).string();
     test.is(JwtVerified(token: token, keys: keys).header().text("kid"), "b");
     test.is(
-        JwtVerified(token: JwtToken(claims: Json(JsonField("k", 1)), key: a).string(), keys: keys).claims().int(
-            "k"
-        ),
+        JwtVerified(token: JwtToken(claims: Json(JsonField("k", 1)), key: a).string(), keys: keys)
+            .claims()
+            .int(
+                "k"
+            ),
         1
     );
     let stranger = JwtHmacKey(algorithm: JwtAlgorithm.hs256, secret: v.secret(), id: "c");

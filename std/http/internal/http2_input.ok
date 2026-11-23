@@ -215,7 +215,8 @@ object Http2ConnectionInput {
     hidden async read_loop() is bool {
         loop {
             let eof = Event();
-            let pending = Http2FrameReading(origin: origin, maximum: local::Settings::frame_size).frame();
+            let pending = Http2FrameReading(origin: origin, maximum: local::Settings::frame_size)
+                .frame();
             let available is @Http2Frame = try {
                 [await pending];
             }

@@ -306,7 +306,8 @@ hidden object RedirectKey {
         else {
             normalized::Parts::path;
         };
-        key = MethodName(request::Head::method).string() + " " + HttpClientKey(url).string() + path + match parts::Parts::query {
+        key = MethodName(request::Head::method).string() + " " + HttpClientKey(url).string() +
+            path + match parts::Parts::query {
             case Maybe.some(query) {
                 "?" + query;
             }

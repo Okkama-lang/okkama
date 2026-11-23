@@ -68,7 +68,11 @@ object DigestBlocks64 {
 
     // The digest after padding.
     bytes() is @byte {
-        let padding = DigestPadding64(tail: self.remainder(), length: length, little_endian: little_endian).bytes();
+        let padding = DigestPadding64(
+            tail: self.remainder(),
+            length: length,
+            little_endian: little_endian
+        ).bytes();
         let completed = self.completed();
         let final = (0..(padding.size() / 64).int()).reduce(completed) -> current, index {
             let block is @byte = (0..64).map() -> i {
@@ -182,13 +186,21 @@ test "digest padding has exact one and two block boundaries" {
 }
 
 test "digest block fake counts final padding without changing history" {
-    let empty = DigestBlocks64(compression: DigestCompression64.fake(), origin: [], little_endian: false);
+    let empty = DigestBlocks64(
+        compression: DigestCompression64.fake(),
+        origin: [],
+        little_endian: false
+    );
     test.is(empty.bytes(), [byte(1)]);
     test.is(empty.state([]).bytes(), [byte(1)]);
     let input is @byte = (0..65).map() -> i {
         byte(i);
     };
-    let origin = DigestBlocks64(compression: DigestCompression64.fake(), origin: input, little_endian: false);
+    let origin = DigestBlocks64(
+        compression: DigestCompression64.fake(),
+        origin: input,
+        little_endian: false
+    );
     let child = origin.state([byte(7)]);
     test.is(origin.bytes(), [byte(2)]);
     test.is(child.bytes(), [byte(2)]);

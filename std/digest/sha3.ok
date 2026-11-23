@@ -29,7 +29,9 @@ object Sha3_224 does Digesting {
 
     // Text, as UTF-8.
     Sha3_224(text is string) {
-        digest = HostDigest(algorithm: "sha3-224", key: [], width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "sha3-224", key: [], width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.
@@ -72,7 +74,9 @@ object Sha3_256 does Digesting {
 
     // Text, as UTF-8.
     Sha3_256(text is string) {
-        digest = HostDigest(algorithm: "sha3-256", key: [], width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "sha3-256", key: [], width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.
@@ -115,7 +119,9 @@ object Sha3_384 does Digesting {
 
     // Text, as UTF-8.
     Sha3_384(text is string) {
-        digest = HostDigest(algorithm: "sha3-384", key: [], width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "sha3-384", key: [], width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.
@@ -158,7 +164,9 @@ object Sha3_512 does Digesting {
 
     // Text, as UTF-8.
     Sha3_512(text is string) {
-        digest = HostDigest(algorithm: "sha3-512", key: [], width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(algorithm: "sha3-512", key: [], width: 0).appended(
+            Utf8Encoded(text).bytes()
+        );
     }
 
     // The digest.

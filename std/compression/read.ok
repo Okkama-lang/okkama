@@ -69,7 +69,10 @@ object DecompressedReading does Reading, Closing {
 
     // origin through decompressor, 65536 bytes at a time.
     DecompressedReading(origin is Reading, decompressor is Decompressing) {
-        stream = CompressionReading(flow: DecompressingFlow(origin, decompressor), chunk_size: 8192);
+        stream = CompressionReading(
+            flow: DecompressingFlow(origin, decompressor),
+            chunk_size: 8192
+        );
     }
 
     // origin through decompressor, chunk_size bytes at a time.

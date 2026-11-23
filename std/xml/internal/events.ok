@@ -663,8 +663,8 @@ hidden object XmlReader {
                 || code == 65534
                 || code == 65535
                 || code > 1114111 {
-                    return false;
-                }
+                return false;
+            }
         }
         true;
     }

@@ -60,7 +60,9 @@ object ImapSession does Closing {
     // Over origin, with the server's capabilities, for account.
     ImapSession(origin is ImapCommandChannel, capabilities is ImapCapabilities, account is string) {
         confirm account.length() > 0 && account.length() <= 4096
-            else throw InvalidArgument.because("IMAP account scope must contain 1..4096 characters");
+            else throw InvalidArgument.because(
+                "IMAP account scope must contain 1..4096 characters"
+            );
         confirm capabilities.features().membership(ImapFeature.imap4rev1)
             && !capabilities.features().membership(ImapFeature.utf8_only)
             else throw UnsupportedOperation.because(
@@ -418,7 +420,11 @@ object ImapSession does Closing {
 
     // APPEND message with flags to mailbox; the UID it got when the server
     // says.
-    async appended(mailbox is ImapMailboxName, message is MailMessage, flags is MailFlags) is ImapAssignedUids {
+    async appended(
+        mailbox is ImapMailboxName,
+        message is MailMessage,
+        flags is MailFlags
+    ) is ImapAssignedUids {
         await AppendedMail(origin: self, mailbox: mailbox, message: message, flags: flags).uids();
     }
 }
@@ -1177,7 +1183,8 @@ object CopiedMail {
 
     // Copies uids of origin to destination.
     CopiedMail(origin is SelectedMailbox, uids is MailboxUids, destination is ImapMailboxName) {
-        pending = ImapCopying(origin: origin, uids: uids, destination: destination, move: false).uids();
+        pending = ImapCopying(origin: origin, uids: uids, destination: destination, move: false)
+            .uids();
     }
 
     // The result.
@@ -1192,7 +1199,8 @@ object MovedMail {
 
     // Moves uids of origin to destination.
     MovedMail(origin is SelectedMailbox, uids is MailboxUids, destination is ImapMailboxName) {
-        pending = ImapCopying(origin: origin, uids: uids, destination: destination, move: true).uids();
+        pending = ImapCopying(origin: origin, uids: uids, destination: destination, move: true)
+            .uids();
     }
 
     // The result.

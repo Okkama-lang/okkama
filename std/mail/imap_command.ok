@@ -193,7 +193,8 @@ object ImapCommand {
                 else throw InvalidArgument.because("IMAP APPEND ordinary literal excludes NUL");
         }
         text = ImapCommandText(
-            "APPEND " + mailbox.quoted() + " " + ImapWritableFlags(flags).string() + " {" + bytes.size().string() + "}"
+            "APPEND " + mailbox.quoted() + " " + ImapWritableFlags(flags).string() + " {" +
+                bytes.size().string() + "}"
         );
         payload = [ByteSnapshot(bytes)];
     }
@@ -315,6 +316,9 @@ test "mailbox command uses a quoted canonical name" {
         operation: ImapMailboxCommand.select,
         mailbox: ImapMailboxName("Drafts & Notes")
     );
-    test.is(Utf8Decoded(command.bytes(ImapTag("O1"))).string(), "O1 SELECT \"Drafts &- Notes\"\r\n");
+    test.is(
+        Utf8Decoded(command.bytes(ImapTag("O1"))).string(),
+        "O1 SELECT \"Drafts &- Notes\"\r\n"
+    );
     test.is(command.literal(), false);
 }

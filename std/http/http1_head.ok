@@ -431,14 +431,18 @@ test "strict HTTP1 head preserves extension status and duplicate fields" {
 }
 
 test "a Host field is one authority: a host and an optional port" {
-    let read = ParsedHttp1RequestHead("GET / HTTP/1.1\r\nHost: EXAMPLE.com:8080\r\n\r\n").head().host();
+    let read = ParsedHttp1RequestHead("GET / HTTP/1.1\r\nHost: EXAMPLE.com:8080\r\n\r\n")
+        .head()
+        .host();
     test.is(read::Parts::host else "", "example.com");
     test.is(read::Parts::port else 0, 8080);
     let literal = ParsedHttp1RequestHead("GET / HTTP/1.1\r\nHost: [::1]:81\r\n\r\n").head().host();
     test.is(literal::Parts::host else "", "[::1]");
     test.is(literal::Parts::port else 0, 81);
     test.is(
-        ParsedHttp1RequestHead("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").head().host()::Parts::port,
+        ParsedHttp1RequestHead("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .head()
+            .host()::Parts::port,
         Maybe<int>.none
     );
     for [

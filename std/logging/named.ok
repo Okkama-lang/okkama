@@ -141,7 +141,12 @@ object NamedLogging does Logging {
         name;
     }
 
-    hidden emit(level is LogLevel, message is string, fields is LogFields, causes is @Error) is void {
+    hidden emit(
+        level is LogLevel,
+        message is string,
+        fields is LogFields,
+        causes is @Error
+    ) is void {
         let merged = CombinedLogFields(base: self.fields, added: fields).fields();
         let at = clock.instant();
         let pid = process.id();

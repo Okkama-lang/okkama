@@ -196,7 +196,8 @@ test "a hard link shares the file; only a regular file can be its source" {
     });
     Directory(path: root.child("folder")).create();
     test.ok(try {
-        HardLink(source: FileEntry(path: root.child("folder")), destination: root.child("x")).create();
+        HardLink(source: FileEntry(path: root.child("folder")), destination: root.child("x"))
+            .create();
         false;
     }
     catch FileError.invalid_hard_link_source(failed) {
@@ -204,14 +205,16 @@ test "a hard link shares the file; only a regular file can be its source" {
     });
     SymbolicLink(path: root.child("alias")).create(state);
     test.ok(try {
-        HardLink(source: FileEntry(path: root.child("alias")), destination: root.child("y")).create();
+        HardLink(source: FileEntry(path: root.child("alias")), destination: root.child("y"))
+            .create();
         false;
     }
     catch FileError.invalid_hard_link_source(failed) {
         failed == root.child("alias").string();
     });
     test.ok(try {
-        HardLink(source: FileEntry(path: root.child("absent")), destination: root.child("z")).create();
+        HardLink(source: FileEntry(path: root.child("absent")), destination: root.child("z"))
+            .create();
         false;
     }
     catch FileError.not_found(failed) {

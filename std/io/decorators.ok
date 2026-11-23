@@ -393,7 +393,11 @@ object TimedAsyncReading does AsyncReading {
             await outcome;
         }
         else {
-            let bounded is Before<@byte> = Before(origin: reading, deadline: deadline, clock: clock);
+            let bounded is Before<@byte> = Before(
+                origin: reading,
+                deadline: deadline,
+                clock: clock
+            );
             let outcome = bounded.outcome();
             await outcome;
         }
@@ -739,7 +743,9 @@ async test "a counting async reading counts what its reads deliver, once" {
     test.is(await counting.bytes(1), [byte(3)]);
     test.is((await counting.bytes(8)).size(), 0);
     test.is(counting.count(), 3);
-    let failing = CountingAsyncReading(origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0));
+    let failing = CountingAsyncReading(
+        origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0)
+    );
     test.is(
         try {
             await failing.bytes(4);
@@ -802,7 +808,11 @@ async test "a timed async reading: per read, a shared deadline, and nothing read
     );
     let gate = Event();
     let held = DecoratorTestPieces(pieces: [[byte(7)], [byte(8)]], gate: gate);
-    let timed = TimedAsyncReading(origin: held, limit: Duration(seconds: rat(20, 1000)), clock: clock);
+    let timed = TimedAsyncReading(
+        origin: held,
+        limit: Duration(seconds: rat(20, 1000)),
+        clock: clock
+    );
     let late = timed.bytes(4);
     test.is(
         try {

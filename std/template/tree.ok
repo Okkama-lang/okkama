@@ -150,7 +150,9 @@ hidden object TemplateTreeBuilder {
         self.source = source;
         self.maximum_depth = maximum_depth;
         let empty is List<TemplateTreeFrame> = EmptyList();
-        stack = empty.prefix(TemplateTreeFrame(name: "", kind: TemplateTreeKind.section, offset: 0));
+        stack = empty.prefix(
+            TemplateTreeFrame(name: "", kind: TemplateTreeKind.section, offset: 0)
+        );
     }
 
     following(token is TemplateInstruction) is ^TemplateTreeBuilder {
@@ -209,7 +211,12 @@ hidden object TemplateTreeBuilder {
 
     hidden failure(offset is int, message is string) is TemplateFailure {
         let lines = source.slice(0, offset).replace("\r\n", "\n").split("\n");
-        TemplateFailure.located(offset, lines.size(), lines[lines.size() - 1].length() + 1, message);
+        TemplateFailure.located(
+            offset,
+            lines.size(),
+            lines[lines.size() - 1].length() + 1,
+            message
+        );
     }
 }
 
@@ -237,7 +244,8 @@ test "nested sections inverted sections and current item compile" {
 }
 
 test "standalone structural tags remove original indentation and endings" {
-    let nodes = TemplateTree("a\n  {{# x}}\r\ninside\n\t{{/ x }}\nb\n {{> header/footer}}\nc").nodes();
+    let nodes = TemplateTree("a\n  {{# x}}\r\ninside\n\t{{/ x }}\nb\n {{> header/footer}}\nc")
+        .nodes();
     test.is(nodes.size(), 5);
     test.is(nodes[0].text(), "a\n");
     test.is(nodes[1].children()[0].text(), "inside\n");
@@ -289,26 +297,33 @@ test "structured syntax errors keep original source positions" {
 
 test "tree input token and depth limits are explicit" {
     test.is(
-        TemplateTree(source: "", maximum_input: 0, maximum_tokens: 0, maximum_depth: 0).nodes().size(),
+        TemplateTree(source: "", maximum_input: 0, maximum_tokens: 0, maximum_depth: 0)
+            .nodes()
+            .size(),
         0
     );
     test.is(
-        TemplateTree(source: "x", maximum_input: 1, maximum_tokens: 1, maximum_depth: 0).nodes()[0].text(),
+        TemplateTree(source: "x", maximum_input: 1, maximum_tokens: 1, maximum_depth: 0).nodes()[0]
+            .text(),
         "x"
     );
     test.is(
-        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 2, maximum_depth: 1).nodes().size(),
+        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 2, maximum_depth: 1)
+            .nodes()
+            .size(),
         1
     );
     test.ok(try {
-        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 1, maximum_depth: 1).nodes();
+        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 1, maximum_depth: 1)
+            .nodes();
         false;
     }
     catch e is Error {
         true;
     });
     test.ok(try {
-        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 2, maximum_depth: 0).nodes();
+        TemplateTree(source: "{{#x}}{{/x}}", maximum_input: 12, maximum_tokens: 2, maximum_depth: 0)
+            .nodes();
         false;
     }
     catch e is Error {

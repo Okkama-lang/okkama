@@ -357,11 +357,11 @@ object TlsClientHandshake {
         let identity = server.string();
         let unrooted = if identity.length() > 0
             && identity.ends_with(".") {
-                identity.slice(0, identity.length() - 1);
-            }
-            else {
-                identity;
-            };
+            identity.slice(0, identity.length() - 1);
+        }
+        else {
+            identity;
+        };
         let sni = if kind == "DNS" {
             unrooted;
         }

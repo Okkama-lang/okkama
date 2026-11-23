@@ -45,7 +45,12 @@ object ImapResponseLimits {
     }
 
     // The limits as given.
-    ImapResponseLimits(line_bytes is int, literal_bytes is int, wire_bytes is int, literals is int) {
+    ImapResponseLimits(
+        line_bytes is int,
+        literal_bytes is int,
+        wire_bytes is int,
+        literals is int
+    ) {
         confirm line_bytes >= 0 && literal_bytes >= 0 && wire_bytes >= 0 && literals >= 0
             else throw InvalidArgument.because("IMAP response limits must be nonnegative");
         self.line_bytes = line_bytes;
@@ -522,7 +527,8 @@ object ImapResponseHeader {
                             "status requires a space before text"
                         );
                     let start = 3 + raw.length();
-                    ImapResponseText(origin: origin.slice(start, origin.length()), offset: start).validate();
+                    ImapResponseText(origin: origin.slice(start, origin.length()), offset: start)
+                        .validate();
                 }
                 kind = ImapResponseKind.untagged;
                 tag = "";
@@ -551,7 +557,8 @@ object ImapResponseHeader {
                         "invalid tagged status"
                     );
                 let start = first.length() + fields[1].length() + 2;
-                ImapResponseText(origin: origin.slice(start, origin.length()), offset: start).validate();
+                ImapResponseText(origin: origin.slice(start, origin.length()), offset: start)
+                    .validate();
                 kind = ImapResponseKind.tagged;
                 tag = first;
                 name = upper;

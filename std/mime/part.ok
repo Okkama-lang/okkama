@@ -170,7 +170,12 @@ object MimePart does ByteSource {
 
     // This part with headers and bounds.
     headers(headers is MessageHeaders, bounds is MimeLimits) is MimePart {
-        let part = MimePart(headers: headers, body: payload, limits: bounds, default_type: fallback);
+        let part = MimePart(
+            headers: headers,
+            body: payload,
+            limits: bounds,
+            default_type: fallback
+        );
         if structured.size() == 1 {
             part.multipart(structured[0]);
         }
@@ -304,9 +309,10 @@ object MultipartBody does MimeBody, ByteSource {
 
     // The same with a default type for its parts.
     part(headers is MessageHeaders, limits is MimeLimits, default_type is MediaType) is MimePart {
-        MimePart(headers: headers, body: self, limits: limits, default_type: default_type).multipart(
-            self
-        );
+        MimePart(headers: headers, body: self, limits: limits, default_type: default_type)
+            .multipart(
+                self
+            );
     }
 
     // Its parts.
@@ -688,7 +694,8 @@ hidden object MimeParsing {
     part() is MimeParsedNode {
         confirm remaining_parts > 0 else throw MimeLimitFailure.kind("parts");
         confirm depth <= limits::Limits::depth else throw MimeLimitFailure.kind("depth");
-        let section = MimeHeaderParsing(origin: origin, start: start, stop: stop, limits: limits).section();
+        let section = MimeHeaderParsing(origin: origin, start: start, stop: stop, limits: limits)
+            .section();
         let metadata = try {
             let content = MimeMetadata(headers: section.headers(), default_type: fallback);
             content.validate();
@@ -734,7 +741,8 @@ hidden object MimeParsing {
                 else {
                     charsets.item(0);
                 };
-                let text = MimeDecodedText(origin: bytes, charset: charset, offset: section.end()).string();
+                let text = MimeDecodedText(origin: bytes, charset: charset, offset: section.end())
+                    .string();
                 TextBody(origin: text, charset: charset);
             }
             else {
@@ -946,7 +954,8 @@ hidden object MimeDelimiterScan {
                 if closing {
                     confirm output.size() > 0
                         else throw InvalidMime.located(index, "multipart has no children");
-                    return output.following(MimeDelimiter(start: index, after: after, closed: true)).entries();
+                    return output.following(MimeDelimiter(start: index, after: after, closed: true))
+                        .entries();
                 }
                 confirm output.size() < maximum_parts else throw MimeLimitFailure.kind("parts");
                 output = output.following(MimeDelimiter(start: index, after: after, closed: false));
@@ -1463,7 +1472,8 @@ hidden object MimeBodyRendering {
             else {
                 rendered;
             };
-            MimeBoundaryCollision(origin: child.bytes(), boundary: body::Multipart::boundary).validate();
+            MimeBoundaryCollision(origin: child.bytes(), boundary: body::Multipart::boundary)
+                .validate();
             writer.write(delimiter);
             writer.write([13.byte(), 10.byte()]);
             writer.write(child.bytes());
@@ -1543,7 +1553,10 @@ hidden object MimeBoundary {
         confirm origin.length() > 0
             && origin.length() <= 70
             && !origin.ends_with(" ")
-            else throw InvalidMime.located(0, "invalid multipart boundary length or trailing space");
+            else throw InvalidMime.located(
+                0,
+                "invalid multipart boundary length or trailing space"
+            );
         // RFC 2046 bchars, by code (#163): letters, digits and '()+_,-./:=? and space.
         let characters = origin.characters();
         for (0..characters.size()) -> index {
@@ -1584,7 +1597,8 @@ hidden object MimeBoundaryCollision {
             let start = position.index();
             last if start == origin.size();
             let end = MimeWireLine(origin: origin, start: start, stop: origin.size()).end();
-            confirm !MimeBytePrefix(origin: origin, start: start, stop: end, prefix: prefix).matches()
+            confirm !MimeBytePrefix(origin: origin, start: start, stop: end, prefix: prefix)
+                .matches()
                 else throw InvalidMime.located(
                     start,
                     "boundary occurs at an encapsulated line prefix"
@@ -1737,7 +1751,8 @@ object MimeMetadata {
             self.disposition();
         }
         confirm type::Type::type != "multipart"
-            || (encoding != TransferEncoding.base64 && encoding != TransferEncoding.quoted_printable)
+            || (encoding != TransferEncoding.base64
+            && encoding != TransferEncoding.quoted_printable)
             else throw InvalidMime.located(
                 0,
                 "multipart transfer encoding must be an identity profile"
@@ -1930,7 +1945,8 @@ test "multipart parsing keeps boundary CRLF outside the leaf" {
 test "MIME parsing bounds depth and rejects missing closing delimiters" {
     let wire = "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n\r\nhello\r\n--x--\r\n";
     let kind = try {
-        ParsedMime(origin: Utf8Encoded(wire).bytes(), limits: MimeLimits(1000, 998, 10, 0, 1000)).part();
+        ParsedMime(origin: Utf8Encoded(wire).bytes(), limits: MimeLimits(1000, 998, 10, 0, 1000))
+            .part();
         "bad";
     }
     catch MimeLimitFailure.kind(kind) {

@@ -222,7 +222,8 @@ test "zstd refuses damaged data, output past its limit and a level out of range"
             ZstdDecompressed(origin: packed, limit: 100).bytes();
         };
         test.throws(InvalidCompressedData) {
-            ZstdDecompressed(origin: packed.slice(0, packed.size() - 3), limit: data.size()).bytes();
+            ZstdDecompressed(origin: packed.slice(0, packed.size() - 3), limit: data.size())
+                .bytes();
         };
         test.throws(InvalidCompressedData) {
             ZstdDecompressed(origin: packed + [0.byte()], limit: data.size()).bytes();

@@ -177,7 +177,12 @@ hidden object Http2HeaderInput {
                 await pending;
             }
             catch failure is EndOfHttp2Frames {
-                throw Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "truncated field block");
+                throw Http2Fault.detailed(
+                    Http2FaultScope.connection,
+                    1,
+                    0,
+                    "truncated field block"
+                );
             }
             catch failure is Http2Fault {
                 // CONTINUATION itself has no structural stream fault. A
@@ -372,7 +377,8 @@ object Http2EncodedHeaderFrames {
             budget: HpackBudget(budget.encoded() - 1, budget.decoded(), budget.fields())
         ).bytes();
         // A zero table at every block start satisfies all peer reductions.
-        let bytes = HttpWireBytes(chunks: [[32.byte()], encoded], maximum: encoded.size() + 1).bytes();
+        let bytes = HttpWireBytes(chunks: [[32.byte()], encoded], maximum: encoded.size() + 1)
+            .bytes();
         let count = ((bytes.size() + fragment - 1) / fragment).int();
         confirm count <= 1024
             else throw Http2Fault.detailed(

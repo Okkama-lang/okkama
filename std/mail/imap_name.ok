@@ -177,7 +177,8 @@ hidden object ImapUtf7Run {
     }
 
     string() is string {
-        let encoded = Base64Encoded(Utf16Encoded(origin: origin, order: ByteOrder.big).bytes()).string();
+        let encoded = Base64Encoded(Utf16Encoded(origin: origin, order: ByteOrder.big).bytes())
+            .string();
         "&" + encoded.replace("=", "").replace("/", ",") + "-";
     }
 }
@@ -214,7 +215,8 @@ hidden object ImapUtf7Parser {
             else {
                 let end = MimePosition(start + 1);
                 loop {
-                    last if end.index() == characters.size() || characters[end.index()].code() == 45;
+                    last if end.index() == characters.size()
+                        || characters[end.index()].code() == 45;
                     end = end.following(end.index() + 1);
                 }
                 confirm end.index() < origin.length()
@@ -224,7 +226,8 @@ hidden object ImapUtf7Parser {
                     "&";
                 }
                 else {
-                    ImapUtf7Shift(origin: origin.slice(start + 1, end.index()), offset: start).string();
+                    ImapUtf7Shift(origin: origin.slice(start + 1, end.index()), offset: start)
+                        .string();
                 }
             };
             confirm piece.length() <= limits::Limits::scalars - count.index()

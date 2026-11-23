@@ -185,7 +185,18 @@ object Number {
     }
 
     test "rejects invalid byte spellings and bounds" {
-        for ["", "-", "-1", "256", "999999999999999999999", "+1", "1.0", " 1", "1 ", "byte"] -> invalid {
+        for [
+            "",
+            "-",
+            "-1",
+            "256",
+            "999999999999999999999",
+            "+1",
+            "1.0",
+            " 1",
+            "1 ",
+            "byte"
+        ] -> invalid {
             test.is(
                 try {
                     Number(invalid).byte();

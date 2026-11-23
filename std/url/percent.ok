@@ -59,8 +59,8 @@ object PercentEncoded {
             || value == 46
             || value == 95
             || value == 126 {
-                return true;
-            }
+            return true;
+        }
         if component == UrlComponent.data {
             return false;
         }
@@ -77,8 +77,8 @@ object PercentEncoded {
             || value == 59
             || value == 61
             || value == 58 {
-                return true;
-            }
+            return true;
+        }
         if component == UrlComponent.userinfo {
             return false;
         }
@@ -195,7 +195,8 @@ test "plain path segment encoding retains data boundaries" {
         "%2F%3F%23%252F%20%C3%A9"
     );
     test.is(
-        PercentEncoded(origin: "AZaz09-._~!$&'()*+,;=:@", component: UrlComponent.path_segment).string(),
+        PercentEncoded(origin: "AZaz09-._~!$&'()*+,;=:@", component: UrlComponent.path_segment)
+            .string(),
         "AZaz09-._~!$&'()*+,;=:@"
     );
     test.is(PercentDecoded("%2F%3F%23%252F%20%C3%A9").string(), "/?#%2F é");

@@ -118,16 +118,28 @@ test "system entropy is fresh and sized" {
 }
 
 test "counter nonces are prefix and big-endian counter" {
-    test.is(CounterNonce(prefix: [1.byte()], counter: 258, size: 4).bytes(), [1.byte(), 0.byte(), 1.byte(), 2.byte()]);
+    test.is(
+        CounterNonce(prefix: [1.byte()], counter: 258, size: 4).bytes(),
+        [1.byte(), 0.byte(), 1.byte(), 2.byte()]
+    );
     test.throws(InvalidCryptoInput) {
         CounterNonce(prefix: [1.byte()], counter: 256, size: 2);
     };
     // The usual AEAD shape: a 4-byte prefix and an 8-byte counter in 12 bytes.
-    let twelve = CounterNonce(prefix: [9.byte(), 9.byte(), 9.byte(), 9.byte()], counter: 1, size: 12).bytes();
+    let twelve = CounterNonce(
+        prefix: [9.byte(), 9.byte(), 9.byte(), 9.byte()],
+        counter: 1,
+        size: 12
+    ).bytes();
     test.is(twelve.size(), 12);
-    test.is(twelve.slice(4, 12), [0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 1.byte()]);
+    test.is(
+        twelve.slice(4, 12),
+        [0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 0.byte(), 1.byte()]
+    );
     let wide = CounterNonce(prefix: [], counter: 258, size: 24).bytes();
-    test.is(wide.slice(0, 22), (0..22).map() -> index { 0.byte(); });
+    test.is(wide.slice(0, 22), (0..22).map() -> index {
+        0.byte();
+    });
     test.is(wide.slice(22, 24), [1.byte(), 2.byte()]);
     test.throws(InvalidCryptoInput) {
         CounterNonce(prefix: [], counter: -1, size: 12);

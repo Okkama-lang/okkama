@@ -336,7 +336,12 @@ hidden object Http2SessionState does Http2ReceivingEvents, Http2BodyEvents {
         self.wake();
     }
 
-    async admit(position is int, request is Request, known is @int, declared is @int) is Http2StreamHolding {
+    async admit(
+        position is int,
+        request is Request,
+        known is @int,
+        declared is @int
+    ) is Http2StreamHolding {
         loop {
             confirm !self.closed() else throw Http2SessionClosed.closed;
             confirm !going.ready() else throw Http2Unprocessed.stream(0);
@@ -347,24 +352,24 @@ hidden object Http2SessionState does Http2ReceivingEvents, Http2BodyEvents {
                 && waiting[0] == position
                 && entries.value().size() < 100
                 && entries.value().size() < capacity {
-                    let stream = ids.value().next_stream();
-                    let entry = Http2StreamHolding(
-                        owner: self,
-                        stream: stream,
-                        request: request,
-                        known: known,
-                        declared: declared
-                    );
-                    ids.replace(ids.value().allocated());
-                    sender.open(stream);
-                    flow.register(stream);
-                    let old = entries.value();
-                    let following is @Http2StreamHolding = old + [entry];
-                    entries.replace(following);
-                    self.unqueue(position);
-                    entry.start();
-                    return entry;
-                }
+                let stream = ids.value().next_stream();
+                let entry = Http2StreamHolding(
+                    owner: self,
+                    stream: stream,
+                    request: request,
+                    known: known,
+                    declared: declared
+                );
+                ids.replace(ids.value().allocated());
+                sender.open(stream);
+                flow.register(stream);
+                let old = entries.value();
+                let following is @Http2StreamHolding = old + [entry];
+                entries.replace(following);
+                self.unqueue(position);
+                entry.start();
+                return entry;
+            }
             await signal.wait();
         }
     }
@@ -668,8 +673,8 @@ hidden object Http2StreamHolding {
             if entry.buffer().wire_ended()
                 && !entry.finished_consumption()
                 && !entry.buffer().closed() {
-                    preserved.set();
-                }
+                preserved.set();
+            }
         }
         ready.set();
         if !self.preserving() {
@@ -778,11 +783,11 @@ hidden object Http2SessionExchange {
         if entry.buffer().wire_ended()
             && entry.lengths().size() == 1
             && entry.lengths()[0].sign() == 0 {
-                let pending = entry.buffer().bytes(1);
-                let prime = await pending;
-                confirm prime.size() == 0
-                    else throw InvalidState.because("unexpected payload at header-only response");
-            }
+            let pending = entry.buffer().bytes(1);
+            let prime = await pending;
+            confirm prime.size() == 0
+                else throw InvalidState.because("unexpected payload at header-only response");
+        }
         published.set();
         result;
     }
@@ -1020,7 +1025,8 @@ hidden object Http2StreamEntry does Closing {
             let starting = Http2RequestHeaderStart(entry: self, ending: zero);
             let fields = Http2RequestFields(request: request, stream: stream).fields();
             owner.check_fields(fields, stream);
-            let head = owner.output().headers(stream, fields, owner.budget(), 16384, zero, starting);
+            let head = owner.output()
+                .headers(stream, fields, owner.budget(), 16384, zero, starting);
             ticket.replace([head]);
             let pending = head.delivered();
             let heads is FutureGroup<bool> = FutureGroup();

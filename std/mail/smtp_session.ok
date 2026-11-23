@@ -311,7 +311,10 @@ object SmtpSession does Closing {
         let accepted is Atomic<@string> = Atomic([]);
         let refused is Atomic<@SmtpRefusal> = Atomic([]);
         for envelope.recipients() -> recipient {
-            let answer = await wire.exchange(SmtpStep.recipients, "RCPT TO:<" + recipient + ">\r\n");
+            let answer = await wire.exchange(
+                SmtpStep.recipients,
+                "RCPT TO:<" + recipient + ">\r\n"
+            );
             if answer.code() == 250 || answer.code() == 251 {
                 accepted.replace(accepted.value() + [recipient]);
             }
@@ -1376,7 +1379,12 @@ hidden object SmtpTestServer {
     }
 
     // The conversation until QUIT, the end of input, or STARTTLS accepted.
-    hidden async talk(input is SmtpTestInput, output is AsyncWriting, secure is bool, greet is bool) is string {
+    hidden async talk(
+        input is SmtpTestInput,
+        output is AsyncWriting,
+        secure is bool,
+        greet is bool
+    ) is string {
         if greet {
             let greeting = script["<greeting>"] else "220 test.example ESMTP\r\n";
             await output.write(Utf8Encoded(greeting).bytes());
@@ -1494,7 +1502,8 @@ async test "a submission: multiline greeting, EHLO, MAIL with SIZE, every recipi
     let heard = await serving;
     test.is(
         heard,
-        "EHLO localhost\n" + mail + "\nRCPT TO:<grace@example.test>\nRCPT TO:<hidden@example.test>\nDATA\n<data>From: Ada <ada@example.test>\r\nTo: grace@example.test\r\nSubject: Lunch\r\n\r\nShall we?\r\n..hidden dot</data>\nQUIT"
+        "EHLO localhost\n" + mail +
+            "\nRCPT TO:<grace@example.test>\nRCPT TO:<hidden@example.test>\nDATA\n<data>From: Ada <ada@example.test>\r\nTo: grace@example.test\r\nSubject: Lunch\r\n\r\nShall we?\r\n..hidden dot</data>\nQUIT"
     );
 }
 
@@ -1786,7 +1795,8 @@ async test "server refusals keep the session open, 421 closes it, EHLO has no HE
             message: message,
             recipients: ["grace@example.test"]
         ).result(),
-        "SmtpFailure.rejected(SmtpStep.sender, 553, \"5.7.1 denied\") | open | EHLO localhost\n" + mail
+        "SmtpFailure.rejected(SmtpStep.sender, 553, \"5.7.1 denied\") | open | EHLO localhost\n" +
+            mail
     );
     test.is(
         await SmtpTestTrial(
@@ -1794,7 +1804,8 @@ async test "server refusals keep the session open, 421 closes it, EHLO has no HE
             message: message,
             recipients: ["grace@example.test"]
         ).result(),
-        "SmtpFailure.rejected(SmtpStep.sender, 421, \"4.3.2 shutting down\") | closed | EHLO localhost\n" + mail
+        "SmtpFailure.rejected(SmtpStep.sender, 421, \"4.3.2 shutting down\") | closed | EHLO localhost\n" +
+            mail
     );
     test.is(
         await SmtpTestTrial(
@@ -1808,7 +1819,8 @@ async test "server refusals keep the session open, 421 closes it, EHLO has no HE
             message: message,
             recipients: ["grace@example.test"]
         ).result(),
-        "SmtpFailure.rejected(SmtpStep.data, 554, \"5.5.1 no valid recipients\") | open | EHLO localhost\n" + mail + "\n" + rcpt + "\nDATA\nRSET"
+        "SmtpFailure.rejected(SmtpStep.data, 554, \"5.5.1 no valid recipients\") | open | EHLO localhost\n" +
+            mail + "\n" + rcpt + "\nDATA\nRSET"
     );
     let final = await SmtpTestTrial(
         script: [
@@ -1858,7 +1870,8 @@ async test "a reply that breaks the protocol, or a lost connection, closes the s
             message: message,
             recipients: ["grace@example.test"]
         ).result(),
-        "SmtpFailure.disconnected(SmtpStep.recipients) | closed | EHLO localhost\n" + mail + "\n" + rcpt
+        "SmtpFailure.disconnected(SmtpStep.recipients) | closed | EHLO localhost\n" + mail + "\n" +
+            rcpt
     );
     test.is(
         await SmtpTestTrial(
@@ -1866,7 +1879,8 @@ async test "a reply that breaks the protocol, or a lost connection, closes the s
             message: message,
             recipients: ["grace@example.test"]
         ).result(),
-        "SmtpFailure.unexpected(SmtpStep.data, 250, \"ok\") | closed | EHLO localhost\n" + mail + "\n" + rcpt + "\nDATA"
+        "SmtpFailure.unexpected(SmtpStep.data, 250, \"ok\") | closed | EHLO localhost\n" + mail +
+            "\n" + rcpt + "\nDATA"
     );
     let lost = await SmtpTestTrial(
         script: [

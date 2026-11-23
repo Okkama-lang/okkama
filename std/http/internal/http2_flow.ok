@@ -227,7 +227,8 @@ object Http2WindowIncrement {
             );
         Http2FrameRules(frame).check();
         stream = frame.header().stream();
-        amount = Binary(bytes: frame.payload(), order: ByteOrder.big).int(Signedness.unsigned) & 2147483647;
+        amount = Binary(bytes: frame.payload(), order: ByteOrder.big).int(Signedness.unsigned) &
+            2147483647;
     }
 
     // The stream, 0 for the connection.

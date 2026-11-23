@@ -265,7 +265,17 @@ object CertificateChain {
 }
 
 // The bits of keyUsage.
-enum CertificateKeyUsage = (digital_signature, content_commitment, key_encipherment, data_encipherment, key_agreement, key_cert_sign, crl_sign, encipher_only, decipher_only);
+enum CertificateKeyUsage = (
+    digital_signature,
+    content_commitment,
+    key_encipherment,
+    data_encipherment,
+    key_agreement,
+    key_cert_sign,
+    crl_sign,
+    encipher_only,
+    decipher_only
+);
 
 // Purposes retain exact EKU OIDs, including unknown purposes. Construction is
 // metadata validation, never permission to bypass verification policy.

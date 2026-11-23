@@ -94,7 +94,11 @@ hidden object HttpProxyConnecting does HttpConversationConnecting {
         }
         self.proxy = proxy;
         self.target = target;
-        route = HttpEndpointSelection(url: proxy.url(), resolver: resolver, access: client.access());
+        route = HttpEndpointSelection(
+            url: proxy.url(),
+            resolver: resolver,
+            access: client.access()
+        );
         self.tls = tls;
         self.client = client;
         self.clock = clock;

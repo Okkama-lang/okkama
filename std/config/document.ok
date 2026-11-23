@@ -101,9 +101,10 @@ hidden object JsonSettingTree {
                 confirm value.size() <= 4096 else throw SettingLimitExceeded.exceeded;
                 for value.names() -> name {
                     let child is @string = path + [name];
-                    JsonSettingTree(path: child, source: source, entries: entries, depth: depth - 1).add(
-                        value.get(name)
-                    );
+                    JsonSettingTree(path: child, source: source, entries: entries, depth: depth - 1)
+                        .add(
+                            value.get(name)
+                        );
                 }
             }
             case JsonKind.array_value {

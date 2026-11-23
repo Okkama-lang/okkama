@@ -277,7 +277,8 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
         let cleanup = Http2ServerCleanup(state: self, owner: owner, finished: finished);
         let opening_cleanup = Http2ServerSettlement(openings);
         defer await opening_cleanup.close();
-        let preface = Http2ServerPreface(input: input, output: output_origin, settings: local).settings();
+        let preface = Http2ServerPreface(input: input, output: output_origin, settings: local)
+            .settings();
         let timeout = policy.timeouts().headers_timeout();
         let selected = if timeout::Span::seconds > 0.rat() {
             let bounded is Within<Http2PeerSettings> = Within(
@@ -322,7 +323,11 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
             controls: output,
             local: local,
             peer: peer.value(),
-            budget: HpackBudget(policy.limits().header_bytes(), policy.limits().header_bytes(), 128),
+            budget: HpackBudget(
+                policy.limits().header_bytes(),
+                policy.limits().header_bytes(),
+                128
+            ),
             from_server: false,
             barrier: self,
             boundary: wire
@@ -343,7 +348,12 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
             false;
         }
         catch e is TimedOut {
-            let fault = Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "HTTP2 wire deadline");
+            let fault = Http2Fault.detailed(
+                Http2FaultScope.connection,
+                1,
+                0,
+                "HTTP2 wire deadline"
+            );
             failures.replace([fault]);
             await self.connection_fault(fault);
             false;
@@ -376,16 +386,16 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
             let waiting = if interval::Span::seconds > 0.rat()
                 && active.value().size() == 0
                 && !reading_busy.value() {
-                    let deadline is Within<Event> = Within(
-                        origin: pending,
-                        limit: interval,
-                        clock: clock
-                    );
-                    deadline.outcome();
-                }
-                else {
-                    pending;
-                };
+                let deadline is Within<Event> = Within(
+                    origin: pending,
+                    limit: interval,
+                    clock: clock
+                );
+                deadline.outcome();
+            }
+            else {
+                pending;
+            };
             try {
                 await waiting;
             }
@@ -522,7 +532,12 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
 
     reset(reset is Http2Reset) is void {
         confirm reset.stream() <= highest.value() && reset.stream() % 2 == 1
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "reset on idle stream");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                1,
+                0,
+                "reset on idle stream"
+            );
         for self.matching(reset.stream()) -> entry {
             entry.cancel();
         }
@@ -919,7 +934,8 @@ hidden object Http2ServerStream {
                 "unsupported server final status or CONNECT tunnel"
             );
         let fields = Http2ResponseFields(response: response, stream: self.stream()).fields();
-        let declared = Http2BodyLength(origin: response::Head::headers, stream: self.stream()).known();
+        let declared = Http2BodyLength(origin: response::Head::headers, stream: self.stream())
+            .known();
         let suppressed = request::Head::method == Method.head
             || status == Status.no_content
             || status == Status.not_modified;

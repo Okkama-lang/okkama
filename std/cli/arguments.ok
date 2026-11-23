@@ -38,7 +38,11 @@ object ProcessArguments does Sequencing<@byte>, Iterating<@byte> {
     }
 
     // These arguments within the limits; ArgumentLimitExceeded beyond.
-    ProcessArguments(arguments is Sequencing<@byte>, maximum_arguments is int, maximum_bytes is int) {
+    ProcessArguments(
+        arguments is Sequencing<@byte>,
+        maximum_arguments is int,
+        maximum_bytes is int
+    ) {
         origin = ArgumentSnapshot(
             arguments: arguments,
             maximum_arguments: maximum_arguments,
@@ -91,7 +95,11 @@ object ProcessArguments does Sequencing<@byte>, Iterating<@byte> {
 hidden object ArgumentSnapshot {
     has origin is @@byte;
 
-    ArgumentSnapshot(arguments is Sequencing<@byte>, maximum_arguments is int, maximum_bytes is int) {
+    ArgumentSnapshot(
+        arguments is Sequencing<@byte>,
+        maximum_arguments is int,
+        maximum_bytes is int
+    ) {
         confirm maximum_arguments >= 0 && maximum_bytes >= 0
             else throw ArgumentLimitExceeded.exceeded;
         let size = arguments.size();

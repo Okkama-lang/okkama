@@ -306,7 +306,11 @@ object AcceptedContentCodings {
             if wildcard.size() == 1 && !wildcard[0].quality().acceptable() {
                 return wildcard[0];
             }
-            return CodingPreference(token: name, quality: Quality(1.rat()), position: origin.size());
+            return CodingPreference(
+                token: name,
+                quality: Quality(1.rat()),
+                position: origin.size()
+            );
         }
         if wildcard.size() == 1 {
             return wildcard[0];
@@ -483,10 +487,10 @@ hidden object CodingChoice {
             || preference.quality().order(quality) == Order.greater
             || (preference.quality().order(quality) == Order.equal
             && preference.position() < position)) {
-                ^selected = [coding];
-                ^quality = preference.quality();
-                ^position = preference.position();
-            }
+            ^selected = [coding];
+            ^quality = preference.quality();
+            ^position = preference.position();
+        }
     }
 
     coding() is ContentCoding {
@@ -645,10 +649,10 @@ hidden object CharsetChoice {
             || preference.quality().order(quality) == Order.greater
             || (preference.quality().order(quality) == Order.equal
             && preference.position() < position)) {
-                ^selected = [charset];
-                ^quality = preference.quality();
-                ^position = preference.position();
-            }
+            ^selected = [charset];
+            ^quality = preference.quality();
+            ^position = preference.position();
+        }
     }
 
     charset() is CharsetName {
@@ -872,11 +876,11 @@ hidden object LanguageChoice {
             || (ranked == Order.equal
             && (preference.specificity() > specificity
             || (preference.specificity() == specificity && preference.position() < position)))) {
-                ^selected = [locale];
-                ^quality = preference.quality();
-                ^specificity = preference.specificity();
-                ^position = preference.position();
-            }
+            ^selected = [locale];
+            ^quality = preference.quality();
+            ^specificity = preference.specificity();
+            ^position = preference.position();
+        }
     }
 
     locale() is Locale {
@@ -1013,8 +1017,8 @@ object MediaRange {
             let name = parameter.name();
             if !origin.parameters().membership(name)
                 || origin.parameters().first(name) != parameter.value() {
-                    return false;
-                }
+                return false;
+            }
         }
         true;
     }
@@ -1277,9 +1281,9 @@ object MediaMatch {
         confirm position >= 0 else throw InvalidArgument.because("negative media match position");
         if selected.size() == 0
             || range.specificity().order(selected[0].specificity()) == Order.greater {
-                ^selected = [range];
-                ^position = position;
-            }
+            ^selected = [range];
+            ^position = position;
+        }
     }
 
     // The quality of the match; 0 for none.
@@ -1326,9 +1330,9 @@ hidden object MediaChoice {
             || (quality == Order.equal
             && (specificity == Order.greater
             || (specificity == Order.equal && lookup_match.position() < matched.position())))) {
-                ^selected = [media];
-                ^matched = lookup_match;
-            }
+            ^selected = [media];
+            ^matched = lookup_match;
+        }
     }
 
     media_type() is HttpMediaType {

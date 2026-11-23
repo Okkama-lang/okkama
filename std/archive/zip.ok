@@ -648,14 +648,15 @@ object ZipWriting does Closing {
         if wide {
             let at = start + directory.size();
             destination.write(
-                ZipLittle(101075792, 4).bytes() + ZipLittle(44, 8).bytes() + ZipLittle(45, 2).bytes() +
-                    ZipLittle(45, 2).bytes() + ZipLittle(0, 4).bytes() + ZipLittle(0, 4).bytes() +
-                    ZipLittle(members, 8).bytes() + ZipLittle(members, 8).bytes() +
-                    ZipLittle(directory.size(), 8).bytes() + ZipLittle(start, 8).bytes()
+                ZipLittle(101075792, 4).bytes() + ZipLittle(44, 8).bytes() +
+                    ZipLittle(45, 2).bytes() + ZipLittle(45, 2).bytes() + ZipLittle(0, 4).bytes() +
+                    ZipLittle(0, 4).bytes() + ZipLittle(members, 8).bytes() +
+                    ZipLittle(members, 8).bytes() + ZipLittle(directory.size(), 8).bytes() +
+                    ZipLittle(start, 8).bytes()
             );
             destination.write(
-                ZipLittle(117853008, 4).bytes() + ZipLittle(0, 4).bytes() + ZipLittle(at, 8).bytes() +
-                    ZipLittle(1, 4).bytes()
+                ZipLittle(117853008, 4).bytes() + ZipLittle(0, 4).bytes() +
+                    ZipLittle(at, 8).bytes() + ZipLittle(1, 4).bytes()
             );
         }
         destination.write(
@@ -663,7 +664,8 @@ object ZipWriting does Closing {
                 ZipLittle(ZipClamped(members, 65535).value(), 2).bytes() +
                 ZipLittle(ZipClamped(members, 65535).value(), 2).bytes() +
                 ZipLittle(ZipClamped(directory.size(), 4294967295).value(), 4).bytes() +
-                ZipLittle(ZipClamped(start, 4294967295).value(), 4).bytes() + ZipLittle(0, 2).bytes()
+                ZipLittle(ZipClamped(start, 4294967295).value(), 4)
+                .bytes() + ZipLittle(0, 2).bytes()
         );
         destination.flush();
     }
@@ -698,8 +700,8 @@ object ZipWriting does Closing {
             20;
         };
         let local_extra is @byte = if large {
-            ZipLittle(1, 2).bytes() + ZipLittle(16, 2).bytes() + ZipLittle(bytes.size(), 8).bytes() +
-                ZipLittle(packed.size(), 8).bytes();
+            ZipLittle(1, 2).bytes() + ZipLittle(16, 2).bytes() +
+                ZipLittle(bytes.size(), 8).bytes() + ZipLittle(packed.size(), 8).bytes();
         }
         else {
             [];
@@ -709,9 +711,11 @@ object ZipWriting does Closing {
             2
         ).bytes() +
             ZipLittle(method, 2).bytes() + ZipLittle(0, 2).bytes() + ZipLittle(33, 2).bytes() +
-            ZipLittle(crc, 4).bytes() + ZipLittle(ZipClamped(packed.size(), 4294967295).value(), 4).bytes() +
+            ZipLittle(crc, 4).bytes() + ZipLittle(ZipClamped(packed.size(), 4294967295).value(), 4)
+            .bytes() +
             ZipLittle(ZipClamped(bytes.size(), 4294967295).value(), 4).bytes() +
-            ZipLittle(encoded.size(), 2).bytes() + ZipLittle(local_extra.size(), 2).bytes() + encoded +
+            ZipLittle(encoded.size(), 2).bytes() + ZipLittle(local_extra.size(), 2)
+            .bytes() + encoded +
             local_extra;
         destination.write(header);
         destination.write(packed);
@@ -734,7 +738,8 @@ object ZipWriting does Closing {
             [];
         });
         let central_extra is @byte = if central_extra_values.size() > 0 {
-            ZipLittle(1, 2).bytes() + ZipLittle(central_extra_values.size(), 2).bytes() + central_extra_values;
+            ZipLittle(1, 2).bytes() + ZipLittle(central_extra_values.size(), 2).bytes() +
+                central_extra_values;
         }
         else {
             [];
@@ -755,7 +760,8 @@ object ZipWriting does Closing {
             ZipLittle(ZipClamped(bytes.size(), 4294967295).value(), 4).bytes() +
             ZipLittle(encoded.size(), 2).bytes() + ZipLittle(central_extra.size(), 2).bytes() +
             ZipLittle(0, 2).bytes() + ZipLittle(0, 2).bytes() + ZipLittle(0, 2).bytes() +
-            ZipLittle(attributes, 4).bytes() + ZipLittle(ZipClamped(at, 4294967295).value(), 4).bytes() +
+            ZipLittle(attributes, 4).bytes() + ZipLittle(ZipClamped(at, 4294967295).value(), 4)
+            .bytes() +
             encoded + central_extra;
         records.replace(records.value() + record);
         count.replace(count.value() + 1);

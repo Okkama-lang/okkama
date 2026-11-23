@@ -285,7 +285,8 @@ hidden object PgCancelTcp does PgCancelRoute {
     }
 
     async cancel(process is int, secret is @byte) is void {
-        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true)).connection();
+        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true))
+            .connection();
         defer tcp.close();
         await PgOutput(tcp.output()).send(
             PgUntypedFrame(
@@ -317,7 +318,8 @@ object PostgresTcp does PostgresTransporting {
 
     // Connects.
     async transport() is PgTransport {
-        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true)).connection();
+        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true))
+            .connection();
         PgTransport(
             input: tcp.input(),
             output: tcp.output(),
@@ -344,7 +346,8 @@ object PostgresTls does PostgresTransporting {
     // Connects, sends SSLRequest and completes a verified handshake; DbFailure
     // when the server refuses TLS.
     async transport() is PgTransport {
-        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true)).connection();
+        let tcp = await TcpConnecting(remote: endpoint, options: TcpOptions(true, true))
+            .connection();
         await PgTlsStart(tcp: tcp, server: server, policy: policy, cancel: endpoint).transport();
     }
 }
@@ -382,7 +385,8 @@ hidden object PgTlsStart {
                 "PG_TLS_REFUSED",
                 "PostgreSQL server refused TLS"
             );
-        let tls = await TlsClientHandshake(origin: tcp, server: server, policy: policy).connection();
+        let tls = await TlsClientHandshake(origin: tcp, server: server, policy: policy)
+            .connection();
         published.set();
         PgTransport(
             input: tls.input(),
@@ -412,10 +416,12 @@ hidden object PgHostTransport does PostgresTransporting {
     async transport() is PgTransport {
         let tcp = match address {
             case Maybe.some(literal) {
-                await TcpConnecting(address: literal, port: port, keep_alive: true, no_delay: true).connection();
+                await TcpConnecting(address: literal, port: port, keep_alive: true, no_delay: true)
+                    .connection();
             }
             else {
-                await TcpConnecting(host: host, port: port, keep_alive: true, no_delay: true).connection();
+                await TcpConnecting(host: host, port: port, keep_alive: true, no_delay: true)
+                    .connection();
             }
         };
         let remote = tcp.endpoints().remote_endpoint();
@@ -549,7 +555,8 @@ hidden object PgUrl {
             || mode == "verify-ca"
             || mode == "verify-full"
             else throw InvalidPostgresOptions.because(
-                "sslmode " + mode + " is not supported: use disable, require, verify-ca or verify-full"
+                "sslmode " + mode +
+                    " is not supported: use disable, require, verify-ca or verify-full"
             );
         mode;
     }
@@ -787,7 +794,8 @@ hidden object PgStartupMessage {
         let encoded is @@byte = pairs.map() -> part {
             PgCString(part).bytes();
         };
-        PgUntypedFrame(@byte(PgInt32(196608).bytes()..., PgJoined(encoded).bytes()..., 0.byte())).bytes();
+        PgUntypedFrame(@byte(PgInt32(196608).bytes()..., PgJoined(encoded).bytes()..., 0.byte()))
+            .bytes();
     }
 }
 
@@ -1304,16 +1312,16 @@ object PgSession does Closing {
                 && (rows.value() > 8192 || bytes.value() > 1048576)
                 && process != 0
                 && transport.cancel_route().routed() {
-                    asked.replace(true);
-                    // A failed cancel only means the rest is read through.
-                    try {
-                        await transport.cancel_route().cancel(process, secret);
-                    }
-                    catch e is Cancelled {
-                        throw;
-                    }
-                    catch e is Error {}
+                asked.replace(true);
+                // A failed cancel only means the rest is read through.
+                try {
+                    await transport.cancel_route().cancel(process, secret);
                 }
+                catch e is Cancelled {
+                    throw;
+                }
+                catch e is Error {}
+            }
             let ready = self.buffered(operation);
             let message = if ready.size() == 1 {
                 ready[0];
@@ -1517,9 +1525,14 @@ object PgSession does Closing {
         let cleanup = PgInterrupted(owner: self, complete: complete);
         defer cleanup.close();
         let name = "okkama_" + self.next_id().string();
-        let describe = PgFrame(kind: "D", body: @byte(83.byte(), PgCString(name).bytes()...)).bytes();
+        let describe = PgFrame(kind: "D", body: @byte(83.byte(), PgCString(name).bytes()...))
+            .bytes();
         await self.send(
-            @byte(request.parse(name)..., describe..., PgFrame(kind: "S", body: @byte()).bytes()...),
+            @byte(
+                request.parse(name)...,
+                describe...,
+                PgFrame(kind: "S", body: @byte()).bytes()...
+            ),
             DbOperation.preparing
         );
         let outcome = await self.ready(DbOperation.preparing);
@@ -1780,7 +1793,12 @@ hidden object PgFinishInterrupted {
     has state is Atomic<int>;
     has complete is Event;
 
-    PgFinishInterrupted(owner is PgSession, commit is bool, state is Atomic<int>, complete is Event) {
+    PgFinishInterrupted(
+        owner is PgSession,
+        commit is bool,
+        state is Atomic<int>,
+        complete is Event
+    ) {
         self.owner = owner;
         self.commit = commit;
         self.state = state;
@@ -2041,8 +2059,8 @@ hidden object PgCommandTag {
             || command == "DELETE"
             || command == "MERGE"
             || command == "COPY") {
-                return Execution(Number(words[words.size() - 1]).int());
-            }
+            return Execution(Number(words[words.size() - 1]).int());
+        }
         Execution();
     }
 }
@@ -2217,7 +2235,8 @@ hidden object PgRequest {
                 DbFailureKind.data,
                 DbOperation.executing,
                 "PG_PARAMETER_COUNT",
-                "prepared statement expects " + count.string() + " parameters, got " + values.size().string()
+                "prepared statement expects " + count.string() + " parameters, got " +
+                    values.size().string()
             );
     }
 

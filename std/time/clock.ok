@@ -23,7 +23,8 @@ import "runtime/time" take wall_clock, monotonic_clock, clock_domain, sleep_nano
 // "explicit" domain and never claims compatibility with a live clock.
 
 // A moment of wall-clock time, nanosecond exact, counted from 1970 UTC.
-object Instant does Comparing<Instant>, Adding<Duration, Instant>, Subtracting<Duration, Instant>, Subtracting<Instant, Duration> {
+object Instant does Comparing<Instant>, Adding<Duration, Instant>, Subtracting<Duration, Instant>,
+    Subtracting<Instant, Duration> {
     has origin is Duration;
 
     // The moment origin after 1970-01-01T00:00:00Z.
@@ -68,7 +69,8 @@ object Instant does Comparing<Instant>, Adding<Duration, Instant>, Subtracting<D
 
 // A reading of a clock that never goes back, for measuring time; it means
 // nothing as a date.
-object MonotonicInstant does Comparing<MonotonicInstant>, Adding<Duration, MonotonicInstant>, Subtracting<Duration, MonotonicInstant>, Subtracting<MonotonicInstant, Duration> {
+object MonotonicInstant does Comparing<MonotonicInstant>, Adding<Duration, MonotonicInstant>,
+    Subtracting<Duration, MonotonicInstant>, Subtracting<MonotonicInstant, Duration> {
     has origin is Duration;
     has domain is string;
 
@@ -226,5 +228,8 @@ test "monotonic readings never mix domains" {
 test "an instant writes itself in RFC 3339 UTC" {
     test.is(Instant(origin: Duration(seconds: 0.rat())).string(), "1970-01-01T00:00:00Z");
     test.is(Instant(origin: Duration(seconds: -1.rat())).string(), "1969-12-31T23:59:59Z");
-    test.is(Instant(origin: Duration(seconds: rat(1786451445125, 1000))).string(), "2026-08-11T12:30:45.125Z");
+    test.is(
+        Instant(origin: Duration(seconds: rat(1786451445125, 1000))).string(),
+        "2026-08-11T12:30:45.125Z"
+    );
 }

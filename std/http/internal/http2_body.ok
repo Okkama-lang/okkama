@@ -222,7 +222,12 @@ object Http2BodyBuffer does BodyReading {
     data(data is Http2DataPayload) is void {
         self.check();
         confirm data.stream() == stream
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 1, 0, "body stream mismatch");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                1,
+                0,
+                "body stream mismatch"
+            );
         confirm !needs_fields.ready() || configured.ready()
             else throw Http2Fault.detailed(
                 Http2FaultScope.stream,
@@ -498,7 +503,12 @@ object Http2Trailers {
 
     // fields received on stream.
     Http2Trailers(fields is @HpackField, stream is int) {
-        let section = Http2FieldSection(origin: fields, allowed: [], request: false, stream: stream);
+        let section = Http2FieldSection(
+            origin: fields,
+            allowed: [],
+            request: false,
+            stream: stream
+        );
         let headers = section.headers();
         let rules = HttpTrailerRules([]);
         let entries = headers.entries();

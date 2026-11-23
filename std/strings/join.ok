@@ -46,7 +46,13 @@ object Joined {
 
     // The joined text.
     string() is string {
-        values.reduce(JoinedParts(separator: separator, maximum_items: maximum_items, maximum_length: maximum_length)) -> parts, value {
+        values.reduce(
+            JoinedParts(
+                separator: separator,
+                maximum_items: maximum_items,
+                maximum_length: maximum_length
+            )
+        ) -> parts, value {
             parts.following(value);
         }.string();
     }
@@ -115,10 +121,14 @@ test "joined keeps order and its separator" {
 }
 
 test "limits bound the items and the length" {
-    test.is(Joined(separator: ",", values: ["ab", "cd"], maximum_items: 2, maximum_length: 5).string(), "ab,cd");
+    test.is(
+        Joined(separator: ",", values: ["ab", "cd"], maximum_items: 2, maximum_length: 5).string(),
+        "ab,cd"
+    );
     let refused = (values is @string, items is int, length is int) is string {
         try {
-            Joined(separator: ",", values: values, maximum_items: items, maximum_length: length).string();
+            Joined(separator: ",", values: values, maximum_items: items, maximum_length: length)
+                .string();
         }
         catch JoinLimitExceeded.kind(kind) {
             if kind == JoinLimit.items {
@@ -140,6 +150,8 @@ test "limits bound the items and the length" {
         },
         "invalid"
     );
-    let parts = JoinedParts(separator: " ", maximum_items: 3, maximum_length: 20).following("x").following("y");
+    let parts = JoinedParts(separator: " ", maximum_items: 3, maximum_length: 20)
+        .following("x")
+        .following("y");
     test.is(parts.string(), "x y");
 }

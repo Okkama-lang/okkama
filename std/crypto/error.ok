@@ -74,7 +74,8 @@ object DecimalArgument {
 
 test "host failures become typed errors" {
     test.ok(try {
-        HostOperation(operation: "aead-open:aes-256-gcm", arguments: [[1.byte()], [], [], []]).bytes();
+        HostOperation(operation: "aead-open:aes-256-gcm", arguments: [[1.byte()], [], [], []])
+            .bytes();
         false;
     }
     catch InvalidCryptoInput.because(reason) {

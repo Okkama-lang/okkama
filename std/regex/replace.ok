@@ -260,7 +260,10 @@ object RegexSubstitution {
                 offset: 0,
                 amount: 0,
             ),
-            action: (current is RegexSubstitutionProgress, found is RegexMatching) is RegexSubstitutionProgress {
+            action: (
+                current is RegexSubstitutionProgress,
+                found is RegexMatching
+            ) is RegexSubstitutionProgress {
                 current.successor(found, replacing);
             },
         ) -> current {
@@ -303,8 +306,8 @@ hidden object RegexSubstitutionProgress {
             rendered: rendered +
                 source.slice(offset, range::Bounds::start) +
                 replacing.replacement(found),
-                offset: range::Bounds::end,
-                amount: quantity + 1,
+            offset: range::Bounds::end,
+            amount: quantity + 1,
         );
     }
 

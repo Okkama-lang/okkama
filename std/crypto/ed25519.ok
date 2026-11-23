@@ -34,12 +34,16 @@ object Ed25519PrivateKey does SigningKey {
 
     // The key as DER PKCS#8.
     pkcs8() is SecretBytes {
-        SecretBytes(HostOperation(operation: "ed25519-pkcs8", arguments: [seed.export_bytes()]).bytes());
+        SecretBytes(
+            HostOperation(operation: "ed25519-pkcs8", arguments: [seed.export_bytes()]).bytes()
+        );
     }
 
     // Its public key.
     public_key() is VerifyingKey {
-        Ed25519PublicKey(HostOperation(operation: "ed25519-public", arguments: [seed.export_bytes()]).bytes());
+        Ed25519PublicKey(
+            HostOperation(operation: "ed25519-public", arguments: [seed.export_bytes()]).bytes()
+        );
     }
 
     // The 64-byte signature of message.
@@ -71,7 +75,9 @@ object Ed25519PublicKey does PublicKey, VerifyingKey {
 
     // Whether signature signs message with this key.
     verified(message is @byte, signature is @byte) is bool {
-        signature.size() == 64 && HostOperation(operation: "ed25519-verify", arguments: [raw, message, signature]).truth();
+        signature.size() == 64
+            && HostOperation(operation: "ed25519-verify", arguments: [raw, message, signature])
+            .truth();
     }
 }
 

@@ -248,8 +248,14 @@ test "UTF encoders preserve noncharacters in every byte order" {
         ]
     );
     for [ByteOrder.big, ByteOrder.little] -> order {
-        test.is(Utf16Decoded(origin: Utf16Encoded(text, order).bytes(), order: order).string(), text);
-        test.is(Utf32Decoded(origin: Utf32Encoded(text, order).bytes(), order: order).string(), text);
+        test.is(
+            Utf16Decoded(origin: Utf16Encoded(text, order).bytes(), order: order).string(),
+            text
+        );
+        test.is(
+            Utf32Decoded(origin: Utf32Encoded(text, order).bytes(), order: order).string(),
+            text
+        );
     }
     test.is(Utf8Decoded(Utf8Encoded(text).bytes()).string(), text);
 }
@@ -281,7 +287,8 @@ test "malformed scalar boundaries retain typed byte offsets" {
     );
     test.is(
         try {
-            Utf16Decoded(origin: [byte(0), byte(65), byte(216), byte(0)], order: ByteOrder.big).string();
+            Utf16Decoded(origin: [byte(0), byte(65), byte(216), byte(0)], order: ByteOrder.big)
+                .string();
             -1;
         }
         catch InvalidUtf16.at(offset) {

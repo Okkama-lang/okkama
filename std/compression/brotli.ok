@@ -225,13 +225,15 @@ test "brotli refuses damaged data, output past its limit and a level out of rang
             BrotliDecompressed(origin: packed, limit: 100).bytes();
         };
         test.throws(InvalidCompressedData) {
-            BrotliDecompressed(origin: packed.slice(0, packed.size() - 3), limit: data.size()).bytes();
+            BrotliDecompressed(origin: packed.slice(0, packed.size() - 3), limit: data.size())
+                .bytes();
         };
         test.throws(InvalidCompressedData) {
             BrotliDecompressed(origin: packed + [0.byte()], limit: data.size()).bytes();
         };
         test.throws(InvalidCompressedData) {
-            BrotliDecompressed(origin: Utf8Encoded("not brotli at all").bytes(), limit: 100).bytes();
+            BrotliDecompressed(origin: Utf8Encoded("not brotli at all").bytes(), limit: 100)
+                .bytes();
         };
     }
 }

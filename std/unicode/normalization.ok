@@ -65,7 +65,10 @@ test "the four forms" {
     test.is(Normalized(origin: composed, form: NormalizationForm.nfd).string(), decomposed);
     test.is(Normalized(origin: "ﬃ", form: NormalizationForm.nfkc).string(), "ffi");
     test.is(Normalized(origin: "ﬃ", form: NormalizationForm.nfc).string(), "ﬃ");
-    test.is(Normalized(origin: "\u{1E9B}\u{0323}", form: NormalizationForm.nfkd).string(), "s\u{0323}\u{0307}");
+    test.is(
+        Normalized(origin: "\u{1E9B}\u{0323}", form: NormalizationForm.nfkd).string(),
+        "s\u{0323}\u{0307}"
+    );
     let once = Normalized(origin: decomposed, form: NormalizationForm.nfc).string();
     test.is(Normalized(origin: once, form: NormalizationForm.nfc).string(), once);
     test.is(Normalized(origin: " a ", form: NormalizationForm.nfkc).string(), " a ");
@@ -74,8 +77,14 @@ test "the four forms" {
 test "normalization data is Unicode 18.0" {
     // U+1ADD (Unicode 17.0) has combining class 220: NFD puts it before an
     // acute (230), and NFC composes e + acute across it.
-    test.is(Normalized(origin: "a\u{0301}\u{1ADD}", form: NormalizationForm.nfd).string(), "a\u{1ADD}\u{0301}");
-    test.is(Normalized(origin: "e\u{1ADD}\u{0301}", form: NormalizationForm.nfc).string(), "\u{00E9}\u{1ADD}");
+    test.is(
+        Normalized(origin: "a\u{0301}\u{1ADD}", form: NormalizationForm.nfd).string(),
+        "a\u{1ADD}\u{0301}"
+    );
+    test.is(
+        Normalized(origin: "e\u{1ADD}\u{0301}", form: NormalizationForm.nfc).string(),
+        "\u{00E9}\u{1ADD}"
+    );
     // U+209D LATIN SUBSCRIPT SMALL LETTER W (Unicode 18.0) folds to w.
     test.is(Normalized(origin: "x\u{209D}", form: NormalizationForm.nfkc).string(), "xw");
     test.is(Normalized(origin: "x\u{209D}", form: NormalizationForm.nfc).string(), "x\u{209D}");

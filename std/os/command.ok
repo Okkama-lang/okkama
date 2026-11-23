@@ -114,11 +114,11 @@ object Command does Commanding {
         else {
             self.quoted(command_arguments[index]) +
                 if index + 1 < command_arguments.size() {
-                    ", " + self.rendered_arguments_from(index + 1);
-                }
-                else {
-                    "";
-                };
+                ", " + self.rendered_arguments_from(index + 1);
+            }
+            else {
+                "";
+            };
         }
     }
 
@@ -190,11 +190,11 @@ object InheritedCommand does Commanding {
         else {
             self.quoted(command_arguments[index]) +
                 if index + 1 < command_arguments.size() {
-                    ", " + self.rendered_arguments_from(index + 1);
-                }
-                else {
-                    "";
-                };
+                ", " + self.rendered_arguments_from(index + 1);
+            }
+            else {
+                "";
+            };
         }
     }
 
@@ -225,11 +225,14 @@ test "a command keeps its context exactly; string() quotes every argument" {
     test.is(command.directory().path(), here.path());
     test.is(
         command.string(),
-        "Command(program: \"/usr/bin/git\", arguments: [\"log\", \"--format=%h \\\"%s\\\"\", \"a\\tb\"], directory: \""
-            + here.path().string() + "\")",
+        "Command(program: \"/usr/bin/git\", arguments: [\"log\", \"--format=%h \\\"%s\\\"\", \"a\\tb\"], directory: \"" +
+            here.path().string() + "\")",
     );
     let bare = Command(program: Path("git"), arguments: [], environment: env, directory: here);
-    test.is(bare.string(), "Command(program: \"git\", arguments: [], directory: \"" + here.path().string() + "\")");
+    test.is(
+        bare.string(),
+        "Command(program: \"git\", arguments: [], directory: \"" + here.path().string() + "\")"
+    );
 }
 
 test "an inherited command observes the process environment and directory" {

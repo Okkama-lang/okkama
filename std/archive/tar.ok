@@ -330,7 +330,8 @@ hidden object TarMemberHeader {
             extensions.writing() <- TarPaxRecord(key: "gname", origin: owner.group()).bytes();
         }
         if !ordinary_uid {
-            extensions.writing() <- TarPaxRecord(key: "uid", origin: owner.user_identity().string()).bytes();
+            extensions.writing() <- TarPaxRecord(key: "uid", origin: owner.user_identity().string())
+                .bytes();
         }
         if !ordinary_gid {
             extensions.writing() <- TarPaxRecord(
@@ -348,7 +349,8 @@ hidden object TarMemberHeader {
             extensions.writing() <- TarPaxRecord(key: "size", origin: size.string()).bytes();
         }
         if metadata.comment() != "" {
-            extensions.writing() <- TarPaxRecord(key: "comment", origin: metadata.comment()).bytes();
+            extensions.writing() <- TarPaxRecord(key: "comment", origin: metadata.comment())
+                .bytes();
         }
         let name = if ordinary_path {
             fields[1];
@@ -489,35 +491,43 @@ hidden object TarUstarHeader {
         let buffer = ByteBuffer();
         defer buffer.closing().close();
         let out = buffer.writing();
-        out <- TarAsciiField(origin: name, width: 100).bytes() <- TarOctal(number: mode, width: 8).bytes() <- TarOctal(
-            number: uid,
-            width: 8
-        ).bytes() <- TarOctal(
-            number: gid,
-            width: 8
-        ).bytes() <- TarOctal(number: size, width: 12).bytes() <- TarOctal(number: mtime, width: 12).bytes() <- "        " <- TarAsciiField(
-            origin: flag,
-            width: 1
-        ).bytes() <- TarAsciiField(origin: link, width: 100).bytes() <- "ustar" <- [byte(0)] <- "00" <- TarAsciiField(
-            origin: user,
-            width: 32
-        ).bytes() <- TarAsciiField(origin: group, width: 32).bytes() <- TarOctal(
-            number: major,
-            width: 8
-        ).bytes() <- TarOctal(
-            number: minor,
-            width: 8
-        ).bytes() <- TarAsciiField(origin: prefix, width: 155).bytes() <- TarZeroes(12).bytes();
+        out <- TarAsciiField(origin: name, width: 100)
+            .bytes() <- TarOctal(number: mode, width: 8).bytes() <- TarOctal(
+                number: uid,
+                width: 8
+            )
+            .bytes() <- TarOctal(
+                number: gid,
+                width: 8
+            ).bytes() <- TarOctal(number: size, width: 12).bytes() <- TarOctal(
+                number: mtime,
+                width: 12
+            ).bytes() <- "        " <- TarAsciiField(
+                origin: flag,
+                width: 1
+            ).bytes() <- TarAsciiField(origin: link, width: 100)
+            .bytes() <- "ustar" <- [byte(0)] <- "00" <- TarAsciiField(
+                origin: user,
+                width: 32
+            )
+            .bytes() <- TarAsciiField(origin: group, width: 32).bytes() <- TarOctal(
+                number: major,
+                width: 8
+            ).bytes() <- TarOctal(
+                number: minor,
+                width: 8
+            ).bytes() <- TarAsciiField(origin: prefix, width: 155).bytes() <- TarZeroes(12).bytes();
         let raw = buffer.content().bytes();
         let checksum = raw.reduce(0) -> sum, b {
             sum + b.int();
         };
         let result = ByteBuffer();
         defer result.closing().close();
-        result.writing() <- raw.slice(0, 148) <- TarOctal(number: checksum, width: 7).bytes() <- " " <- raw.slice(
-            156,
-            512
-        );
+        result.writing() <- raw.slice(0, 148) <- TarOctal(number: checksum, width: 7)
+            .bytes() <- " " <- raw.slice(
+                156,
+                512
+            );
         result.content().bytes();
     }
 }
@@ -1318,11 +1328,11 @@ hidden object TarInputMember {
         let normalized = if kind == "5"
             && name.length() > 0
             && name.ends_with("/") {
-                name.slice(0, name.length() - 1);
-            }
-            else {
-                name;
-            };
+            name.slice(0, name.length() - 1);
+        }
+        else {
+            name;
+        };
         origin = limits.path(normalized);
         let size_text = local.lookup("size", global.lookup("size", ""));
         let length = if size_text == "" {
@@ -1406,8 +1416,10 @@ hidden object TarInputMember {
             comment: local.lookup("comment", global.lookup("comment", ""))
         );
         if kind == "3" || kind == "4" {
-            major = TarCheckedInt(origin: header.number(329, 8), maximum: 9223372036854775807).int();
-            minor = TarCheckedInt(origin: header.number(337, 8), maximum: 9223372036854775807).int();
+            major = TarCheckedInt(origin: header.number(329, 8), maximum: 9223372036854775807)
+                .int();
+            minor = TarCheckedInt(origin: header.number(337, 8), maximum: 9223372036854775807)
+                .int();
         }
         else {
             major = 0;
@@ -1432,7 +1444,11 @@ hidden object TarInputMember {
                 ArchiveHardLink(path: origin, metadata: attributes, target: ArchivePath(target));
             }
             case "2" {
-                ArchiveSymbolicLink(path: origin, metadata: attributes, target: ArchivePath(target));
+                ArchiveSymbolicLink(
+                    path: origin,
+                    metadata: attributes,
+                    target: ArchivePath(target)
+                );
             }
             case "3" {
                 ArchiveDevice(

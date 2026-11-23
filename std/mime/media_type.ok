@@ -140,7 +140,8 @@ object MediaType {
 
     // Reads origin; InvalidMediaType says where it is wrong.
     MediaType(origin is string) {
-        let parsed = MimeScanning(origin: origin, maximum_parameters: 256, maximum_bytes: 1048576).media_type();
+        let parsed = MimeScanning(origin: origin, maximum_parameters: 256, maximum_bytes: 1048576)
+            .media_type();
         major = parsed.type();
         minor = parsed.subtype();
         entries = parsed.parameters();
@@ -765,7 +766,10 @@ hidden object MimeExtended {
                 valid && octet.int() < 128;
             };
             confirm ascii
-                else throw InvalidMediaType.located(offset, "non-ASCII bytes without UTF-8 charset");
+                else throw InvalidMediaType.located(
+                    offset,
+                    "non-ASCII bytes without UTF-8 charset"
+                );
         }
         let decoded = try {
             Utf8Decoded(bytes).string();

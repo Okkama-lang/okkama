@@ -57,7 +57,8 @@ object HttpProxyTunnel {
     // status.
     async ready() is bool {
         let request = HttpConnectRequest(origin: target, proxy_fields: fields).request();
-        let sending = Http1RequestWriting(origin: output, request: request, limits: limits).output();
+        let sending = Http1RequestWriting(origin: output, request: request, limits: limits)
+            .output();
         await sending;
         let information = HttpMediaPosition(index: 0, slots: 0);
         loop {

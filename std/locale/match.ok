@@ -592,7 +592,9 @@ test "lookup tries the ranges in order, skips the wildcard and drops a dangling 
     let supported = [Locale("en"), Locale("de"), Locale("zh-Hant")];
     let asked = [BasicLanguageRange("de-CH"), BasicLanguageRange("en")];
     test.is(
-        LookedUpLocale(requested: asked, available: supported, fallback: Locale("en")).locale().string(),
+        LookedUpLocale(requested: asked, available: supported, fallback: Locale("en"))
+            .locale()
+            .string(),
         "de"
     );
     let wild = [
@@ -601,12 +603,16 @@ test "lookup tries the ranges in order, skips the wildcard and drops a dangling 
         BasicLanguageRange("zh-Hant-CN-x-private")
     ];
     test.is(
-        LookedUpLocale(requested: wild, available: supported, fallback: Locale("en")).locale().string(),
+        LookedUpLocale(requested: wild, available: supported, fallback: Locale("en"))
+            .locale()
+            .string(),
         "zh-Hant"
     );
     let unmatched = [BasicLanguageRange("*"), BasicLanguageRange("fr-FR")];
     test.is(
-        LookedUpLocale(requested: unmatched, available: supported, fallback: Locale("de")).locale().string(),
+        LookedUpLocale(requested: unmatched, available: supported, fallback: Locale("de"))
+            .locale()
+            .string(),
         "de"
     );
 }

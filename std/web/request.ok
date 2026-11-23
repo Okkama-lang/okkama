@@ -213,12 +213,12 @@ object WebRequest {
         let suffix = media::Type::subtype.split("+");
         let accepted = media::Type::type == "application"
             && if expected == "json" {
-                media::Type::subtype == "json"
-                    || (suffix.size() > 1 && suffix[suffix.size() - 1] == "json");
-            }
-            else {
-                media::Type::subtype == "x-www-form-urlencoded";
-            };
+            media::Type::subtype == "json"
+                || (suffix.size() > 1 && suffix[suffix.size() - 1] == "json");
+        }
+        else {
+            media::Type::subtype == "x-www-form-urlencoded";
+        };
         confirm accepted
             else throw Exception.status(
                 415,
@@ -566,7 +566,9 @@ object WebLinks {
             let kind = part::Segment::kind;
             let text = part::Segment::text;
             if kind == RouteSegmentKind.literal {
-                kept + [PercentEncoded(origin: text, component: UrlComponent.path_segment).string()];
+                kept + [
+                    PercentEncoded(origin: text, component: UrlComponent.path_segment).string()
+                ];
             }
             else {
                 confirm given.has(text)
@@ -578,7 +580,8 @@ object WebLinks {
                     }
                     else {
                         let segments is @string = value.split("/").map() -> segment {
-                            PercentEncoded(origin: segment, component: UrlComponent.path_segment).string();
+                            PercentEncoded(origin: segment, component: UrlComponent.path_segment)
+                                .string();
                         };
                         kept + segments;
                     }
@@ -898,9 +901,10 @@ hidden object JsonProblem {
     }
 
     kind(pointer is string, expected is JsonKind, actual is JsonKind) is string {
-        "JSON value at " + JsonLocation(pointer).string() + " must be " + JsonKindName(expected).string() + ", found " + JsonKindName(
-            actual
-        ).string();
+        "JSON value at " + JsonLocation(pointer).string() + " must be " +
+            JsonKindName(expected).string() + ", found " + JsonKindName(
+                actual
+            ).string();
     }
 
     missing(location is string) is string {

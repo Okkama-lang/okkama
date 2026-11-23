@@ -246,11 +246,11 @@ object SettingKeyIndex {
             if index > 0
                 && ordered[index - 1].order(ordered[index]) == Order.equal
                 && positions[index] < earliest {
-                    positions[index];
-                }
-                else {
-                    earliest;
-                }
+                positions[index];
+            }
+            else {
+                earliest;
+            }
         };
         confirm duplicate == original.size()
             else throw DuplicateSetting.key((original[duplicate]).string());

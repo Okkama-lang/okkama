@@ -292,12 +292,30 @@ test "byte ranges read ASCII decimals" {
 
 test "byte ranges read fixed-width integers like Binary.int" {
     let source is @byte = [byte(0), byte(1), byte(2), byte(255), byte(254)];
-    test.is(ByteRange(source: source, start: 1, end: 3).integer(Signedness.unsigned, ByteOrder.big), 258);
-    test.is(ByteRange(source: source, start: 1, end: 3).integer(Signedness.unsigned, ByteOrder.little), 513);
-    test.is(ByteRange(source: source, start: 3, end: 5).integer(Signedness.signed, ByteOrder.big), -2);
-    test.is(ByteRange(source: source, start: 3, end: 5).integer(Signedness.unsigned, ByteOrder.big), 65534);
-    test.is(ByteRange(source: source, start: 3, end: 5).integer(Signedness.signed, ByteOrder.little), -257);
-    test.is(ByteRange(source: source, start: 0, end: 5).integer(Signedness.unsigned, ByteOrder.big), 16973822);
+    test.is(
+        ByteRange(source: source, start: 1, end: 3).integer(Signedness.unsigned, ByteOrder.big),
+        258
+    );
+    test.is(
+        ByteRange(source: source, start: 1, end: 3).integer(Signedness.unsigned, ByteOrder.little),
+        513
+    );
+    test.is(
+        ByteRange(source: source, start: 3, end: 5).integer(Signedness.signed, ByteOrder.big),
+        -2
+    );
+    test.is(
+        ByteRange(source: source, start: 3, end: 5).integer(Signedness.unsigned, ByteOrder.big),
+        65534
+    );
+    test.is(
+        ByteRange(source: source, start: 3, end: 5).integer(Signedness.signed, ByteOrder.little),
+        -257
+    );
+    test.is(
+        ByteRange(source: source, start: 0, end: 5).integer(Signedness.unsigned, ByteOrder.big),
+        16973822
+    );
     let wide is @byte = [
         byte(255),
         byte(255),
@@ -308,7 +326,10 @@ test "byte ranges read fixed-width integers like Binary.int" {
         byte(255),
         byte(255)
     ];
-    test.is(ByteRange(source: wide, start: 0, end: 8).integer(Signedness.signed, ByteOrder.big), -1);
+    test.is(
+        ByteRange(source: wide, start: 0, end: 8).integer(Signedness.signed, ByteOrder.big),
+        -1
+    );
     test.is(
         try {
             ByteRange(source: wide, start: 0, end: 8).integer(Signedness.unsigned, ByteOrder.big);
@@ -332,7 +353,17 @@ test "byte ranges read fixed-width integers like Binary.int" {
     test.is(
         try {
             ByteRange(
-                source: [byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(1)],
+                source: [
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(0),
+                    byte(1)
+                ],
                 start: 0,
                 end: 9
             ).integer(Signedness.unsigned, ByteOrder.big);
@@ -347,7 +378,10 @@ test "byte ranges read fixed-width integers like Binary.int" {
 
 test "byte ranges compare and copy" {
     let source is @byte = [byte(71), byte(69), byte(84), byte(32), byte(47)];
-    test.is(ByteRange(source: source, start: 0, end: 3).equals([byte(71), byte(69), byte(84)]), true);
+    test.is(
+        ByteRange(source: source, start: 0, end: 3).equals([byte(71), byte(69), byte(84)]),
+        true
+    );
     test.is(ByteRange(source: source, start: 0, end: 3).equals([byte(71), byte(69)]), false);
     test.is(ByteRange(source: source, start: 1, end: 1).equals([]), true);
     test.is(ByteRange(source: source, start: 3, end: 5).bytes(), [byte(32), byte(47)]);

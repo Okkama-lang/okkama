@@ -44,7 +44,8 @@ object TextLogLine {
         PhysicalLogLine(
             Rfc3339(origin: time, offset: zone.offset(time)).string() + " level=" + LogLevelName(
                 origin::Entry::level
-            ).string() + " name=" + name + " process=" + context.process().string() + " message=" + message + " fields=" + fields + cause
+            ).string() + " name=" + name + " process=" + context.process()
+                .string() + " message=" + message + " fields=" + fields + cause
         ).string();
     }
 }
@@ -154,7 +155,10 @@ test "a record is one physical line of text or JSON, quotes escaped" {
         cause: InvalidLogProcess.invalid,
     );
     test.is(
-        TextLogLine(origin: record, zone: FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()))).string(),
+        TextLogLine(
+            origin: record,
+            zone: FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()))
+        ).string(),
         "2023-11-14T22:13:20Z level=WARNING name=\"app.db\" process=7 message=\"slow \\\"query\\\"\" fields={\"ms\":900} cause=\"InvalidLogProcess.invalid\""
     );
     test.is(

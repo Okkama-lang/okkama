@@ -206,28 +206,28 @@ hidden object ImapDataParsing {
                 if index > 0
                     && parts.item(index - 1).kind() != ImapResponsePartKind.text
                     && text.length() > 2 {
-                        confirm text.starts_with(" ") || text.starts_with(")")
-                            else throw InvalidImapData.because(
-                                "literal requires a following separator"
-                            );
-                    }
+                    confirm text.starts_with(" ") || text.starts_with(")")
+                        else throw InvalidImapData.because(
+                            "literal requires a following separator"
+                        );
+                }
                 let end = MimePosition(text.length() - 2);
                 if index + 1 < parts.size()
                     && parts.item(index + 1).kind() != ImapResponsePartKind.text {
-                        // The framing layer already validated the terminal literal marker.
-                        let start = MimePosition(end.index());
-                        loop {
-                            last if start.index() == 0
-                                || text.slice(start.index() - 1, start.index()) == "{";
-                            start = start.following(start.index() - 1);
-                        }
-                        confirm start.index() > 0
-                            else throw InvalidImapData.because("literal payload without marker");
-                        end = end.following(start.index() - 1);
-                        if end.index() > 0 && text.slice(end.index() - 1, end.index()) == "~" {
-                            end = end.following(end.index() - 1);
-                        }
+                    // The framing layer already validated the terminal literal marker.
+                    let start = MimePosition(end.index());
+                    loop {
+                        last if start.index() == 0
+                            || text.slice(start.index() - 1, start.index()) == "{";
+                        start = start.following(start.index() - 1);
                     }
+                    confirm start.index() > 0
+                        else throw InvalidImapData.because("literal payload without marker");
+                    end = end.following(start.index() - 1);
+                    if end.index() > 0 && text.slice(end.index() - 1, end.index()) == "~" {
+                        end = end.following(end.index() - 1);
+                    }
+                }
                 ImapDataLexing(origin: text.slice(0, end.index()), initial: gathered).tokens();
             }
             else {

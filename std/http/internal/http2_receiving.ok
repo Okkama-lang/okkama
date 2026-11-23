@@ -93,7 +93,12 @@ object Http2ReceiveFlow does Http2BodyEvents {
             );
         let old = slots.value();
         confirm old.size() < maximum
-            else throw Http2Fault.detailed(Http2FaultScope.connection, 11, 0, "receive slot budget");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                11,
+                0,
+                "receive slot budget"
+            );
         let slot = Http2ReceivingSlot(stream);
         let following is @Http2ReceivingSlot = old + [slot];
         slots.replace(following);

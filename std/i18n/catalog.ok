@@ -326,7 +326,8 @@ object MessageCatalog does Translating {
     plural(key is MessageKey, count is PluralNumber) is string {
         let entry = self.entry(key);
         let forms = entry.forms();
-        let category = PluralCategoryOf(origin: count, locale: locale, kind: entry.kind()).category();
+        let category = PluralCategoryOf(origin: count, locale: locale, kind: entry.kind())
+            .category();
         for (0..forms.size()) -> index {
             let form = forms.item(index);
             if form::Form::category == category {

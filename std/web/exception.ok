@@ -83,7 +83,10 @@ test "problems name status, title and detail" {
         Exception.status(404, "user 7 not found").text(),
         "Exception.status(404, \"user 7 not found\")"
     );
-    test.is(ProblemReply(status: Status.not_found, detail: "user 7 not found").title(), "Not Found");
+    test.is(
+        ProblemReply(status: Status.not_found, detail: "user 7 not found").title(),
+        "Not Found"
+    );
     test.is(ProblemReply(status: Status.other(599), detail: "x").title(), "HTTP 599");
     test.throws(InvalidReply) {
         ProblemReply(status: Status.found, detail: "x");

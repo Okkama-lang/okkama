@@ -368,13 +368,28 @@ test "section templates keep their errors: iterations, partials, depths, limits"
 
 test "section configuration rejects negatives before parsing" {
     test.throws(InvalidTemplateLimits) {
-        SectionTemplate(source: "{{", maximum_iterations: -1, maximum_output: 0, maximum_members: 0);
+        SectionTemplate(
+            source: "{{",
+            maximum_iterations: -1,
+            maximum_output: 0,
+            maximum_members: 0
+        );
     };
     test.throws(InvalidTemplateLimits) {
-        SectionTemplate(source: "{{", maximum_iterations: 0, maximum_output: -1, maximum_members: 0);
+        SectionTemplate(
+            source: "{{",
+            maximum_iterations: 0,
+            maximum_output: -1,
+            maximum_members: 0
+        );
     };
     test.throws(InvalidTemplateLimits) {
-        SectionTemplate(source: "{{", maximum_iterations: 0, maximum_output: 0, maximum_members: -1);
+        SectionTemplate(
+            source: "{{",
+            maximum_iterations: 0,
+            maximum_output: 0,
+            maximum_members: -1
+        );
     };
 }
 

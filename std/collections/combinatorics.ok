@@ -616,8 +616,8 @@ hidden object PermutationPositions {
             if !self.taken(prefix, candidate)
                 && candidate != selected
                 && rank == offset {
-                    return candidate;
-                }
+                return candidate;
+            }
         }
         -1
     }

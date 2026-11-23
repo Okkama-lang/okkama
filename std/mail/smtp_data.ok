@@ -111,7 +111,11 @@ hidden object SmtpDataValue {
     has size is int;
     has mode is SmtpBodyMode;
 
-    SmtpDataValue(origin is MailMessage, capabilities is SmtpCapabilities, limits is SmtpDataLimits) {
+    SmtpDataValue(
+        origin is MailMessage,
+        capabilities is SmtpCapabilities,
+        limits is SmtpDataLimits
+    ) {
         let encoding = MimeMetadata(origin.headers()).encoding();
         confirm encoding != TransferEncoding.binary
             else throw InvalidSmtpData.located(0, "binary MIME requires BDAT, not DATA");
@@ -130,7 +134,8 @@ hidden object SmtpDataValue {
             body_bytes: maximum
         );
         let rendered = try {
-            DeliveredMail(MailMessage(headers: origin.headers(), body: origin.body(), limits: mime)).bytes();
+            DeliveredMail(MailMessage(headers: origin.headers(), body: origin.body(), limits: mime))
+                .bytes();
         }
         catch failure is MimeLimitFailure {
             match failure {
@@ -147,17 +152,17 @@ hidden object SmtpDataValue {
             && rendered[rendered.size() - 1].int() == 10;
         let content is @byte = if !terminated
             && encoding == TransferEncoding.base64 {
-                if rendered.size() > maximum - 2 {
-                    if maximum < original::Limits::body_bytes {
-                        throw SmtpLimitExceeded.kind("message_bytes");
-                    }
-                    throw MimeLimitFailure.kind("body_bytes");
+            if rendered.size() > maximum - 2 {
+                if maximum < original::Limits::body_bytes {
+                    throw SmtpLimitExceeded.kind("message_bytes");
                 }
-                rendered + [13.byte(), 10.byte()];
+                throw MimeLimitFailure.kind("body_bytes");
             }
-            else {
-                rendered;
-            };
+            rendered + [13.byte(), 10.byte()];
+        }
+        else {
+            rendered;
+        };
         let declared = SmtpDataMime(mime).requires_eight_bit(
             ParsedMime(origin: content, limits: mime).node()
         );
@@ -331,11 +336,13 @@ test "SMTP DATA terminates base64 and enforces declared transport encoding" {
         Utf8Decoded(PreparedSmtpData(message, capabilities).bytes()).string(),
         text + "\r\n.\r\n"
     );
-    let eight = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: 8bit\r\n\r\na\r\n").bytes()).message();
+    let eight = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: 8bit\r\n\r\na\r\n").bytes())
+        .message();
     test.throws(MissingSmtpExtension) {
         PreparedSmtpData(eight, capabilities);
     };
-    let binary = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: binary\r\n\r\na\r\n").bytes()).message();
+    let binary = ParsedMail(Utf8Encoded("Content-Transfer-Encoding: binary\r\n\r\na\r\n").bytes())
+        .message();
     test.throws(InvalidSmtpData) {
         PreparedSmtpData(binary, capabilities);
     };

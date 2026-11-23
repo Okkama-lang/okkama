@@ -70,12 +70,12 @@ object ParsedPlist {
                 byte(115),
                 byte(116)
             ] {
-                return PlistBinaryDocument(
-                    origin: origin,
-                    maximum_nodes: maximum_nodes,
-                    maximum_depth: maximum_depth
-                ).root();
-            }
+            return PlistBinaryDocument(
+                origin: origin,
+                maximum_nodes: maximum_nodes,
+                maximum_depth: maximum_depth
+            ).root();
+        }
         let bom = origin.size() >= 3 && origin.slice(0, 3) == [byte(239), byte(187), byte(191)];
         let base = if bom {
             3;
@@ -264,8 +264,10 @@ object PlistXmlSource {
         }
         if body.starts_with("!") {
             let compact = PlistXmlText(body).compact();
-            confirm compact == "!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
-                || compact == "!DOCTYPE plist SYSTEM \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
+            confirm compact ==
+                "!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
+                || compact ==
+                "!DOCTYPE plist SYSTEM \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
                 else throw self.failure(at, "unsupported DTD or declaration");
             return PlistXmlToken(kind: "doctype", text: "", start: at, end: end + 1);
         }
@@ -291,7 +293,8 @@ object PlistXmlSource {
             })
         )).stripped();
         let normalized = PlistXmlText(name).compact();
-        let plain = if normalized == "plist version=\"1.0\"" || normalized == "plist version='1.0'" {
+        let plain = if normalized == "plist version=\"1.0\""
+            || normalized == "plist version='1.0'" {
             "plist";
         }
         else {
@@ -323,11 +326,11 @@ object PlistXmlSource {
             let token = self.token(cursor.at());
             if token.kind() == "skip"
                 || (token.kind() == "text" && PlistXmlText(token.text()).stripped() == "") {
-                    cursor = cursor.following(token.end(), 0);
-                }
-                else {
-                    return token;
-                }
+                cursor = cursor.following(token.end(), 0);
+            }
+            else {
+                return token;
+            }
         }
     }
 
@@ -365,11 +368,11 @@ object PlistXmlSource {
                 let count = if char == "\r"
                     && index + 1 < text.length()
                     && text.slice(index + 1, index + 2) == "\n" {
-                        2;
-                    }
-                    else {
-                        1;
-                    };
+                    2;
+                }
+                else {
+                    1;
+                };
                 cursor = cursor.following(index + count, 0);
             }
             else {
@@ -412,13 +415,19 @@ object PlistXmlSource {
                             "0123456789";
                         };
                         let scalar = (start..entity.length()).reduce(0) -> value, position {
-                            let digit = entity.slice(position, position + 1).replace("A", "a").replace(
-                                "B",
-                                "b"
-                            ).replace("C", "c").replace("D", "d").replace("E", "e").replace(
-                                "F",
-                                "f"
-                            );
+                            let digit = entity.slice(position, position + 1)
+                                .replace("A", "a")
+                                .replace(
+                                    "B",
+                                    "b"
+                                )
+                                .replace("C", "c")
+                                .replace("D", "d")
+                                .replace("E", "e")
+                                .replace(
+                                    "F",
+                                    "f"
+                                );
                             let split = alphabet.split(digit);
                             confirm split.size() == 2 && value <= 1114111
                                 else throw self.failure(at + index, "invalid character reference");
@@ -427,7 +436,8 @@ object PlistXmlSource {
                         confirm PlistXmlCharacter(scalar).valid()
                             else throw self.failure(at + index, "invalid character reference");
                         Utf32Decoded(
-                            origin: IntegerBytes(scalar, 4, Signedness.unsigned, ByteOrder.big).bytes(),
+                            origin: IntegerBytes(scalar, 4, Signedness.unsigned, ByteOrder.big)
+                                .bytes(),
                             order: ByteOrder.big
                         ).string();
                     }
@@ -507,9 +517,13 @@ object PlistXmlText {
 
     // Without any whitespace, as base64 data is read.
     compact() is string {
-        let words = origin.replace("\r", " ").replace("\n", " ").replace("\t", " ").split(" ").filter() -> word {
-            word != "";
-        };
+        let words = origin.replace("\r", " ")
+            .replace("\n", " ")
+            .replace("\t", " ")
+            .split(" ")
+            .filter() -> word {
+                word != "";
+            };
         words.join(" ");
     }
 }
@@ -579,11 +593,11 @@ hidden object PlistXmlEvents {
         // The tokenizer's bounds are the plist's node and depth budgets.
         let reason = if error.starts_with("elements nested deeper")
             || error.starts_with("more than") {
-                "node or depth budget exceeded";
-            }
-            else {
-                error;
-            };
+            "node or depth budget exceeded";
+        }
+        else {
+            error;
+        };
         confirm error == "" else throw self.located(state.offset(), reason);
         let wrapper = self.significant(0);
         confirm wrapper < count
@@ -627,7 +641,9 @@ hidden object PlistXmlEvents {
                             else throw self.failure(item, "duplicate dictionary key");
                     }
                     let child = self.element(key.end(), depth + 1, remaining - cursor.used() - 2);
-                    members = members.following(PlistMember(name: key.text(), value: child.plist()));
+                    members = members.following(
+                        PlistMember(name: key.text(), value: child.plist())
+                    );
                     cursor = cursor.following(child.end(), child.nodes() + 1);
                 }
                 else {
@@ -825,11 +841,11 @@ hidden object PlistDecimalReal {
             let written = parts[1];
             let start = if written.length() > 0
                 && (written.starts_with("+") || written.starts_with("-")) {
-                    1;
-                }
-                else {
-                    0;
-                };
+                1;
+            }
+            else {
+                0;
+            };
             confirm written.length() > start
                 else throw InvalidPlist.located(0, "empty real exponent");
             (start..written.length()).reduce(0) -> value, index {
@@ -1080,7 +1096,12 @@ hidden object PlistBinaryDocument {
         }
     }
 
-    hidden read(index is int, depth is int, remaining is int, path is List<int>) is PlistParsedNode {
+    hidden read(
+        index is int,
+        depth is int,
+        remaining is int,
+        path is List<int>
+    ) is PlistParsedNode {
         let start = offsets[index];
         let end = self.limit(start);
         let marker = origin[start].int();

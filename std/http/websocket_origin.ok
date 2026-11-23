@@ -43,8 +43,8 @@ object SameOriginWebSockets does WebSocketAllowing {
             if parts::Parts::path != ""
                 || parts::Parts::query != Maybe<string>.none
                 || parts::Parts::fragment != Maybe<string>.none {
-                    return false;
-                }
+                return false;
+            }
             let left = WebSocketOriginCoordinates(parsed);
             let right = WebSocketOriginCoordinates(destination);
             left.scheme() == right.scheme()

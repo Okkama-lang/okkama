@@ -98,7 +98,10 @@ object MemorySessions does SessionStoring {
     has lifetime is Duration;
 
     // Sessions kept in memory for lifetime (7 days unless told).
-    MemorySessions(clock is Timing = SystemClock(), lifetime is Duration = Duration(seconds: (7 * 86400).rat())) {
+    MemorySessions(
+        clock is Timing = SystemClock(),
+        lifetime is Duration = Duration(seconds: (7 * 86400).rat())
+    ) {
         let none_yet is %string:%string:string = [:];
         entries = Atomic(none_yet);
         let no_expiry is %string:Instant = [:];
@@ -224,8 +227,8 @@ object Sessions {
                 left: Utf8Encoded(self.signed(id)).bytes(),
                 right: Utf8Encoded(given).bytes()
             ).matches() {
-                return Maybe<Session>.none;
-            }
+            return Maybe<Session>.none;
+        }
         let values = await store.values(id);
         match values {
             case Maybe.some(map) {
@@ -341,8 +344,8 @@ object CsrfProtection does Surrounding {
             || method == Method.head
             || method == Method.options
             || method == Method.trace {
-                return await inner(request);
-            }
+            return await inner(request);
+        }
         let found = await sessions.found(request);
         let expected = match found {
             case Maybe.some(session) {
@@ -425,7 +428,9 @@ hidden object SessionSite {
 
     async home(request is WebRequest) is Responding {
         let session = await sessions.session(request);
-        TextReply("hi " + session.text("user") + " " + (session.maybe("theme").text() else "light"));
+        TextReply(
+            "hi " + session.text("user") + " " + (session.maybe("theme").text() else "light")
+        );
     }
 
     async change(request is WebRequest) is Responding {
@@ -445,7 +450,12 @@ hidden object SessionDispatch {
         self.routes = routes;
     }
 
-    async result(method is Method, path is string, headers is Headers, body is string) is HandlingResult {
+    async result(
+        method is Method,
+        path is string,
+        headers is Headers,
+        body is string
+    ) is HandlingResult {
         let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(
             local: IpEndpoint(address: IpAddress("127.0.0.1"), port: 80),
             remote: IpEndpoint(address: IpAddress("127.0.0.1"), port: 50000)
@@ -481,7 +491,9 @@ async test "a session starts with a signed cookie, is found again and ends" {
     let login = (await table.result(Method.post, "/login", Headers(), "")).response();
     test.is(login::Head::status, Status.see_other);
     let set = login::Head::headers.text("Set-Cookie");
-    test.ok(set.starts_with("sid=") && set.contains("; HttpOnly") && set.contains("Max-Age=604800"));
+    test.ok(
+        set.starts_with("sid=") && set.contains("; HttpOnly") && set.contains("Max-Age=604800")
+    );
     let value = set.slice(4, set.find(";") else set.length());
     let token = login::Head::headers.text("X-Csrf");
     let cookie = Headers(Header(name: "Cookie", value: "sid=" + value));

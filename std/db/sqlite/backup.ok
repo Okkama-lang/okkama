@@ -17,7 +17,12 @@ import "time/clock" take SystemClock;
 // Something that can back itself up.
 role SqliteBackupMaking {
     // Copies to target, pages at a time, within timeout.
-    async backup(target is Path, pages is int, clock is Timing, timeout is Duration) is BackupReport;
+    async backup(
+        target is Path,
+        pages is int,
+        clock is Timing,
+        timeout is Duration
+    ) is BackupReport;
 }
 
 // A backup to run.
@@ -81,7 +86,12 @@ enum InvalidSqliteBackup is Error = (invalid);
 hidden object CountingBackup does SqliteBackupMaking {
     CountingBackup();
 
-    async backup(target is Path, pages is int, clock is Timing, timeout is Duration) is BackupReport {
+    async backup(
+        target is Path,
+        pages is int,
+        clock is Timing,
+        timeout is Duration
+    ) is BackupReport {
         BackupReport(copies: pages, total: 16);
     }
 }

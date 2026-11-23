@@ -234,9 +234,12 @@ test "repeating is endless, repeated is finite, cycled goes round" {
     let padding = Repeated(value: " ", count: 4);
     test.is(padding.size(), 4);
     test.is(padding.item(2), " ");
-    test.is(padding.map() -> value {
-        "[" + value + "]";
-    }.join(""), "[ ][ ][ ][ ]");
+    test.is(
+        padding.map() -> value {
+            "[" + value + "]";
+        }.join(""),
+        "[ ][ ][ ][ ]"
+    );
     test.is(
         try {
             Repeated(value: 1, count: 0).first();

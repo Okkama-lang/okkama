@@ -467,8 +467,8 @@ hidden object HtmlReader {
             if codes[at].code() == first
                 && codes[at + 1].code() == second
                 && (third == -1 || self.code(at + 2) == third) {
-                    return at;
-                }
+                return at;
+            }
         }
         size;
     }
@@ -753,20 +753,20 @@ hidden object HtmlReader {
                 at.replace(self.skip_space(at.value(), end));
                 if at.value() < end
                     && (codes[at.value()].code() == 34 || codes[at.value()].code() == 39) {
-                        let quote = codes[at.value()].code();
+                    let quote = codes[at.value()].code();
+                    at.replace(at.value() + 1);
+                    let begin = at.value();
+                    at.replace(self.value_end(at.value(), end, quote));
+                    value.replace(self.decoded(begin, at.value(), true));
+                    if at.value() < end {
                         at.replace(at.value() + 1);
-                        let begin = at.value();
-                        at.replace(self.value_end(at.value(), end, quote));
-                        value.replace(self.decoded(begin, at.value(), true));
-                        if at.value() < end {
-                            at.replace(at.value() + 1);
-                        }
                     }
-                    else {
-                        let begin = at.value();
-                        at.replace(self.value_end(at.value(), end, 0));
-                        value.replace(self.decoded(begin, at.value(), true));
-                    }
+                }
+                else {
+                    let begin = at.value();
+                    at.replace(self.value_end(at.value(), end, 0));
+                    value.replace(self.decoded(begin, at.value(), true));
+                }
             }
             attributes.replace(
                 attributes.value() + [
@@ -805,9 +805,9 @@ hidden object HtmlReader {
                 let base = Atomic(10);
                 if cursor.value() < end
                     && (codes[cursor.value()].code() == 120 || codes[cursor.value()].code() == 88) {
-                        base.replace(16);
-                        cursor.replace(cursor.value() + 1);
-                    }
+                    base.replace(16);
+                    cursor.replace(cursor.value() + 1);
+                }
                 let digits = cursor.value();
                 let number = Atomic(0);
                 loop {
@@ -863,8 +863,8 @@ hidden object HtmlReader {
                 if cursor.value() < end
                     && cursor.value() <= begin + 32
                     && codes[cursor.value()].code() == 59 {
-                        cursor.replace(cursor.value() + 1);
-                    }
+                    cursor.replace(cursor.value() + 1);
+                }
                 loop {
                     last if cursor.value() <= begin + 1;
                     let name = origin.slice(begin + 1, cursor.value());
@@ -875,10 +875,10 @@ hidden object HtmlReader {
                         && cursor.value() < end
                         && (self.alnum(codes[cursor.value()].code())
                         || codes[cursor.value()].code() == 61)) {
-                            value.replace(found);
-                            finish.replace(cursor.value());
-                            last;
-                        }
+                        value.replace(found);
+                        finish.replace(cursor.value());
+                        last;
+                    }
                     cursor.replace(cursor.value() - 1);
                 }
             }
@@ -917,11 +917,11 @@ hidden object EventLog does HandlingHtmlEvent {
         };
         seen.replace(@string(seen.value()..., "<" + event.name() + "[" + names.join(",") + "]" +
             if event.self_closing() {
-                "/>";
-            }
-            else {
-                ">";
-            }));
+            "/>";
+        }
+        else {
+            ">";
+        }));
     }
 
     handle(event is EndingHtmlTag) is void {
@@ -967,9 +967,10 @@ test "events come in source order, names lowercased, references decoded" {
 }
 
 test "script content stays raw; kinds tell the events apart" {
-    let kinds is @HtmlEventKind = HtmlEvents(origin: "<script>if (a < b) { x = '&amp;'; }</script>").map() -> event {
-        event.kind();
-    };
+    let kinds is @HtmlEventKind = HtmlEvents(origin: "<script>if (a < b) { x = '&amp;'; }</script>")
+        .map() -> event {
+            event.kind();
+        };
     test.is(kinds, [HtmlEventKind.start_tag, HtmlEventKind.text, HtmlEventKind.end_tag]);
     let log = EventLog();
     for HtmlEvents(origin: "<script>a < b &amp;</script>") -> event {
@@ -3269,7 +3270,9 @@ test "HTML Unicode spaces separate names but only ASCII names change case" {
 
 test "HTML references distinguish text and attribute ambiguity" {
     let log = EventLog();
-    for HtmlEvents("<p a='&notit; &amp= &copyx &copy;z &#65x'>&notit; &amp= &copyx &copy;z &#65x") -> e {
+    for HtmlEvents(
+        "<p a='&notit; &amp= &copyx &copy;z &#65x'>&notit; &amp= &copyx &copy;z &#65x"
+    ) -> e {
         e.dispatch(log);
     }
     test.is(log.events(), ["<p[a=&notit; &amp= &copyx ©z Ax]>", "text:¬it; &= ©x ©z Ax"]);
@@ -3344,7 +3347,9 @@ test "HTML malformed markup and empty instructions merge adjacent text" {
 
 test "HTML lexical declarations and ordinary title content" {
     let log = EventLog();
-    for HtmlEvents("<![CDATA[x&copy;]]><title>&amp;<b>x</b></title><textarea>&lt;</textarea>") -> e {
+    for HtmlEvents(
+        "<![CDATA[x&copy;]]><title>&amp;<b>x</b></title><textarea>&lt;</textarea>"
+    ) -> e {
         e.dispatch(log);
     }
     test.is(

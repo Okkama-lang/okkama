@@ -132,7 +132,12 @@ object Logger does Logging {
         }
     }
 
-    hidden failed(level is LogLevel, message is string, cause is Error, fields is @JsonField) is void {
+    hidden failed(
+        level is LogLevel,
+        message is string,
+        cause is Error,
+        fields is @JsonField
+    ) is void {
         if destination.enabled(name, level) {
             origin.log(level, message, LogFields(fields), cause);
         }
@@ -151,7 +156,10 @@ test "a logger writes its levels and leaves the rest unbuilt" {
     let records = kept.records();
     test.is(records.item(0)::Entry::message, "started");
     test.ok(records.item(0)::Entry::level == LogLevel.info);
-    test.is(records.item(1).context().fields().values().string(), "{\"ms\":900,\"path\":\"/cart\"}");
+    test.is(
+        records.item(1).context().fields().values().string(),
+        "{\"ms\":900,\"path\":\"/cart\"}"
+    );
     test.ok(records.item(2).has_cause());
     test.ok(records.item(2)::Entry::level == LogLevel.error);
     test.is(records.item(3).context().fields().values().string(), "{\"disk\":\"/var\"}");

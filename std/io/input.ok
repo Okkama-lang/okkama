@@ -96,7 +96,9 @@ object ByteInput {
         let searched = Atomic(0);
         loop {
             let at is int = position.value();
-            let found is int = ByteSearch(source: buffer.value(), pattern: terminator).from(at + searched.value());
+            let found is int = ByteSearch(source: buffer.value(), pattern: terminator).from(
+                at + searched.value()
+            );
             if found >= 0 {
                 confirm found - at <= limit else throw LineTooLong.after(limit);
                 position.replace(found + terminator.size());

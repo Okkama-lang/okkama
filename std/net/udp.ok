@@ -136,7 +136,11 @@ object UdpBinding {
         dual_stack is bool = false
     ) {
         local = IpEndpoint(address: address, port: port);
-        options = UdpOptions(address_reuse: address_reuse, broadcast: broadcast, dual_stack: dual_stack);
+        options = UdpOptions(
+            address_reuse: address_reuse,
+            broadcast: broadcast,
+            dual_stack: dual_stack
+        );
     }
 
     // Binds and gives the socket.
@@ -201,7 +205,11 @@ object UdpSocket {
         self.state = state;
         endpoint = try {
             let fields = network.local_endpoint(state);
-            IpEndpoint(address: IpAddress(fields[0]), port: Number(fields[1]).int(), zone: fields[2]);
+            IpEndpoint(
+                address: IpAddress(fields[0]),
+                port: Number(fields[1]).int(),
+                zone: fields[2]
+            );
         }
         catch failure is NativeFailure {
             network.close(state);
@@ -497,7 +505,11 @@ object UdpConnection {
 }
 
 test "datagram retains binary payload and sender" {
-    let packet = Datagram(source: IpEndpoint(IpAddress("192.0.2.7"), 5353), bytes: [byte(0), byte(255)], truncated: false);
+    let packet = Datagram(
+        source: IpEndpoint(IpAddress("192.0.2.7"), 5353),
+        bytes: [byte(0), byte(255)],
+        truncated: false
+    );
     test.is(packet.source().string(), "192.0.2.7:5353");
     test.is(packet.bytes(), [byte(0), byte(255)]);
     test.ok(!packet::Received::truncated);

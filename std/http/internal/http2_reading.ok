@@ -77,7 +77,8 @@ hidden object Http2FrameInput {
             }
             header.writing().write(chunk);
         }
-        let parsed = ParsedHttp2FrameHeader(origin: header.content().bytes(), maximum: maximum).header();
+        let parsed = ParsedHttp2FrameHeader(origin: header.content().bytes(), maximum: maximum)
+            .header();
         try {
             Http2HeaderRules(parsed).check();
         }

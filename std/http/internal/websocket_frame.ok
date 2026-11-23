@@ -193,7 +193,8 @@ object ParsedWebSocketFrameHeader {
             indicator;
         }
         else {
-            Binary(bytes: origin.slice(2, 2 + width), order: ByteOrder.big).int(Signedness.unsigned);
+            Binary(bytes: origin.slice(2, 2 + width), order: ByteOrder.big)
+                .int(Signedness.unsigned);
         };
         confirm (indicator != 126 || length >= 126) && (indicator != 127 || length >= 65536)
             else throw WebSocketFailure.because("nonminimal payload length");

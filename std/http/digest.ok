@@ -101,7 +101,8 @@ object DigestCredentials {
         let original = DigestHash(origin: a1, algorithm: challenge::Challenge::algorithm).string();
         let secret = if challenge.session() {
             DigestHash(
-                origin: DigestAscii(original + ":" + challenge::Challenge::nonce + ":" + cnonce).bytes(),
+                origin: DigestAscii(original + ":" + challenge::Challenge::nonce + ":" + cnonce)
+                    .bytes(),
                 algorithm: challenge::Challenge::algorithm
             ).string();
         }
@@ -114,7 +115,8 @@ object DigestCredentials {
         ).string();
         DigestHash(
             origin: DigestAscii(
-                secret + ":" + challenge::Challenge::nonce + ":" + count + ":" + cnonce + ":auth:" + a2
+                secret + ":" + challenge::Challenge::nonce + ":" + count + ":" + cnonce + ":auth:" +
+                    a2
             ).bytes(),
             algorithm: challenge::Challenge::algorithm
         ).string();
@@ -345,7 +347,8 @@ object DigestAuthorization does HttpAuthorizing {
         };
         let user = if challenge::Challenge::userhash {
             "username=" + DigestQuoted(
-                DigestHash(origin: self.identity(), algorithm: challenge::Challenge::algorithm).string()
+                DigestHash(origin: self.identity(), algorithm: challenge::Challenge::algorithm)
+                    .string()
             ).string();
         }
         else {
@@ -360,26 +363,28 @@ object DigestAuthorization does HttpAuthorizing {
                 "username=" + DigestQuoted(name).string();
             }
             else {
-                "username*=UTF-8''" + PercentEncoded(origin: name, component: UrlComponent.data).string();
+                "username*=UTF-8''" +
+                    PercentEncoded(origin: name, component: UrlComponent.data).string();
             }
         };
-        let value = "Digest " + user + ", realm=" + DigestQuoted(challenge::Challenge::realm).string() + ", nonce=" + DigestQuoted(
-            challenge::Challenge::nonce
-        ).string() +
-            ", uri=" + DigestQuoted(uri).string() + ", algorithm=" + challenge::Challenge::algorithm + ", response=" + DigestQuoted(
+        let value = "Digest " + user + ", realm=" +
+            DigestQuoted(challenge::Challenge::realm).string() + ", nonce=" + DigestQuoted(
+                challenge::Challenge::nonce
+            ).string() + ", uri=" + DigestQuoted(uri).string() + ", algorithm=" +
+            challenge::Challenge::algorithm + ", response=" + DigestQuoted(
                 response
             ).string() + ", qop=auth, nc=" + count + ", cnonce=" + DigestQuoted(cnonce).string() +
             if challenge::Challenge::opaque_present {
-                ", opaque=" + DigestQuoted(challenge::Challenge::opaque).string();
-            }
-            else {
-                "";
-            } + if challenge::Challenge::userhash {
-                ", userhash=true";
-            }
-            else {
-                "";
-            };
+            ", opaque=" + DigestQuoted(challenge::Challenge::opaque).string();
+        }
+        else {
+            "";
+        } + if challenge::Challenge::userhash {
+            ", userhash=true";
+        }
+        else {
+            "";
+        };
         Header(name: HeaderName("Authorization"), value: value);
     }
 
@@ -622,10 +627,10 @@ object DigestExchanging does Exchanging {
             if refreshing.size() == 1
                 && refreshing[0]::Challenge::stale
                 && refreshing[0]::Challenge::nonce != selected::Challenge::nonce {
-                    final_cleanup.close();
-                    let refreshed = await self.authorized(request, refreshing[0]);
-                    return self.result(request, refreshed);
-                }
+                final_cleanup.close();
+                let refreshed = await self.authorized(request, refreshing[0]);
+                return self.result(request, refreshed);
+            }
         }
         final.set();
         self.result(request, result);
@@ -634,7 +639,8 @@ object DigestExchanging does Exchanging {
     hidden eligible(result is ClientResponse, request is Request) is bool {
         result::Head::status == Status.unauthorized
             && result::Exchange::history.size() == 0
-            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string()
+            && result::Exchange::request::Head::target.url().string() ==
+            request::Head::target.url().string()
             && scope.matches(result::Exchange::request);
     }
 
@@ -662,7 +668,8 @@ object DigestExchanging does Exchanging {
         let cleanup = DigestResponseCleanup(origin: result::Exchange::response, retained: retained);
         defer cleanup.close();
         confirm result::Exchange::history.size() == 0
-            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string()
+            && result::Exchange::request::Head::target.url().string() ==
+            request::Head::target.url().string()
             else throw InvalidAuthentication.because("Digest requires a direct exchange");
         proof.verify(result::Head::headers);
         let source = result::Exchange::response;
@@ -688,13 +695,14 @@ object DigestExchanging does Exchanging {
 
     hidden result(request is Request, result is ClientResponse) is ClientResponse {
         if result::Exchange::history.size() == 0
-            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string() {
-                return ClientResponse(
-                    request: request,
-                    response: result::Exchange::response,
-                    details: result::Exchange::details
-                );
-            }
+            && result::Exchange::request::Head::target.url().string() ==
+            request::Head::target.url().string() {
+            return ClientResponse(
+                request: request,
+                response: result::Exchange::response,
+                details: result::Exchange::details
+            );
+        }
         result;
     }
 }

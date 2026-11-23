@@ -76,7 +76,8 @@ object IntervalRotating does Rotating {
 
     // The time and index.
     suffix(now is Instant, index is int) is string {
-        Rfc3339(origin: now, offset: zone.offset(now)).string().split(":").join("-") + "-" + index.string();
+        Rfc3339(origin: now, offset: zone.offset(now)).string().split(":").join("-") + "-" +
+            index.string();
     }
 }
 
@@ -391,7 +392,10 @@ test "a rotating file archives by generation and keeps the newest backups" {
     let listed is @string = DirectoryEntries(origin: scratch).map() -> entry {
         entry.path().string();
     };
-    test.is(listed, [path.string(), path.string() + ".archive.2.2", path.string() + ".archive.3.3"]);
+    test.is(
+        listed,
+        [path.string(), path.string() + ".archive.2.2", path.string() + ".archive.3.3"]
+    );
     test.is(File(path: path).text().content(), "gggggggg\n");
     test.is(
         File(path: Path(path.string() + ".archive.2.2")).text().content(),

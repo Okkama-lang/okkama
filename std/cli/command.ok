@@ -370,11 +370,11 @@ hidden object CliSyntaxValidation {
             if index > 0
                 && sorted[index - 1].key().order(sorted[index].key()) == Order.equal
                 && sorted[index - 1].item() < options.size() {
-                    old.earlier(sorted[index].item(), "incompatible declarations share a key");
-                }
-                else {
-                    old;
-                }
+                old.earlier(sorted[index].item(), "incompatible declarations share a key");
+            }
+            else {
+                old;
+            }
         };
         let alternatives is @CliFlagAlternative = (0..flags.size()).map() -> index {
             CliFlagAlternative(
@@ -388,14 +388,14 @@ hidden object CliSyntaxValidation {
             if index > 0
                 && ordered[index - 1].key().order(ordered[index].key()) == Order.equal
                 && ordered[index - 1].present() == ordered[index].present() {
-                    old.earlier(
-                        ordered[index].index(),
-                        "flag alternatives must declare distinct values"
-                    );
-                }
-                else {
-                    old;
-                }
+                old.earlier(
+                    ordered[index].index(),
+                    "flag alternatives must declare distinct values"
+                );
+            }
+            else {
+                old;
+            }
         };
         for (0..declarations) -> index {
             confirm index != lookup.duplicate_index()
@@ -431,7 +431,9 @@ hidden object CliSyntaxValidation {
             confirm !(repeated < index && (!required || repeated <= optional))
                 else throw InvalidCommandSyntax.because("repeated operand must be last");
             confirm !(required && optional < index)
-                else throw InvalidCommandSyntax.because("required operand follows optional operand");
+                else throw InvalidCommandSyntax.because(
+                    "required operand follows optional operand"
+                );
             CliOperandPrefix(
                 repeated: if repeated > index && operand::Spec::count == OperandCount.repeated {
                     index;
@@ -735,7 +737,8 @@ object CliCommand {
     // selected command. A bad argument throws CliFailure with its index.
     // Reading is pure and repeatable.
     invocation(arguments is Sequencing<string>) is Invocation {
-        CliParsing(origin: self, arguments: CliArgumentSnapshot(arguments: arguments).strings()).invocation();
+        CliParsing(origin: self, arguments: CliArgumentSnapshot(arguments: arguments).strings())
+            .invocation();
     }
 
     // The usage text of this command, wrapped to width columns.
@@ -756,7 +759,8 @@ hidden object CliTreeBudget {
         confirm remaining >= 0 || children.size() == 0
             else throw InvalidCommandSyntax.because("command tree exceeds 32 levels");
         count = children.reduce(0) -> used, child {
-            let added = 1 + CliTreeBudget(children: child.commands(), remaining: remaining - 1).size();
+            let added = 1 +
+                CliTreeBudget(children: child.commands(), remaining: remaining - 1).size();
             confirm added <= 4096 - used
                 else throw InvalidCommandSyntax.because("command tree exceeds 4096 nodes");
             used + added;
@@ -1306,16 +1310,16 @@ hidden object Usage {
             };
             "  " + names.join(", ") + " <" + option::Spec::value + ">" +
                 if option::Spec::repeated {
-                    "...";
-                }
-                else {
-                    "";
-                } + (if option::Spec::help == "" {
-                    "\n";
-                }
-                else {
-                    "\n    " + option::Spec::help + "\n";
-                });
+                "...";
+            }
+            else {
+                "";
+            } + (if option::Spec::help == "" {
+                "\n";
+            }
+            else {
+                "\n    " + option::Spec::help + "\n";
+            });
         };
         let values = values_lines.join("");
         let flags_lines is @string = origin.flags().map() -> flag {
@@ -1353,25 +1357,23 @@ hidden object Usage {
             });
         };
         let commands = commands_lines.join("");
-        let text = "Usage: " + program + options + operands + children + "\n" + origin::Spec::summary + "\n" +
-            if values + flags != "" {
-                "\nOptions:\n" + values + flags;
-            }
-            else {
-                "";
-            } +
-            if files != "" {
-                "\nOperands:\n" + files;
-            }
-            else {
-                "";
-            } +
-            if commands != "" {
-                "\nCommands:\n" + commands;
-            }
-            else {
-                "";
-            };
+        let text = "Usage: " + program + options + operands + children + "\n" +
+            origin::Spec::summary + "\n" + if values + flags != "" {
+            "\nOptions:\n" + values + flags;
+        }
+        else {
+            "";
+        } + if files != "" {
+            "\nOperands:\n" + files;
+        }
+        else {
+            "";
+        } + if commands != "" {
+            "\nCommands:\n" + commands;
+        }
+        else {
+            "";
+        };
         WrappedDisplay(origin: text, width: width).string();
     }
 }
@@ -1406,10 +1408,12 @@ hidden object ShellCompletion {
                         " -s " + FishCompletionLiteral(word.slice(1, 2)).string();
                     }
                     else {
-                        " -a " + FishCompletionLiteral(FishCompletionLiteral(word).string()).string();
+                        " -a " +
+                            FishCompletionLiteral(FishCompletionLiteral(word).string()).string();
                     }
                 };
-                "complete -c " + FishCompletionLiteral(program).string() + " -f" + declaration + "\n";
+                "complete -c " + FishCompletionLiteral(program).string() + " -f" + declaration +
+                    "\n";
             };
             if words.size() > 0 {
                 lines.join("");
@@ -1425,14 +1429,17 @@ hidden object ShellCompletion {
             let literals = quoted.join(" ");
             if shell == CompletionShell.bash {
                 let iteration = if words.size() > 0 {
-                    "  for candidate in " + literals + "; do\n    if [[ \"$candidate\" == \"$cur\"* ]]; then COMPREPLY+=(\"$candidate\"); fi\n  done\n";
+                    "  for candidate in " + literals +
+                        "; do\n    if [[ \"$candidate\" == \"$cur\"* ]]; then COMPREPLY+=(\"$candidate\"); fi\n  done\n";
                 }
                 else {
                     "";
                 };
-                function + "() {\n  local candidate cur=\"${COMP_WORDS[COMP_CWORD]}\"\n  COMPREPLY=()\n" + iteration + "}\ncomplete -F " + function + " -- " + CompletionLiteral(
-                    program
-                ).string() + "\n";
+                function +
+                    "() {\n  local candidate cur=\"${COMP_WORDS[COMP_CWORD]}\"\n  COMPREPLY=()\n" +
+                    iteration + "}\ncomplete -F " + function + " -- " + CompletionLiteral(
+                        program
+                    ).string() + "\n";
             }
             else {
                 let operation = if words.size() > 0 {
@@ -1441,9 +1448,10 @@ hidden object ShellCompletion {
                 else {
                     "  return 0\n";
                 };
-                function + "() {\n" + operation + "}\ncompdef " + function + " " + CompletionLiteral(
-                    program
-                ).string() + "\n";
+                function + "() {\n" + operation + "}\ncompdef " + function + " " +
+                    CompletionLiteral(
+                        program
+                    ).string() + "\n";
             }
         }
     }
@@ -1616,7 +1624,11 @@ test "a subcommand is the declared object; ancestor options stop at the child" {
 test "a branch command stops at its own flag, not at an option or a parent's flag" {
     let count = CliCommand(name: "count", operands: [Operand(name: "FILE")]);
     let show = CliCommand(name: "show", flags: [Flag(name: "help", short: "h")]);
-    let remote = CliCommand(name: "remote", flags: [Flag(name: "help", short: "h")], commands: [show]);
+    let remote = CliCommand(
+        name: "remote",
+        flags: [Flag(name: "help", short: "h")],
+        commands: [show]
+    );
     let tally = CliCommand(
         name: "tally",
         options: [Option(name: "config")],

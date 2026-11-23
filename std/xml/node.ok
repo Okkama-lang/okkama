@@ -180,7 +180,8 @@ object XmlAttribute {
 
     // `name="value"`, escaped.
     xml() is string {
-        once let pair = name.lexical() + "=\"" + EscapedXml(origin: value, attribute: true).string() + "\"";
+        once let pair = name.lexical() + "=\"" +
+            EscapedXml(origin: value, attribute: true).string() + "\"";
         pair;
     }
 }
@@ -228,13 +229,15 @@ object XmlElement does XmlNode {
 
     // The element as XML text.
     xml() is string {
-        once let text = XmlElementContent(name: name, attributes: attributes, children: children).xml();
+        once let text = XmlElementContent(name: name, attributes: attributes, children: children)
+            .xml();
         text;
     }
 
     // How deep it goes.
     depth() is int {
-        once let levels = XmlElementContent(name: name, attributes: attributes, children: children).depth();
+        once let levels = XmlElementContent(name: name, attributes: attributes, children: children)
+            .depth();
         levels;
     }
 
@@ -397,14 +400,14 @@ hidden object XmlElementContent {
             attribute: true
         ).string() + "\"" +
             (if name.prefix() == "" || name.prefix() == "xml" {
-                "";
-            }
-            else {
-                " xmlns:" + name.prefix() + "=\"" + EscapedXml(
-                    origin: name.namespace(),
-                    attribute: true
-                ).string() + "\"";
-            });
+            "";
+        }
+        else {
+            " xmlns:" + name.prefix() + "=\"" + EscapedXml(
+                origin: name.namespace(),
+                attribute: true
+            ).string() + "\"";
+        });
         let declarations is @string = (0..attributes.size()).map() -> index {
             let current = attributes[index].name();
             let previous = (0..index).reduce(false) -> seen, prior {
@@ -414,14 +417,14 @@ hidden object XmlElementContent {
                 || current.prefix() == "xml"
                 || current.prefix() == name.prefix()
                 || previous {
-                    "";
-                }
-                else {
-                    " xmlns:" + current.prefix() + "=\"" + EscapedXml(
-                        origin: current.namespace(),
-                        attribute: true
-                    ).string() + "\"";
-                }
+                "";
+            }
+            else {
+                " xmlns:" + current.prefix() + "=\"" + EscapedXml(
+                    origin: current.namespace(),
+                    attribute: true
+                ).string() + "\"";
+            }
         };
         let pairs is @string = attributes.map() -> attribute {
             " " + attribute.xml();
@@ -441,7 +444,8 @@ hidden object XmlElementContent {
         let attributes_length = pairs.reduce(0) -> length, text {
             length + text.length();
         };
-        let total = content_length + namespace.length() + declarations_length + attributes_length + name.lexical().length() * 2 + 5;
+        let total = content_length + namespace.length() + declarations_length + attributes_length +
+            name.lexical().length() * 2 + 5;
         confirm total <= 33554432
             else throw InvalidXml.located(0, "XML element exceeds 32 Mi scalars");
         let opening = "<" + name.lexical() + namespace + declarations.join("") + pairs.join("");

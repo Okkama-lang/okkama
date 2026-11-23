@@ -280,7 +280,12 @@ object StreamConnection does Closing {
     }
 
     // The server side of TLS over an accepted connection (#209).
-    upgrade_tls_server(versions is int, protocols is @string, certificates is @@byte, key is @byte) is tls.TlsState {
+    upgrade_tls_server(
+        versions is int,
+        protocols is @string,
+        certificates is @@byte,
+        key is @byte
+    ) is tls.TlsState {
         confirm !reader_busy.value() && writer_count.value() == 0 && !writer_closed.ready()
             else throw InvalidState.because("TLS requires drained TCP operations");
         tls.server(state, versions, protocols, certificates, key);
@@ -303,7 +308,12 @@ object TlsTcpOrigin {
     }
 
     // Starts a server session.
-    server(versions is int, protocols is @string, certificates is @@byte, key is @byte) is tls.TlsState {
+    server(
+        versions is int,
+        protocols is @string,
+        certificates is @@byte,
+        key is @byte
+    ) is tls.TlsState {
         input.tls_server(versions, protocols, certificates, key);
     }
 }
@@ -338,7 +348,12 @@ object StreamReading does AsyncReading, Closing {
     }
 
     // Starts a TLS server session on this connection; net/tls uses it.
-    tls_server(versions is int, protocols is @string, certificates is @@byte, key is @byte) is tls.TlsState {
+    tls_server(
+        versions is int,
+        protocols is @string,
+        certificates is @@byte,
+        key is @byte
+    ) is tls.TlsState {
         owner.upgrade_tls_server(versions, protocols, certificates, key);
     }
 }

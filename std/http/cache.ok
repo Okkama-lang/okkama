@@ -75,8 +75,8 @@ object Caching does Exchanging {
             };
             if peek.size() == 1
                 && CacheRequestFreshness(request: request, entry: peek[0]).usable(now) {
-                    return peek[0].response(request, now);
-                }
+                return peek[0].response(request, now);
+            }
         }
         let leases is @CacheAdmissionLease = if eligible {
             let booking = admissions.booking(request);
@@ -105,8 +105,8 @@ object Caching does Exchanging {
             if shared.size() == 1
                 && shared[0].revision() == cache.revision()
                 && shared[0].entry().matches(request) {
-                    return shared[0].entry().response(request, admitted_at);
-                }
+                return shared[0].entry().response(request, admitted_at);
+            }
         }
         let selected is @CachedHttpEntry = if eligible {
             try {
@@ -167,18 +167,18 @@ object Caching does Exchanging {
             let refreshed = validation[0].refreshed(result, timing);
             if CacheResponseSelection(refreshed.response()::Head::headers).allowed()
                 && refreshed.storable() {
-                    cache.conditional_store(refreshed, revision);
-                    CacheVerifiedPublication(
-                        cache: cache,
-                        request: request,
-                        entry: refreshed,
-                        revision: revision,
-                        leases: leases
-                    ).publish();
-                }
-                else {
-                    cache.invalidate(request);
-                }
+                cache.conditional_store(refreshed, revision);
+                CacheVerifiedPublication(
+                    cache: cache,
+                    request: request,
+                    entry: refreshed,
+                    revision: revision,
+                    leases: leases
+                ).publish();
+            }
+            else {
+                cache.invalidate(request);
+            }
             return refreshed.response(request, clock.monotonic_instant());
         }
 
@@ -188,8 +188,8 @@ object Caching does Exchanging {
             && request::Head::method != Method.options
             && request::Head::method != Method.trace
             && (class == StatusClass.successful || class == StatusClass.redirection) {
-                cache.invalidate(request);
-            }
+            cache.invalidate(request);
+        }
         let direct = result::Exchange::history.size() == 0
             && result::Exchange::request::Head::target.kind() == RequestTargetKind.absolute
             && result::Exchange::request::Head::target.string() == request::Head::target.string()
@@ -199,12 +199,12 @@ object Caching does Exchanging {
             && class != StatusClass.informational
             && class != StatusClass.server_error
             && cache.revision() == revision {
-                cache.invalidate(request);
-                cache.revision();
-            }
-            else {
-                revision;
-            };
+            cache.invalidate(request);
+            cache.revision();
+        }
+        else {
+            revision;
+        };
         let reported = if direct && validation.size() == 1 && validation[0].conditional() {
             ClientResponse(
                 request: request,
@@ -496,7 +496,11 @@ hidden object CacheReadSettlement {
     has group is FutureGroup<@byte>;
     has complete is Event;
 
-    CacheReadSettlement(reader is CacheBodyReading, group is FutureGroup<@byte>, complete is Event) {
+    CacheReadSettlement(
+        reader is CacheBodyReading,
+        group is FutureGroup<@byte>,
+        complete is Event
+    ) {
         self.reader = reader;
         self.group = group;
         self.complete = complete;
@@ -549,9 +553,10 @@ hidden object CacheVerifiedPublication {
         if stored.size() == 1
             && stored[0].bytes() == entry.bytes()
             && stored[0].response()::Head::headers == entry.response()::Head::headers
-            && stored[0].timing().finished().reading()::Span::seconds == entry.timing().finished().reading()::Span::seconds {
-                leases[0].publish(entry, revision);
-            }
+            && stored[0].timing().finished().reading()::Span::seconds ==
+            entry.timing().finished().reading()::Span::seconds {
+            leases[0].publish(entry, revision);
+        }
     }
 }
 

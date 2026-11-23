@@ -78,7 +78,12 @@ object OpenedReplyResponse {
     has given is Headers;
 
     // A response of status with fixed fields, body and headers.
-    OpenedReplyResponse(status is Status, fixed is @Header, body is BodyOpening, headers is Headers) {
+    OpenedReplyResponse(
+        status is Status,
+        fixed is @Header,
+        body is BodyOpening,
+        headers is Headers
+    ) {
         code = BodyStatus(status).status();
         self.fixed = fixed;
         self.body = body;
@@ -192,7 +197,8 @@ enum InvalidReply is Error = (because(reason is string));
 test "framing headers are owned by the reply" {
     let owned = Headers(Header(name: "Content-Length", value: "1"));
     test.throws(InvalidReply) {
-        ReplyResponse(status: Status.ok, media: "text/plain", content: [], headers: owned).response();
+        ReplyResponse(status: Status.ok, media: "text/plain", content: [], headers: owned)
+            .response();
     };
     let traced = Headers(
         Header(name: "X-Trace", value: "a"),

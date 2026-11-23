@@ -185,9 +185,11 @@ hidden object CacheFreshnessObservations {
             let expires = headers.values(HeaderName("Expires"));
             confirm expires.size() <= 1 else throw InvalidCacheMetadata.invalid;
             if expires.size() == 1 {
-                let difference = ParsedHttpDate(origin: expires.item(0), reference: received).instant().minus(
-                    observed
-                )::Span::seconds;
+                let difference = ParsedHttpDate(origin: expires.item(0), reference: received)
+                    .instant()
+                    .minus(
+                        observed
+                    )::Span::seconds;
                 if difference > 0.rat() {
                     difference;
                 }

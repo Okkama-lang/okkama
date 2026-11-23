@@ -225,11 +225,11 @@ hidden object GammaCandidate {
                 || distribution_log(uniform) <
                 0.5 * square +
                 adjusted * (1.0 - cube + distribution_log(cube)) {
-                    adjusted * cube;
-                }
-                else {
-                    self.sample();
-                }
+                adjusted * cube;
+            }
+            else {
+                self.sample();
+            }
         }
     }
 }
@@ -416,31 +416,31 @@ hidden object VonMisesCandidate {
         let uniform is float = random.float();
         if uniform < 1.0 - delta * delta
             || uniform <= (1.0 - delta) * distribution_exp(delta) {
-                let reciprocal is float = 1.0 / ratio;
-                let projected is float = (reciprocal + cosine) /
-                    (1.0 + reciprocal * cosine);
-                let bounded is float = if projected < -1.0 {
-                    -1.0;
-                }
-                else {
-                    if projected > 1.0 {
-                        1.0;
-                    }
-                    else {
-                        projected;
-                    }
-                };
-                let angle is float = distribution_acos(bounded);
-                if random.float() > 0.5 {
-                    distribution_angle(center + angle);
-                }
-                else {
-                    distribution_angle(center - angle);
-                }
+            let reciprocal is float = 1.0 / ratio;
+            let projected is float = (reciprocal + cosine) /
+                (1.0 + reciprocal * cosine);
+            let bounded is float = if projected < -1.0 {
+                -1.0;
             }
             else {
-                self.sample();
+                if projected > 1.0 {
+                    1.0;
+                }
+                else {
+                    projected;
+                }
+            };
+            let angle is float = distribution_acos(bounded);
+            if random.float() > 0.5 {
+                distribution_angle(center + angle);
             }
+            else {
+                distribution_angle(center - angle);
+            }
+        }
+        else {
+            self.sample();
+        }
     }
 }
 
@@ -780,7 +780,11 @@ test "seeded samples keep each distribution's shape" {
 
 test "choices honour weights and samples are distinct" {
     let random = PcgRandom(seed: 7);
-    let weighted = WeightedChoices(random: random, values: ["never", "always"], weights: [0.0, 1.0]);
+    let weighted = WeightedChoices(
+        random: random,
+        values: ["never", "always"],
+        weights: [0.0, 1.0]
+    );
     for (0..200) -> n {
         test.is(weighted.sample(), "always");
     }

@@ -112,12 +112,22 @@ object Http1HeadRead<T> {
 hidden object Http1RequestHeadDecoding {
     Http1RequestHeadDecoding();
 
-    decode(origin is string, tail is @byte, count is int, limits is Http1Limits) is Http1HeadRead<Http1RequestHead> {
+    decode(
+        origin is string,
+        tail is @byte,
+        count is int,
+        limits is Http1Limits
+    ) is Http1HeadRead<Http1RequestHead> {
         let head = ParsedHttp1RequestHead(origin: origin, limits: limits).head();
         Http1HeadRead(head: head, tail: tail, count: count);
     }
 
-    reading(origin is AsyncReading, prefix is @byte, limits is Http1Limits, chunk_bytes is int) is Future<Http1HeadRead<Http1RequestHead>> {
+    reading(
+        origin is AsyncReading,
+        prefix is @byte,
+        limits is Http1Limits,
+        chunk_bytes is int
+    ) is Future<Http1HeadRead<Http1RequestHead>> {
         let input is Http1HeadInput<Http1HeadRead<Http1RequestHead>> = Http1HeadInput(
             origin: origin,
             prefix: prefix,
@@ -132,12 +142,22 @@ hidden object Http1RequestHeadDecoding {
 hidden object Http1ResponseHeadDecoding {
     Http1ResponseHeadDecoding();
 
-    decode(origin is string, tail is @byte, count is int, limits is Http1Limits) is Http1HeadRead<Http1ResponseHead> {
+    decode(
+        origin is string,
+        tail is @byte,
+        count is int,
+        limits is Http1Limits
+    ) is Http1HeadRead<Http1ResponseHead> {
         let head = ParsedHttp1ResponseHead(origin: origin, limits: limits).head();
         Http1HeadRead(head: head, tail: tail, count: count);
     }
 
-    reading(origin is AsyncReading, prefix is @byte, limits is Http1Limits, chunk_bytes is int) is Future<Http1HeadRead<Http1ResponseHead>> {
+    reading(
+        origin is AsyncReading,
+        prefix is @byte,
+        limits is Http1Limits,
+        chunk_bytes is int
+    ) is Future<Http1HeadRead<Http1ResponseHead>> {
         let input is Http1HeadInput<Http1HeadRead<Http1ResponseHead>> = Http1HeadInput(
             origin: origin,
             prefix: prefix,

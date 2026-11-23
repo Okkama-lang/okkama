@@ -82,7 +82,11 @@ object Http1ResponseWriting {
 hidden object Http1MessageOutput {
     Http1MessageOutput();
 
-    request(origin is AsyncWriting, request is Request, limits is Http1Limits) is Future<AsyncWriting> {
+    request(
+        origin is AsyncWriting,
+        request is Request,
+        limits is Http1Limits
+    ) is Future<AsyncWriting> {
         let head = Http1RequestHead(
             method: request::Head::method,
             target: request::Head::target,

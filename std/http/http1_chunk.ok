@@ -42,15 +42,16 @@ object ParsedHttp1ChunkLine {
         };
         confirm state == 1 || state == 4 || state == 7 || state == 10
             else throw InvalidHttpMessage.because("invalid chunk size or extension syntax");
-        let end = [origin.find(";"), origin.find(" "), origin.find("\t")].reduce(origin.length()) -> first, found {
-            let at = found else origin.length();
-            if at < first {
-                at;
-            }
-            else {
-                first;
-            }
-        };
+        let end = [origin.find(";"), origin.find(" "), origin.find("\t")]
+            .reduce(origin.length()) -> first, found {
+                let at = found else origin.length();
+                if at < first {
+                    at;
+                }
+                else {
+                    first;
+                }
+            };
         let hex = origin.slice(0, end);
         confirm hex.length() <= 16 else throw Http1LimitExceeded.kind("chunk_digits");
         // The size stops growing past the limit, so it never overflows.
@@ -157,8 +158,8 @@ object ParsedHttp1ChunkLine {
                 || (code >= 35 && code <= 91)
                 || (code >= 93 && code <= 126)
                 || code >= 128 {
-                    return 8;
-                }
+                return 8;
+            }
             return -1;
         }
         if state == 9 {
@@ -242,9 +243,10 @@ object ParsedHttp1Trailers {
         let lines = origin.split("\r\n");
         confirm lines.size() - 2 <= limits::Limits::fields
             else throw Http1LimitExceeded.kind("fields");
-        let names = Http1FramingFields(origin: head, version: HttpVersion.http_1_1, limits: limits).list(
-            "Connection"
-        );
+        let names = Http1FramingFields(origin: head, version: HttpVersion.http_1_1, limits: limits)
+            .list(
+                "Connection"
+            );
         let nominated is @string = names.map() -> value {
             try {
                 HeaderName(value).lowercase();

@@ -156,7 +156,10 @@ hidden object PemBlockCursor does Cursor<PemBlock> {
 enum InvalidPem is Error = (at(offset is int));
 
 test "PEM snapshot cursors keep independent ordered branches" {
-    let text = PemEncoded(kind: "ONE", data: [65.byte()]).string() + PemEncoded(kind: "TWO", data: [66.byte()]).string();
+    let text = PemEncoded(kind: "ONE", data: [65.byte()]).string() + PemEncoded(
+        kind: "TWO",
+        data: [66.byte()]
+    ).string();
     let first = PemBlocks(text).cursor();
     let second = first.successor();
     test.is(first.item().kind(), "ONE");
@@ -166,7 +169,9 @@ test "PEM snapshot cursors keep independent ordered branches" {
 }
 
 test "one block answers kind and bytes alike, and refuses both when invalid" {
-    let block = PemBlock(origin: PemEncoded(kind: "TEST DATA", data: [1.byte(), 2.byte()]).string());
+    let block = PemBlock(
+        origin: PemEncoded(kind: "TEST DATA", data: [1.byte(), 2.byte()]).string()
+    );
     test.is(block.kind(), "TEST DATA");
     test.is(block.bytes(), [1.byte(), 2.byte()]);
     test.is(block.kind(), "TEST DATA");

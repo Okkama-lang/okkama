@@ -381,7 +381,8 @@ async test "a body is compressed and decompressed as Brotli while it is read" {
         reading.close();
         test.ok(packed.value().size() * 10 < plain.size());
         test.is(BrotliDecompressed(origin: packed.value(), limit: plain.size()).bytes(), plain);
-        let decoded = BrotliDecodedBody(origin: ByteBody(packed.value()), limit: plain.size()).reading();
+        let decoded = BrotliDecodedBody(origin: ByteBody(packed.value()), limit: plain.size())
+            .reading();
         let unpacked = Atomic(empty);
         loop {
             let chunk = await decoded.bytes(4096);

@@ -115,7 +115,7 @@ test "dotted paths read scalars of a Json" {
     test.is(
         strings.string("name") + "|" + strings.string("vip") + "|" + strings.string("none") + "|" +
             strings.string("total") + "|" + strings.string("address.city"),
-            "Ada|true||12.5|Oslo"
+        "Ada|true||12.5|Oslo"
     );
     test.is(
         try {

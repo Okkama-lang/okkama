@@ -11,7 +11,12 @@ native object TlsState;
 
 // A TLS client on origin, with allowed versions, ALPN protocols and the server
 // name for SNI.
-native client(origin is SocketState, versions is int, protocols is @string, server is string) is TlsState;
+native client(
+    origin is SocketState,
+    versions is int,
+    protocols is @string,
+    server is string
+) is TlsState;
 
 // A TLS server over an accepted connection (#209): the certificate chain (DER,
 // the server's own first) and its PKCS #8 private key (DER); no client
@@ -35,7 +40,13 @@ native async handshake(origin is TlsState) is bool;
 
 // Verifies the peer's chain against roots for the DNS or IP identity host at a
 // time.
-native authorize(origin is TlsState, roots is @@byte, kind is string, host is string, at is string) is bool;
+native authorize(
+    origin is TlsState,
+    roots is @@byte,
+    kind is string,
+    host is string,
+    at is string
+) is bool;
 
 // At most limit bytes; [] at the end.
 native async read(origin is TlsState, limit is int) is @byte;

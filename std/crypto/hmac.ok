@@ -57,17 +57,29 @@ object Hmac does Digesting {
 
     // An empty HMAC with key.
     Hmac(hash is HmacHash, key is SecretBytes) {
-        digest = HostDigest(algorithm: HmacAlgorithm(hash).name(), key: key.export_bytes(), width: 0);
+        digest = HostDigest(
+            algorithm: HmacAlgorithm(hash).name(),
+            key: key.export_bytes(),
+            width: 0
+        );
     }
 
     // The HMAC of these bytes.
     Hmac(hash is HmacHash, key is SecretBytes, origin is @byte) {
-        digest = HostDigest(algorithm: HmacAlgorithm(hash).name(), key: key.export_bytes(), width: 0).appended(origin);
+        digest = HostDigest(
+            algorithm: HmacAlgorithm(hash).name(),
+            key: key.export_bytes(),
+            width: 0
+        ).appended(origin);
     }
 
     // Text, as UTF-8.
     Hmac(hash is HmacHash, key is SecretBytes, text is string) {
-        digest = HostDigest(algorithm: HmacAlgorithm(hash).name(), key: key.export_bytes(), width: 0).appended(Utf8Encoded(text).bytes());
+        digest = HostDigest(
+            algorithm: HmacAlgorithm(hash).name(),
+            key: key.export_bytes(),
+            width: 0
+        ).appended(Utf8Encoded(text).bytes());
     }
 
     // The tag.
@@ -145,11 +157,18 @@ test "HMAC matches RFC 4231 test case 2" {
 test "HMAC successors and constant-time matching" {
     let key = SecretBytes([1.byte(), 2.byte(), 3.byte()]);
     let whole = Hmac(hash: HmacHash.sha3_256, key: key, origin: [1.byte(), 2.byte()]);
-    test.is(Hmac(hash: HmacHash.sha3_256, key: key).state([1.byte()]).state([2.byte()]).bytes(), whole.bytes());
+    test.is(
+        Hmac(hash: HmacHash.sha3_256, key: key).state([1.byte()]).state([2.byte()]).bytes(),
+        whole.bytes()
+    );
     test.ok(whole.matches(whole.bytes()));
     test.ok(
         !whole.matches(
-            Hmac(hash: HmacHash.sha3_256, key: SecretBytes([9.byte()]), origin: [1.byte(), 2.byte()]).bytes()
+            Hmac(
+                hash: HmacHash.sha3_256,
+                key: SecretBytes([9.byte()]),
+                origin: [1.byte(), 2.byte()]
+            ).bytes()
         )
     );
     test.ok(!whole.matches([]));

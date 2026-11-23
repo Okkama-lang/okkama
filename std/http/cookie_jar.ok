@@ -56,7 +56,9 @@ object CookieLimits {
     // The limits as given.
     CookieLimits(total is int, per_domain is int) {
         confirm total >= 1 && total <= 10000 && per_domain >= 1 && per_domain <= total
-            else throw InvalidCookie.because("jar limits require 1 <= per-domain <= total <= 10000");
+            else throw InvalidCookie.because(
+                "jar limits require 1 <= per-domain <= total <= 10000"
+            );
         self.total = total;
         self.per_domain = per_domain;
     }
@@ -327,7 +329,8 @@ hidden object CookieRecord does Comparing<CookieRecord> {
         cookie.name() == other.cookie().name()
             && domain == other.domain()
             && host_only == other.host_only()
-            && cookie.attributes()::Attributes::path == other.cookie().attributes()::Attributes::path
+            && cookie.attributes()::Attributes::path ==
+            other.cookie().attributes()::Attributes::path
             && partition == other.partition();
     }
 
@@ -358,8 +361,8 @@ hidden object CookieRecord does Comparing<CookieRecord> {
                 cookie: cookie.attributes()::Attributes::path,
                 request: endpoint::Origin::path
             ).matches() {
-                return false;
-            }
+            return false;
+        }
         let site = cookie.attributes()::Attributes::same_site;
         endpoint::Origin::site == context::Context::key
             || site == SameSite.cross_site
@@ -434,7 +437,12 @@ hidden object CookieJarUpdate {
         self.limits = limits;
     }
 
-    following(cookie is Cookie, endpoint is CookieOrigin, context is CookieContext, now is Instant) is ^CookieJarUpdate {
+    following(
+        cookie is Cookie,
+        endpoint is CookieOrigin,
+        context is CookieContext,
+        now is Instant
+    ) is ^CookieJarUpdate {
         let policy = cookie.attributes()::Attributes::same_site;
         let allowed = policy == SameSite.cross_site
             || endpoint::Origin::site == context::Context::key
@@ -476,7 +484,8 @@ hidden object CookieJarUpdate {
             else {
                 kept + [revised];
             };
-            ^records = CookieJarBounded(records: added, limits: limits, domain: proposed.domain()).records();
+            ^records = CookieJarBounded(records: added, limits: limits, domain: proposed.domain())
+                .records();
             ^counter = index;
         }
     }
@@ -598,7 +607,9 @@ object SavedCookieJar {
     // Replaces the file atomically and durably (File.replace), then gives it;
     // a new file is owner-only.
     file() is FileEntry {
-        File(path: destination.path()).binary().replace(AsciiEncoded(origin.persisted_text()).bytes());
+        File(path: destination.path()).binary().replace(
+            AsciiEncoded(origin.persisted_text()).bytes()
+        );
         destination;
     }
 }
@@ -810,7 +821,8 @@ hidden object ParsedCookieStore {
         );
         for (0..revisions.size()) -> index {
             if index > 0 {
-                confirm revisions.item(index - 1).creation_order() != revisions.item(index).creation_order()
+                confirm revisions.item(index - 1).creation_order() !=
+                    revisions.item(index).creation_order()
                     else throw InvalidCookieStore.because("duplicate creation order");
             }
         }
@@ -933,19 +945,20 @@ hidden object ParsedCookieStoreRow {
                 throw InvalidCookieStore.because("SameSite field");
             }
         };
-        let flags is @CookieFlag = [CookieFlag.secure, CookieFlag.http_only, CookieFlag.partitioned].filter() -> flag {
-            match flag {
-                case CookieFlag.secure {
-                    CookieStoreBoolean(fields[7]).bool();
+        let flags is @CookieFlag = [CookieFlag.secure, CookieFlag.http_only, CookieFlag.partitioned]
+            .filter() -> flag {
+                match flag {
+                    case CookieFlag.secure {
+                        CookieStoreBoolean(fields[7]).bool();
+                    }
+                    case CookieFlag.http_only {
+                        CookieStoreBoolean(fields[8]).bool();
+                    }
+                    case CookieFlag.partitioned {
+                        partitioned;
+                    }
                 }
-                case CookieFlag.http_only {
-                    CookieStoreBoolean(fields[8]).bool();
-                }
-                case CookieFlag.partitioned {
-                    partitioned;
-                }
-            }
-        };
+            };
         let selected is Set<CookieFlag> = OrderedSet(flags);
         let expiry = CookieStoreNumber(fields[10]).instant();
         let created = CookieStoreNumber(fields[11]).instant();

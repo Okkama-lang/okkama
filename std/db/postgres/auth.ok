@@ -149,11 +149,13 @@ hidden object ScramKeys {
     }
 
     client() is @byte {
-        Hmac(hash: HmacHash.sha256, key: self.salted(), origin: Utf8Encoded("Client Key").bytes()).bytes();
+        Hmac(hash: HmacHash.sha256, key: self.salted(), origin: Utf8Encoded("Client Key").bytes())
+            .bytes();
     }
 
     server() is @byte {
-        Hmac(hash: HmacHash.sha256, key: self.salted(), origin: Utf8Encoded("Server Key").bytes()).bytes();
+        Hmac(hash: HmacHash.sha256, key: self.salted(), origin: Utf8Encoded("Server Key").bytes())
+            .bytes();
     }
 }
 

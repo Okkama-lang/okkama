@@ -69,7 +69,10 @@ object FormatProbe {
 
 test "values after the pattern turn into text" {
     test.is(Formatted("{} + {} = {}", 1, 2, 3).string(), "1 + 2 = 3");
-    test.is(Formatted("{} is {}, {} and {}", FormatProbe(), true, 1.5, 'x').string(), "probe is true, 1.5 and x");
+    test.is(
+        Formatted("{} is {}, {} and {}", FormatProbe(), true, 1.5, 'x').string(),
+        "probe is true, 1.5 and x"
+    );
     test.is(Formatted("plain").string(), "plain");
     test.is(Formatted("{}/{}", 3 / 4, "s").string(), "3/4/s");
 }

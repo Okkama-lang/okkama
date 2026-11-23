@@ -75,7 +75,10 @@ object TemplateBindings does TemplateStrings {
         let names = texts.keys();
         let values = texts.values();
         let listed is @TemplateBinding = (0..names.size()).map() -> index {
-            TemplateBinding(path: TemplatePathFromString(names[index]).path(), value: values[index]);
+            TemplateBinding(
+                path: TemplatePathFromString(names[index]).path(),
+                value: values[index]
+            );
         };
         origin = TemplateBindingSnapshot(source: listed, maximum: 1024).items();
     }

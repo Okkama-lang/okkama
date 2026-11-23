@@ -419,7 +419,9 @@ object StaticFiles does Handling {
                 headers: Headers(Header(name: HeaderName("Vary"), value: "Accept-Encoding"))
             );
         }
-        catch FileError.not_found(_), FileError.invalid_operation(_), FileError.permission_denied(_), FileError.invalid_text(
+        catch FileError.not_found(
+            _
+        ), FileError.invalid_operation(_), FileError.permission_denied(_), FileError.invalid_text(
             _
         ) {
             Response(status: Status.not_found);
@@ -647,7 +649,9 @@ object StaticFiles does Handling {
                 for ranges -> part {
                     pieces = pieces.following(
                         StaticPiece(
-                            "--" + boundary + "\r\nContent-Type: " + type + "\r\nContent-Range: bytes " + part.string() + "/" + size.string() + "\r\n\r\n"
+                            "--" + boundary + "\r\nContent-Type: " + type +
+                                "\r\nContent-Range: bytes " + part.string() + "/" + size.string() +
+                                "\r\n\r\n"
                         )
                     );
                     pieces = pieces.following(
@@ -770,9 +774,10 @@ object StaticFiles does Handling {
                 let candidate = candidates[0];
                 let metadata = candidate.stat();
                 if metadata::Shape::kind == FileKind.file
-                    && metadata.times().modification().order(facts.times().modification()) == Order.equal {
-                        return [StaticRepresentation(entry: candidate, coding: coding)];
-                    }
+                    && metadata.times().modification().order(facts.times().modification()) ==
+                    Order.equal {
+                    return [StaticRepresentation(entry: candidate, coding: coding)];
+                }
                 candidate.close();
             }
             let empty is @StaticRepresentation = [];
@@ -794,9 +799,10 @@ object StaticFiles does Handling {
         let used = Atomic(text.value().length());
         for names -> name {
             let href = PercentEncoded(origin: name, component: UrlComponent.data).string();
-            let row = "<li><a href=\"./" + EscapedHtml(origin: href, quotes: true).string() + "\">" + EscapedHtml(
-                name
-            ).string() + "</a></li>";
+            let row = "<li><a href=\"./" + EscapedHtml(origin: href, quotes: true).string() +
+                "\">" + EscapedHtml(
+                    name
+                ).string() + "</a></li>";
             let width = Utf8Encoded(row).bytes().size();
             confirm width <= 1048576 - used.value()
                 else throw InvalidStaticPolicy.because("listing byte budget");
@@ -955,7 +961,10 @@ hidden object StaticValidator {
     has tag is EntityTag;
 
     StaticValidator(facts is FileStat, coding is string) {
-        let value = facts.identity()::Identity::device.string() + "-" + facts.identity().inode().string() + "-" + facts::Shape::size.string() + "-" + facts.times().modification().unix_duration()::Span::seconds.int().string() + "-" + facts.times().change().unix_duration()::Span::seconds.int().string() + "-" + coding;
+        let value = facts.identity()::Identity::device.string() + "-" +
+            facts.identity().inode().string() + "-" + facts::Shape::size.string() + "-" +
+            facts.times().modification().unix_duration()::Span::seconds.int().string() + "-" +
+            facts.times().change().unix_duration()::Span::seconds.int().string() + "-" + coding;
         tag = EntityTag(value: value, weak: true);
     }
 

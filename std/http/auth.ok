@@ -122,19 +122,19 @@ object BearerAuthorization does HttpAuthorizing {
             let code = octets[index].int();
             correct
                 && if index >= padding {
-                    code == 61;
-                }
-                else {
-                    (code >= 65 && code <= 90)
-                        || (code >= 97 && code <= 122)
-                        || (code >= 48 && code <= 57)
-                        || code == 45
-                        || code == 46
-                        || code == 95
-                        || code == 126
-                        || code == 43
-                        || code == 47;
-                };
+                code == 61;
+            }
+            else {
+                (code >= 65 && code <= 90)
+                    || (code >= 97 && code <= 122)
+                    || (code >= 48 && code <= 57)
+                    || code == 45
+                    || code == 46
+                    || code == 95
+                    || code == 126
+                    || code == 43
+                    || code == 47;
+            };
         };
         confirm valid else throw InvalidAuthentication.because("bearer token syntax");
         Header(name: HeaderName("Authorization"), value: "Bearer " + AsciiDecoded(octets).string());
@@ -166,7 +166,11 @@ object BearerExchanging does Exchanging {
     has scoped is ScopedAuthorization;
 
     // Sends through origin, with authorization inside scope.
-    BearerExchanging(origin is Exchanging, scope is UrlParts, authorization is BearerAuthorization) {
+    BearerExchanging(
+        origin is Exchanging,
+        scope is UrlParts,
+        authorization is BearerAuthorization
+    ) {
         scoped = ScopedAuthorization(origin: origin, scope: scope, authorization: authorization);
     }
 
@@ -265,13 +269,14 @@ object ScopedAuthorization does Exchanging {
         );
         let result = await origin.response(outgoing);
         if result::Exchange::history.size() == 0
-            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string() {
-                return ClientResponse(
-                    request: request,
-                    response: result::Exchange::response,
-                    details: result::Exchange::details
-                );
-            }
+            && result::Exchange::request::Head::target.url().string() ==
+            request::Head::target.url().string() {
+            return ClientResponse(
+                request: request,
+                response: result::Exchange::response,
+                details: result::Exchange::details
+            );
+        }
         result;
     }
 }

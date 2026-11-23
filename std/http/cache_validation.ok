@@ -137,15 +137,17 @@ object CacheValidation {
         }
         let old = entry.response()::Exchange::response;
         if updated.membership(HeaderName("Content-Encoding")) {
-            confirm updated.values(HeaderName("Content-Encoding")).size() == old::Head::headers.values(
-                HeaderName("Content-Encoding")
-            ).size()
+            confirm updated.values(HeaderName("Content-Encoding")).size() ==
+                old::Head::headers.values(
+                    HeaderName("Content-Encoding")
+                ).size()
                 && updated.first(HeaderName("Content-Encoding")) == old::Head::headers.first(
                     HeaderName("Content-Encoding")
                 )
                 else throw InvalidCacheRevalidation.invalid;
         }
-        let fields = Cache304Fields(stored: old::Head::headers, updated: updated, timing: timing).headers();
+        let fields = Cache304Fields(stored: old::Head::headers, updated: updated, timing: timing)
+            .headers();
         let response = Response(
             status: old::Head::status,
             headers: fields,
@@ -195,7 +197,8 @@ hidden object Cache304Fields {
             dated;
         }
         else {
-            ReplacedHeader(origin: dated, entry: Header(name: HeaderName("Age"), value: "0")).headers();
+            ReplacedHeader(origin: dated, entry: Header(name: HeaderName("Age"), value: "0"))
+                .headers();
         };
     }
 
@@ -252,7 +255,8 @@ object CacheRequestFreshness {
             let required = !control.present("no-cache")
                 && !control.present("no-store")
                 && (!control.present("max-age") || age <= control.seconds("max-age").rat())
-                && (!control.present("min-fresh") || remaining >= control.seconds("min-fresh").rat());
+                && (!control.present("min-fresh")
+                || remaining >= control.seconds("min-fresh").rat());
             if !required {
                 false;
             }

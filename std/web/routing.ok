@@ -127,7 +127,12 @@ object Get does WebRouting {
 
     // Inside a Resource, which gives the path: Resource("/notes", Get(notes.list)).
     Get(endpoint is async (WebRequest) is Responding) {
-        origin = MethodRoute(method: Maybe.some(Method.get), path: "", endpoint: endpoint, name: "");
+        origin = MethodRoute(
+            method: Maybe.some(Method.get),
+            path: "",
+            endpoint: endpoint,
+            name: ""
+        );
     }
 
     // The routes it adds under prefix; WebRoutes calls this.
@@ -214,7 +219,12 @@ object Put does WebRouting {
 
     // Inside a Resource, which gives the path.
     Put(endpoint is async (WebRequest) is Responding) {
-        origin = MethodRoute(method: Maybe.some(Method.put), path: "", endpoint: endpoint, name: "");
+        origin = MethodRoute(
+            method: Maybe.some(Method.put),
+            path: "",
+            endpoint: endpoint,
+            name: ""
+        );
     }
 
     // The routes it adds under prefix; WebRoutes calls this.
@@ -344,7 +354,12 @@ object Route does WebRouting {
         endpoint is async (WebRequest) is Responding,
         name is string = ""
     ) {
-        origin = MethodRoute(method: Maybe.some(method), path: path, endpoint: endpoint, name: name);
+        origin = MethodRoute(
+            method: Maybe.some(method),
+            path: path,
+            endpoint: endpoint,
+            name: name
+        );
     }
 
     // Inside a Resource, which gives the path.
@@ -382,7 +397,12 @@ object Any does WebRouting {
 
     // Any method on path to endpoint.
     Any(path is string, endpoint is async (WebRequest) is Responding, name is string = "") {
-        origin = MethodRoute(method: Maybe<Method>.none, path: path, endpoint: endpoint, name: name);
+        origin = MethodRoute(
+            method: Maybe<Method>.none,
+            path: path,
+            endpoint: endpoint,
+            name: name
+        );
     }
 
     // Inside a Resource, which gives the path.
@@ -450,7 +470,8 @@ object Resource does WebRouting {
         for all -> route {
             confirm route.pattern().string() == full
                 else throw InvalidWebRoute.because(
-                    "a route in the resource " + full + " takes no path of its own: " + route.pattern().string()
+                    "a route in the resource " + full + " takes no path of its own: " +
+                        route.pattern().string()
                 );
         }
         all;
@@ -943,7 +964,10 @@ hidden object LinkScope does ExceptionScope {
         self.links = links;
     }
 
-    async scoped(request is WebRequest, endpoint is async (WebRequest) is Responding) is Responding {
+    async scoped(
+        request is WebRequest,
+        endpoint is async (WebRequest) is Responding
+    ) is Responding {
         await endpoint(
             WebRequest(request: request.request(), context: request.context(), links: links)
         );
@@ -983,7 +1007,10 @@ hidden object AroundScope does ExceptionScope {
         self.origin = origin;
     }
 
-    async scoped(request is WebRequest, endpoint is async (WebRequest) is Responding) is Responding {
+    async scoped(
+        request is WebRequest,
+        endpoint is async (WebRequest) is Responding
+    ) is Responding {
         await origin.around(request, ExceptionReplies(endpoint).answer);
     }
 }

@@ -25,7 +25,15 @@ import "encoding/utf" take Utf8Encoded;
 import "archive/metadata" take ArchiveMetadata, ArchiveModificationFromEpoch;
 
 // What an archive member is.
-enum ArchiveEntryKind = (file, directory, symbolic_link, hard_link, fifo, character_device, block_device);
+enum ArchiveEntryKind = (
+    file,
+    directory,
+    symbolic_link,
+    hard_link,
+    fifo,
+    character_device,
+    block_device
+);
 
 // A member of an archive: a name, a kind, metadata and a visitor callback.
 role ArchiveEntry {
@@ -48,7 +56,10 @@ role ArchiveEntry {
         }
 
         metadata() is ArchiveMetadata {
-            ArchiveMetadata(modified: ArchiveModificationFromEpoch(0.rat()).local_date_time(), comment: "");
+            ArchiveMetadata(
+                modified: ArchiveModificationFromEpoch(0.rat()).local_date_time(),
+                comment: ""
+            );
         }
 
         accept(to is ArchiveEntryVisitor) is void {
@@ -325,7 +336,11 @@ enum InvalidArchiveDevice is Error = (because(reason is string));
 
 test "archive entries preserve the role coordinates and file bytes" {
     let source = ArchiveEntry.fake();
-    let file = ArchiveFile(path: source.path(), metadata: source.metadata(), data: [byte(0), byte(255)]);
+    let file = ArchiveFile(
+        path: source.path(),
+        metadata: source.metadata(),
+        data: [byte(0), byte(255)]
+    );
     let directory = ArchiveDirectory(path: source.path(), metadata: source.metadata());
     test.is(file.kind(), ArchiveEntryKind.file);
     test.is(directory.kind(), ArchiveEntryKind.directory);
@@ -336,11 +351,22 @@ test "archive entries preserve the role coordinates and file bytes" {
 
 test "archive symbolic and hard links keep distinct kinds" {
     let source = ArchiveEntry.fake();
-    let symbolic = ArchiveSymbolicLink(path: source.path(), metadata: source.metadata(), target: source.path());
-    let hard = ArchiveHardLink(path: source.path(), metadata: source.metadata(), target: source.path());
+    let symbolic = ArchiveSymbolicLink(
+        path: source.path(),
+        metadata: source.metadata(),
+        target: source.path()
+    );
+    let hard = ArchiveHardLink(
+        path: source.path(),
+        metadata: source.metadata(),
+        target: source.path()
+    );
     test.ok(symbolic.kind() != hard.kind());
     test.is(symbolic.target(), hard.target());
-    test.is(ArchiveFifo(path: source.path(), metadata: source.metadata()).kind(), ArchiveEntryKind.fifo);
+    test.is(
+        ArchiveFifo(path: source.path(), metadata: source.metadata()).kind(),
+        ArchiveEntryKind.fifo
+    );
 }
 
 test "archive devices reject contradictory kind and negative numbers" {
@@ -355,14 +381,26 @@ test "archive devices reject contradictory kind and negative numbers" {
     test.is(device.major(), 0);
     test.is(device.minor(), 7);
     test.ok(try {
-        ArchiveDevice(path: source.path(), kind: ArchiveEntryKind.file, metadata: source.metadata(), major: 0, minor: 0);
+        ArchiveDevice(
+            path: source.path(),
+            kind: ArchiveEntryKind.file,
+            metadata: source.metadata(),
+            major: 0,
+            minor: 0
+        );
         false;
     }
     catch error is InvalidArchiveDevice {
         true;
     });
     test.ok(try {
-        ArchiveDevice(path: source.path(), kind: ArchiveEntryKind.character_device, metadata: source.metadata(), major: -1, minor: 0);
+        ArchiveDevice(
+            path: source.path(),
+            kind: ArchiveEntryKind.character_device,
+            metadata: source.metadata(),
+            major: -1,
+            minor: 0
+        );
         false;
     }
     catch error is InvalidArchiveDevice {
@@ -371,7 +409,10 @@ test "archive devices reject contradictory kind and negative numbers" {
 }
 
 test "a file entry takes text content" {
-    let stamp = ArchiveMetadata(modified: ArchiveModificationFromEpoch(0.rat()).local_date_time(), comment: "");
+    let stamp = ArchiveMetadata(
+        modified: ArchiveModificationFromEpoch(0.rat()).local_date_time(),
+        comment: ""
+    );
     let file = ArchiveFile(path: ArchivePath("a.txt"), metadata: stamp, text: "hé");
     test.is(file.data(), [104.byte(), 195.byte(), 169.byte()]);
 }

@@ -222,12 +222,12 @@ object Http1Session does Closing {
                 );
                 if plan::Plan::kind == Http1BodyKind.empty
                     || (plan::Plan::kind == Http1BodyKind.fixed && plan.length().sign() == 0) {
-                        let group is FutureGroup<@byte> = FutureGroup();
-                        lease.priming().replace([group]);
-                        let prime = reader.bytes(1);
-                        group.start(prime);
-                        await prime;
-                    }
+                    let group is FutureGroup<@byte> = FutureGroup();
+                    lease.priming().replace([group]);
+                    let prime = reader.bytes(1);
+                    group.start(prime);
+                    await prime;
+                }
                 published.set();
                 return result;
             }
@@ -522,7 +522,9 @@ hidden object Http1SessionReading does BodyReading {
         confirm !lease.aborted() else throw BodyClosed.closed;
         if bytes.size() == 0 {
             confirm origin.remainder().size() == 0
-                else throw InvalidHttpMessage.because("unsolicited bytes after HTTP1 response body");
+                else throw InvalidHttpMessage.because(
+                    "unsolicited bytes after HTTP1 response body"
+                );
             lease.finish(reusable);
             finished.set();
         }

@@ -30,7 +30,13 @@ native bytes_equal(source is @byte, start is int, end is int, other is @byte) is
 
 // Fixed-width integer of a non-empty range: two's complement when signed,
 // magnitude otherwise; big-endian when big. Fits: the value is a 64-bit int.
-native bytes_integer_fits(source is @byte, start is int, end is int, signed is bool, big is bool) is bool;
+native bytes_integer_fits(
+    source is @byte,
+    start is int,
+    end is int,
+    signed is bool,
+    big is bool
+) is bool;
 
 // The integer of source from start to end, signed or not, big- or
 // little-endian.

@@ -101,11 +101,12 @@ object MappedMediaTypes does MediaIdentifying {
     extensions(type is MediaType) is Sequencing<string> {
         let output = MediaAliases(maximum);
         for entries -> entry {
-            let index = MediaMatch(entries: entries, name: "x." + entry::Extension::extension).index();
+            let index = MediaMatch(entries: entries, name: "x." + entry::Extension::extension)
+                .index();
             if MediaTypeKey(entries[index].type()).string() == MediaTypeKey(type).string()
                 && !output.membership(entry::Extension::extension) {
-                    output = output.addition(entry::Extension::extension);
-                }
+                output = output.addition(entry::Extension::extension);
+            }
         }
         let other = fallback.extensions(type);
         let size = other.size();
@@ -113,7 +114,10 @@ object MappedMediaTypes does MediaIdentifying {
             else throw InvalidArgument.because("media extension source size must be nonnegative");
         confirm size <= maximum else throw MediaTypeLimitExceeded.kind("entries");
         for (0..size) -> position {
-            let extension = MediaTypeExtension(extension: other.item(position), type: type)::Extension::extension;
+            let extension = MediaTypeExtension(
+                extension: other.item(position),
+                type: type
+            )::Extension::extension;
             let index = MediaMatch(entries: entries, name: "x." + extension).index();
             let shadowed = index >= 0
                 && MediaTypeKey(entries[index].type()).string() != MediaTypeKey(type).string();
@@ -306,12 +310,14 @@ hidden object MediaFileName {
             && start.index() == 0
             && name.length() >= 2
             && name.slice(1, 2) == ":"
-            && "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split(name.slice(0, 1)).size() == 2 {
-                MediaAsciiLower(name.slice(2, name.length())).string();
-            }
-            else {
-                MediaAsciiLower(name).string();
-            }
+            && "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            .split(name.slice(0, 1))
+            .size() == 2 {
+            MediaAsciiLower(name.slice(2, name.length())).string();
+        }
+        else {
+            MediaAsciiLower(name).string();
+        }
     }
 }
 
@@ -335,9 +341,9 @@ object MediaMatch {
             if name.length() > suffix.length()
                 && suffix.length() > longest.index()
                 && name.slice(name.length() - suffix.length(), name.length()) == suffix {
-                    selected = selected.following(index);
-                    longest = longest.following(suffix.length());
-                }
+                selected = selected.following(index);
+                longest = longest.following(suffix.length());
+            }
         }
         selected.index();
     }
@@ -422,7 +428,8 @@ hidden object SystemMediaSnapshot {
         let count = MimePosition(0);
         let output is MimeItems<MediaTypeExtension> = MimeItems();
         for paths -> path {
-            let bytes = OptionalMediaFile(path: path, maximum: limits.bytes() - count.index()).bytes();
+            let bytes = OptionalMediaFile(path: path, maximum: limits.bytes() - count.index())
+                .bytes();
             count = count.following(count.index() + bytes.size());
             let entries = MediaDatabaseEntries(
                 origin: bytes,
@@ -500,11 +507,11 @@ hidden object MediaDatabaseEntries {
             let line = if index + 1 < lines.size()
                 && raw.length() > 0
                 && raw.ends_with("\r") {
-                    raw.slice(0, raw.length() - 1);
-                }
-                else {
-                    raw;
-                };
+                raw.slice(0, raw.length() - 1);
+            }
+            else {
+                raw;
+            };
             confirm !line.contains("\r")
                 else throw InvalidMediaTypeDatabase.located(index + 1, "bare CR");
             let content = line.split("#")[0];
@@ -573,7 +580,8 @@ hidden object StandardMediaEntries {
             "audio/ogg oga ogg",
             "video/mp4 mp4"
         ];
-        MediaDatabaseEntries(origin: Utf8Encoded(rows.join("\n")).bytes(), maximum: 10000).entries();
+        MediaDatabaseEntries(origin: Utf8Encoded(rows.join("\n")).bytes(), maximum: 10000)
+            .entries();
     }
 }
 

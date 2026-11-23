@@ -38,10 +38,13 @@ object EscapedXml {
 
     // The escaped text.
     string() is string {
-        let escaped = origin.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
-            "\r",
-            "&#13;"
-        );
+        let escaped = origin.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace(
+                "\r",
+                "&#13;"
+            );
         let text = if attribute {
             escaped.replace("\"", "&quot;").replace("\t", "&#9;").replace("\n", "&#10;");
         }

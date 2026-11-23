@@ -153,7 +153,12 @@ hidden object XmlParseFrame {
     }
 
     adding(node is XmlNode) is XmlParseFrame {
-        XmlParseFrame(name: name, scope: scope, attributes: attributes, children: children + [node]);
+        XmlParseFrame(
+            name: name,
+            scope: scope,
+            attributes: attributes,
+            children: children + [node]
+        );
     }
 
     element() is XmlElement {
@@ -289,7 +294,11 @@ test "documents that are not well formed are refused at their offset" {
     test.ok(refused("").ends_with("no root element"));
     test.is(
         try {
-            ParsedXml(origin: "<a><a><a/></a></a>", maximum_depth: 2, maximum_events: 100).document().root().name().lexical();
+            ParsedXml(origin: "<a><a><a/></a></a>", maximum_depth: 2, maximum_events: 100)
+                .document()
+                .root()
+                .name()
+                .lexical();
         }
         catch InvalidXml.located(_offset, reason) {
             reason;

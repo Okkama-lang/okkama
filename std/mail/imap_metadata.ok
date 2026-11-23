@@ -122,7 +122,9 @@ object ImapMailbox {
         }
         else {
             confirm delimiter.kind() == ImapValueKind.quoted && delimiter.string().length() == 1
-                else throw InvalidImapData.because("delimiter requires one quoted character or NIL");
+                else throw InvalidImapData.because(
+                    "delimiter requires one quoted character or NIL"
+                );
             separator = [delimiter.string()];
         }
         let mailbox = values.item(4);
@@ -357,15 +359,15 @@ object ImapSearchResult {
             let position = MimePosition(2);
             if position.index() < values.size()
                 && values.item(position.index()).kind() == ImapValueKind.list {
-                    let correlator = values.item(position.index()).entries();
-                    confirm correlator.size() == 2
-                        && correlator.item(0).kind() == ImapValueKind.atom
-                        && correlator.item(1).kind() == ImapValueKind.quoted
-                        && ImapDataUpper(correlator.item(0).string()).string() == "TAG"
-                        && correlator.item(1).string() == tag.string()
-                        else throw InvalidImapData.because("ESEARCH tag mismatch");
-                    position = position.following(position.index() + 1);
-                }
+                let correlator = values.item(position.index()).entries();
+                confirm correlator.size() == 2
+                    && correlator.item(0).kind() == ImapValueKind.atom
+                    && correlator.item(1).kind() == ImapValueKind.quoted
+                    && ImapDataUpper(correlator.item(0).string()).string() == "TAG"
+                    && correlator.item(1).string() == tag.string()
+                    else throw InvalidImapData.because("ESEARCH tag mismatch");
+                position = position.following(position.index() + 1);
+            }
             confirm position.index() < values.size()
                 && values.item(position.index()).kind() == ImapValueKind.atom
                 && ImapDataUpper(values.item(position.index()).string()).string() == "UID"
@@ -456,7 +458,9 @@ test "ESEARCH snapshots validate cardinality and extrema" {
         Utf8Encoded("* ESEARCH UID ALL 9,3:4 COUNT 3 MIN 3 MAX 9\r\n").bytes()
     ).response();
     test.is(
-        ImapSearchResult(origin: response, tag: ImapTag("O1"), limits: ImapUidSetLimits()).uids().argument(),
+        ImapSearchResult(origin: response, tag: ImapTag("O1"), limits: ImapUidSetLimits())
+            .uids()
+            .argument(),
         "9,3,4"
     );
 }

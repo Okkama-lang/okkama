@@ -227,7 +227,11 @@ object MailboxUids {
     }
 
     // The same, the account too.
-    checked(mailbox is ImapMailboxName, validity is ImapUidValidity, account is string) is ImapUidSet {
+    checked(
+        mailbox is ImapMailboxName,
+        validity is ImapUidValidity,
+        account is string
+    ) is ImapUidSet {
         confirm account != ""
             && self.account == account
             && name.string() == mailbox.string()

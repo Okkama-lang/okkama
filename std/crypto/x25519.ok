@@ -32,12 +32,19 @@ object X25519PrivateKey {
 
     // Its public key.
     public_key() is X25519PublicKey {
-        X25519PublicKey(HostOperation(operation: "x25519-public", arguments: [secret.export_bytes()]).bytes());
+        X25519PublicKey(
+            HostOperation(operation: "x25519-public", arguments: [secret.export_bytes()]).bytes()
+        );
     }
 
     // The secret shared with peer; an all-zero result is refused.
     shared_secret(peer is X25519PublicKey) is SecretBytes {
-        SecretBytes(HostOperation(operation: "x25519-shared", arguments: [secret.export_bytes(), peer.raw()]).bytes());
+        SecretBytes(
+            HostOperation(
+                operation: "x25519-shared",
+                arguments: [secret.export_bytes(), peer.raw()]
+            ).bytes()
+        );
     }
 }
 

@@ -158,9 +158,11 @@ hidden object Http2HostAgreement {
         let hosts = fields.values(HeaderName("Host"));
         confirm hosts.size() <= 1
             else throw Http2Fault.detailed(Http2FaultScope.stream, 1, stream, "duplicate Host");
-        let expected = Http2AuthorityKey(scheme: scheme, origin: authority, stream: stream).string();
+        let expected = Http2AuthorityKey(scheme: scheme, origin: authority, stream: stream)
+            .string();
         if hosts.size() == 1 {
-            confirm Http2AuthorityKey(scheme: scheme, origin: hosts.item(0), stream: stream).string() == expected
+            confirm Http2AuthorityKey(scheme: scheme, origin: hosts.item(0), stream: stream)
+                .string() == expected
                 else throw Http2Fault.detailed(
                     Http2FaultScope.stream,
                     1,
@@ -181,7 +183,8 @@ hidden object Http2HostAgreement {
             stream: stream
         ).string();
         if hosts.size() == 1 {
-            confirm Http2AuthorityKey(scheme: scheme, origin: hosts.item(0), stream: stream).string() == expected
+            confirm Http2AuthorityKey(scheme: scheme, origin: hosts.item(0), stream: stream)
+                .string() == expected
                 else throw Http2Fault.detailed(
                     Http2FaultScope.stream,
                     1,
@@ -212,7 +215,8 @@ hidden object Http2AuthorityKey {
                 stream,
                 "authority without host or with userinfo"
             );
-        key = Http2AuthorityCoordinates(scheme: scheme, authority: authority, stream: stream).string();
+        key = Http2AuthorityCoordinates(scheme: scheme, authority: authority, stream: stream)
+            .string();
     }
 
     string() is string {
@@ -490,7 +494,12 @@ object ParsedHttp2Request {
                 ParsedRequestTarget(origin: path, method: method).target();
             }
             catch failure is InvalidRequestTarget {
-                throw Http2Fault.detailed(Http2FaultScope.stream, 1, stream, "invalid request path");
+                throw Http2Fault.detailed(
+                    Http2FaultScope.stream,
+                    1,
+                    stream,
+                    "invalid request path"
+                );
             };
             confirm checked.kind() == RequestTargetKind.origin
                 || checked.kind() == RequestTargetKind.asterisk
@@ -575,7 +584,12 @@ object Http2FieldSection {
     Http2FieldSection(origin is @HpackField, allowed is @string, request is bool, stream is int) {
         Http2StreamCoordinate(stream);
         confirm origin.size() <= 1024
-            else throw Http2Fault.detailed(Http2FaultScope.stream, 11, stream, "field count budget");
+            else throw Http2Fault.detailed(
+                Http2FaultScope.stream,
+                11,
+                stream,
+                "field count budget"
+            );
         let known = Http2PseudoFields(stream);
         let ordinary = Atomic(false);
         let used = Atomic(0);
@@ -623,7 +637,12 @@ object Http2FieldSection {
                 );
             }
             catch failure is InvalidHeader {
-                throw Http2Fault.detailed(Http2FaultScope.stream, 1, stream, "invalid field octets");
+                throw Http2Fault.detailed(
+                    Http2FaultScope.stream,
+                    1,
+                    stream,
+                    "invalid field octets"
+                );
             };
             confirm validated.value() == field.value()
                 else throw Http2Fault.detailed(
@@ -640,7 +659,8 @@ object Http2FieldSection {
             Header(name: HeaderName(field.name()), value: field.value());
         };
         headers = try {
-            Http2Headers(origin: Headers(entries, HeaderLimits(1024, 1048576)), request: request).headers();
+            Http2Headers(origin: Headers(entries, HeaderLimits(1024, 1048576)), request: request)
+                .headers();
         }
         catch failure is InvalidHeader {
             throw Http2Fault.detailed(

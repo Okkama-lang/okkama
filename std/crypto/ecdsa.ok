@@ -67,7 +67,10 @@ object EcdsaPrivateKey does SigningKey {
 
     // The key in a DER PKCS#8 document.
     EcdsaPrivateKey(curve is EcdsaCurve, pkcs8 is SecretBytes) {
-        let algorithm = HostOperation(operation: "pkcs8-algorithm", arguments: [pkcs8.export_bytes()]).bytes();
+        let algorithm = HostOperation(
+            operation: "pkcs8-algorithm",
+            arguments: [pkcs8.export_bytes()]
+        ).bytes();
         confirm EcdsaCurveName(curve).algorithm() == Utf8Decoded(algorithm).string()
             else throw InvalidCryptoInput.because("PKCS#8 key is not an ECDSA key of this curve");
         self.curve = curve;
@@ -89,7 +92,10 @@ object EcdsaPrivateKey does SigningKey {
     public_key() is VerifyingKey {
         EcdsaPublicKey(
             curve: curve,
-            spki: HostOperation("ecdsa-" + EcdsaCurveName(curve).name() + "-public", [key.export_bytes()]).bytes()
+            spki: HostOperation(
+                "ecdsa-" + EcdsaCurveName(curve).name() + "-public",
+                [key.export_bytes()]
+            ).bytes()
         );
     }
 
@@ -146,7 +152,10 @@ hidden object EcdsaScalar {
         let candidate = entropy.bytes(EcdsaCurveName(curve).width());
         try {
             SecretBytes(
-                HostOperation(operation: "ecdsa-" + EcdsaCurveName(curve).name() + "-from-scalar", arguments: [candidate]).bytes()
+                HostOperation(
+                    operation: "ecdsa-" + EcdsaCurveName(curve).name() + "-from-scalar",
+                    arguments: [candidate]
+                ).bytes()
             );
         }
         catch e is InvalidCryptoInput {
