@@ -59,7 +59,8 @@ object Platform {
         }
     }
 
-    // The machine architecture, such as `x86_64` or `aarch64`.
+    // The machine architecture: `x86_64`, `x86`, `arm64`, `arm`, `ppc64`,
+    // `ppc`, `riscv64`, `s390x`, or `unknown`.
     architecture() is string {
         try {
             system_architecture();

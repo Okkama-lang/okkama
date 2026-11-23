@@ -292,7 +292,17 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(
         if *stop.borrow() {
             return Ok(output);
         }
-        let count = tokio::select! {biased;_=stop.changed()=>return Ok(output),result=stream.read(&mut buffer)=>match result {Ok(n)=>n,Err(e)=>{control.stop();return Err(e);}}};
+        let count = tokio::select! {
+            biased;
+            _ = stop.changed() => return Ok(output),
+            result = stream.read(&mut buffer) => match result {
+                Ok(n) => n,
+                Err(e) => {
+                    control.stop();
+                    return Err(e);
+                }
+            },
+        };
         if count == 0 {
             return Ok(output);
         }
@@ -340,9 +350,24 @@ pub(crate) async fn capture(
         let shared = control.clone();
         let mut stop = shared.stop.subscribe();
         tasks.spawn_local(async move {
-            let result=if *stop.borrow() {Ok(())} else {tokio::select! {biased;_=stop.changed()=>Ok(()),result=stream.write_all(&payload)=>result}};
-            let result=match result {Err(e) if e.kind()==io::ErrorKind::BrokenPipe=>Ok(vec![]),Err(e)=>{shared.stop();Err(e)},Ok(())=>Ok(vec![])};
-            (0,0,result)
+            let result = if *stop.borrow() {
+                Ok(())
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => Ok(()),
+                    result = stream.write_all(&payload) => result,
+                }
+            };
+            let result = match result {
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(vec![]),
+                Err(e) => {
+                    shared.stop();
+                    Err(e)
+                }
+                Ok(()) => Ok(vec![]),
+            };
+            (0, 0, result)
         });
     }
     let mut result = Captured {

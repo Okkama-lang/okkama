@@ -79,8 +79,10 @@ impl Heap {
                 if native == SecretSize {
                     return Ok(Outcome::Value(Slot::small(bytes.len() as i64)));
                 }
-                let snapshot = bytes.to_vec();
-                self.native_byte_array(snapshot).map(Outcome::Value)
+                // The handle table is borrowed, so the bytes pass through a
+                // copy; it is zeroed when dropped, like the secret (#1010).
+                let snapshot = zeroize::Zeroizing::new(bytes.to_vec());
+                self.allocate_bytes(&snapshot).map(Outcome::Value)
             }
             _ => Err(Error("invalid secret provider".into())),
         }

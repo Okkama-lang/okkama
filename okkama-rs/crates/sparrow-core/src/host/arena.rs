@@ -6,27 +6,18 @@ struct Entry<T> {
     generation: u32,
     value: Option<T>,
     marked: bool,
-    pinned: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct Arena<T> {
     entries: Vec<Entry<T>>,
     free: Vec<usize>,
-    pub allocations: usize,
-    /// Unpinned values that survived the last sweep.
-    pub live: usize,
-    // Pinned entries form a prefix that collection never resets or sweeps.
-    pinned: usize,
 }
 impl<T> Default for Arena<T> {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
             free: Vec::new(),
-            allocations: 0,
-            live: 0,
-            pinned: 0,
         }
     }
 }
@@ -46,7 +37,6 @@ impl<T> Arena<T> {
             .ok_or_else(|| Error("stale heap handle".into()))
     }
     pub fn allocate(&mut self, value: T) -> Result<u64, Error> {
-        self.allocations += 1;
         if let Some(index) = self.free.pop() {
             let entry = &mut self.entries[index];
             entry.generation += 1; // Exhausted generations are retired by sweep.
@@ -59,20 +49,19 @@ impl<T> Arena<T> {
             generation: 0,
             value: Some(value),
             marked: false,
-            pinned: false,
         });
         Ok(u64::from(index))
     }
     /// Drop the value of a live handle now.
     pub fn release(&mut self, handle: u64) {
         let index = handle as u32 as usize;
-        if let Some(e) = self.entries.get_mut(index).filter(|e| e.generation == (handle >> 32) as u32 && !e.pinned)
+        if let Some(e) = self.entries.get_mut(index).filter(|e| e.generation == (handle >> 32) as u32)
             && e.value.take().is_some() && e.generation != u32::MAX {
                 self.free.push(index);
             }
     }
     pub fn begin_collection(&mut self) {
-        for e in &mut self.entries[self.pinned..] {
+        for e in &mut self.entries {
             e.marked = false;
         }
     }
@@ -84,15 +73,10 @@ impl<T> Arena<T> {
         Ok(first)
     }
     pub fn sweep(&mut self) {
-        let mut live = 0;
-        for (index, e) in self.entries.iter_mut().enumerate().skip(self.pinned) {
-            if e.marked {
-                live += usize::from(e.value.is_some());
-            } else if !e.pinned && e.value.take().is_some() && e.generation != u32::MAX {
+        for (index, e) in self.entries.iter_mut().enumerate() {
+            if !e.marked && e.value.take().is_some() && e.generation != u32::MAX {
                 self.free.push(index);
             }
         }
-        self.live = live;
-        self.allocations = 0;
     }
 }

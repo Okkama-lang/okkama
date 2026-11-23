@@ -1,7 +1,7 @@
 //! Portable POSIX/Windows path syntax; no filesystem access or VM values.
 use crate::host::path_regex as jre;
 const JAVA_END: &str = r"(?:(?=\r\n\z)|(?=[\n\r\u{85}\u{2028}\u{2029}]\z)|\z)";
-/// Perl `split` без предела (`keep_trailing` — с пределом -1).
+/// Perl `split` without a limit (`keep_trailing`: with limit -1).
 fn perl_split(text: &str, pattern: &str, keep_trailing: bool) -> Vec<String> {
     if text.is_empty() {
         return Vec::new();

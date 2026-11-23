@@ -116,8 +116,8 @@ pub(crate) fn host(n: Native, e: std::io::Error) -> ProviderError {
     }
 }
 
-/// The message of a failed host file operation, the phrase the IR engine and
-/// use for it; the reason is in the code (#319). Other natives keep
+/// The message of a failed host file operation: one phrase per operation,
+/// as the IR engine used; the reason is in the code (#319). Other natives keep
 /// the host's own text.
 fn host_message(n: Native) -> Option<&'static str> {
     Some(match n.name() {

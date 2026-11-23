@@ -450,6 +450,9 @@ impl Heap {
                     let _ = rustix::fs::unlinkat(root, temporary.as_str(), AtFlags::empty());
                     return Err(host(n, e));
                 }
+                // The new name is durable only once the directory is: sync it,
+                // as `File.replace` does (#122, #1010). F_FULLFSYNC on macOS.
+                root.sync_all().map_err(|e| host(n, e))?;
                 Ok(Slot::boolean(true))
             }
             _ => Err(Error("unsupported rooted filesystem native".into()).into()),

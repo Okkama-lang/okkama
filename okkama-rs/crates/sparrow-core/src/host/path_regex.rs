@@ -2,7 +2,7 @@
 use fancy_regex::Regex;
 use std::collections::HashMap;
 
-/// Скомпилированное выражение (кэш на поток).
+/// The compiled expression (cached per thread).
 pub fn regex(pattern: &str) -> std::rc::Rc<Regex> {
     thread_local! {
         static CACHE: std::cell::RefCell<HashMap<String, std::rc::Rc<Regex>>> =
@@ -24,7 +24,7 @@ pub fn is_match(pattern: &str, text: &str) -> bool {
     regex(pattern).is_match(text).unwrap_or(false)
 }
 
-/// `String.matches`: выражение покрывает всю строку.
+/// `String.matches`: the expression covers the whole string.
 pub fn matches(pattern: &str, text: &str) -> bool {
     is_match(&format!(r"\A(?:{pattern})\z"), text)
 }
@@ -43,7 +43,7 @@ pub fn replace_first(text: &str, pattern: &str, replacement: &str) -> String {
         .into_owned()
 }
 
-/// Группы первого совпадения (`find`), None — нет совпадения.
+/// The groups of the first match (`find`); None when nothing matches.
 pub fn captures(pattern: &str, text: &str) -> Option<Vec<Option<String>>> {
     let found = regex(pattern).captures(text).ok().flatten()?;
     Some(
@@ -53,7 +53,7 @@ pub fn captures(pattern: &str, text: &str) -> Option<Vec<Option<String>>> {
     )
 }
 
-/// Начало и конец первого совпадения в байтах.
+/// The start and end of the first match, in bytes.
 pub fn find(pattern: &str, text: &str) -> Option<(usize, usize)> {
     regex(pattern)
         .find(text)
@@ -62,8 +62,8 @@ pub fn find(pattern: &str, text: &str) -> Option<(usize, usize)> {
         .map(|found| (found.start(), found.end()))
 }
 
-/// `String.split(regex, limit)` Java: `limit == 0` отбрасывает хвостовые
-/// пустые поля; совпадение нулевой ширины в начале не даёт пустого поля.
+/// Java's `String.split(regex, limit)`: `limit == 0` drops trailing empty
+/// fields; a zero-width match at the start gives no empty field.
 pub fn split(text: &str, pattern: &str, limit: i32) -> Vec<String> {
     let compiled = regex(pattern);
     let mut out = Vec::new();

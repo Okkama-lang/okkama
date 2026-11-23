@@ -28,6 +28,8 @@ import "runtime/input_state" take Utf8InputState, input_state_create, input_stat
 // Every Stdin value reads the same process input through one buffer of the
 // runtime, so lines and bytes may be mixed and Stdin() made anew each time.
 // On a terminal, what was written to Stdout shows before the program waits.
+// The wait blocks: no other task runs until input comes, unlike the
+// asynchronous streams of a child process (Process.streams).
 //
 // Utf8Input decodes any Reading, a Stdin too:
 //
