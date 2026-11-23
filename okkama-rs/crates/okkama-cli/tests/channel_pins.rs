@@ -361,7 +361,7 @@ fn selection_timeout_boundary_retains_committed_resource() {
             let b is Channel<Res> = Channel(capacity: 0);
             let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
             {
-                let received = await Within(origin: selected.item(), limit: Duration(seconds: 1),
+                let received = await Within(origin: selected.item(), limit: Duration(seconds: 1.rat()),
                     clock: SelectionTimer(output: b.sending(), log: log)).outcome();
                 confirm received.source() == 1;
                 confirm received.value().use() == "T";

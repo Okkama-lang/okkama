@@ -7,7 +7,7 @@ module app v1.0.0;
 import "terminal/session" take OpenedControllingTerminal, TerminalInput;
 import "terminal/capability" take ColorPolicy;
 import "async/timeout" take Within, TimedOut;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 import "time/clock" take SystemClock;
 
 object Reader {
@@ -22,7 +22,7 @@ async main() is int {
     let out = session.output();
     let resizes = await session.resizes();
     let timed = try {
-        await Within(Reader(input: session.input()).line(), Duration(1.rat() / 5.rat(), DurationUnit.second), SystemClock()).outcome();
+        await Within(Reader(input: session.input()).line(), Duration(seconds: rat(1, 5)), SystemClock()).outcome();
         "read early";
     } catch TimedOut.elapsed { "timed out"; };
     out.writeln(timed);

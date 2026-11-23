@@ -829,8 +829,8 @@ fn future_outcome_async_helper_returns_unique_future() {
 fn future_outcome_prepared_pool_lease_survives_factory() {
     check(r#"
         let pool = DbPreparedPool(origin: MemoryAcquiring(),
-            options: PoolOptions(minimum: 0, maximum: 1, idle_timeout: Duration(seconds: 30),
-                lifetime: Duration(seconds: 60), acquisition_timeout: Duration(seconds: 5)),
+            options: PoolOptions(minimum: 0, maximum: 1, idle_timeout: Duration(seconds: 30.rat()),
+                lifetime: Duration(seconds: 60.rat()), acquisition_timeout: Duration(seconds: 5.rat())),
             clock: SystemClock());
         defer await pool.settled(); defer pool.close();
         let lease = await pool.connection();

@@ -117,7 +117,7 @@ fn a_killed_test_keeps_its_output() {
     std::fs::write(
         &file,
         "module slow;\nimport \"io/stdout\" take Stdout;\nimport \"time/clock\" take SystemClock;\nimport \"time/duration\" take Duration;\n\
-         async test \"prints then hangs\" {\n    Stdout().writeln(\"progress: step 1 done\");\n    await SystemClock().wait(Duration(seconds: 5));\n    test.ok(true);\n}\n",
+         async test \"prints then hangs\" {\n    Stdout().writeln(\"progress: step 1 done\");\n    await SystemClock().wait(Duration(seconds: 5.rat()));\n    test.ok(true);\n}\n",
     )
     .expect("write the suite");
     let path = file.display().to_string();

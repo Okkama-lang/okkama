@@ -539,7 +539,7 @@ const SHOWN_VALUES: &str = "module app v1.0.0;\n\
     object Box<T> { has v is T; Box(:v); }\n\
     object Cached { has n is int; Cached(:n); twice() is int { once let doubled = n * 2; doubled; } }\n\
     test \"values\" {\n\
-    \x20   test.is(Duration(seconds: 1), Duration(seconds: 2));\n\
+    \x20   test.is(Duration(seconds: 1.rat()), Duration(seconds: 2.rat()));\n\
     \x20   test.is(Point(x: 1, label: \"a\\\"b\"), Point(x: 2, label: \"c\"));\n\
     \x20   test.is(Box(v: Shape.rect(1, 2)), Box(v: Shape.dot));\n\
     \x20   test.is(Box(v: [1, 2]), Box(v: [3]));\n\
@@ -1719,7 +1719,7 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
     let source = "module app v1.0.0;\n\
         import \"io/stdout\" take Stdout;\n\
         import \"time/clock\" take SystemClock;\n\
-        import \"time/duration\" take Duration, DurationUnit;\n\
+        import \"time/duration\" take Duration;\n\
         object W {\n    W();\n\
             noisy() is int { Stdout().writeln(\"worker ran\"); 1; }\n\
             slow(count is int) is int { (0..count).reduce(0) -> total, i { total + i; }; }\n}\n\
@@ -1728,11 +1728,11 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
             early.cancel();\n\
             let first = try { await early; } catch e is Cancelled { -1; };\n\
             let late = spawn W().slow(count: 100000000000);\n\
-            await SystemClock().wait(Duration(1.rat(), DurationUnit.second));\n\
+            await SystemClock().wait(Duration(seconds: 1.rat()));\n\
             late.cancel();\n\
             let second = try { await late; } catch e is Cancelled { -1; };\n\
             Stdout().writeln(first.string() + \" \" + second.string() + \" \" + early.cancelled().string() + \" \" + late.cancelled().string());\n\
-            await SystemClock().wait(Duration(2.rat(), DurationUnit.second));\n\
+            await SystemClock().wait(Duration(seconds: 2.rat()));\n\
             Stdout().writeln(\"end\");\n\
             0;\n}\n";
     let file = TempFile::new("cancelled-worker.ok", source.as_bytes());

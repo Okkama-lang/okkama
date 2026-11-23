@@ -31,7 +31,7 @@ object Pages {
     async slow(request is WebRequest) is Responding {
         // The test signals only after this line (#556).
         Stderr().writeln("slow started");
-        await SystemClock().wait(Duration(seconds: delay));
+        await SystemClock().wait(Duration(seconds: delay.rat()));
         TextReply("slow and done");
     }
 }

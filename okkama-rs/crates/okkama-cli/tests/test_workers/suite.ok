@@ -9,7 +9,7 @@ import "time/clock" take SystemClock;
 import "time/duration" take Duration;
 
 async test "slow" {
-    await SystemClock().wait(Duration(milliseconds: 600));
+    await SystemClock().wait(Duration(seconds: rat(600, 1000)));
     Stdout().writeln("slow done");
     test.ok(true);
 }
