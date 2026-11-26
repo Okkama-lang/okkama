@@ -10,6 +10,11 @@
 - [x] #1039 (feature/1039): `blade new` (blade/src/lib.rs `new_project`) refuses an existing NAME, a missing or
   extra argument and an invalid package name; creates with `create_dir`/`File::create_new`; output from
   `project::default_output` (shared with `Project::parse`); no `bin/`.
+- [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
+  (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
+  sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to
+  release/065 except `L03.anonymous.lexical-scope`, whose closure capture order differs run to run on both
+  binaries (codegen nondeterminism, ticket to file).
 - [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
   `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
   program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with

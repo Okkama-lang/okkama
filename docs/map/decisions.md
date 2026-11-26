@@ -537,3 +537,9 @@ every declaration is open (#1005, owner decision).
 - An existing `NAME` (any file or directory) is refused, like `cargo new`; an existing empty directory too.
   The name must pass `manifest::check_package_name`; the default output has one definition,
   `project::default_output`.
+## A shift does not close type arguments (#1032, 2026-11-26)
+
+- `Name<…>` (#1004) is a type only when its closing `>` is a whole `>` token or the second half of a
+  `>>`/`>>>` that a nested type closes too; a type closed by the first half of a shift would leave the
+  other `>` comparing a type value, so the comparison reading wins (`Count < a >> 2` = `Count < (a >> 2)`).
+  `>=` is not treated so: neither reading of `Count < a >= 2` is valid.

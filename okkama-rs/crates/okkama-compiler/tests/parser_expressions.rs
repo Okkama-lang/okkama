@@ -103,6 +103,26 @@ fn a_capitalised_binding_compares_with_less_than() {
     }
 }
 
+/// #1032: a `>` that is the first half of a shift does not close type
+/// arguments: `>>` binds tighter than `<`, and the type would leave the other
+/// `>` to compare it.
+#[test]
+fn a_shift_after_a_capitalised_binding_is_not_a_closing_angle() {
+    for (source, expected) in [
+        ("Count < a >> 2", "(< Count (>> a 2))"),
+        ("Count < a >>> 2", "(< Count (>>> a 2))"),
+        ("Count < Limit >> 1", "(< Count (>> Limit 1))"),
+        ("Count < a.b >> 1", "(< Count (>> (. a b) 1))"),
+        ("box.Count < a >> 2", "(< (. box Count) (>> a 2))"),
+        ("Count < a >> 2 && Count < b >> 1", "(&& (< Count (>> a 2)) (< Count (>> b 1)))"),
+    ] {
+        assert_eq!(expr_sexpr(source), expected, "{source}");
+    }
+    // A `>>` both halves of which close type arguments is still a type.
+    let tree = expr_sexpr("Maybe<Maybe<int>>.none");
+    assert!(!tree.starts_with("(<"), "{tree}");
+}
+
 #[test]
 fn ranges_sit_between_equality_and_comparison() {
     assert_eq!(expr_sexpr("1..10"), "(.. 1 10)");

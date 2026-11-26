@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 22351 lines
+## front — 36 files, 22375 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -31,8 +31,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/ast/types.rs` 45 — Type expressions and action result specifications.
 - `okkama-compiler/src/syntax/lexer/mod.rs` 634 — The Okkama lexer.
 - `okkama-compiler/src/syntax/parser/decl.rs` 872 — Module items and object/role members.
-- `okkama-compiler/src/syntax/parser/expr.rs` 1041 — Expressions.
-- `okkama-compiler/src/syntax/parser/mod.rs` 529 — The Okkama parser.
+- `okkama-compiler/src/syntax/parser/expr.rs` 1044 — Expressions.
+- `okkama-compiler/src/syntax/parser/mod.rs` 550 — The Okkama parser.
 - `okkama-compiler/src/syntax/parser/stmt.rs` 539 — Blocks and statements.
 - `okkama-compiler/src/syntax/parser/types.rs` 195 — Type expressions, result specifications and generic parameter lists.
 - `okkama-compiler/src/syntax/print/build.rs` 566 — Conversion of the typed AST into the printer [`Node`] description.

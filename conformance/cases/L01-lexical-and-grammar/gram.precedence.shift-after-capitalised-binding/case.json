@@ -1,0 +1,51 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L01.gram.precedence.shift-after-capitalised-binding",
+  "title": "a shift on the right of < after a capitalised binding binds tighter than the comparison",
+  "purpose": "Accept the construct and observe its result.",
+  "level": "L01",
+  "contracts": [
+    {
+      "contract": "GRAM.PRECEDENCE",
+      "aspects": [
+        "interaction"
+      ]
+    },
+    {
+      "contract": "VAL.SHIFTS",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "true\nfalse\nfalse\ntrue\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-grammar-1.0.ebnf",
+    "docs/okkama-llm-context-1.0.md#6",
+    "docs/bitwise-guide.md"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #1032 from the cited contract text",
+    "expected_basis": "grammar: shift binds tighter than comparison, and a binding of any case compares with < (#1004): 1<(8>>2)=1<2 true; 1<(8>>>3)=1<1 false; 1<(16>>4)=1<1 false; (16>>2)>1=4>1 true."
+  },
+  "status": "mandatory"
+}

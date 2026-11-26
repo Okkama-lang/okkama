@@ -33,6 +33,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   A NAME its own manifest check rejects (`my-app`) is refused before anything is written; `blade new acme/web`
   writes the default `output = "target/web.spb"` (it wrote `target/acme/web.spb`); the unused empty `bin/` is
   gone, and the generated `src/main.ok` is fmt-clean. Bible §19.7.
+- **`Count < a >> 2` compares again (#1032).** After #1004 the parser read `Name<…>` as a type whenever the
+  text after `<` parsed as type arguments closed by `>`, and the type parser splits `>>` and `>>>` into `>`
+  tokens, so a shift on the right of `<` after a capitalised binding closed "type arguments" and the program
+  failed with "A type is not a value". A `>` that is the first half of a shift no longer closes them:
+  `Count < a >> 2` is `Count < (a >> 2)`, as for `count`; `Maybe<Maybe<int>>.none` stays a type. A trial that
+  backtracks now also puts the split tokens back together. Conformance
+  `L01.gram.precedence.shift-after-capitalised-binding`; Bible appendix A.
 ### Security
 - **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at

@@ -5033,10 +5033,12 @@
     "interaction": {
      "cases": [
       "L01.gram.precedence.bitwise-vs-comparison",
+      "L01.gram.precedence.shift-after-capitalised-binding",
       "L01.gram.precedence.stream-and-range"
      ],
      "mandatory_cases": [
       "L01.gram.precedence.bitwise-vs-comparison",
+      "L01.gram.precedence.shift-after-capitalised-binding",
       "L01.gram.precedence.stream-and-range"
      ],
      "requirement": "required"
@@ -28821,9 +28823,11 @@
     },
     "normal": {
      "cases": [
+      "L01.gram.precedence.shift-after-capitalised-binding",
       "L02.shift.int"
      ],
      "mandatory_cases": [
+      "L01.gram.precedence.shift-after-capitalised-binding",
       "L02.shift.int"
      ],
      "requirement": "required"
@@ -31349,5 +31353,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "2e859dcb34ce7b48d0728bce421a76c75e980abe4e1f2c1cc268fddbc03e5307"
+ "suite_tree_sha256": "c35f5ceb42e69da32077c42b5e663ac502b518978c948c83fac035905edbff04"
 }

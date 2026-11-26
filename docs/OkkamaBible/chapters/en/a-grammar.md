@@ -37,7 +37,8 @@ BINDING    = WORD that is not a keyword ;                  (* let, for, catch, c
 - `<` after a type name opens type arguments only when the name contains a
   lower-case letter (`List<int>`) and what follows parses as type arguments
   closed by `>`. Otherwise `<` compares: `LIMIT < x`, and also
-  `let Count = 2; Count < 3`.
+  `let Count = 2; Count < 3`. The first `>` of a shift does not close them:
+  `Count < a >> 2` is `Count < (a >> 2)`.
 
 **Keywords.** These words cannot be used as names (except in the member and
 action positions above):
