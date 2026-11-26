@@ -1,8 +1,23 @@
 //! Shared boolean environment-switch policy (#1067).
 use std::ffi::OsStr;
 
+#[allow(dead_code)]
 pub fn enabled(name: &str) -> bool {
     value_enabled(std::env::var_os(name).as_deref())
+}
+
+/// A switch that is on (or off) until set: unset keeps `default`; a set value
+/// follows the one rule of [`value_enabled`] (#1067).
+#[allow(dead_code)]
+pub fn enabled_or(name: &str, default: bool) -> bool {
+    value_enabled_or(std::env::var_os(name).as_deref(), default)
+}
+
+pub(crate) fn value_enabled_or(value: Option<&OsStr>, default: bool) -> bool {
+    match value {
+        None => default,
+        value => value_enabled(value),
+    }
 }
 
 pub(crate) fn value_enabled(value: Option<&OsStr>) -> bool {
@@ -13,9 +28,22 @@ pub(crate) fn value_enabled(value: Option<&OsStr>) -> bool {
     })
 }
 
+/// NO_COLOR is a presence convention, not a boolean switch.
+pub(crate) fn no_color(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unset_switch_keeps_its_default() {
+        assert!(value_enabled_or(None, true));
+        assert!(!value_enabled_or(None, false));
+        assert!(!value_enabled_or(Some(OsStr::new("off")), true));
+        assert!(value_enabled_or(Some(OsStr::new("1")), false));
+    }
 
     #[test]
     fn boolean_switch_values() {
@@ -27,9 +55,4 @@ mod tests {
             assert!(value_enabled(Some(OsStr::new(value))), "{value:?}");
         }
     }
-}
-
-/// NO_COLOR is a presence convention, not a boolean switch.
-pub(crate) fn no_color(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|value| !value.is_empty())
 }

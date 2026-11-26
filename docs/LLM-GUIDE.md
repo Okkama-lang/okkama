@@ -205,10 +205,12 @@ The REPL (`okkama-cli/src/repl.rs`, design `okkama-docs/runtime/repl-588.md`):
 - **Tests:** `okkama-cli/tests/repl.rs` (stdin scripts, a destroy oracle, a pty test of the history),
   `sparrow-core/src/session_tests.rs`, `okkama-sparrow/tests/session.rs`.
 
-Environment switches share one rule across Rust crates and std: unset, empty,
-`0`, `false`, `off` and `no` (ASCII case-insensitive) are OFF; every other
-value is ON. Values are not trimmed. This includes test helpers, `OKKAMA_TRACE`
-(default OFF), GC, verification and profiling switches. Explicit CLI flags and
+Environment switches share one rule across Rust crates and std: a set value
+that is empty, `0`, `false`, `off` or `no` (ASCII case-insensitive) is OFF;
+every other set value is ON. Values are not trimmed. An unset switch keeps its
+default: OFF for most (test helpers, GC, verification and profiling switches),
+ON for `OKKAMA_TRACE` (the call stack of a failure), `SPARROW_CORE_POINTER_FREE`
+and `SPARROW_CORE_INT_RANGE` (JIT optimisations). Explicit CLI flags and
 mandatory debug checks still apply independently. `OKKAMA_DEV` uses this rule
 before parsing its category selection. Paths, numbers, representation choices
 and symbol/pass lists are not boolean switches.

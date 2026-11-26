@@ -29,7 +29,7 @@ USAGE:
 run          Verify and execute bytecode; ARGS are the program's arguments.
              main's integer result in 0..255 becomes the exit status; an
              uncaught failure is reported on stderr (exit 1) with the call
-             stack in Sparrow terms when OKKAMA_TRACE=1. `--stats` prints
+             stack in Sparrow terms (OKKAMA_TRACE=off: without). `--stats` prints
              counts of runtime events at exit (also SPARROW_CORE_STATS=1),
              with the compile time and machine-code size of each function.
              DEBUGGING the compiled code (SYMBOLS: comma-separated, or *):
@@ -120,7 +120,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
         Box::new(move || watchdog(flag)) as Box<dyn FnOnce() + Send>
     });
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = crate::env_switch::enabled("OKKAMA_TRACE");
+    let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     let options = sparrow_core::ExecutionOptions { stats, trace, on_verified, ..Default::default() };
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
     let _ = sparrow_core::stdout::flush();

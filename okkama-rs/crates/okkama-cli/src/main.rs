@@ -166,7 +166,7 @@ RUN OPTIONS:
                           --test-timeout).
                           An uncaught failure on Sparrow also
                           prints its source line and the call stack;
-                          OKKAMA_TRACE=1 includes the call stack (off by default).
+                          OKKAMA_TRACE=off prints the failure alone.
 
 EXIT STATUS:
     0  success
@@ -312,7 +312,7 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
         return Outcome::failure(format!("okkama: cannot read `{path}`: {error}\n"), EXIT_IO);
     }
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = crate::env_switch::enabled("OKKAMA_TRACE");
+    let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     match sparrow_core::run_executable(
         bytes, arguments, core::worker_command(Path::new(path)), limits,
         sparrow_core::ExecutionOptions {
@@ -424,7 +424,7 @@ fn with_trace(
     uncaught: Option<sparrow_core::Uncaught>,
     render: impl Fn(&[sparrow_core::Site]) -> String,
 ) -> Outcome {
-    if outcome.code == 1 && crate::env_switch::enabled("OKKAMA_TRACE")
+    if outcome.code == 1 && crate::env_switch::enabled_or("OKKAMA_TRACE", true)
         && let Some(uncaught) = uncaught {
         outcome.stderr = uncaught.render_report(&outcome.stderr, render);
     }

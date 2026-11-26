@@ -568,7 +568,7 @@ fn lower_analyzed(
         sabotage_int_add(&mut module);
     }
     dev_ir("ir after passes", &module);
-    verify_lowered(&module, program.span).map_err(|error| (root, error))?;
+    verify_lowered(&module, program.span, verify_ownership()).map_err(|error| (root, error))?;
     if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
         let mut report = ir::ownership::analyze(&module);
         report.record_param_adopts(&param_adopts_removed);
@@ -775,7 +775,7 @@ pub fn inspect_parsed(
     inspection
 }
 
-fn verify_lowered(module: &ir::Module, span: Span) -> Result<()> {
+fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()> {
     // Invalid output is a compiler failure, never a rejected fuzz input.
     if let Err(error) = ir::verify(module) {
         // Preserve rejected IR for diagnostics.
@@ -788,7 +788,7 @@ fn verify_lowered(module: &ir::Module, span: Span) -> Result<()> {
         ));
     }
     // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
-    if verify_ownership() {
+    if ownership {
         let _span = okkama_devtrace::span!("lower", "linearity check");
         if let Err(error) = ir::linearity::check(module) {
             if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
@@ -1000,10 +1000,10 @@ mod internal_error_tests {
     #[test]
     fn invalid_oir_is_an_internal_error() {
         let mut module = module(include_str!("../../../../fuzz/seeds/sum.ok"));
-        verify_lowered(&module, module.span).unwrap();
+        verify_lowered(&module, module.span, true).unwrap();
         // Mutation: an undefined return operand in otherwise valid lowering.
         module.functions[0].blocks[0].term.kind = ir::TermKind::Ret(Some(ir::ValueId(usize::MAX)));
-        let error = verify_lowered(&module, module.span).unwrap_err();
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
         assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
         assert!(error.message().contains("lowering produced invalid IR"));
         assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
@@ -1024,7 +1024,7 @@ mod internal_error_tests {
         }
         assert!(removed > 0);
         ir::verify(&module).expect("only linearity is broken");
-        let error = verify_lowered(&module, module.span).unwrap_err();
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
         assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
         assert!(error.message().contains("may still be open"), "{error}");
         assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());

@@ -80,9 +80,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/codegen/sparrow/mod.rs` 735 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 17 files, 6261 lines
+## compiler — 17 files, 6279 lines
 
-- `okkama-compiler/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
+- `okkama-compiler/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `okkama-compiler/src/lib.rs` 19 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
 - `okkama-compiler/src/doc/coverage.rs` 43 — Public declaration coverage and the incremental std gate (#514).
@@ -117,13 +117,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2353 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 65 files, 34791 lines
+## sparrow — 65 files, 34809 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 494 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
+- `sparrow-core/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `sparrow-core/src/heap.rs` 2320 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 1093 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
@@ -185,16 +185,16 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
-## devtrace — 2 files, 345 lines
+## devtrace — 2 files, 363 lines
 
-- `okkama-devtrace/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
+- `okkama-devtrace/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `okkama-devtrace/src/lib.rs` 320 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 11 files, 5312 lines
+## cli — 11 files, 5330 lines
 
 - `okkama-cli/src/core.rs` 81 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
-- `okkama-cli/src/env_switch.rs` 28 — Shared boolean environment-switch policy (#1067).
+- `okkama-cli/src/env_switch.rs` 46 — Shared boolean environment-switch policy (#1067).
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 935 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
 - `okkama-cli/src/main.rs` 1744 — `okkama` — command-line front end for the Okkama compiler library.
@@ -204,7 +204,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 70 files, 21713 lines
+## other — 70 files, 21749 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -232,7 +232,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 58 — Allocation accounting and memory scope shared with Sparrow.
 - `okkama-runtime-core/src/data.rs` 88 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
-- `okkama-runtime-core/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
+- `okkama-runtime-core/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `okkama-runtime-core/src/failure.rs` 238 — Engine-independent failure records carried on exceptional control-flow edges. A record's kind and
 - `okkama-runtime-core/src/float.rs` 394 — `float` (OIR-1 §16.2): конечное binary64. Неконечный результат и делитель 0 —
 - `okkama-runtime-core/src/heap.rs` 1627 — Values used by the Sparrow native bridge and its providers.
@@ -274,5 +274,5 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/x509.rs` 2100 — `runtime/x509`: строгий DER-конверт и снимок
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
-- `sparrow-cli/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
+- `sparrow-cli/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `sparrow-cli/src/main.rs` 260 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a

@@ -138,8 +138,8 @@ impl Loaded {
         let workers = add_workers(&mut program);
         // One switch for both JIT roots and suspended-frame layouts. Read it
         // once at load time; never change a live runtime's tracing contract.
-        let pointer_free = crate::env_switch::enabled("SPARROW_CORE_POINTER_FREE");
-        let int_ranges = crate::env_switch::enabled("SPARROW_CORE_INT_RANGE");
+        let pointer_free = crate::env_switch::enabled_or("SPARROW_CORE_POINTER_FREE", true);
+        let int_ranges = crate::env_switch::enabled_or("SPARROW_CORE_INT_RANGE", true);
         let profile = crate::env_switch::enabled("SPARROW_CORE_PROFILE_COMPILE");
         let resources = program.objects.iter().any(|o| o.destroy.is_some());
         let functions = program
