@@ -13,6 +13,9 @@ argon2 = { version = "0.6.0", features = ["zeroize"] }
 blake2 = "0.11.0"
 chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
 ed25519-dalek = { version = "3.0.0", features = ["pkcs8", "alloc"] }
+# Only for its `zeroize` feature, which ed25519-dalek does not forward: the seed
+# copy in `KeypairBytes` (PKCS#8 in and out) is zeroed on drop (#1026).
+ed25519 = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 getrandom = "0.4.3"
 hkdf = "0.13.0"
 hmac = { version = "0.13.0", features = ["zeroize"] }

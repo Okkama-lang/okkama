@@ -204,7 +204,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 70 files, 21635 lines
+## other — 70 files, 21713 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -214,7 +214,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 23
 - `okkama-native/src/lib.rs` 5 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc
-- `okkama-native/src/ops.rs` 806 — Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
+- `okkama-native/src/ops.rs` 884 — Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
 - `okkama-native/src/rsa_public.rs` 84 — Открытые операции RSA через низкоуровневый API aws-lc: проверка подписей
 - `okkama-native/src/secure.rs` 31 — Криптостойкие случайные байты от генератора платформы (#195).
 - `okkama-native/src/x509.rs` 326 — Подписи сертификатов X.509: проверка `signatureValue` над `tbsCertificate`

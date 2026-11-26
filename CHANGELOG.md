@@ -13,6 +13,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Sparrow (#1034).** A failure trace cut at its million activations keeps the outermost ones too, so a stack
   overflow's report ends with `main` again; a cause whose trace was cut says how many activations it left out, as
   the root does ("... and N more activations in the middle, not recorded").
+### Security
+- **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
+  owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at
+  std's default 19 MiB, t=2); the Ed25519 seed copy in `KeypairBytes` (PKCS#8 in and out) is zeroed on drop
+  (`ed25519/zeroize`, which ed25519-dalek does not forward).
 
 ## [0.6.4] — 2026-11-23
 

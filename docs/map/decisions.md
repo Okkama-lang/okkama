@@ -506,3 +506,11 @@ every declaration is open (#1005, owner decision).
   activations and a ring of the 4096 outermost; the omitted ones are between the
   two. The renderers keep their `Fn(&[Site])` shape: the joined trace is rendered
   and one line after it counts the middle, for the root and for every cause.
+## Argon2 memory is the provider's (#1026, 2026-11-26)
+
+- okkama-native never calls argon2's allocating entry points (`hash_password_into`,
+  `PasswordHasher`, `PasswordVerifier`): they free the password-derived blocks
+  unzeroed even with `zeroize`. `argon2_into` owns and zeroes them; PHC making and
+  checking mirror the crate's code over it (tests compare with the crate).
+- A crate whose `zeroize` feature a wrapper does not forward gets a direct
+  dependency only to enable it (`ed25519` for `KeypairBytes`).

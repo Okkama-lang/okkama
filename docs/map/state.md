@@ -53,6 +53,10 @@ no full test suites, Docker, cargo fmt or clippy.
   `TRACE_LIMIT − TRACE_TAIL` innermost activations, then a ring of the `TRACE_TAIL` = 4096
   outermost; `Uncaught::cause_traces` carries each cause's omitted count; the count line
   says "in the middle" under the root and under causes.
+- [x] #1026 (feature/1026): okkama-native `argon2_into` (zeroed `Vec<Block>` through
+  `hash_password_into_with_memory`), `argon2_hash` mirrors `hash_password_with_salt`,
+  `argon2-verify` mirrors `verify_password` over it; direct dependency `ed25519` with
+  `zeroize` (Cargo.lock and fuzz/Cargo.lock).
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 
