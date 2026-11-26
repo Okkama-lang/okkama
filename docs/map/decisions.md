@@ -59,7 +59,9 @@ the session's memory; older rulings live in the commits and tickets named.
 
 - **2026-11-26. Test/tool audit (owner, #1067/#1051/#1052/#1055).** Boolean
   switches are OFF when unset, empty, or ASCII-case-insensitive 0/false/off/no,
-  otherwise ON, including previously default-ON proof/trace switches. NO_COLOR
+  otherwise ON. Correction (9d7749f4e): the default-ON switches keep their default — OKKAMA_TRACE,
+  SPARROW_CORE_POINTER_FREE and SPARROW_CORE_INT_RANGE are ON when unset (`enabled_or(name, true)`),
+  and 0/false/off/no (or empty) turns them off. NO_COLOR
   uses nonempty presence. Micro rounds aggregate geometrically, requiring every
   cell VALID; binary versions are checked against declared local revisions before
   measurement. Fuzzing rejects ordinary compile errors but crashes on typed

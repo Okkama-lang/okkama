@@ -245,8 +245,9 @@ IR verifier in a release build; debug builds always run it),
 roots in Cranelift's frontend stack maps, as before #354; by default async
 bodies use the core's own root slots and synchronous functions Cranelift's
 maps, #362),
-`SPARROW_CORE_POINTER_FREE=1` (enable #535's whole-register proof in both
-JIT roots and async frame tracing; default OFF; load-time setting).
+`SPARROW_CORE_POINTER_FREE` (#535's whole-register proof in both
+JIT roots and async frame tracing; default ON, `0`/`off` turns it off;
+load-time setting).
 Under `SPARROW_CORE_PROFILE_COMPILE`, `pointer-free analysis` lines separately
 report its load-time cost; `roots` lines under profiling or `SPARROW_CORE_DUMP`
 report traced/omitted registers and the sum of root words across stack maps.
