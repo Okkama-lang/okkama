@@ -181,6 +181,9 @@ pub fn verify(module: &Module) -> Result<()> {
             }
         }
     }
+    for cap in &module.caps {
+        check_cap(module, cap).map_err(|message| module_error(format!("cap {}: {message}", cap.name)))?;
+    }
     // Раскладка каждого случая — свой объект, не встроенный, без `destroy`
     // и конструктора: значения создаёт только `variant.new` (#290).
     let mut cases = HashSet::new();
@@ -314,6 +317,37 @@ fn check_witness(
                 function.symbol,
                 declared.name,
                 declared.slot_name(slot).unwrap_or_else(|| format!("#{slot}"))
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A cap declaration (§8.5): its owner exists, its field names are distinct,
+/// and each field is a synchronous `[method Owner]` function of the owner
+/// alone that returns a value, which `call.cap` recomputes (#1071).
+fn check_cap(module: &Module, cap: &super::Cap) -> std::result::Result<(), String> {
+    let owner = module
+        .object(cap.owner)
+        .ok_or_else(|| format!("owner refers to missing object #{}", cap.owner.0))?;
+    let mut names = HashSet::new();
+    for (name, func) in &cap.fields {
+        if !names.insert(name.as_str()) {
+            return Err(format!("declares field {name} twice"));
+        }
+        let function = module
+            .function(*func)
+            .ok_or_else(|| format!("field {name} refers to missing function #{}", func.0))?;
+        let receiver_only = function.params.len() == 1
+            && function.value_type(function.params[0]) == Some(&Type::Object(cap.owner));
+        if !function.attrs.contains(&Attr::Method(cap.owner))
+            || !receiver_only
+            || function.is_async()
+            || function.result == ResultType::Void
+        {
+            return Err(format!(
+                "field {name}: @{} must be a synchronous `[method {}]` function ({}) -> value",
+                function.symbol, owner.name, owner.name
             ));
         }
     }
@@ -1651,15 +1685,42 @@ impl<'a> FunctionVerifier<'a> {
                 for (arg, ty) in args.iter().zip(&sig.params) {
                     self.expect_type(*arg, ty)?;
                 }
+                // The worker runs a synchronous action: a Future cannot
+                // cross the process boundary as the result (#1071).
+                if let ResultType::Value(Type::Future(_)) = &sig.result {
+                    return Err(format!(
+                        "worker.spawn of {entry}: the entry must be synchronous, it returns {}",
+                        Type::Fn(sig.clone())
+                    ));
+                }
                 Type::Future(Box::new(sig.result.clone()))
             }
-            InstKind::WorkerBind { action, entry, .. } => {
+            InstKind::WorkerBind { action, entry, fields } => {
                 let action_ty = self.ty(*action)?.clone();
-                if !matches!(action_ty, Type::Fn(_)) {
+                let Type::Fn(action_sig) = &action_ty else {
                     return Err(format!("worker.bind of {action}: not a fn value"));
-                }
-                if !matches!(self.ty(*entry)?, Type::Fn(_)) {
+                };
+                let Type::Fn(entry_sig) = self.ty(*entry)?.clone() else {
                     return Err(format!("worker.bind entry {entry}: not a fn value"));
+                };
+                // The entry rebuilds the receiver from `fields`, then runs the
+                // action on its arguments: fn(field types…, action params…) with
+                // the action's result (#1071).
+                let mut expected = Vec::with_capacity(fields.len() + action_sig.params.len());
+                for field in fields {
+                    expected.push(self.ty(*field)?.clone());
+                }
+                expected.extend(action_sig.params.iter().cloned());
+                if entry_sig.params != expected || entry_sig.result != action_sig.result {
+                    return Err(format!(
+                        "worker.bind entry {entry} has type {}, expected {} for {} fields and the action {action_ty}",
+                        Type::Fn(entry_sig.clone()),
+                        Type::Fn(Box::new(super::FnSig {
+                            params: expected,
+                            result: action_sig.result.clone(),
+                        })),
+                        fields.len()
+                    ));
                 }
                 action_ty
             }

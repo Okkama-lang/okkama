@@ -38,6 +38,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   the same source gave different SPB from build to build (`L03.anonymous.lexical-scope`), and the outer action
   kept values it never used. Now each action captures only the names it or an action inside it uses, in the
   order of first use, as the Bible states (§18.2); builds of one source are byte-identical.
+- **IR verifier: caps, `worker.bind` and `worker.spawn` (#1071).** A cap declaration is checked where it is
+  declared: its owner exists, its field names are distinct and each field is a synchronous `[method Owner]`
+  function of the owner alone that returns a value (before, a broken field surfaced only at a `call.cap` of it,
+  or never). `worker.bind` requires its entry to take the receiver's fields and then the action's parameters,
+  with the action's result; `worker.spawn` refuses an entry that returns a Future. Lowering never produced such
+  modules; they matter for hand-written passes and IR producers.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

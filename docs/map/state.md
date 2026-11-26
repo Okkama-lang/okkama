@@ -39,6 +39,10 @@
   t/gen, examples, conformance, Bible examples): exit codes as release/065; SPB differs in 22 files, all with
   nested closures (16 were already nondeterministic on release/065), their runs print the same; three branch
   sweeps byte-identical.
+- [x] #1071 (feature/1071): `ir::verify` checks cap declarations (`check_cap`: owner exists, distinct field
+  names, each field a synchronous `[method Owner]` function of the owner alone returning a value),
+  `worker.bind` (entry `fn(field types…, action params…)` with the action's result) and `worker.spawn` (the
+  entry does not return a Future). Not reachable from lowering; compile sweep as release/065.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

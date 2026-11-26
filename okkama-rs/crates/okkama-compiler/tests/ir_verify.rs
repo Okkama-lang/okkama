@@ -767,3 +767,115 @@ fn a_catch_handler_edge_keeps_the_successor_obligation() {
         &format!("branch to ^b4 passes {held}: ^object#0 for {handler_param}: object#0"),
     );
 }
+
+const CAPS: &str = "module app v1.0.0;
+object W { has n is int; W(:n); cap View { count is int { n; } } }
+object V { V(); }
+main() is int { W(n: 1)::View::count; }";
+
+/// #1071: a cap declaration is checked where it is declared, not at the
+/// first `call.cap` of a field (a field nobody reads was never checked).
+#[test]
+fn cap_fields_are_synchronous_methods_of_the_owner() {
+    let module = lowered(CAPS);
+    ir::verify(&module).unwrap();
+    let field = module.caps[0].fields[0].1;
+
+    let mut broken = module.clone();
+    broken.caps[0].fields[0].1 = FuncId(9999);
+    rejects(&broken, "cap W::View: field count refers to missing function #9999");
+
+    let mut broken = module.clone();
+    broken.caps[0].owner = ir::ObjectId(9999);
+    rejects(&broken, "cap W::View: owner refers to missing object #9999");
+
+    let mut broken = module.clone();
+    let other = broken.objects.iter().position(|object| object.name == "V").expect("V is lowered");
+    broken.caps[0].owner = ir::ObjectId(other);
+    rejects(&broken, "cap W::View: field count: @W::View.count must be a synchronous `[method V]` function (V) -> value");
+
+    let mut broken = module.clone();
+    broken.functions[field.0].attrs.push(Attr::Async);
+    rejects(&broken, "must be a synchronous `[method W]` function (W) -> value");
+
+    let mut broken = module.clone();
+    let extra = broken.caps[0].fields[0].clone();
+    broken.caps[0].fields.push(extra);
+    rejects(&broken, "cap W::View: declares field count twice");
+}
+
+const WORKERS: &str = "module app v1.0.0;
+object W { has n is int; W(:n); f(x is int) is int { n + x; } }
+async main() is int {
+    let g is (int) is int = W(n: 1).f;
+    let a = await spawn g(2);
+    let b = await spawn W(n: 1).f(x: 2);
+    a + b;
+}";
+
+/// #1071: `worker.bind`'s entry rebuilds the receiver from the listed fields
+/// and takes the action's parameters after them, with the action's result.
+#[test]
+fn worker_bind_entry_takes_the_fields_then_the_action_parameters() {
+    let module = lowered(WORKERS);
+    ir::verify(&module).unwrap();
+    let (function, block, position) = module
+        .functions
+        .iter()
+        .enumerate()
+        .find_map(|(index, function)| {
+            function.blocks.iter().enumerate().find_map(|(block, body)| {
+                body.insts
+                    .iter()
+                    .position(|inst| matches!(inst.kind, InstKind::WorkerBind { .. }))
+                    .map(|position| (index, block, position))
+            })
+        })
+        .expect("a bound action for the worker is lowered");
+
+    let mut broken = module.clone();
+    let InstKind::WorkerBind { fields, .. } = &mut broken.functions[function].blocks[block].insts[position].kind else {
+        unreachable!()
+    };
+    fields.clear();
+    rejects(&broken, "has type fn(int, int) -> int, expected fn(int) -> int for 0 fields and the action fn(int) -> int");
+
+    // The operands swapped: the entry passed as the action and the other way round.
+    let mut broken = module.clone();
+    let InstKind::WorkerBind { action, entry, .. } = &mut broken.functions[function].blocks[block].insts[position].kind else {
+        unreachable!()
+    };
+    std::mem::swap(action, entry);
+    rejects(&broken, "expected fn(int, int, int) -> int for 1 fields and the action fn(int, int) -> int");
+}
+
+/// #1071: a worker runs a synchronous action; an entry returning a Future
+/// would make `worker.spawn`'s result `future<future<R>>`.
+#[test]
+fn worker_spawn_requires_a_synchronous_entry() {
+    let module = lowered(WORKERS);
+    let main = symbol(&module, "main");
+    let entries: Vec<(ValueId, usize)> = module.functions[main]
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter_map(|inst| match &inst.kind {
+            InstKind::WorkerSpawn { entry, direct: true, .. } => Some(*entry),
+            _ => None,
+        })
+        .filter_map(|entry| {
+            module.functions[main].blocks.iter().flat_map(|block| &block.insts).find_map(|inst| match inst.kind {
+                InstKind::FnClosure { func, .. } if inst.result == Some(entry) => Some((entry, func.0)),
+                _ => None,
+            })
+        })
+        .collect();
+    let [(entry, func)] = entries[..] else { panic!("one direct spawn: {entries:?}") };
+
+    // The entry made async, its fn value typed as it then is: fn(…) -> future<int>.
+    let mut broken = module.clone();
+    broken.functions[func].attrs.push(Attr::Async);
+    let Type::Fn(sig) = &mut broken.functions[main].values[entry.0] else { panic!("the entry is a fn value") };
+    sig.result = ResultType::Value(Type::Future(Box::new(ResultType::Value(Type::Int))));
+    rejects(&broken, &format!("worker.spawn of {entry}: the entry must be synchronous, it returns fn(int, int) -> future<int>"));
+}
