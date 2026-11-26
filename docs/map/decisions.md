@@ -716,5 +716,8 @@ every declaration is open (#1005, owner decision).
   not a thrown error any more.
 - Every tracked `test_*.py` runs in CI through `tools/test-python.sh` (#1092, 2026-11-27). A tool test
   needs no toolchain, Docker or network.
+- A native whose canonical symbol (`module@major::name/arity`) is in the ABI table must have the table's
+  signature, or lowering refuses it at the declaration (#1098, 2026-11-27). A symbol outside the table
+  compiles, and the runtime refuses it, as the SPB verifier does.
 - A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
   and a test replays the target's logic on it.

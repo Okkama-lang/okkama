@@ -7,6 +7,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Compiler: a native declaration unlike the runtime's native table passed lowering and failed codegen
+  (#1098).** The fuzzer mutated `std/runtime/time_zone.ok` so that `timezone_local_candidates` took a `bool` and
+  returned `rat` where the table has `int`. Lowering gave it the table's symbol
+  (`runtime/time_zone@1::timezone_local_candidates/8`). Codegen then refused its own SPB, because the verifier
+  checks every native against the table. Lowering now checks the same at the declaration (`lowering/natives.rs`):
+  parameters, result and `native async` must match. Example: `Native "timezone_local_candidates" does not match
+  runtime/time_zone@1::timezone_local_candidates/8 of the runtime, which is (string, int, int, int, int, int, int,
+  int) -> int`. A symbol the table does not name (another module, major version or arity) is still left to the
+  runtime, as the verifier leaves it, and the run refuses it. std is unchanged: every `std/runtime` module
+  generates. Two sweeps checked the result. Of 16656 type and `async` mutants of std/runtime's natives, without the
+  check 14751 failed codegen and now none do. The fuzz run's exec and analyze corpora (5581 inputs), linked
+  against std, all link and generate or are refused before codegen. The crash input is a regression in
+  `okkama-rs/fuzz/regressions/exec/`.
 - **Sparrow: an intrinsic's error case in the layout before #290 loaded and was raised with its fields mixed up
   (#1090).** The load-time contract still accepted an error enum written as one `[$tag, $0_x: array…]` object.
   The runtime raised such an object by filling the payload arrays, and with a payload the runtime does not have,

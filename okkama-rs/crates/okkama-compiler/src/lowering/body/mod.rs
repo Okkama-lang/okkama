@@ -1124,6 +1124,15 @@ fn lower_native(ctx: &mut Ctx<'_, '_>, symbol: String, native: usize) -> Result<
         values.push(ctx.ir_type(ty, info.decl.span)?);
     }
     let result = ctx.ir_result(&info.result, &[], info.decl.span)?;
+    // Канонический символ ABI (§14.1): `модуль@major::имя/арность`.
+    let extern_symbol = format!(
+        "{}@{}::{}/{}",
+        reg.modules[info.module].name,
+        reg.modules[info.module].program.module.major(),
+        info.name,
+        info.params.len()
+    );
+    super::natives::check_abi(ctx, info, &extern_symbol, &values, &result)?;
     // A native can fail with a NativeFailure even where the program never
     // names one: the Sparrow core builds that object from its declaration
     // (an uncaught failure printed "program has no NativeFailure", #270).
@@ -1132,15 +1141,8 @@ fn lower_native(ctx: &mut Ctx<'_, '_>, symbol: String, native: usize) -> Result<
         symbol,
         params: (0..values.len()).map(ValueId).collect(),
         result,
-        // Канонический символ ABI (§14.1): `модуль@major::имя/арность`.
         attrs: {
-            let mut attrs = vec![ir::Attr::Extern(format!(
-                "{}@{}::{}/{}",
-                reg.modules[info.module].name,
-                reg.modules[info.module].program.module.major(),
-                info.name,
-                info.params.len()
-            ))];
+            let mut attrs = vec![ir::Attr::Extern(extern_symbol)];
             // Async native: вызов даёт `future<R>` от provider (§13).
             if info.is_async {
                 attrs.push(ir::Attr::Async);

@@ -2,6 +2,12 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1098 (feature/1098, not committed): `lowering/natives.rs::check_abi`, called from `lower_native`, refuses
+  a native whose canonical symbol is in the ABI table but whose parameters, result or asynchrony differ
+  (semantic error at the declaration); unknown symbols stay the runtime's. `okkama-runtime-abi`
+  `Native::signature_text` is public for the message. Sweeps: 16656 std/runtime native mutants (14751 codegen
+  failures without the check, 0 with it); fuzz run 45896662080's exec + analyze corpora (5581) linked against
+  std: 0 codegen failures.
 - [x] #1090 + #1091 + #1092 (feature/fuzz2, not committed): `contracts.rs::thrown` checks that an error case's
   fields are exactly the raised payload (the legacy `$tag` layout, unemitted since #290, used to load; a
   crafted one read `x` as the tag, 0); an intrinsic's contract errors name the intrinsic; `intrinsics::raised`

@@ -13,6 +13,7 @@ mod ctx;
 mod futures;
 pub(crate) mod intrinsics;
 mod modules;
+mod natives;
 pub mod std_paths;
 
 pub use modules::{LoadedModule, MODULE_COUNT, ModuleLoader};

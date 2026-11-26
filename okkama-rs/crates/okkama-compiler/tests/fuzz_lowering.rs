@@ -116,3 +116,26 @@ fn a_program_importing_std_runs_under_the_exec_budgets() {
         assert_eq!(run(text.as_bytes()).map(|outcome| outcome.map_err(|error| error.0)), Some(Ok(0)), "{path}");
     }
 }
+
+/// #1098 (fuzz exec): std/runtime/time_zone.ok mutated to natives only, one of
+/// them, `timezone_local_candidates`, with a `bool` parameter and a `rat` result
+/// where the native table has `int`. Codegen refused its own SPB; lowering now
+/// refuses the declaration, so linking accepts only what codegen generates.
+#[test]
+fn a_native_unlike_the_table_is_a_diagnostic() {
+    let data = include_bytes!("../../../fuzz/regressions/exec/crash-02628ffef0d82fc725199af58600524d7026a85a");
+    let error = analyze(data).unwrap_err();
+    assert!(matches!(error, LoweringError::Invalid { .. }), "{error:?}");
+    assert!(error.message().contains("Native \"timezone_local_candidates\" does not match \
+        runtime/time_zone@1::timezone_local_candidates/8 of the runtime, which is (string, int, int, int, int, int, int, int) -> int"),
+        "{}", error.message());
+    let text = std::str::from_utf8(data).unwrap();
+    assert!(text[error.span().start as usize..].starts_with("native timezone_local_candidates("));
+    assert!(!exec(data));
+    // std's own module, natives only and no main, links and generates.
+    let std = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../std/runtime/time_zone.ok")).unwrap();
+    assert!(exec(&std));
+    // A native the table does not name compiles; the run refuses it, never codegen.
+    let unknown = "module app;\nnative nothing_here() is int;\nmain() is int { nothing_here(); }";
+    assert!(run(unknown.as_bytes()).is_some_and(|outcome| outcome.is_err()), "an unknown native fails the run");
+}
