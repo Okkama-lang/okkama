@@ -61,6 +61,10 @@ no full test suites, Docker, cargo fmt or clippy.
   the global check refuses the first non-finite float; unit test `typing::data_tests`.
 - [x] #1066 (feature/1066): `jit::compile_limit_text` (MiB / KiB / bytes) in the compile-cost
   refusal; unit test `compile_limit_tests`, integration `compile_cost.rs` at 256 KiB.
+- [x] #1056 (feature/1056): `asm::Parser::error_after` (line of the consumed token) at the 14
+  consume-then-fail sites of asm.rs, operand.rs and `instructions!`; `unknown_escape` prints an
+  invisible escape by code point; unit tests `asm::line_tests`.
+
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 

@@ -213,7 +213,7 @@ macro_rules! instructions {
                         )*
                         Ok(Instruction::$name { $($field),* })
                     } )*
-                    other => Err(parser.error(format!("unknown instruction `{other}`"))),
+                    other => Err(parser.error_after(format!("unknown instruction `{other}`"))),
                 }
             }
 

@@ -386,7 +386,7 @@ fn tokenize(source: &str) -> Result<Vec<(Token, usize)>, AsmError> {
                                     .ok_or_else(|| AsmError { line, message: format!("invalid escape \\u{{{digits}}}") })?;
                                 text.push(point);
                             }
-                            other => return Err(AsmError { line, message: format!("unknown escape \\{other}") }),
+                            other => return Err(AsmError { line, message: unknown_escape(other) }),
                         }
                     }
                     '\n' => return Err(AsmError { line, message: "newline in string".into() }),
@@ -422,6 +422,16 @@ fn tokenize(source: &str) -> Result<Vec<(Token, usize)>, AsmError> {
     Ok(tokens)
 }
 
+/// `\q` for a visible character after a backslash; a newline, tab or other
+/// invisible one by its code point, so the message stays on one line (#1056).
+fn unknown_escape(escape: char) -> String {
+    if escape.is_whitespace() || escape.is_control() {
+        format!("unknown escape: `\\` followed by U+{:04X}", u32::from(escape))
+    } else {
+        format!("unknown escape \\{escape}")
+    }
+}
+
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct Parser<'a> {
@@ -442,6 +452,13 @@ impl Parser<'_> {
             line: self.line(),
             message: message.into(),
         }
+    }
+
+    /// An error about the token just consumed, on its line: the next token may
+    /// be on the line after (#1056).
+    pub(crate) fn error_after(&self, message: impl Into<String>) -> AsmError {
+        let line = self.at.checked_sub(1).and_then(|at| self.tokens.get(at)).map_or_else(|| self.line(), |(_, line)| *line);
+        AsmError { line, message: message.into() }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -514,12 +531,12 @@ impl Parser<'_> {
             Some(hex) => u64::from_str_radix(hex, 16),
             None => text.parse(),
         };
-        parsed.map_err(|_| self.error(format!("invalid number `{text}`")))
+        parsed.map_err(|_| self.error_after(format!("invalid number `{text}`")))
     }
 
     pub(crate) fn u32(&mut self) -> Result<u32, AsmError> {
         let value = self.u64()?;
-        u32::try_from(value).map_err(|_| self.error("number exceeds u32"))
+        u32::try_from(value).map_err(|_| self.error_after("number exceeds u32"))
     }
 
     /// Десятичное целое со знаком (текст константы `int`).
@@ -580,7 +597,7 @@ impl Parser<'_> {
     fn index(&mut self, prefix: &str, expected: usize) -> Result<(), AsmError> {
         let found = self.prefixed(prefix)?;
         if found as usize != expected {
-            return Err(self.error(format!("expected {prefix}{expected}, found {prefix}{found}")));
+            return Err(self.error_after(format!("expected {prefix}{expected}, found {prefix}{found}")));
         }
         Ok(())
     }
@@ -620,7 +637,7 @@ impl Parser<'_> {
             "future" => Type::Future(self.option_type()?),
             "cap" => Type::Cap(crate::CapRef::parse(self)?),
             "variant" => Type::Variant(crate::VariantRef::parse(self)?),
-            other => return Err(self.error(format!("unknown type `{other}`"))),
+            other => return Err(self.error_after(format!("unknown type `{other}`"))),
         })
     }
 
@@ -657,7 +674,7 @@ impl Parser<'_> {
         while !self.eat_punct("}") {
             let pc = self.u32()?;
             if pc as usize != code.len() {
-                return Err(self.error(format!("expected instruction {}, found {pc}", code.len())));
+                return Err(self.error_after(format!("expected instruction {}, found {pc}", code.len())));
             }
             self.punct(":")?;
             let mnemonic = self.ident()?;
@@ -680,7 +697,7 @@ impl Parser<'_> {
         self.keyword("sparrow")?;
         let version = self.u32()?;
         if version != u32::from(crate::VERSION) {
-            return Err(self.error(format!("unsupported Sparrow assembly version {version}")));
+            return Err(self.error_after(format!("unsupported Sparrow assembly version {version}")));
         }
         self.keyword("module")?;
         let mut program = Program {
@@ -827,4 +844,60 @@ pub fn assemble(source: &str) -> Result<Program, AsmError> {
         message: error.to_string(),
     })?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod line_tests {
+    /// The line and message of the assembly error of `text`.
+    fn error(text: &str) -> (usize, String) {
+        let error = super::assemble(text).expect_err(text);
+        (error.line, error.message)
+    }
+
+    /// `main` with `code` as its body, one register of type t0 = int and t1 = bool.
+    fn body(code: &str) -> String {
+        format!(
+            "sparrow {}\nmodule \"m\" \"v1\"\ntype t0 int\ntype t1 bool\nfunction f0 \"main\" {{\n registers [t0, t1]\n params []\n result t0\n{code}\n}}\nentry f0\n",
+            crate::VERSION
+        )
+    }
+
+    /// #1056: an error found after its token was consumed names that token's
+    /// line, even when the next token is on the line after.
+    #[test]
+    fn errors_after_a_consumed_token_name_its_line() {
+        let header = |rest: &str| format!("sparrow {}\nmodule \"m\" \"v1\"\n{rest}", crate::VERSION);
+        let (line, message) = error("sparrow 15\nmodule \"m\" \"v1\"\n");
+        assert_eq!((line, message.as_str()), (1, "unsupported Sparrow assembly version 15"));
+        assert_eq!(error(&header("type t0 string\ntype t1 int\n")), (3, "unknown type `string`".into()));
+        assert_eq!(error(&header("type t1 int\ntype t2 int\n")), (3, "expected t0, found t1".into()));
+        assert_eq!(error(&header("type t0 handle 4294967296\ntype t1 int\n")), (3, "number exceeds u32".into()));
+        assert_eq!(error(&header("type t0 handle 0xzz\ntype t1 int\n")), (3, "invalid number `0xzz`".into()));
+        // The body starts on line 9: the failing token ends it.
+        for (code, message) in [
+            (" 0: const r0, int 007\n 1: ret r0", "non-canonical integer constant"),
+            (" 0: const r0, byte 256\n 1: ret r0", "byte constant exceeds 255"),
+            (" 0: const r0, char 55296\n 1: ret r0", "invalid char constant"),
+            (" 0: const r0, word\n 7\n 1: ret r0", "unknown constant kind `word`"),
+            (" 0: frob\n r0\n 1: ret r0", "unknown instruction `frob`"),
+            (" 0: int.cmp around\n , r1, r0, r0\n 1: ret r0", "unknown Cmp `around`"),
+            (" 1\n : ret r0", "expected instruction 0, found 1"),
+        ] {
+            let (line, found) = error(&body(code));
+            assert_eq!((line, found.as_str()), (9, message), "{code}");
+        }
+        let deep = format!("{}\n 1 int 0", "array 1 ".repeat(64) + "array");
+        let (line, message) = error(&header(&format!("type t0 int\nglobal g0 t0 f0 data {deep}\n")));
+        assert_eq!((line, message.as_str()), (4, "data nested deeper than 64"));
+        // An error at the current token keeps its own line.
+        assert_eq!(error(&header("type t0 int\n}\n")), (4, "expected a declaration".into()));
+    }
+
+    /// #1056: a backslash before a raw newline is reported without the newline.
+    #[test]
+    fn an_unknown_escape_is_shown_printable() {
+        let (line, message) = error(&format!("sparrow {}\nmodule \"m\\\n\" \"v1\"\n", crate::VERSION));
+        assert_eq!((line, message.as_str()), (2, "unknown escape: `\\` followed by U+000A"));
+        assert_eq!(error(&format!("sparrow {}\nmodule \"m\\q\" \"v1\"\n", crate::VERSION)).1, "unknown escape \\q");
+    }
 }

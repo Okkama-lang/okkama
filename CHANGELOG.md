@@ -23,6 +23,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   it used to verify and run.
 - **JIT (#1066).** The compile-cost refusal names its limit in KiB under a memory budget below 1 MiB (bytes below
   1 KiB); it said "more than 0 MiB".
+- **Sparrow assembler (#1056).** An error found after its token was read (an unsupported version, an unknown type,
+  instruction, constant kind or comparison, a bad or too large number, a non-canonical `int`, `byte` over 255, an
+  invalid `char`, a wrong table index or instruction number, data nested too deep) names that token's line, not
+  the next token's; a backslash before a raw newline in a string is reported as "`\` followed by U+000A" instead
+  of breaking the message.
 
 ## [0.6.4] — 2026-11-23
 
