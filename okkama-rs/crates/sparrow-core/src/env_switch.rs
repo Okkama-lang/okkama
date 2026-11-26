@@ -1,4 +1,4 @@
-//! Shared boolean environment-switch policy (#1067).
+//! Shared environment-switch policy: booleans (#1067) and byte counts (#933).
 use std::ffi::OsStr;
 
 #[allow(dead_code)]
@@ -11,6 +11,21 @@ pub fn enabled(name: &str) -> bool {
 #[allow(dead_code)]
 pub fn enabled_or(name: &str, default: bool) -> bool {
     value_enabled_or(std::env::var_os(name).as_deref(), default)
+}
+
+/// A byte-count switch (#933): unset or empty is `None`; a value that is not
+/// a decimal count up to `max` is an error naming the switch, never ignored.
+pub fn bytes(name: &str, max: usize) -> Result<Option<usize>, String> {
+    value_bytes(name, std::env::var_os(name).as_deref(), max)
+}
+
+pub(crate) fn value_bytes(name: &str, value: Option<&OsStr>, max: usize) -> Result<Option<usize>, String> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else { return Ok(None) };
+    let text = value.to_string_lossy();
+    match text.parse::<usize>() {
+        Ok(count) if count <= max && text.bytes().all(|b| b.is_ascii_digit()) => Ok(Some(count)),
+        _ => Err(format!("{name}: expected a byte count from 0 to {max}, got {text:?}")),
+    }
 }
 
 pub(crate) fn value_enabled_or(value: Option<&OsStr>, default: bool) -> bool {
@@ -38,6 +53,20 @@ mod tests {
         assert!(!value_enabled_or(None, false));
         assert!(!value_enabled_or(Some(OsStr::new("off")), true));
         assert!(value_enabled_or(Some(OsStr::new("1")), false));
+    }
+
+    #[test]
+    fn byte_count_switch_values() {
+        let read = |value: Option<&str>| value_bytes("S", value.map(OsStr::new), 4096);
+        assert_eq!(read(None), Ok(None));
+        assert_eq!(read(Some("")), Ok(None));
+        assert_eq!(read(Some("0")), Ok(Some(0)));
+        assert_eq!(read(Some("192")), Ok(Some(192)));
+        assert_eq!(read(Some("4096")), Ok(Some(4096)));
+        for bad in ["4097", "-1", "+64", " 64", "64 ", "0x40", "64k", "on"] {
+            let error = read(Some(bad)).unwrap_err();
+            assert!(error.starts_with("S: expected a byte count from 0 to 4096"), "{bad:?}: {error}");
+        }
     }
 
     #[test]

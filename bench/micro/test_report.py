@@ -70,6 +70,19 @@ class ReportTests(unittest.TestCase):
         b = self.campaign('b', 1, toolchain={'version_check': {'status': 'MISMATCH'}})
         self.assertEqual(self.cell([a], [b])['verdict'], 'incompatible')
 
+    def test_layout_spread_is_carried_and_placements_must_match(self):
+        cell = lambda value, layout: {'x': {'sparrow': {'status': 'VALID', 'ns_per_iteration': value, 'spread': .05, 'layout_spread': layout}}}
+        old = [self.campaign('a1', 100, benchmarks=cell(100, .01), placements=[0, 64]),
+               self.campaign('a2', 100, benchmarks=cell(100, .03), placements=[0, 64])]
+        new = [self.campaign('b', 100, benchmarks=cell(101, .02), placements=[0, 64])]
+        result = self.cell(old, new)
+        self.assertEqual((result['layoutBefore'], result['layoutAfter']), (.03, .02))
+        self.assertEqual(result['verdict'], 'noise')
+        other = self.campaign('c', 100, benchmarks=cell(101, .02), placements=[0, 1024])
+        self.assertEqual(self.cell(old, [other])['verdict'], 'incompatible')
+        plain = self.cell([self.campaign('d', 100)], [self.campaign('e', 100)])
+        self.assertEqual((plain['layoutBefore'], plain['layoutAfter']), (None, None))
+
     def test_template_is_in_repo_and_embedded_data_uses_all_rounds(self):
         old = [self.campaign('a1', 1), self.campaign('a2', 9)]
         new = [self.campaign('b', 6)]

@@ -107,6 +107,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   ("the session changes the published constant const.LIMIT"), as the other tables name their items; it said
   `FuncRef(1)`.
 ### Changed
+- **Sparrow: machine-code placement and the micro A/B's layout spread (#933).** Every compiled function starts on
+  a page of its own at a fixed offset, so the alignment of its code does not depend on compile order (unit tests
+  for the rule); `SPARROW_CORE_CODE_SHIFT=N` (bytes, 0–65536, a bad value is refused) moves every function N bytes
+  past its page. `bench/micro/run.py --placements 0,64,1024` runs each cell under those shifts, every placement in
+  every round, and records each cell's layout spread; `report.py` shows it. Measured on Apple silicon (macOS and
+  the Linux container): moving JIT code (other pages, shifts, 16/64 KiB granules) does not move array-plus, float
+  or map-replace beyond run noise; the v0.6.1 array-plus gap (77 vs 60 ns) follows the runtime binary's own
+  layout, and `SPARROW_CORE_NO_INLINE=main` adds the lazy compile of `Measurement.finish` (~1.4 ms) to the timed
+  interval (bench/micro README, "Code layout"). The container has no hardware counters, so there is no
+  instruction-count mode.
 - **IR text (#1043).** `okkama ir` prints `oir 2 high` (it said `oir 1 high`), and the compiler's documentation
   names the current IR OIR-2.
 - **SPB 18 (#1061).** `resource.settle` and `resource.settle_unwind` (opcodes 161, 162, since 0.6.2) came without a

@@ -2,6 +2,18 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #933 (feature/933, not committed): `code_memory` places every function on a page of its own at
+  `shift` bytes (`CodeMemory::new(shift)`, `Region::written`, skipped pages untouched); `Jit::new` reads
+  `SPARROW_CORE_CODE_SHIFT` through `env_switch::bytes` (refuses a malformed value), `Jit::with_code_shift`;
+  devtrace event `jit` "code placed". `bench/micro/run.py --placements` (every placement in every round,
+  `layout`/`layout_spread` per cell, placements part of compatibility), report.py shows the layout spread.
+  Numbers (okkama-dev, n=10⁶, 5 runs): release/065 — moving JIT code (base +4/8/12/16/20/36 KiB, shift
+  64/128/1024/2048, 64 KiB granule) keeps array-plus 58–59, float 8.8, map-replace 376–385 ns; v0.6.1 —
+  array-plus 75.7–79.1 ns on every JIT placement vs 60 with `NO_INLINE=main`, unchanged by heap page
+  alignment, malloc padding and stack shifts, gone after an unrelated Rust edit (62.9/63.8): the AOT binary's
+  layout. `NO_INLINE=main` adds ~1.4 ms of lazy compile (`Measurement.finish`) to the timed interval. No PMU
+  in the Docker VM. Proposed tickets: harness pre-compile of the finish path; link-order perturbation
+  (lld `--shuffle-sections`) for the AOT layout lottery.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

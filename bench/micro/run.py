@@ -62,11 +62,12 @@ def bounded(cmd,timeout=120,limit=65536):
 
 class Docker:
     def __init__(self,args,work):self.args=args;self.work=work
-    def run(self,command,timeout=None):
+    def run(self,command,timeout=None,env=None):
         a=self.args;name='okkama-micro-'+uuid.uuid4().hex
         cmd=['docker','run','--name',name,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--cpus',str(a.cpus),'--memory',a.memory,'--memory-swap',a.memory,'--pids-limit','128','--ulimit','nofile=256:256','--ulimit','fsize=268435456:268435456','--ulimit',f'cpu={a.timeout}:{a.timeout}','--tmpfs','/tmp:rw,nosuid,size=256m','-v',f'{HERE}:/suite:ro','-v',f'{self.work}:/work','-w','/work','-e','OKKAMA_TRACE=off']
         if a.toolchain:cmd+=['-v',f'{Path(a.toolchain).resolve()}:/toolchain:ro']
         if a.stdlib:cmd+=['-v',f'{Path(a.stdlib).resolve()}:/stdlib:ro','-e','OKKAMA_STDLIB_DIR=/stdlib']
+        for key,value in (env or {}).items():cmd+=['-e',f'{key}={value}']
         cmd+=[a.image,*command]
         try:return bounded(cmd,timeout or a.timeout,a.output_bytes)
         finally:
@@ -84,17 +85,48 @@ def parse_sample(output,n,warm,name):
     return {'elapsed_ns':elapsed,'checksum':check,'warm_checksum':warm_check,'ns_per_iteration':elapsed/n}
 
 
+PLACEMENT_SWITCH='SPARROW_CORE_CODE_SHIFT'
+MAX_PLACEMENT=65536
+
+
+def placements(text):
+    """--placements: distinct machine-code shifts in bytes (#933), e.g. 0,64,1024."""
+    try:values=[int(part) for part in text.split(',')]
+    except ValueError:raise argparse.ArgumentTypeError('comma-separated byte counts')
+    if not values or len(set(values))!=len(values) or any(not 0<=v<=MAX_PLACEMENT for v in values):
+        raise argparse.ArgumentTypeError(f'distinct byte counts from 0 to {MAX_PLACEMENT}')
+    return values
+
+
+def placement_env(placement):
+    return {} if placement is None else {PLACEMENT_SWITCH:str(placement)}
+
+
+def layout(samples):
+    """Per-placement medians and their spread (max/min - 1); None without two placements."""
+    groups={}
+    for sample in samples:
+        if sample.get('placement') is not None:groups.setdefault(sample['placement'],[]).append(sample['ns_per_iteration'])
+    if len(groups)<2:return None
+    medians={str(p):statistics.median(v) for p,v in sorted(groups.items())}
+    return {'medians':medians,'spread':max(medians.values())/min(medians.values())-1}
+
+
 def summarize(samples,runs,min_ns):
     if len(samples)!=runs:return {'status':'INVALID','reason':'incomplete sample set','samples':samples}
     values=[s['ns_per_iteration'] for s in samples]
     median=statistics.median(values);spread=max(values)/min(values)-1
     status='VALID' if min(s['elapsed_ns'] for s in samples)>=min_ns and spread<=.10 else 'INCONCLUSIVE'
-    return {'status':status,'samples':samples,'ns_per_iteration':median,'min':min(values),'max':max(values),'spread':spread,'mad':statistics.median(abs(v-median) for v in values),'reason':None if status=='VALID' else 'short batch or >10% full-range spread; repeat N/2N/4N and inspect GC/JIT separately'}
+    cell={'status':status,'samples':samples,'ns_per_iteration':median,'min':min(values),'max':max(values),'spread':spread,'mad':statistics.median(abs(v-median) for v in values),'reason':None if status=='VALID' else 'short batch or >10% full-range spread; repeat N/2N/4N and inspect GC/JIT separately'}
+    # The full-range spread covers every placement, so the comparison band already includes layout (#933).
+    shape=layout(samples)
+    if shape:cell['layout']=shape['medians'];cell['layout_spread']=shape['spread']
+    return cell
 
 
 def compare(before,after,name,engine):
     if before.get('schema')!=SCHEMA:return {'status':'INCOMPATIBLE','reason':'legacy schema lacks comparable provenance'}
-    for key in ['suite_hash','protocol','environment','n','warmup','quality_policy']:
+    for key in ['suite_hash','protocol','environment','n','warmup','quality_policy','placements']:
         if before.get(key)!=after.get(key):return {'status':'INCOMPATIBLE','reason':key+' differs'}
     if any(result.get('toolchain',{}).get('version_check',{}).get('status')=='MISMATCH' for result in (before,after)):
         return {'status':'INCOMPATIBLE','reason':'toolchain version does not match declared revision'}
@@ -153,6 +185,7 @@ def main():
     p.add_argument('--cpus',type=positive,default=1);p.add_argument('--memory',default='2g')
     p.add_argument('--min-ms',type=positive,default=10);p.add_argument('--seed',type=int,default=1729)
     p.add_argument('--label',default=datetime.datetime.now(datetime.timezone.utc).strftime('micro-%Y%m%dT%H%M%SZ'))
+    p.add_argument('--placements',type=placements,help=f'machine-code shifts in bytes ({PLACEMENT_SWITCH}, #933), e.g. 0,64,1024: --runs is split evenly between them, each round runs every placement; reports the layout spread of each cell')
     p.add_argument('--require-valid',action='store_true',help='exit 2 if any completed cell remains inconclusive')
     p.add_argument('--compare');p.add_argument('--plan',action='store_true')
     p.add_argument('--results',default=str(HERE/'results'),help='directory of result files (the archive lives in okkama-docs/benchmarks/micro/results)')
@@ -160,6 +193,8 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*',a.label):p.error('label must be a plain filename stem')
     if a.toolchain and not a.stdlib:p.error('--toolchain requires explicit --stdlib for reproducible comparisons')
     if a.runs<3:p.error('at least three process samples required')
+    if a.placements and (a.runs%len(a.placements) or a.runs<2*len(a.placements)):
+        p.error('--runs must be a multiple of the placements, with at least two runs per placement')
     engines=[{'tomato':'sparrow'}.get(e,e) for e in a.engines.split(',')]
     if len(set(engines))!=len(engines) or not set(engines)<={'ir','sparrow','jvm'}:p.error('unknown or duplicate engine')
     manifest=json.loads((HERE/'manifest.json').read_text());selected=set(a.only.split(',')) if a.only else set(manifest)
@@ -177,7 +212,7 @@ def main():
     files=sorted([*HERE.glob('lang/*.ok'),*HERE.glob('std/*.ok'),*HERE.glob('support/*.ok'),HERE/'manifest.json',HERE/'oracles.py',HERE/'run.py'])
     hashes={str(f.relative_to(HERE)):digest(f) for f in files}
     suite_hash=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
-    result={'schema':SCHEMA,'status':'INCOMPLETE','label':a.label,'protocol':'micro-v2 warmed batch; no baseline subtraction','suite_hash':suite_hash,'source_hashes':hashes,'n':a.n,'warmup':a.warmup,'runs':a.runs,'quality_policy':{'min_ms':a.min_ms,'max_spread':.10},'seed':a.seed,'order':[],'workloads':{name:manifest[name] for name in sorted(selected)},'benchmarks':{},'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    result={'schema':SCHEMA,'status':'INCOMPLETE','label':a.label,'protocol':'micro-v2 warmed batch; no baseline subtraction','suite_hash':suite_hash,'source_hashes':hashes,'n':a.n,'warmup':a.warmup,'runs':a.runs,'quality_policy':{'min_ms':a.min_ms,'max_spread':.10},'seed':a.seed,**({'placements':a.placements} if a.placements else {}),'order':[],'workloads':{name:manifest[name] for name in sorted(selected)},'benchmarks':{},'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
     def save():
         tmp=out.with_suffix('.json.tmp');tmp.write_text(json.dumps(result,indent=2)+'\n');os.replace(tmp,out)
     try:
@@ -215,18 +250,24 @@ def main():
             # Short independent-oracle checks exercise more than one iteration count.
             for name,e in jobs:
                 for n in (17,31):
-                    stdout,stderr=docker.run([*commands[name,e],str(n),'3'])
+                    stdout,stderr=docker.run([*commands[name,e],str(n),'3'],env=placement_env(a.placements[0] if a.placements else None))
                     parse_sample(stdout,n,3,name)
                     if stderr:raise ValueError(f'{name}/{e}: unexpected stderr: {stderr[:1000]}')
-            for round_ in range(a.runs):
-                order=list(jobs);rng.shuffle(order);result['order'].append(order)
-                for name,e in order:
+            shifts=a.placements or [None]
+            for round_ in range(a.runs//len(shifts)):
+                # #933: a round runs every cell under every placement, shuffled together, so a burst of
+                # host load falls on all placements alike instead of on the placement of one round.
+                order=[(name,e,placement) for name,e in jobs for placement in shifts];rng.shuffle(order)
+                result['order'].append([item if item[2] is not None else item[:2] for item in order])
+                for name,e,placement in order:
                     key=(name,e)
                     if key in broken:continue
                     try:
-                        stdout,stderr=docker.run([*commands[key],str(a.n),str(a.warmup)])
+                        stdout,stderr=docker.run([*commands[key],str(a.n),str(a.warmup)],env=placement_env(placement))
                         if stderr:raise ValueError('unexpected stderr: '+stderr[:1000])
-                        samples[key].append(parse_sample(stdout,a.n,a.warmup,name))
+                        sample=parse_sample(stdout,a.n,a.warmup,name)
+                        if placement is not None:sample['placement']=placement
+                        samples[key].append(sample)
                         cell=summarize(samples[key],a.runs,a.min_ms*1000000)
                     except (RuntimeError,ValueError,OSError) as error:
                         broken.add(key);cell={'status':'INVALID','reason':str(error),'samples':samples[key]}
@@ -239,12 +280,13 @@ def main():
     except (RuntimeError,ValueError,OSError,subprocess.SubprocessError) as error:
         result['status']='INVALID';result['error']=str(error)
     finally:save()
-    print('benchmark / engine                 gross ns/iteration  status')
+    print('benchmark / engine                 gross ns/iteration  status'+('  layout spread over placements '+','.join(map(str,a.placements)) if a.placements else ''))
     for name,row in sorted(result['benchmarks'].items()):
         for engine,cell in sorted(row.items()):
             value=cell.get('ns_per_iteration')
             shown=f'{value:.3f}' if value is not None else 'unavailable'
-            print(f'{name}/{engine:8} {shown:>20}  {cell["status"]}')
+            shape=f'  layout ±{cell["layout_spread"]:.1%}' if 'layout_spread' in cell else ''
+            print(f'{name}/{engine:8} {shown:>20}  {cell["status"]}{shape}')
             if cell.get('reason'):print('  '+cell['reason'])
             comparison=result.get('comparison',{}).get(name,{}).get(engine)
             if comparison:print('  comparison: '+json.dumps(comparison))

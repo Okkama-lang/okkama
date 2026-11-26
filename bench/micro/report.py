@@ -23,7 +23,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ENGINE_NAMES = {"sparrow": "Tomato", "ir": "IR", "jvm": "JVM"}
-SAME = ["suite_hash", "protocol", "n", "warmup", "quality_policy"]
+SAME = ["suite_hash", "protocol", "n", "warmup", "quality_policy", "placements"]
 
 
 def campaign_key(result):
@@ -66,6 +66,8 @@ def aggregate(rounds):
     return {"status": "VALID" if valid and measured else "INCONCLUSIVE",
             "ns_per_iteration": statistics.geometric_mean(values) if measured else None,
             "spread": max((cell.get("spread", 0) for cell in cells), default=0),
+            # #933: the spread of the per-placement medians, when the campaign ran under --placements.
+            "layout": max((cell["layout_spread"] for cell in cells if "layout_spread" in cell), default=None),
             "rounds": len(rounds)}
 
 
@@ -84,6 +86,7 @@ def cells(old_files, new_files):
             all_rounds = bases + rounds
             out = {"before": before["ns_per_iteration"], "after": cell["ns_per_iteration"],
                    "spreadBefore": before["spread"], "spreadAfter": cell["spread"],
+                   "layoutBefore": before["layout"], "layoutAfter": cell["layout"],
                    "statusBefore": before["status"], "statusAfter": cell["status"],
                    "roundsBefore": len(bases), "roundsAfter": len(rounds),
                    "n": rounds[0][1]["n"]}
@@ -228,7 +231,10 @@ function chip(c) {
   if (c.verdict === "incompatible") return `<span class="chip even" title="кампании несовместимы">несовместимо</span>`;
   return `<span class="chip even" title="${c.statusBefore} / ${c.statusAfter}: короткая серия или разброс больше 10%">неубедительно ${v}</span>`;
 }
-const spread = c => `±${((c.spreadBefore || 0) * 100).toFixed(0)}% / ±${((c.spreadAfter || 0) * 100).toFixed(0)}%`;
+const spread = c => `±${((c.spreadBefore || 0) * 100).toFixed(0)}% / ±${((c.spreadAfter || 0) * 100).toFixed(0)}%` + layout(c);
+// #933: the part of the spread that follows the placement of machine code (run.py --placements).
+const layout = c => c.layoutBefore == null && c.layoutAfter == null ? "" :
+  ` <span class="muted" title="разброс медиан по раскладкам машинного кода">раскладка ±${((c.layoutBefore || 0) * 100).toFixed(0)}% / ±${((c.layoutAfter || 0) * 100).toFixed(0)}%</span>`;
 
 function tiles() {
   const items = [];

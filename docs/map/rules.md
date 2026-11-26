@@ -16,7 +16,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (115)
+## Tags in one layer (116)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -69,6 +69,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - SHIFT_RIGHT — front: `syntax/token.rs`
 - SHIFT_UNSIGNED — front: `syntax/token.rs`
 - SPARROW_CORE_CLOSURE_BRIDGE — sparrow: `runtime.rs`
+- SPARROW_CORE_CODE_SHIFT — sparrow: `jit.rs`
 - SPARROW_CORE_DUMP — sparrow: `jit.rs`
 - SPARROW_CORE_FRONTEND_MAPS — sparrow: `jit.rs`
 - SPARROW_CORE_FS_FAULTS — sparrow: `host/native_fs.rs`

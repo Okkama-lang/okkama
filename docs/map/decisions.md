@@ -6,6 +6,15 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-26. #933 JIT code placement (lead task, implementer measurement).** Keep one page per
+  function (entries page-aligned, in-page offsets independent of compile order, now a tested rule in
+  `code_memory`); no 16/64 KiB granule, cache-line padding or index-derived pages: on Apple silicon (macOS
+  and the okkama-dev container) none of them moved array-plus, float or map-replace beyond run noise, on
+  release/065 and on v0.6.1. `SPARROW_CORE_CODE_SHIFT` (bytes, 0–65536, refused when malformed) is the
+  layout perturbation; the micro A/B uses it through `run.py --placements`, every placement in every round.
+  The v0.6.1 array-plus gap is not JIT placement (it follows the AOT runtime binary's layout); no
+  instruction-count mode, because the Docker VM has no PMU.
+
 - **2026-11-26. #1029 entry-result report (implementation choice under the
   owner's six-ticket task).** Preserve the bare runtime message used for
   results beyond i64: `main() must return an int in 0..255, got VALUE`, newline,

@@ -53,7 +53,7 @@ class RunnerTests(unittest.TestCase):
             (root/'run.py').write_text('fixture');(root/'oracles.py').write_text('fixture')
             class FakeDocker:
                 def __init__(self,*args):self.timed=0
-                def run(self,command):
+                def run(self,command,env=None):
                     if '--version' in command:return 'okkama test',''
                     if command[0]=='sha256sum':return 'abc binary',''
                     n,w=map(int,command[-2:])
@@ -72,6 +72,68 @@ class RunnerTests(unittest.TestCase):
             cell=result['benchmarks']['baseline']['ir']
             self.assertEqual(cell['status'],'INVALID');self.assertEqual(len(cell['samples']),1)
             self.assertIn('later failure',cell['reason'])
+
+
+class PlacementTests(unittest.TestCase):
+    """#933: each cell under several machine-code placements, and its layout spread."""
+    def sample(self,value,placement=None):
+        s={'elapsed_ns':value*10000,'checksum':0,'warm_checksum':0,'ns_per_iteration':value}
+        if placement is not None:s['placement']=placement
+        return s
+    def test_placement_list(self):
+        self.assertEqual(run.placements('0,64,1024'),[0,64,1024])
+        for bad in ['', '0,0', '-64', '65537', '64k', '0,,64']:
+            with self.assertRaises(run.argparse.ArgumentTypeError):run.placements(bad)
+    def test_layout_spread_is_over_placement_medians(self):
+        samples=[self.sample(100,0),self.sample(102,64),self.sample(100,0),self.sample(110,64)]
+        cell=run.summarize(samples,4,1)
+        self.assertEqual(cell['layout'],{'0':100,'64':106})
+        self.assertAlmostEqual(cell['layout_spread'],.06)
+        # The band still uses the full-range spread over every placement.
+        self.assertAlmostEqual(cell['spread'],.10)
+        self.assertNotIn('layout',run.summarize([self.sample(100)]*3,3,1))
+        self.assertNotIn('layout',run.summarize([self.sample(100,0)]*3,3,1))
+    def test_different_placements_are_incompatible(self):
+        a={'schema':2,'placements':[0,64],'benchmarks':{'x':{'ir':{'status':'VALID','ns_per_iteration':100,'spread':.01}}}}
+        b={'placements':[0,1024],'benchmarks':{'x':{'ir':{'status':'VALID','ns_per_iteration':100,'spread':.01}}}}
+        self.assertEqual(run.compare(a,b,'x','ir')['status'],'INCOMPATIBLE')
+        self.assertEqual(run.compare(a,dict(b,placements=[0,64]),'x','ir')['status'],'WITHIN_NOISE')
+    def test_every_round_runs_every_placement(self):
+        import tempfile,json
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            (root/'lang').mkdir();(root/'lang/baseline.ok').write_text('fixture')
+            (root/'manifest.json').write_text(json.dumps({'baseline':{'path':'lang/baseline.ok'}}))
+            (root/'run.py').write_text('fixture');(root/'oracles.py').write_text('fixture')
+            seen=[]
+            class FakeDocker:
+                def __init__(self,*args):pass
+                def run(self,command,env=None):
+                    if '--version' in command:return 'okkama test',''
+                    if command[0]=='sha256sum':return 'abc binary',''
+                    n,w=map(int,command[-2:])
+                    shift=int((env or {}).get(run.PLACEMENT_SWITCH,-1))
+                    if n==101:seen.append(shift)
+                    return f'micro-v2 {n} {w} {100000000+shift*1000} {expected("baseline",n)} {expected("baseline",w)}',''
+            def probe(command,**kwargs):
+                return ('[{"Id":"image-id","Architecture":"arm64"}]' if command[1]=='image' else 'host','')
+            argv=['run.py','--okkama','/binary','--image','fixture','--engines','ir','--n','101','--warmup','3','--runs','4','--placements','0,64','--label','turns','--build-profile','fixture','--revision','fixture']
+            with patch.object(run,'HERE',root),patch.object(run,'Docker',FakeDocker),patch.object(run,'bounded',probe),patch.object(sys,'argv',argv):
+                run.main()
+            # Each round runs every placement once.
+            self.assertEqual([sorted(seen[:2]),sorted(seen[2:])],[[0,64],[0,64]])
+            result=json.loads((root/'results/turns.json').read_text())
+            self.assertEqual(result['placements'],[0,64])
+            self.assertEqual([sorted(item[2] for item in order) for order in result['order']],[[0,64],[0,64]])
+            cell=result['benchmarks']['baseline']['ir']
+            self.assertEqual([s['placement'] for s in cell['samples']],seen)
+            self.assertEqual(set(cell['layout']),{'0','64'})
+            self.assertGreater(cell['layout_spread'],0)
+    def test_runs_split_evenly_between_placements(self):
+        for runs in ['3','5']:
+            argv=['run.py','--okkama','/binary','--image','fixture','--runs',runs,'--placements','0,64','--plan']
+            with patch.object(sys,'argv',argv),self.assertRaises(SystemExit) as refused:run.main()
+            self.assertEqual(refused.exception.code,2)
 
 
 class VersionTests(unittest.TestCase):

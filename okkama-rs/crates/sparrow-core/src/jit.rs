@@ -320,11 +320,18 @@ impl std::fmt::Debug for Jit {
 
 impl Jit {
     pub fn new() -> Result<Self, Error> {
+        // The layout perturbation of the micro A/B (#933, `code_memory`).
+        let shift = crate::env_switch::bytes("SPARROW_CORE_CODE_SHIFT", crate::code_memory::MAX_SHIFT).map_err(Error)?;
+        Self::with_code_shift(shift.unwrap_or(0))
+    }
+
+    /// A JIT whose functions start `shift` bytes past their pages (#933).
+    pub(crate) fn with_code_shift(shift: usize) -> Result<Self, Error> {
         let isa = target("speed")?;
         let unoptimized = Chosen::from_env("SPARROW_CORE_UNOPTIMIZED");
         let unoptimized_isa = if unoptimized.any() { Some(target("none")?) } else { None };
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
-        builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new()));
+        builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new(shift)));
         declare_helpers(&mut builder);
         let mut module = JITModule::new(builder);
         let helpers = import_helpers(&mut module)?;
@@ -718,6 +725,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         eprintln!("; roots\t{symbol}\ttraced registers {traced}\tomitted registers {omitted}\tstack-map words {root_words}");
     }
     let address = jit.module.get_finalized_function(id) as u64;
+    okkama_devtrace::event!("jit", "code placed", fn = symbol, address = format!("{address:#x}"), bytes = size);
     for (ret, slots) in maps {
         jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
     }
@@ -3407,3 +3415,5 @@ mod inline_tests;
 #[cfg(test)]
 mod closure_call_tests;
 
+#[cfg(test)]
+mod placement_tests;

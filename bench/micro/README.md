@@ -117,6 +117,42 @@ A change must exceed 10% and twice the larger full-range spread. This is a
 **conservative heuristic, not a confidence interval or statistical significance**.
 `INCOMPATIBLE`, `INCONCLUSIVE` and `WITHIN_NOISE` must not be presented as a win.
 
+### Code layout (#933)
+
+Sparrow places every compiled function on a page of its own, at the same offset
+(`SPARROW_CORE_CODE_SHIFT`, 0 by default), so the alignment of every instruction
+within its page and cache line belongs to the function's own code and does not
+depend on what was compiled before it. Only the page number follows the compile order.
+
+`--placements 0,64,1024` runs each cell under those machine-code shifts in bytes:
+`--runs` is split evenly between them (a multiple of their count, at least two
+runs each), and every round runs every cell under every placement, shuffled
+together, so a burst of host load falls on all placements alike. A cell then
+records `layout` (the median per placement) and `layout_spread` (their
+max/min − 1), and the runner prints it. The full-range spread, and so the
+comparison band, covers every placement. Campaigns with different placements are
+incompatible; report.py shows both sides' layout spread next to the run spread.
+A toolchain older than 0.6.5 ignores the switch, so its layout spread is run noise.
+
+What the placements do not cover: in v0.6.1, `array-plus` ran 77–83 ns with
+inlining into `main` and 60–66 ns with `SPARROW_CORE_NO_INLINE=main` on every
+JIT placement tried (other pages, shifts 64/1024 bytes, 16 KiB granule), with
+heap pages 4/64 KiB-aligned, after allocator padding and stack shifts; an
+unrelated edit to the Rust runtime removed the gap (62.9 / 63.8 ns). That
+lottery lives in the layout of the ahead-of-time runtime binary, which a runtime
+switch cannot perturb. And `SPARROW_CORE_NO_INLINE=main` is not a pure layout
+toggle: without inlining, `Measurement.finish` and its callees are compiled
+lazily after the loop and before the closing clock read, about 1.2–1.5 ms inside
+the timed interval (float: +5.9 ns/iteration at N=250 000, +1.15 at 10⁶,
++0.34 at 4·10⁶).
+
+There is no instruction-count mode: Docker Desktop's Linux VM exposes no
+hardware PMU (`/sys/bus/event_source/devices` lists only software, tracepoint,
+kprobe, uprobe and breakpoint; `perf_event_open` of
+`PERF_COUNT_HW_INSTRUCTIONS` fails with ENOENT even in a privileged
+container). Instruction counts need a host with a PMU, such as an x86 runner
+(#265).
+
 ## Immutable results and release workflow
 
 Results use schema 2 and include source hashes, image ID, architecture, Docker host
