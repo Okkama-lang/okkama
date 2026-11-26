@@ -24,7 +24,8 @@ use sparrow_core::test_report;
 #[global_allocator]
 static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
 
-mod env_switch;
+// The one switch policy of every crate (#1095); `crate::env_switch` names it.
+use okkama_devtrace::env_switch;
 
 mod core;
 mod doctest;
@@ -383,7 +384,9 @@ fn core_described(
     match result {
         Ok(Ok(value)) => (core_outcome(Ok(value)), None),
         Ok(Err((error, uncaught))) => (core_outcome(Err(error)), uncaught),
-        Err(error) => (core_outcome(Err(error)), None),
+        // A program that does not load (#1097: a runtime that cannot be built, such as a malformed
+        // `SPARROW_CORE_CODE_SHIFT`), with the prefix `okkama exec` gives it.
+        Err(error) => (Outcome::failure(format!("okkama: {}", core::report(error)), EXIT_DIAGNOSTICS), None),
     }
 }
 

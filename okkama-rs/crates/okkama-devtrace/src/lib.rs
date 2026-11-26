@@ -18,8 +18,10 @@
 //!   emission order;
 //! - `summary.txt` (also printed on stderr) and `counters.json`: counters and timers (count, total, max).
 //!
-//! Categories are free strings; the ones in use are listed by `OKKAMA_DEV=help` (see [`CATEGORIES`]).
-mod env_switch;
+//! Categories are free strings; the ones in use are listed by `OKKAMA_DEV=help` (see [`CATEGORIES`]). `OKKAMA_DEV`
+//! is off when unset, empty, `0`/`false`/`off`/`no` (the [`env_switch`] rule) or when it names nothing after trimming
+//! (`" "`, `" , "`, #1094).
+pub mod env_switch;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -125,15 +127,28 @@ fn config() -> Option<&'static Config> {
     #[cfg(not(okkama_release))]
     {
         CONFIG.get_or_init(|| {
-            if !crate::env_switch::enabled("OKKAMA_DEV") { return None; }
-            let spec = std::env::var("OKKAMA_DEV").unwrap_or_default();
+            let value = std::env::var_os("OKKAMA_DEV");
+            let spec = requested(value.as_deref())?;
             START.get_or_init(Instant::now);
             // `{pid}` in the directory gives each process its own (a corpus run, #909).
             let out = std::env::var("OKKAMA_DEV_OUT").ok()
                 .map(|out| PathBuf::from(out.replace("{pid}", &std::process::id().to_string())));
-            Some(Config::parse(&spec, out))
+            Some(Config::parse(spec, out))
         }).as_ref()
     }
+}
+
+/// The category list `OKKAMA_DEV` holds when it turns devtrace on: none when the switch is off by the one rule
+/// of [`env_switch`] and none when no category is left after trimming (a blank value, as in 0.6.4, #1094); a value
+/// that is not UTF-8 names nothing.
+// A release build reads no configuration.
+#[cfg_attr(okkama_release, allow(dead_code))]
+fn requested(value: Option<&std::ffi::OsStr>) -> Option<&str> {
+    if !env_switch::value_enabled(value) {
+        return None;
+    }
+    let spec = value?.to_str().unwrap_or_default();
+    (!spec.split(',').all(|item| item.trim().is_empty())).then_some(spec)
 }
 
 /// A category's switch at one call site: after the first look, one relaxed load.

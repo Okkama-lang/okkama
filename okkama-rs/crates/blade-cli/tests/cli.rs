@@ -485,6 +485,64 @@ fn sync_runs_no_git_when_pkg_matches_the_lock() {
     assert_eq!(text(&vendored.stdout), "dependencies are up to date\n");
 }
 
+/// #1096: `blade update` reports a change of `blade.lock` even when `pkg/`
+/// already holds what the new lock records: a moved tag the lock follows is
+/// named with both commits, and "up to date" means neither changed.
+#[test]
+fn update_reports_a_lock_change_that_pkg_already_has() {
+    let tree = Tree::new("lock-change");
+    let json = tree.0.join("json");
+    let git = |args: &[&str]| {
+        let done = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&json)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "git {args:?}: {}", text(&done.stderr));
+        text(&done.stdout).trim().to_string()
+    };
+    tree.write("json/src/json.ok", "module json;\n");
+    for args in [&["init", "-q"][..], &["add", "-A"], &["commit", "-qm", "1.0.0"], &["tag", "v1.0.0"]] {
+        git(args);
+    }
+    let old = git(&["rev-parse", "HEAD"]);
+    tree.write(
+        "app/blade.toml",
+        &format!("[module]\nname = \"app\"\n\n[dependencies]\njson = {{ git = \"{}\", version = \"1.0.0\" }}\n", json.display()),
+    );
+    let blade = |args: &[&str]| {
+        let output = tree.blade("app", args);
+        assert!(output.status.success(), "blade {args:?}: {}", text(&output.stderr));
+        text(&output.stdout)
+    };
+    assert_eq!(blade(&["sync"]), "+ json 1.0.0\n");
+    let lock_file = tree.0.join("app/blade.lock");
+    let old_lock = std::fs::read_to_string(&lock_file).unwrap();
+
+    // The tag moves to a new commit of the same release.
+    tree.write("json/src/json.ok", "module json; // moved\n");
+    git(&["commit", "-qam", "moved"]);
+    git(&["tag", "-f", "v1.0.0"]);
+    let new = git(&["rev-parse", "HEAD"]);
+    let moved = format!("~ json 1.0.0 (tag moved: {} -> {})", &old[..10], &new[..10]);
+    assert_eq!(blade(&["update", "json"]), format!("{moved}\n"));
+
+    // The old lock back (a checkout of blade.lock) while pkg/ keeps the new
+    // commit: only the lock changes, and the update says so.
+    std::fs::write(&lock_file, old_lock).unwrap();
+    assert_eq!(blade(&["update", "json"]), format!("{moved} in blade.lock\n"));
+    let lock = std::fs::read_to_string(&lock_file).unwrap();
+    assert!(lock.contains(&new) && !lock.contains(&old), "{lock}");
+    assert_eq!(blade(&["update", "json"]), "dependencies are up to date\n");
+
+    // A lock written again for a pkg/ that already holds its packages.
+    std::fs::remove_file(&lock_file).unwrap();
+    assert_eq!(blade(&["update"]), "+ json 1.0.0 in blade.lock\n");
+    assert!(std::fs::read_to_string(&lock_file).unwrap().contains(&new));
+    assert_eq!(blade(&["sync"]), "dependencies are up to date\n");
+}
+
 /// The walk-through of #351 through the binary: a new project, a package
 /// that brings another, a build, a higher minimum, an update, a removal and
 /// a sync; then the help, the version and the exit codes.

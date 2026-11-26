@@ -206,6 +206,24 @@ fn uncaught_failures_are_reported_like_okkama() {
     );
     let quiet_core = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0).env("OKKAMA_TRACE", "off").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&quiet_core.stderr), "RuntimeError: confirm failed\n");
+    // The stack is on until the switch is set (9d7749f4e, one switch rule since #1095).
+    let unset = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0).env_remove("OKKAMA_TRACE").output().unwrap();
+    assert_eq!(unset.stderr, result.stderr);
+}
+
+/// A malformed `SPARROW_CORE_CODE_SHIFT` is a program that does not load: `sparrow run` refuses it with the
+/// `sparrow:` prefix of other load errors, naming the switch (#1097).
+#[test]
+fn a_malformed_code_shift_is_a_load_error_with_the_prefix() {
+    let file = File::new(&value("0"));
+    let refused = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0)
+        .env("SPARROW_CORE_CODE_SHIFT", "-1").output().unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&refused.stderr),
+               "sparrow: SPARROW_CORE_CODE_SHIFT: expected a byte count from 0 to 65536, got \"-1\"\n");
+    let shifted = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0)
+        .env("SPARROW_CORE_CODE_SHIFT", "1024").output().unwrap();
+    assert_eq!(shifted.status.code(), Some(0), "{}", String::from_utf8_lossy(&shifted.stderr));
 }
 
 /// An Atomic read on an object the program builds itself: the core would

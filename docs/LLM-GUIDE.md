@@ -214,8 +214,12 @@ default: OFF for most (test helpers, GC, verification and profiling switches),
 ON for `OKKAMA_TRACE` (the call stack of a failure), `SPARROW_CORE_POINTER_FREE`
 and `SPARROW_CORE_INT_RANGE` (JIT optimisations). Explicit CLI flags and
 mandatory debug checks still apply independently. `OKKAMA_DEV` uses this rule
-before parsing its category selection. Paths, numbers, representation choices
-and symbol/pass lists are not boolean switches.
+before parsing its category selection, and is also OFF when no category is left
+after trimming (`" "`, `" , "`, #1094). Paths, numbers, representation choices
+and symbol/pass lists are not boolean switches. The Rust side has one
+implementation, `okkama_devtrace::env_switch` (#1095: `enabled`, `enabled_or`,
+`bytes` for byte counts such as `SPARROW_CORE_CODE_SHIFT`, `no_color`); every
+crate reads its switches through it, never through a copy.
 `NO_COLOR` is the exception specified by no-color.org: automatic colour is off
 when it is present and non-empty (even `0` or `false`), in both `okkama man` and
 std `terminal/capability`; empty or absent does not disable colour.

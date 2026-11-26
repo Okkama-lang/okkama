@@ -36,8 +36,9 @@ x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = "1.9.1"
 
 # unsafe разрешён только в
-# `rsa_public` (низкоуровневая проверка подписей RSA через aws-lc) и в
-# `secure` (arc4random_buf на системах Apple).
+# `rsa_public` (низкоуровневая проверка подписей RSA через aws-lc), в
+# `secure` (arc4random_buf на системах Apple) и в одном тесте `ops`
+# (#1026: `drop_in_place`, чтобы проверить, что сид Ed25519 обнуляется; #1097).
 [lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

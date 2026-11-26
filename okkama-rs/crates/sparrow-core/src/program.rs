@@ -329,3 +329,29 @@ mod worker_tests {
     }
 
 }
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    /// `SPARROW_CORE_POINTER_FREE` and `SPARROW_CORE_INT_RANGE` are on until set (9d7749f4e, after #1067 had
+    /// turned both off by accident; one switch rule since #1095): a load with neither set keeps the registers the
+    /// range analysis proves small out of the GC roots, more than the analysis without ranges does.
+    #[test]
+    fn the_pointer_free_and_range_analyses_are_on_until_set() {
+        if ["SPARROW_CORE_POINTER_FREE", "SPARROW_CORE_INT_RANGE"].iter().any(|name| std::env::var_os(name).is_some()) {
+            return; // The test states the default; a run that sets either switch has chosen otherwise.
+        }
+        let program = okkama_sparrow::assemble(
+            "sparrow 18\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
+             params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n",
+        ).unwrap();
+        let loaded = Loaded::new(program);
+        let (function, info) = (&loaded.program.functions[0], &loaded.functions[0]);
+        let ranged = crate::pointer_free::analyze(function, &info.kinds, &loaded.program);
+        let unranged = crate::pointer_free::analyze_with_ranges(function, &info.kinds, &loaded.program, false);
+        assert_eq!(info.pointer_free, ranged);
+        assert_ne!(ranged, unranged, "the program must tell the two analyses apart");
+        assert!(info.pointer_free.contains(&true));
+    }
+}

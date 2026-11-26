@@ -315,6 +315,25 @@ fn rejects_nonfinite_floats_ordered_value_comparisons_sync_resource_settles_and_
     assert_eq!(program.verify(), Ok(()));
 }
 
+/// #1097: `bits` refuses each mistake with its own text, as the OIR verifier does (#1070): a rotation without a
+/// count, and a count on anything else.
+#[test]
+fn a_rotation_needs_a_count_and_only_rotations_take_one() {
+    use okkama_sparrow::BitOp;
+    let bits = |op, count| {
+        let mut program = sample();
+        program.functions[0].code[1] = I::Bits { op, byte: false, dst: d(1), value: r(0), count };
+        program
+    };
+    for op in [BitOp::RotateLeft, BitOp::RotateRight] {
+        let refusal = message(&bits(op, None));
+        assert!(refusal.contains("a rotation needs a count"), "{refusal}");
+        assert!(!refusal.contains("only rotations"), "{refusal}");
+    }
+    let refusal = message(&bits(BitOp::BitCount, Some(r(0))));
+    assert!(refusal.contains("only rotations take a count"), "{refusal}");
+}
+
 /// #976: native ABI types name a handle by its short name, so a program may not hold two
 /// modules' handles of one name; distinct names, or the same handle once, are fine.
 #[test]

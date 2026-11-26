@@ -8,6 +8,16 @@
   `Native::signature_text` is public for the message. Sweeps: 16656 std/runtime native mutants (14751 codegen
   failures without the check, 0 with it); fuzz run 45896662080's exec + analyze corpora (5581) linked against
   std: 0 codegen failures.
+- [x] #1094/#1095/#1096/#1097 (feature/book, not committed): `okkama-devtrace/src/env_switch.rs` is the one
+  switch implementation (pub; re-exported as `okkama_compiler::env_switch`, `sparrow_core::env_switch`; a `use` in
+  both CLIs; a dev-dependency of okkama-runtime-core); the five copies are gone. devtrace `requested`: a blank
+  `OKKAMA_DEV` category list is off. Default-on pins: `okkama-cli/tests/env_switches.rs` (`OKKAMA_TRACE` under
+  run/exec), `sparrow-cli/tests/cli.rs`, `sparrow-core/src/program.rs` `switch_tests` (POINTER_FREE, INT_RANGE).
+  Blade `report(root, installed, locked, new)` adds `… in blade.lock` lines for lock changes `pkg/` already has.
+  SPB verifier: "a rotation needs a count"; `analysis_bytes` prints the computed bytes. `run_executable` returns a
+  failed `configured_runtime` as `ExecutionError::Load`, `core_described` prefixes run_described's load error
+  with `okkama:`.
+
 - [x] #1090 + #1091 + #1092 (feature/fuzz2, not committed): `contracts.rs::thrown` checks that an error case's
   fields are exactly the raised payload (the legacy `$tag` layout, unemitted since #290, used to load; a
   crafted one read `x` as the tag, 0); an intrinsic's contract errors name the intrinsic; `intrinsics::raised`

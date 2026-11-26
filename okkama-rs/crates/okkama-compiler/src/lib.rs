@@ -15,8 +15,9 @@
 //! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES` or a selected pass list. Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
 
+// The one switch policy of every crate (#1095), under its old path.
 #[doc(hidden)]
-pub mod env_switch;
+pub use okkama_devtrace::env_switch;
 
 pub mod analysis;
 pub mod codegen;

@@ -166,7 +166,7 @@ fn install_busy(root: &Path, unlock: &Unlock) -> Result<Report, String> {
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
-    let report = report(root, &installed_lock(root, &lock)?, &new_lock);
+    let report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
     if !commit(root, &chosen, &lock, &new_lock, false, &mut work)? {
         return Ok(Report::default());
     }
@@ -288,7 +288,7 @@ pub fn sync(root: &Path) -> Result<Report, String> {
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
-    let report = report(root, &installed_lock(root, &lock)?, &new_lock);
+    let report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
     if !commit(root, &chosen, &lock, &new_lock, true, &mut work)? {
         return Ok(Report::default());
     }
@@ -1637,9 +1637,54 @@ impl Drop for Busy {
 /// What a commit from what `pkg/` holds (`installed`, Blade's record of it)
 /// to `new` does, package by package: added (or missing from `pkg/`), moved
 /// to another version or source, its tag moved, its files changed (a local
-/// package edited, #1040), removed.
-fn report(root: &Path, installed: &Lock, new: &Lock) -> Report {
+/// package edited, #1040), removed. A package whose `pkg/` entry already is
+/// what `new` records but whose entry in `blade.lock` (`locked`) changes is
+/// reported too, as the same change `in blade.lock` (#1096): a moved tag the
+/// lock follows is never silent, and "up to date" means that neither `pkg/`
+/// nor the lock changes.
+fn report(root: &Path, installed: &Lock, locked: &Lock, new: &Lock) -> Report {
     let present = |name: &str| root.join(PKG).join(name).is_dir();
+    let mut lines = Vec::new();
+    let mut reported = BTreeSet::new();
+    for (name, package) in &new.packages {
+        let line = match installed.packages.get(name) {
+            None => Some(format!("+ {name} {}", package.version)),
+            Some(_) if !present(name) => Some(format!("+ {name} {}", package.version)),
+            Some(before) => change(name, before, package),
+        };
+        if let Some(line) = line {
+            lines.push(line);
+            reported.insert(name);
+        }
+    }
+    for (name, before) in &installed.packages {
+        if !new.packages.contains_key(name) && present(name) {
+            lines.push(format!("- {name} {}", before.version));
+            reported.insert(name);
+        }
+    }
+    for (name, package) in &new.packages {
+        let line = match locked.packages.get(name) {
+            _ if reported.contains(name) => None,
+            None => Some(format!("+ {name} {}", package.version)),
+            Some(before) => change(name, before, package).or_else(|| {
+                (before.dependencies != package.dependencies)
+                    .then(|| format!("~ {name} {} (dependencies changed)", package.version))
+            }),
+        };
+        lines.extend(line.map(|line| format!("{line} in {LOCK}")));
+    }
+    for (name, before) in &locked.packages {
+        if !new.packages.contains_key(name) && !reported.contains(name) {
+            lines.push(format!("- {name} {} in {LOCK}", before.version));
+        }
+    }
+    Report { lines }
+}
+
+/// The report line of a package recorded as `before` and now as `after`, if
+/// they differ by version, source, commit (a moved tag) or files.
+fn change(name: &str, before: &Locked, after: &Locked) -> Option<String> {
     let short = |commit: &Option<String>| {
         commit
             .as_deref()
@@ -1648,36 +1693,23 @@ fn report(root: &Path, installed: &Lock, new: &Lock) -> Report {
             .take(10)
             .collect::<String>()
     };
-    let mut lines = Vec::new();
-    for (name, package) in &new.packages {
-        let version = package.version;
-        match installed.packages.get(name) {
-            None => lines.push(format!("+ {name} {version}")),
-            Some(_) if !present(name) => lines.push(format!("+ {name} {version}")),
-            Some(before) if before.version != version => {
-                lines.push(format!("~ {name} {} -> {version}", before.version));
-            }
-            Some(before) if before.source != package.source => {
-                lines.push(format!(
-                    "~ {name} {version} (source {} -> {})",
-                    before.source, package.source
-                ));
-            }
-            Some(before) if before.commit != package.commit => lines.push(format!(
-                "~ {name} {version} (tag moved: {} -> {})",
-                short(&before.commit),
-                short(&package.commit)
-            )),
-            Some(before) if before.checksum != package.checksum => {
-                lines.push(format!("~ {name} {version} (files changed)"));
-            }
-            Some(_) => {}
-        }
+    let version = after.version;
+    if before.version != version {
+        Some(format!("~ {name} {} -> {version}", before.version))
+    } else if before.source != after.source {
+        Some(format!(
+            "~ {name} {version} (source {} -> {})",
+            before.source, after.source
+        ))
+    } else if before.commit != after.commit {
+        Some(format!(
+            "~ {name} {version} (tag moved: {} -> {})",
+            short(&before.commit),
+            short(&after.commit)
+        ))
+    } else if before.checksum != after.checksum {
+        Some(format!("~ {name} {version} (files changed)"))
+    } else {
+        None
     }
-    for (name, before) in &installed.packages {
-        if !new.packages.contains_key(name) && present(name) {
-            lines.push(format!("- {name} {}", before.version));
-        }
-    }
-    Report { lines }
 }

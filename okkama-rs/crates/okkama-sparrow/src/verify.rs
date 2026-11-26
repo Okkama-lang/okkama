@@ -278,9 +278,11 @@ fn check_instruction(context: &Context<'_>, pc: usize, instruction: &Instruction
             }
         }
         Instruction::Bits { op, count, .. } => {
-            let rotates = matches!(op, crate::BitOp::RotateLeft | crate::BitOp::RotateRight);
-            if rotates != count.is_some() {
-                return Err(context.error(Some(pc), "only rotations take a count"));
+            // The OIR verifier's two texts (#1070), one per mistake (#1097).
+            match (matches!(op, crate::BitOp::RotateLeft | crate::BitOp::RotateRight), count.is_some()) {
+                (true, false) => return Err(context.error(Some(pc), "a rotation needs a count")),
+                (false, true) => return Err(context.error(Some(pc), "only rotations take a count")),
+                _ => {}
             }
         }
         _ => {}
@@ -669,6 +671,22 @@ pub(crate) fn edges(pc: usize, instruction: &Instruction) -> Vec<Edge<'_>> {
 /// stubs (see [`State`]) within what is left.
 pub const MAX_ANALYSIS_BYTES: usize = 64 * 1024 * 1024;
 
+/// The bytes the three register sets of `blocks` block leaders over `size`
+/// registers take (#1069), or the refusal when they are over
+/// [`MAX_ANALYSIS_BYTES`]: it prints the computed bytes, which the two counts
+/// alone do not give (#1097).
+fn analysis_bytes(blocks: usize, size: usize) -> Result<usize, String> {
+    let bytes = blocks.checked_mul(size.div_ceil(64)).and_then(|words| words.checked_mul(3 * 8));
+    match bytes {
+        Some(bytes) if bytes <= MAX_ANALYSIS_BYTES => Ok(bytes),
+        _ => Err(format!(
+            "function is too large to verify: {blocks} blocks × {size} registers need {} bytes \
+             for three register sets per block, over {MAX_ANALYSIS_BYTES}",
+            bytes.map_or_else(|| format!("more than {}", usize::MAX), |bytes| bytes.to_string())
+        )),
+    }
+}
+
 /// Does `pc` only fall through to the next instruction?
 fn falls_through(pc: usize, edges: &[Edge<'_>]) -> bool {
     matches!(edges, [(target, moves, None)] if *target as usize == pc + 1 && moves.is_empty())
@@ -709,19 +727,7 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
     for (block, &pc) in leaders.iter().enumerate() {
         block_of[pc] = block as u32;
     }
-    let bytes = leaders
-        .len()
-        .checked_mul(size.div_ceil(64))
-        .and_then(|words| words.checked_mul(3 * 8));
-    if bytes.is_none_or(|bytes| bytes > MAX_ANALYSIS_BYTES) {
-        return Err(context.error(
-            None,
-            format!(
-                "function is too large to verify: {} blocks × {size} registers exceed {MAX_ANALYSIS_BYTES} bytes",
-                leaders.len()
-            ),
-        ));
-    }
+    let bytes = analysis_bytes(leaders.len(), size).map_err(|message| context.error(None, message))?;
     let mut state: Vec<Option<State>> = vec![None; leaders.len()];
     let mut entry = State::new(size);
     for param in &function.params {
@@ -732,7 +738,7 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
     let mut queued = vec![false; leaders.len()];
     queued[0] = true;
     // Guard entries of all stored states, bounded with the sets (8 bytes each).
-    let budget = (MAX_ANALYSIS_BYTES - bytes.unwrap_or(0)) / 8;
+    let budget = (MAX_ANALYSIS_BYTES - bytes) / 8;
     let mut entries = 0usize;
     let mut merge = |state: &mut Vec<Option<State>>, work: &mut Vec<usize>, queued: &mut Vec<bool>, block: usize, incoming: State| {
         let before = state[block].as_ref().map_or(0, State::entries);
@@ -918,4 +924,26 @@ pub(crate) fn verify(program: &Program) -> Result<(), VerifyError> {
         check_function(program, function)?;
     }
     crate::typing::tables(program).map_err(program_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The refusal prints the bytes the analysis would take (three 64-register words per block and word), so its
+    /// numbers add up (#1097); the budget itself is inclusive.
+    #[test]
+    fn the_analysis_budget_refusal_names_the_bytes_it_computed() {
+        assert_eq!(analysis_bytes(2, 65), Ok(2 * 2 * 3 * 8));
+        assert_eq!(analysis_bytes(0, 1 << 20), Ok(0));
+        let words = MAX_ANALYSIS_BYTES / 24;
+        assert_eq!(analysis_bytes(words, 64), Ok(MAX_ANALYSIS_BYTES - MAX_ANALYSIS_BYTES % 24));
+        assert_eq!(
+            analysis_bytes(1000, 64 * 3000),
+            Err("function is too large to verify: 1000 blocks × 192000 registers need 72000000 bytes \
+                 for three register sets per block, over 67108864".to_string())
+        );
+        let overflow = analysis_bytes(usize::MAX, 128).unwrap_err();
+        assert!(overflow.contains(&format!("need more than {} bytes", usize::MAX)), "{overflow}");
+    }
 }

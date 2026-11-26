@@ -20,6 +20,31 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   check 14751 failed codegen and now none do. The fuzz run's exec and analyze corpora (5581 inputs), linked
   against std, all link and generate or are refused before codegen. The crash input is a regression in
   `okkama-rs/fuzz/regressions/exec/`.
+- **devtrace: `OKKAMA_DEV` of whitespace only turned devtrace on with no categories (#1094).** Since the
+  environment switches share one rule (#1067), `OKKAMA_DEV=" "` was a set, non-off value, so `finish` wrote
+  `summary.txt`, `counters.json` and a stderr summary of nothing. A category list that is empty after trimming
+  (`" "`, `" , "`, a value that is not UTF-8) is off again, as in 0.6.4; the off words of the switch rule stay off.
+- **Six copies of the environment-switch rule (#1095).** `env_switch.rs` lived in okkama-cli, okkama-compiler,
+  okkama-devtrace, okkama-runtime-core, sparrow-cli and sparrow-core, and nothing checked that they agreed. There
+  is one implementation now, `okkama_devtrace::env_switch` (`enabled`, `enabled_or`, `bytes`, `no_color` and their
+  `value_*` forms): devtrace is the one crate below all six and has no dependencies, and the module is the same in
+  a release build. okkama-compiler and sparrow-core re-export it under their old paths; okkama-runtime-core, whose
+  only switch is read by a test, takes it as a dev-dependency. Every call site reads its switch as before; the
+  default-on ones are pinned by tests: `OKKAMA_TRACE` under `okkama run`, `okkama exec` and `sparrow run`, and
+  `SPARROW_CORE_POINTER_FREE` and `SPARROW_CORE_INT_RANGE` at load.
+- **Blade: `blade update` said "dependencies are up to date" when only `blade.lock` changed (#1096).** The report
+  compared the new lock with `pkg/` only. When `pkg/` already held a moved tag's new commit and the lock still had
+  the old one (a checkout of `blade.lock`), the update rewrote the lock silently. A change of the lock that `pkg/`
+  already has is now reported as the same change `in blade.lock`, for example
+  `~ json 1.0.0 (tag moved: b91931b56b -> 479dd466b6) in blade.lock`, or `+ json 1.0.0 in blade.lock` for a lock
+  written again; "up to date" means that neither `pkg/` nor the lock changes.
+- **Messages (#1097).** The SPB verifier refuses `bits rotl`/`rotr` without a count with "a rotation needs a
+  count", as the OIR verifier does (#1070), instead of the text for the opposite mistake. The analysis-budget
+  refusal prints the bytes it computed (`N blocks × M registers need B bytes for three register sets per block,
+  over 67108864`): since #1069 the bytes do not follow from the two counts. A runtime that cannot be built before
+  `main` runs (a malformed `SPARROW_CORE_CODE_SHIFT`, an intrinsic's contract) is a load error with the launcher's
+  prefix (`okkama:` under `okkama run` and `okkama exec`, `sparrow:` under `sparrow run`); the exit code stays 1.
+  okkama-native's comments name the one test that uses `unsafe` (#1026's `drop_in_place`).
 - **Sparrow: an intrinsic's error case in the layout before #290 loaded and was raised with its fields mixed up
   (#1090).** The load-time contract still accepted an error enum written as one `[$tag, $0_x: array…]` object.
   The runtime raised such an object by filling the payload arrays, and with a payload the runtime does not have,

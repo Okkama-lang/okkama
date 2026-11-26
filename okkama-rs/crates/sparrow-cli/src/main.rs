@@ -1,6 +1,7 @@
 //! `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
 //! size limit, execution, tests, verification, assembler and disassembler.
-mod env_switch;
+// The one switch policy of every crate (#1095); `crate::env_switch` names it.
+use okkama_devtrace::env_switch;
 
 use std::io::{Read, Write};
 use std::{fs::File, path::Path, process::ExitCode};

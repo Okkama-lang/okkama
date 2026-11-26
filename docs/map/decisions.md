@@ -11,6 +11,16 @@ the session's memory; older rulings live in the commits and tickets named.
   branches are cut from `main`, features leave and rejoin the release branch, a merge into `develop` is a nightly
   build (`okkama-nightly-YYYY-MM-DD`), the release ends with a pull request into `main` and the tag on its merge
   commit. A ruleset on `main` enforces it; LLM-GUIDE §10 has the steps.
+- **2026-11-27. #1095 one switch implementation in okkama-devtrace (lead decision).** The environment-switch rule
+  lives once, in `okkama_devtrace::env_switch`: the lowest crate the six readers share, with no dependencies, and
+  not compiled out in a release (only its gates are). No new crate; okkama-runtime-core, whose only switch is a
+  test's, takes it as a dev-dependency. Old paths stay as re-exports, so no call site changes.
+- **2026-11-27. #1097 a runtime that cannot be built is a load error (lead decision).** Everything before `main`
+  runs (decode, verify, intrinsic contracts, JIT setup such as `SPARROW_CORE_CODE_SHIFT`) is reported with the
+  launcher's prefix (`okkama:`/`sparrow:`), exit 1 as before; only a failure of the run itself keeps the runtime
+  report's formatting. Before, setup failures printed without a prefix under `run` and `exec`.
+- **2026-11-27. #1096 the update report covers the lock (lead decision).** A lock change that `pkg/` already has
+  is the pkg line's text plus ` in blade.lock`; a package already reported for `pkg/` gets no second line.
 - **2026-11-27. #1086 release A/B on two builds per version (lead decision).** Each version is built with
   `toolchain.sh` at LAYOUT_SEED 1 and 2 and runs one campaign per binary, A1 B1 B2 A2 (order balance and binary
   layout in the same four campaigns). The binaries' spread widens the band instead of being reported apart: a

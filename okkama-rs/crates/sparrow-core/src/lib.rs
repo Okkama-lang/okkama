@@ -22,8 +22,9 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 pub mod budget;
+// The one switch policy of every crate (#1095), under its old path.
 #[doc(hidden)]
-pub mod env_switch;
+pub use okkama_devtrace::env_switch;
 
 mod code_memory;
 mod contracts;
@@ -126,8 +127,9 @@ pub enum Execution {
     Tests(bool),
 }
 
-/// Preserve CLI formatting: SPB/test-profile errors have the launcher prefix;
-/// VM setup failures have the runtime report's formatting.
+/// Preserve CLI formatting: SPB, runtime setup and test-profile errors have the
+/// launcher prefix (setup since #1097: everything before `main` runs is the
+/// load); a failure of the run itself has the runtime report's formatting.
 #[derive(Debug)]
 pub enum ExecutionError {
     Load(Error),
@@ -177,7 +179,12 @@ pub fn run_executable(
             return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
-        let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
+        // A runtime that cannot be built (an intrinsic's contract, a malformed `SPARROW_CORE_CODE_SHIFT`) is a
+        // program that does not load, reported as an SPB error is (#1097).
+        let mut runtime = match configured_runtime(program, arguments, stats, worker_command, limits) {
+            Ok(runtime) => runtime,
+            Err(error) => return Ok(Err(ExecutionError::Load(error))),
+        };
         let result = execute(&mut runtime).map_err(|failure| {
             let (error, uncaught) = *failure;
             let Some(mut uncaught) = uncaught.filter(|_| trace) else {

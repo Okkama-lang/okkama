@@ -1317,6 +1317,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "okkama-allocation-counter",
+ "okkama-devtrace",
  "okkama-native",
  "okkama-persistent",
  "okkama-runtime-abi",
