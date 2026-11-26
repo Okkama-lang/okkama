@@ -127,12 +127,12 @@ helpers! {
     resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
-    builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects];
+    builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects, Fails];
     rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
     scalar_safepoint = crate::ops::rt_scalar_safepoint as (ctx, conversion: u64); [Collects];
     trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
-    int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects];
+    int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects, Fails];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     await_take = crate::tasks::rt_await_take as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
@@ -2749,6 +2749,7 @@ impl Emitter<'_, '_> {
             {
                 let value = self.get(source);
                 let text = self.helper(|h| h.int_text, &[ctx, value]).expect("result");
+                self.check(pc);
                 self.set(&dst.0, text);
             }
             // A code point or a byte is always a small int: tag it inline

@@ -1,5 +1,12 @@
 # State (update at the end of every task)
 
+## Release 0.6.5 (release/065)
+
+- [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
+  `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
+  program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with
+  bounded sizes (`rt_array`, `rt_closure`: operand counts) need none; natives and `rt_exec`
+  catch panics.
 
 ## Formatter, IDE, CLI and IDNA audit (2026-11-26, feature/065-ide)
 

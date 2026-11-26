@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Fixed
+- **Sparrow (#1033).** `builder.finish` (the array of a `map` or `filter`) and an int's decimal text check the
+  length limit before they allocate, in machine code as in the generic path: past 2^32 − 1 elements or 4 GiB
+  they fail the program instead of aborting the process.
+
 ## [0.6.4] — 2026-11-23
 
 0.6.4 is a hotfix release: every finding of reading the 0.6.3 source end to end (the milestone "Hotfixes TBD",

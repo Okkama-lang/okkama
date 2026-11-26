@@ -974,9 +974,9 @@ pub extern "C" fn rt_builder_finish(ctx: *mut Ctx, builder: Word, packed: u64) -
     let frame = crate::runtime::frame_pointer!();
     let ctx = unsafe { &mut *ctx };
     let runtime = unsafe { &mut *ctx.runtime };
-    let word = builder_finish(runtime, builder, packed != 0);
-    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
-    word
+    // An array past the length limit fails the program (#1033): no panic in a direct helper.
+    let outcome = builder_finish(runtime, builder, packed != 0);
+    exec_outcome(runtime, ctx, frame, outcome, |_| Repr::Ref)
 }
 
 /// #344 integration: the existing Rat/IntValue representation and exact
@@ -1029,8 +1029,13 @@ pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
     spare.unwrap_or_else(|| runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
 }
 
-pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Word {
+pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Outcome {
     let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
+    // An array or byte array holds at most 2^32 - 1 elements (#985): `map` or `filter` over a huge
+    // range fails the program here, before the heap's length check would panic (#1033).
+    if crate::heap::passes_length_limit(builder.items.len()) {
+        return Err(array_limit());
+    }
     let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
     let array = if packed {
         let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
@@ -1048,7 +1053,13 @@ pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) 
         }
         runtime.heap.retire_payload(object);
     }
-    array
+    Ok(array)
+}
+
+/// The failure text of an array that would pass the 2^32 - 1 elements an array can hold (#1033).
+#[cold]
+fn array_limit() -> String {
+    "array: the result would pass the 4294967295 elements an array can hold".to_string()
 }
 
 fn rat_new(runtime: &mut Runtime, left: Word, right: Word) -> Outcome {
@@ -1490,7 +1501,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
         }
         I::BuilderFinish { dst, builder } => {
             let packed = matches!(runtime.ty(function, dst.0), Some(Type::Array(element)) if runtime.kind_of(*element) == Kind::Byte);
-            Ok(builder_finish(runtime, value(builder), packed))
+            builder_finish(runtime, value(builder), packed)
         }
         I::MapNew { dst, entries } => {
             let mut map = map_for(runtime, function, dst.0)?;
@@ -1775,13 +1786,17 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
     }
 }
 
-/// Decimal text of an integer word (inline integers without a BigInt).
-fn int_text(runtime: &mut Runtime, word: Word) -> Word {
+/// Decimal text of an integer word (inline integers without a BigInt). An integer of more than
+/// 4 GiB of digits fails the program, before the heap's length check would panic (#1033).
+fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
     let text = match runtime.heap.integer(word) {
         crate::heap::Integer::Small(n) => n.to_string(),
         crate::heap::Integer::Big(n) => n.to_string(),
     };
-    runtime.text_new(&text)
+    if crate::heap::passes_length_limit(text.len()) {
+        return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
+    }
+    Ok(runtime.text_new(&text))
 }
 
 /// `cvt` of an int to a string.
@@ -1790,11 +1805,8 @@ pub extern "C" fn rt_int_text(ctx: *mut Ctx, word: Word) -> Word {
     let frame = crate::runtime::frame_pointer!();
     let ctx = unsafe { &mut *ctx };
     let runtime = unsafe { &mut *ctx.runtime };
-    let text = int_text(runtime, word);
-    if runtime.heap.needs_collection() {
-        runtime.safepoint(frame, ctx, &[(text, Repr::Ref)]);
-    }
-    text
+    let outcome = int_text(runtime, word);
+    exec_outcome(runtime, ctx, frame, outcome, |_| Repr::Ref)
 }
 
 fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Register, dst: okkama_sparrow::Register, word: Word) -> Outcome {
@@ -1806,7 +1818,7 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
 /// `cvt` between scalar types.
 pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Option<Type>, word: Word) -> Outcome {
     match (from, to) {
-        (Some(Type::Int), Some(Type::Str)) => Ok(int_text(runtime, word)),
+        (Some(Type::Int), Some(Type::Str)) => int_text(runtime, word),
         (Some(Type::Bool), Some(Type::Str)) => Ok(runtime.text_new(if word != 0 { "true" } else { "false" })),
         (Some(Type::Byte), Some(Type::Str)) => Ok(runtime.text_new(&word.to_string())),
         (Some(Type::Float), Some(Type::Str)) => Ok(runtime.text_new(&crate::scalar::float_text(f64::from_bits(word)))),

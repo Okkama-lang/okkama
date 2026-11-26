@@ -142,10 +142,36 @@ pub fn header(kind: u8, repr: Repr, payload: u32) -> u64 {
 /// A length as the 32-bit payload of a header (#985). Strings, byte arrays and arrays hold at
 /// most `u32::MAX` bytes or elements; a longer one used to be truncated silently (a wrong length,
 /// and for an array of references a tail the collector would not trace). Operations that can grow
-/// a value check first and fail the program (`join`, `+`); this is the last line of defence.
+/// a value check first and fail the program (`join`, `+`, `builder.finish`, int text); this is the
+/// last line of defence.
 #[inline]
 pub(crate) fn length(len: usize) -> u32 {
     u32::try_from(len).unwrap_or_else(|_| too_long(len))
+}
+
+/// Would a string, byte array or array of `len` bytes or elements pass what its header holds? The
+/// check an operation makes before it allocates, so that the program fails instead of [`length`]
+/// panicking: a direct helper of machine code has no `catch_unwind` (#985, #1033).
+#[inline]
+pub(crate) fn passes_length_limit(len: usize) -> bool {
+    len > max_length()
+}
+
+#[cfg(not(test))]
+#[inline]
+fn max_length() -> usize {
+    u32::MAX as usize
+}
+
+/// Tests lower the limit on their own thread instead of building 4 GiB values (#1033).
+#[cfg(test)]
+fn max_length() -> usize {
+    MAX_LENGTH.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MAX_LENGTH: std::cell::Cell<usize> = const { std::cell::Cell::new(u32::MAX as usize) };
 }
 
 #[cold]

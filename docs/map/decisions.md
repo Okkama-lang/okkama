@@ -492,3 +492,11 @@ every declaration is open (#1005, owner decision).
 - A separate, switchable pass (`dce` in OKKAMA_IR_PASSES), not a widened `undef`:
   it drops only unread `const` (and `undef`), renumbering values as `undef` does.
   Listing tests that check lowering use the values they inspect.
+
+## Length limit: pre-check, not catch_unwind (#1033, 2026-11-26)
+
+- A direct helper of machine code that can build a value past the header length
+  (2^32 − 1 bytes or elements) checks `heap::passes_length_limit` first and fails
+  the program, as `+` and `join` do; `heap::length` stays the panic of last resort,
+  caught only by `rt_exec` and `rt_native`. No `catch_unwind` per direct helper.
+  Tests lower the limit per thread (`heap::MAX_LENGTH`, test builds only).
