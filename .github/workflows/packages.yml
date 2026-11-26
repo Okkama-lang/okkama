@@ -1,7 +1,8 @@
 # Пакеты Okkama: tar.gz для всех платформ, .pkg (macOS) и .deb (Linux).
 #
-# - push в develop: пакеты текущей версии `<версия>-nightly.<дата>.<sha>`,
-#   пре-релиз `nightly` на странице Releases обновляется;
+# - push в develop (слияние в песочницу): ночная сборка — пакеты версии
+#   `<версия>-nightly.<дата>.<sha>`, пре-релиз `okkama-nightly-ГГГГ-ММ-ДД`;
+#   повторное слияние в тот же день заменяет сборку дня, хранятся 14 последних;
 # - тег vX.Y.Z: релиз X.Y.Z (тег обязан совпадать с версией в Cargo.toml);
 # - вручную (workflow_dispatch): только артефакты сборки.
 #
@@ -178,10 +179,17 @@ jobs:
         run: >
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
           --title "Okkama ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
+      # Trunk-based flow (owner, 2026-11-27): a merge into develop is a nightly build, one pre-release per day,
+      # okkama-nightly-YYYY-MM-DD; a second merge the same day replaces that day's; the last 14 are kept.
       - name: Nightly
         if: github.ref == 'refs/heads/develop'
         run: |
-          gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-          gh release create nightly dist/* --repo "$GITHUB_REPOSITORY" --prerelease \
-            --target "$GITHUB_SHA" --title "Nightly" \
-            --notes "Built from develop at $GITHUB_SHA. Unstable: use a tagged release for anything real."
+          name="okkama-nightly-$(date -u +%Y-%m-%d)"
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release delete "$name" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$name" dist/* --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+            --target "$GITHUB_SHA" --title "$name" \
+            --notes "Nightly build of develop at $GITHUB_SHA. Unstable: use a tagged release for anything real."
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("okkama-nightly-"))] | sort_by(.createdAt) | reverse | .[14:][] | .tagName' |
+            while read -r old; do gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done

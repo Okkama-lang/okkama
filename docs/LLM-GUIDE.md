@@ -23,10 +23,12 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   runtime tooling. **Needs the owner's permission**: the language, the
   compiler's front end and checks, and the public API of `std`. When a
   compiler change would help, explain the risk and ask (or file an issue).
-- **Commits**: Claude commits on feature branches and merges them into the
-  current release branch as part of the release workflow; tags, `develop` and
-  `main` are the owner's. Never `git commit -a`: name the paths. Commit
-  messages end with the attribution line the harness asks for.
+- **Commits and branches** (trunk-based, owner, 2026-11-27; §10): Claude
+  commits on feature branches, merges them into the current release branch,
+  and merges into `develop` for a nightly build. `main` changes only through a
+  pull request (a ruleset refuses direct pushes); tags are pushed by the owner.
+  Never `git commit -a`: name the paths. Commit messages end with the
+  attribution line the harness asks for.
 - **Working on `std/`**: read `docs/std-principles.md` first and follow it
   (objects are mechanisms, not records: no accessors or mutators unless
   unavoidable; flat APIs; the review plan and its inventory tool).
@@ -646,13 +648,32 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 
 ## 10. Release process
 
-1. Feature branches merge into `release/0X0` (cut from `develop`).
+Trunk-based (owner, 2026-11-27):
+
+- `main` is the source of releases. It changes only through a pull request
+  (ruleset: no direct push, no force push, no deletion, the CI jobs must pass,
+  merge commits only). It is the default branch.
+- `develop` is the shared sandbox for every change and does not decide a
+  release. A merge into `develop` is a nightly build: `packages.yml` runs the
+  gate, builds the packages (`<version>-nightly.<date>.<sha>`) and publishes the
+  pre-release `okkama-nightly-YYYY-MM-DD` (a second merge the same day replaces
+  that day's; the last 14 are kept).
+- A release branch `release/0XY` is cut from `main`; feature branches
+  `feature/<ticket>` leave the release branch and merge back into it. To ship a
+  nightly, the release branch (or a feature) is merged into `develop`; nothing
+  flows from `develop` back into a release branch.
+
+Steps:
+
+1. `git checkout main && git pull && git checkout -b release/0XY`; feature
+   branches from it, merged back after their tests (waves on `wave/**`, §6).
 2. Bump `version` in `okkama-rs/Cargo.toml` (`cargo update --workspace
    --offline` refreshes Cargo.lock; run `cargo metadata --offline` in
    `okkama-rs/fuzz` too, or its lockfile falls behind and the fuzz job's
    `--locked` fails, #960); move CHANGELOG `[Unreleased]` to
    `## [X.Y.Z] — date` with a summary.
-3. `make gate` (Docker) must pass; write the benchmark report (§6).
+3. `make gate` (Docker) must pass; write the benchmark report (§6, micro A/B
+   with `bench/micro/toolchain.sh`, #1025/#1086).
    Releases are built with the toolchain pinned in
    `tools/release-toolchain.txt` (the gate image, the CI gate and
    `packages.yml` install it;
@@ -660,13 +681,15 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
    `rustc -V`). The declared MSRV is `rust-version` in `okkama-rs/Cargo.toml`
    — the oldest Rust the dependencies allow — and the CI job *MSRV* checks
    every target on it. Raise both together with the dependency that needs it.
-4. Merge the release branch into `develop` (fast-forward history on
-   `develop`), tag `vX.Y.Z` (annotated, must match Cargo.toml), push `develop`,
-   the release branch and the tag: `.github/workflows/packages.yml` builds
-   tar.gz/.pkg/.deb/.rpm and the GitHub Release; pushes to `develop` publish the
-   `nightly` pre-release.
-5. Install locally: `./install.sh` (or `make install-pgo`).
-6. Delete merged branches locally and on GitHub.
+4. Open a pull request `release/0XY` → `main`
+   (`gh pr create --base main --head release/0XY`); merge it (merge commit)
+   when its checks pass.
+5. Tag the merge commit on `main`: `git tag -a vX.Y.Z -m "Okkama X.Y.Z"` (must
+   match Cargo.toml); the owner pushes the tag. `.github/workflows/packages.yml`
+   runs the gate and builds tar.gz/.pkg/.deb/.rpm and the GitHub Release.
+6. Merge `main` into `develop` so the sandbox carries the release.
+7. Install locally: `./install.sh` (or `make install-pgo`).
+8. Delete merged branches locally and on GitHub.
 
 ## Documents outside the repository
 

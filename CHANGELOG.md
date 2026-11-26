@@ -172,6 +172,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   ("the session changes the published constant const.LIMIT"), as the other tables name their items; it said
   `FuncRef(1)`.
 ### Changed
+- **Branches: trunk-based.** `main` is the source of releases and changes only through pull requests; `develop` is
+  the sandbox, and a merge into it publishes the nightly pre-release `okkama-nightly-YYYY-MM-DD` (one per day, the
+  last 14 kept) instead of a single rolling `nightly`. CI and the audit also run on pushes to `main`.
 - **Sparrow: machine-code placement and the micro A/B's layout spread (#933).** Every compiled function starts on
   a page of its own at a fixed offset, so the alignment of its code does not depend on compile order (unit tests
   for the rule); `SPARROW_CORE_CODE_SHIFT=N` (bytes, 0–65536, a bad value is refused) moves every function N bytes

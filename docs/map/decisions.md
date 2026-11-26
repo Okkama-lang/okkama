@@ -6,6 +6,11 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-27. Trunk-based branches (owner).** «main — источник релиза, туда льем только через пулл-реквесты,
+  прямые слияния веток отвергаем; develop — общая песочница для всех изменений, на релиз не влияет». Release
+  branches are cut from `main`, features leave and rejoin the release branch, a merge into `develop` is a nightly
+  build (`okkama-nightly-YYYY-MM-DD`), the release ends with a pull request into `main` and the tag on its merge
+  commit. A ruleset on `main` enforces it; LLM-GUIDE §10 has the steps.
 - **2026-11-27. #1086 release A/B on two builds per version (lead decision).** Each version is built with
   `toolchain.sh` at LAYOUT_SEED 1 and 2 and runs one campaign per binary, A1 B1 B2 A2 (order balance and binary
   layout in the same four campaigns). The binaries' spread widens the band instead of being reported apart: a
