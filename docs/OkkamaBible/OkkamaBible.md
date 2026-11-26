@@ -16468,7 +16468,8 @@ the book's examples run in a cage without processes.
 A directory that holds a `blade.toml` is a *package root*. A file belongs to
 the package of the nearest such directory above it, and a *project* is a
 package that is not installed inside another project. `blade new demo`
-creates one:
+creates one in a new directory `demo` (it refuses a name that exists already
+or that is not a package name, such as `my-app`):
 
 ```toml
 [module]
@@ -16488,10 +16489,10 @@ env = {}
 
 ```okkama
 module demo;
+
 import "io/stdout" take Stdout;
 
 main() is int {
-
     Stdout().writeln("hello from okkama");
     0;
 }

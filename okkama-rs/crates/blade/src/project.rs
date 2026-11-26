@@ -31,6 +31,12 @@ pub struct Project {
     pub env: BTreeMap<String, String>,
 }
 
+/// The default `[build] output` of package `name`: `target/<last segment>.spb`.
+pub fn default_output(name: &str) -> String {
+    let leaf = name.rsplit('/').next().unwrap_or(name);
+    format!("target/{leaf}.spb")
+}
+
 impl Project {
     /// The project at `root` (its `blade.toml`).
     pub fn read(root: &Path) -> Result<Project, String> {
@@ -65,10 +71,7 @@ impl Project {
             Some(toml::Value::Array(files)) if !files.is_empty() => strings(files, "[build] entry")?,
             Some(_) => return Err("[build] entry must be a file or a non-empty list of files".into()),
         };
-        let output = text_of(&build, "build", "output")?.unwrap_or_else(|| {
-            let leaf = name.rsplit('/').next().unwrap_or(&name);
-            format!("target/{leaf}.spb")
-        });
+        let output = text_of(&build, "build", "output")?.unwrap_or_else(|| default_output(&name));
         let args = match run.get("args") {
             None => Vec::new(),
             Some(toml::Value::Array(args)) => strings(args, "[run] args")?,

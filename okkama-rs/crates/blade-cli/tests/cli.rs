@@ -117,6 +117,54 @@ fn a_new_project_builds_and_runs_with_no_flags() {
     assert_eq!(tree.calls(), ["build src/main.ok -o target/app.spb", "exec app/target/app.spb"]);
 }
 
+/// #1039: `blade new` writes only what it creates. It refuses an existing
+/// NAME (the project kept as edited), a missing or extra argument (usage, 2),
+/// and a NAME its own manifest check rejects; `acme/web` gets the default
+/// output `target/web.spb`; no unused `bin/`.
+#[test]
+fn new_never_overwrites_and_checks_its_name() {
+    let tree = Tree::new("new-checks");
+    assert!(tree.blade(".", &["new", "keep"]).status.success());
+    for path in ["keep/src/main.ok", "keep/blade.toml"] {
+        assert!(tree.0.join(path).is_file(), "{path}");
+    }
+    assert!(tree.0.join("keep/pkg").is_dir());
+    assert!(!tree.0.join("keep/bin").exists(), "nothing uses bin/");
+    let main = std::fs::read_to_string(tree.0.join("keep/src/main.ok")).unwrap();
+    assert!(main.starts_with("module keep;\n"), "{main}");
+
+    tree.write("keep/src/main.ok", "module keep;\n// edited\n");
+    tree.write("keep/blade.toml", "[module]\nname = \"keep\"\n\n[dependencies]\nlib = { git = \"x\", version = \"1.0.0\" }\n");
+    let again = tree.blade(".", &["new", "keep"]);
+    assert_eq!(again.status.code(), Some(2));
+    assert_eq!(text(&again.stderr), "blade: keep already exists; `blade new` makes a new project\n");
+    assert_eq!(std::fs::read_to_string(tree.0.join("keep/src/main.ok")).unwrap(), "module keep;\n// edited\n");
+    assert!(std::fs::read_to_string(tree.0.join("keep/blade.toml")).unwrap().contains("lib = "));
+    // An existing plain file is not replaced by a project either.
+    tree.write("file", "data");
+    assert_eq!(tree.blade(".", &["new", "file"]).status.code(), Some(2));
+    assert_eq!(std::fs::read_to_string(tree.0.join("file")).unwrap(), "data");
+
+    for args in [&["new"][..], &["new", "first", "second"]] {
+        let usage = tree.blade(".", args);
+        assert_eq!(usage.status.code(), Some(2), "{args:?}");
+        assert!(text(&usage.stderr).starts_with("blade — Blade command-line tool"), "{args:?}: {}", text(&usage.stderr));
+    }
+    assert!(!tree.0.join("first").exists() && !tree.0.join("second").exists());
+
+    let invalid = tree.blade(".", &["new", "my-app"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(text(&invalid.stderr).contains("invalid package name \"my-app\""), "{}", text(&invalid.stderr));
+    assert!(!tree.0.join("my-app").exists());
+
+    assert!(tree.blade(".", &["new", "acme/web"]).status.success());
+    let manifest = std::fs::read_to_string(tree.0.join("acme/web/blade.toml")).unwrap();
+    assert!(manifest.contains("name = \"acme/web\"") && manifest.contains("output = \"target/web.spb\""), "{manifest}");
+    let built = tree.blade("acme/web", &["build"]);
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    assert_eq!(text(&built.stdout), "built target/web.spb\n");
+}
+
 #[test]
 fn blade_toml_decides_what_builds_and_runs() {
     let tree = Tree::new("settings");

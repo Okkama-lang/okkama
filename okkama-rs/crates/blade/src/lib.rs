@@ -17,7 +17,8 @@ pub const HELP: &str = "\
 blade — Blade command-line tool
 
 USAGE:
-    blade new NAME                   create a project NAME
+    blade new NAME                   create the project NAME in a new directory
+                                     NAME (never over an existing one)
     blade add NAME GIT [MIN]         depend on the package in the git repository
                                      GIT, version MIN or later (default: its
                                      newest tag), and install it; adding NAME
@@ -107,77 +108,58 @@ struct CommandVersion {
 
 impl Command for CommandNew {
     fn execute(&self) -> ExitCode {
-        if let Err(e) = self.create_dir() {
-            eprintln!("cannot make a root dir: {}", e);
+        let [name] = self.args.as_slice() else {
+            eprint!("{HELP}");
             return ExitCode::from(2);
+        };
+        // The manifest of the new project must pass its own check (#1039).
+        if let Err(e) = manifest::check_package_name(name) {
+            return failure(&e);
         }
-
-        if let Err(e) = self.create_dir_internal(String::from("src")) {
-            eprintln!("cannot make src dir: {}", e);
-            return ExitCode::from(2);
+        let root = match std::env::current_dir() {
+            Ok(cwd) => cwd.join(name),
+            Err(e) => return failure(&format!("cannot read the current directory: {e}")),
+        };
+        // Never over an existing file or directory: `new` writes nothing it did not create (#1039).
+        if root.symlink_metadata().is_ok() {
+            return failure(&format!("{name} already exists; `blade new` makes a new project"));
         }
-        
-        if let Err(e) = self.create_dir_internal(String::from("bin")) {
-            eprintln!("cannot make bin dir: {}", e);
-            return ExitCode::from(2);
+        match new_project(&root, name) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => failure(&format!("cannot make the project {name}: {e}")),
         }
+    }
+}
 
-        if let Err(e) = self.create_dir_internal(String::from(manifest::PKG)) {
-            eprintln!("cannot make {} dir: {}", manifest::PKG, e);
-            return ExitCode::from(2);
-        }
+/// The files of a new project `name` in the new directory `root`: `src/main.ok`, `blade.toml` and an empty
+/// `pkg/` for dependencies. Each directory and file is created new, so nothing existing is overwritten.
+fn new_project(root: &std::path::Path, name: &str) -> std::io::Result<()> {
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir(root)?;
+    std::fs::create_dir(root.join("src"))?;
+    std::fs::create_dir(root.join(manifest::PKG))?;
+    let main_ok = format!(
+        r#"module {name};
 
-        let project_name = self.args.last().unwrap();
-        
-        // create src/main.ok
-        /*
-            module hello;
-
-            import "io/stdout" take Stdout;
-
-            main() is int {
-                Stdout.writeln("hello from okkama");
-                0;
-            }
-        */
-        let main_ok = format!(
-    r#"module {project_name};
 import "io/stdout" take Stdout;
 
 main() is int {{
-
     Stdout().writeln("hello from okkama");
     0;
 }}
 "#
-
-);
-        if let Err(e) = self.create_file(String::from("src/main.ok"), main_ok.as_bytes()) {
-            eprintln!("cannot make file src/main.ok: {}", e);
-            return ExitCode::from(2);
-        }
-
-        
-
-        // create blade.toml
-        /*
-            [module]
-            name = "hello"
-            version = "1.0.0"
-            
-            [build]
-            output = "hello"
-
-            [dependencies]
-        */
-        let hello_toml = format!(
-r#"[module]
-name = "{project_name}"
+    );
+    let output = project::default_output(name);
+    let manifest = format!(
+        r#"[module]
+name = "{name}"
 version = "1.0.0"
 
 [build]
 entry = "src/main.ok"
-output = "target/{project_name}.spb"
+output = "{output}"
 
 [run]
 args = []
@@ -185,14 +167,11 @@ env = {{}}
 
 [dependencies]
 "#
-);
-        if let Err(e) = self.create_file(String::from(manifest::MANIFEST), hello_toml.as_bytes()) {
-            eprintln!("cannot make file {}: {}", manifest::MANIFEST, e);
-            return ExitCode::from(2);
-        }
-
-        ExitCode::SUCCESS
+    );
+    for (path, text) in [("src/main.ok", main_ok), (manifest::MANIFEST, manifest)] {
+        std::fs::File::create_new(root.join(path))?.write_all(text.as_bytes())?;
     }
+    Ok(())
 }
 
 impl Command for CommandInstall {
@@ -373,32 +352,6 @@ impl Command for CommandUsage {
 impl CommandNew {
     fn new(args: Args) -> Self {
         Self { args: args.collect() }
-    }
-
-    fn create_dir(&self) -> std::io::Result<()> {
-        let cwd = std::env::current_dir()?;
-        let dir_name = self.args.last().unwrap();
-        let dir_path = cwd.join(dir_name);
-        std::fs::create_dir_all(dir_path)?;
-        Ok(())
-    }
-
-    fn create_dir_internal(&self, dir_name: String) -> std::io::Result<()> {
-        let cwd = std::env::current_dir()?;
-        let root_dir = self.args.last().unwrap();
-        let dir_path = cwd.join(root_dir).join(dir_name);
-        std::fs::create_dir_all(dir_path)?;
-        Ok(())
-    }
-
-    fn create_file(&self, filepath: String, filecontent: &[u8]) -> std::io::Result<()> {
-        let cwd = std::env::current_dir()?;
-        let root_dir = self.args.last().unwrap();
-        let path = cwd.join(root_dir).join(filepath);
-        let mut file = std::fs::File::create(path)?;
-        file.write_all(filecontent)?;
-        
-        Ok(())
     }
 }
 

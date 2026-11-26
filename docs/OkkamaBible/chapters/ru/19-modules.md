@@ -476,7 +476,9 @@ in module "shop/money"`).
 
 Папка, в которой лежит `blade.toml`, — *корень пакета*. Файл принадлежит
 пакету ближайшей такой папки над ним, а *проект* — это пакет, не
-установленный внутрь другого проекта. `blade new demo` создаёт его:
+установленный внутрь другого проекта. `blade new demo` создаёт его в новой
+папке `demo` (имя, которое уже есть, или не имя пакета, как `my-app`, он
+отвергает):
 
 ```toml
 [module]
@@ -496,10 +498,10 @@ env = {}
 
 ```okkama
 module demo;
+
 import "io/stdout" take Stdout;
 
 main() is int {
-
     Stdout().writeln("hello from okkama");
     0;
 }

@@ -25,6 +25,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `does` list longer than its role, panicked and lost the dump. `slot_name` is `None` for a missing slot; the
   printer writes `call.role %0, R.<invalid>()` and `<invalid> = @…`, as it does for other damaged references
   (#1003).
+- **`blade new` overwrote an existing project (#1039).** It made its directories with `create_dir_all` and its
+  files with `File::create`, so `blade new keep` over the project `keep` replaced its `src/main.ok` and
+  `blade.toml` (dependencies and settings lost), exit 0. Now an existing `NAME` (directory or file) is refused,
+  "blade: keep already exists; `blade new` makes a new project", and every directory and file is created new.
+  `blade new` without NAME panicked and `blade new first second` made `second`: both are usage errors (exit 2).
+  A NAME its own manifest check rejects (`my-app`) is refused before anything is written; `blade new acme/web`
+  writes the default `output = "target/web.spb"` (it wrote `target/acme/web.spb`); the unused empty `bin/` is
+  gone, and the generated `src/main.ok` is fmt-clean. Bible §19.7.
 ### Security
 - **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at

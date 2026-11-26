@@ -532,3 +532,8 @@ every declaration is open (#1005, owner decision).
 - The cleanup relaxation of OIR edge types (`^C` and `C` compatible) is for `block.unwind` targets only. The
   handler of `catch` and the `found` target of lookups also fill an implicit last parameter but are normal
   paths: a successor keeps its type there and its obligation is followed into the parameter.
+## `blade new` writes only what it creates (#1039, 2026-11-26)
+
+- An existing `NAME` (any file or directory) is refused, like `cargo new`; an existing empty directory too.
+  The name must pass `manifest::check_package_name`; the default output has one definition,
+  `project::default_output`.
