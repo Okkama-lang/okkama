@@ -790,20 +790,6 @@ fn conversion(from: &str, target: CastTarget) -> String {
     format!("`{from}` to `{to}` conversion")
 }
 
-#[cfg(test)]
-mod conversion_tests {
-    use super::*;
-
-    /// #1044: one "of", and both types as the source writes them.
-    #[test]
-    fn a_conversion_gap_names_both_types_in_source_notation() {
-        assert_eq!(unsupported(Span::default(), &conversion("char", CastTarget::Float)).to_string(),
-            "IR lowering of `char` to `float` conversion is not implemented yet.");
-        assert_eq!(conversion("bool", CastTarget::Str), "`bool` to `string` conversion");
-        assert_eq!(conversion("@int", CastTarget::Rat), "`@int` to `rat` conversion");
-    }
-}
-
 fn str_op(op: StrOp, receiver: ir::ValueId, rest: &[ir::ValueId]) -> InstKind {
     let mut args = vec![receiver];
     args.extend_from_slice(rest);
@@ -939,5 +925,19 @@ impl BodyLowerer<'_, '_, '_> {
         self.b.switch_to(out);
         self.sync_unwind();
         Typed { value: out_params[0], ty: Type::Rat }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    /// #1044: one "of", and both types as the source writes them.
+    #[test]
+    fn a_conversion_gap_names_both_types_in_source_notation() {
+        assert_eq!(unsupported(Span::default(), &conversion("char", CastTarget::Float)).to_string(),
+            "IR lowering of `char` to `float` conversion is not implemented yet.");
+        assert_eq!(conversion("bool", CastTarget::Str), "`bool` to `string` conversion");
+        assert_eq!(conversion("@int", CastTarget::Rat), "`@int` to `rat` conversion");
     }
 }
