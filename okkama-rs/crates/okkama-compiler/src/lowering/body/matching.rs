@@ -304,7 +304,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 _ => {
                     return Err(LoweringError::internal(
                         part.span,
-                        "internal compiler error: a map accumulator grows only by literals",
+                        "a map accumulator grows only by literals",
                     ));
                 }
             }
@@ -620,7 +620,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     _ => {
                         return Err(LoweringError::internal(
                             span,
-                            "internal compiler error: an error enum lowers to a variant",
+                            "an error enum lowers to a variant",
                         ))
                     }
                 }
@@ -743,7 +743,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     if !matches!(alt_ty, Type::Variant(_)) {
                         return Err(LoweringError::internal(
                             catch.span,
-                            "internal compiler error: a catch case filter needs an enum",
+                            "a catch case filter needs an enum",
                         ));
                     }
                     let tag = self.emit(InstKind::VariantTag(value), Type::Int, catch.span);

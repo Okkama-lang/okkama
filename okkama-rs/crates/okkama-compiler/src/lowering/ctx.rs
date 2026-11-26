@@ -758,7 +758,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             return Ok(*index);
         }
         let Some(crate::analysis::registry::ConstState::Done(Some(result))) = self.reg.const_state.get(constant) else {
-            return Err(LoweringError::internal(span, "internal compiler error: a constant without a value"));
+            return Err(LoweringError::internal(span, "a constant without a value"));
         };
         let ty = self.ir_type(&result.ty.clone(), span)?;
         let symbol = format!("{}const.{}", self.prefixes[self.reg.consts[constant].module], self.reg.consts[constant].name);

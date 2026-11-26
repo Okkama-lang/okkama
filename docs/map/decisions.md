@@ -49,6 +49,16 @@ the session's memory; older rulings live in the commits and tickets named.
   in the order of first use; the enclosing action captures a name for a nested
   one at the nested action's position. Nothing iterates a hash map to decide
   captures; a closure written in a default value sees no caller locals (#149).
+- **2026-11-27. The linearity check takes freshness and argument ownership from the model (#1093, lead
+  decision applying #553/#555).** A call result is a resource the function must own only where the ownership
+  census reports a creation site (`ownership::analyze`; call resolution shared via `ownership::resolved_call`),
+  never by type alone. A call whose callee adopts the parameter (its body has `region.adopt` of it, as kept after
+  the param-adopt elision) owns the fresh argument from the call on, including the call's unwind edge. A branch
+  moves a resource's ownership state into the block parameter it is passed to (coordinator, from the book
+  review). The `statics` pass removes the regions it emptied itself instead of relying on `regions` after it.
+  A `LoweringError::Internal` message is bare text; the kind is named once by whoever prints it (Display adds
+  "internal compiler error: "). A discarded `call.fn`/`call.cap` result that is a new resource is a real leak
+  in lowering, refused by the check (#1099), not a false positive.
 - **2026-11-26. Every resource has an owner before the function leaves (#1073,
   lead decision; the owner gave none).** The ownership linearity check
   requires each resource a function makes (an object with its own `destroy`,

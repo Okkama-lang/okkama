@@ -21,13 +21,15 @@
 //! The rewrite: the creating block is split after the constructor call; `track`/`adopt` become `resource.pin`;
 //! every `region.leave R` the value reaches gets a `resource.leave` before it; every edge from the value's code
 //! into a handler that runs `region.unwind R` goes through a new block that runs `resource.unwind` first. R is
-//! then empty and the `regions` pass removes it. The runtime destroys a pinned resource exactly once (a second
-//! close of it does nothing), so a redirected edge that also passes a `resource.leave` cannot destroy twice.
+//! then empty: this pass removes a region it emptied (the `regions` pass would, but a `resource.leave` that fails
+//! before `region.leave R` must not leave R open when this pass runs alone, #1093). The runtime destroys a pinned
+//! resource exactly once (a second close of it does nothing), so a redirected edge that also passes a
+//! `resource.leave` cannot destroy twice.
 //! Anything unsure stays dynamic.
 use std::collections::HashSet;
 
 use super::ownership::{self, Owner};
-use super::regions::Plain;
+use super::regions::{self, Plain};
 use super::{Block, BlockId, Function, Inst, InstKind, Module, Target, TermKind, Terminator, Type, ValueId, cfg};
 
 /// Make the module's provably local resources static; the number made static.
@@ -45,6 +47,7 @@ pub fn make_static(module: &mut Module) -> usize {
             .filter(|creation| creation.owner == Owner::Scope && creation.kind == "call.result")
             .map(|creation| ValueId(creation.value))
             .collect();
+        let mut emptied = HashSet::new();
         for value in candidates {
             let others = match eligible(module, &plain, &module.functions[found.function], value) {
                 Ok(others) => others,
@@ -62,8 +65,15 @@ pub fn make_static(module: &mut Module) -> usize {
                     continue;
                 }
             };
+            emptied.insert(plan.region);
             apply(&mut module.functions[found.function], value, plan);
             count += 1;
+        }
+        // R holds none of the values made static now. A region left empty goes here, not only in the `regions`
+        // pass: a `resource.leave` before `region.leave R` fails to the handler after R's, so R would stay open on
+        // that path when the pass runs alone (#1093).
+        if !emptied.is_empty() {
+            regions::elide_among(&mut module.functions[found.function], Some(&emptied));
         }
     }
     okkama_devtrace::count!("lower", "statics: resources made static", count as u64);

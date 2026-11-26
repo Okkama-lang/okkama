@@ -182,7 +182,7 @@ impl Ctx<'_, '_> {
                 "Self" => object,
                 "core::ArraySequence" => {
                     let adapter = self.reg.adapters.array_sequence.ok_or_else(|| {
-                        LoweringError::internal(span, "internal compiler error: no Sequencing role")
+                        LoweringError::internal(span, "no Sequencing role")
                     })?;
                     let element = args.first().cloned().unwrap_or(Ty::Never);
                     self.object_instance(adapter, vec![element.clone(), element], span)?

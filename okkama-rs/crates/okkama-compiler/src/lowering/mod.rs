@@ -30,7 +30,8 @@ pub enum LoweringError {
     Unsupported { span: Span, message: String },
     /// Программа нарушает правило языка: имена, типы, управление потоком.
     Invalid { span: Span, message: String },
-    /// A compiler invariant failed, rather than an error in the input program.
+    /// A compiler invariant failed, rather than an error in the input program. The message is the bare text: the
+    /// kind, "internal compiler error", comes from the variant, as the other kinds' names do (#1093).
     Internal { span: Span, message: String },
 }
 
@@ -68,7 +69,10 @@ impl LoweringError {
 
 impl fmt::Display for LoweringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message())
+        match self {
+            Self::Internal { message, .. } => write!(f, "internal compiler error: {message}"),
+            _ => f.write_str(self.message()),
+        }
     }
 }
 
@@ -416,7 +420,8 @@ fn check_roots(
             LoweringError::Unsupported { .. } => {
                 crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
             }
-            LoweringError::Invalid { .. } | LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
+            LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
+            LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.to_string()),
         };
         return Err(Ok(vec![CheckError {
             source: source_of(&graph, roots, module),
@@ -786,7 +791,7 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
         }
         return Err(LoweringError::internal(
             span,
-            format!("internal compiler error: lowering produced invalid IR: {error}"),
+            format!("lowering produced invalid IR: {error}"),
         ));
     }
     // #910: the ownership linearity check, in debug builds and, in an optimized build too, with
@@ -797,7 +802,7 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
             if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
                 let _ = std::fs::write(path, module.to_string());
             }
-            return Err(LoweringError::internal(span, format!("internal compiler error: {error}")));
+            return Err(LoweringError::internal(span, error));
         }
     }
     Ok(())
@@ -1071,6 +1076,19 @@ mod internal_error_tests {
         assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
         assert!(error.message().contains("may still be open"), "{error}");
         assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
+    }
+
+    /// #1093: an internal error names its kind once. The message is the bare text, as a caller that prints
+    /// "KIND: message" (the CLI) expects; the error as a whole reads "internal compiler error: …".
+    #[test]
+    fn an_internal_error_names_its_kind_once() {
+        let mut module = module("module app; object R { R(); destroy {} } main() is int { let r = R(); 0; }");
+        module.functions[0].blocks[0].term.kind = ir::TermKind::Ret(Some(ir::ValueId(usize::MAX)));
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
+        assert!(error.message().starts_with("lowering produced invalid IR: "), "{error:?}");
+        let text = error.to_string();
+        assert!(text.starts_with("internal compiler error: lowering produced invalid IR: "), "{text}");
+        assert_eq!(text.matches("internal compiler error").count(), 1, "{text}");
     }
 }
 

@@ -168,6 +168,7 @@ fn the_linearity_check_refuses_a_resource_in_no_region() {
         })
         .expect("P.run makes a Res");
     let mut untracked = module.clone();
+    borrowing(&mut untracked, "Res.read");
     for block in &mut untracked.functions[index].blocks {
         block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionTrack { value, .. } | ir::InstKind::RegionAdopt { value, .. } if value == made));
     }
@@ -205,6 +206,7 @@ fn the_linearity_check_refuses_a_loop_resource_in_no_region() {
     ir::linearity::check(&module).expect("the lowering's output owns every resource");
     let index = symbol(&module, "P.run");
     let mut untracked = module.clone();
+    borrowing(&mut untracked, "Res.read");
     for block in &mut untracked.functions[index].blocks {
         block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionTrack { .. } | ir::InstKind::RegionAdopt { .. }));
     }
@@ -231,6 +233,146 @@ fn the_linearity_check_refuses_a_region_entered_while_open() {
     }
     let error = ir::linearity::check(&open).expect_err("the loop region is entered while open");
     assert!(error.contains(&format!("in P.run: {region} is entered again at block {block}")) && error.contains("while it may still be open"), "{error}");
+}
+
+/// The parameters of `symbol` borrow: its adopts of them go, as the parameter-adopt elision drops them (#555). A
+/// caller that passes such an action a fresh resource must own it itself (#1093); the #1073 tests above make
+/// `Res.read` borrow, because an action that adopts its argument would own it.
+fn borrowing(module: &mut ir::Module, symbol_name: &str) {
+    let index = symbol(module, symbol_name);
+    let params = module.functions[index].params.clone();
+    for block in &mut module.functions[index].blocks {
+        block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionAdopt { value, .. } if params.contains(&value)));
+    }
+}
+
+/// #1093: lowering's output passes the check with and without the IR passes when a call hands back an identity
+/// someone else owns (a cap field reading its owner's field, a closure returning its argument, sync or async), when
+/// a fresh resource goes straight to an action that adopts it (a cap field or a closure that makes one, a worker
+/// entry's rebuilt receiver), and when an async action returns its argument.
+#[test]
+fn the_linearity_check_accepts_borrowed_call_results_and_adopted_arguments() {
+    let programs = [
+        format!("{RES} object Box {{ has item is Res; Box(:item); cap View {{ item is Res {{ item; }} \
+            fresh is Res {{ Res(n: 7); }} }} }} main() is int {{ let b = Box(item: Res(n: 1)); let v = b::View; \
+            v::item.read() + v::fresh.read(); }}"),
+        format!("{RES} object Use {{ Use(); alias() is Res {{ let f = (v is Res) is Res {{ v; }}; f(Res(n: 2)); }} \
+            made() is int {{ let f = () is Res {{ Res(n: 5); }}; f().read(); }} }} main() is int {{ Use().alias().read(); }}"),
+        format!("{RES} object Job {{ Job(); async alias(r is Res) is Res {{ r; }} async make() is Res {{ Res(n: 2); }} \
+            async both() is int {{ let a = await self.alias(Res(n: 3)); let b = await self.make(); a.read() + b.read(); }} }} \
+            async main() is int {{ await Job().both(); }}"),
+        format!("{RES} object W {{ has n is int; W(:n); work(i is int) is int {{ i + n; }} destroy {{}} }} \
+            async main() is int {{ let a = await spawn W(n: 1).work(2); let b = await spawn Res(n: 3).read(); a + b; }}"),
+    ];
+    for program in &programs {
+        for passes in ["none", "all", "statics"] {
+            let module = lowered(program, passes);
+            ir::linearity::check(&module).unwrap_or_else(|error| panic!("{passes}: {error}\n{program}"));
+        }
+    }
+}
+
+/// #1093: whether a call makes a resource is the census's answer. A closure that makes one hands it out fresh, so
+/// when the action it goes to only borrows it, nothing owns it; a closure that returns its argument hands back the
+/// caller's own (tracked) resource, so the same borrowing action leaves nothing unowned.
+#[test]
+fn the_linearity_check_takes_fresh_call_results_from_the_census() {
+    let module = lowered(&format!("{RES} object Use {{ Use(); \
+        made() is int {{ let f = () is Res {{ Res(n: 5); }}; f().read(); }} }} main() is int {{ 0; }}"), "none");
+    let mut borrowed = module.clone();
+    borrowing(&mut borrowed, "Res.read");
+    let index = symbol(&borrowed, "Use.made");
+    let made = borrowed.functions[index].blocks.iter().flat_map(|block| &block.insts)
+        .find_map(|inst| matches!(inst.kind, ir::InstKind::CallFn { .. }).then_some(inst.result).flatten())
+        .expect("Use.made calls its closure");
+    let error = ir::linearity::check(&borrowed).expect_err("the closure's resource is in no region");
+    assert!(error.contains(&format!("in Use.made: {made} may be in no region")), "{error}");
+    let mut alias = lowered(&format!("{RES} object Use {{ Use(); \
+        alias() is int {{ let f = (v is Res) is Res {{ v; }}; f(Res(n: 2)).read(); }} }} main() is int {{ 0; }}"), "none");
+    borrowing(&mut alias, "Res.read");
+    ir::linearity::check(&alias).expect("a closure returning its argument makes nothing");
+}
+
+/// #1093: a worker entry rebuilds the receiver and hands it to the action, which adopts it; an action that only
+/// borrowed it would leave the receiver with no owner.
+#[test]
+fn the_linearity_check_lets_an_adopting_action_own_a_worker_receiver() {
+    let module = lowered(&format!("{RES} object W {{ has n is int; W(:n); work(i is int) is int {{ i + n; }} \
+        destroy {{}} }} async main() is int {{ await spawn W(n: 1).work(2); }}"), "none");
+    ir::linearity::check(&module).expect("the action adopts the rebuilt receiver");
+    let entry = module.functions.iter().find(|function| function.symbol.starts_with("W.work$worker#")).expect("a worker entry");
+    let entry = entry.symbol.clone();
+    let mut borrowed = module.clone();
+    borrowing(&mut borrowed, "W.work");
+    let error = ir::linearity::check(&borrowed).expect_err("nobody owns the receiver");
+    assert!(error.contains(&format!("in {entry}: ")) && error.contains("may be in no region"), "{error}");
+}
+
+/// #1093: a resource passed to a block parameter moves there: returning the parameter hands it out, and dropping
+/// it leaves the resource with no owner. Lowering does not build this shape yet; the module is rewritten by hand.
+#[test]
+fn the_linearity_check_moves_a_resource_into_a_block_parameter() {
+    let module = lowered(&format!("{RES} object P {{ P(); make() is Res {{ Res(n: 2); }} }} \
+        main() is int {{ P().make().read(); }}"), "none");
+    let index = symbol(&module, "P.make");
+    let through = |returned_param: bool| {
+        let mut module = module.clone();
+        let function = &mut module.functions[index];
+        let (at, value) = function.blocks.iter().enumerate()
+            .find_map(|(at, block)| match block.term.kind { ir::TermKind::Ret(Some(value)) => Some((at, value)), _ => None })
+            .expect("P.make returns");
+        let ty = function.values[value.0].clone();
+        function.values.push(ty.clone());
+        let param = ir::ValueId(function.values.len() - 1);
+        let span = function.blocks[at].term.span;
+        let next = ir::BlockId(function.blocks.len());
+        function.blocks[at].term.kind = ir::TermKind::Br(ir::Target { block: next, args: vec![value] });
+        let mut insts = Vec::new();
+        let returned = if returned_param {
+            param
+        } else {
+            // The parameter is dropped: the block returns another resource it makes.
+            let func = function.blocks.iter().flat_map(|block| &block.insts).find_map(|inst| match &inst.kind {
+                ir::InstKind::Call { func, .. } if inst.result == Some(value) => Some(*func),
+                _ => None,
+            }).expect("P.make calls the constructor");
+            function.values.push(ir::Type::Int);
+            let n = ir::ValueId(function.values.len() - 1);
+            function.values.push(ty);
+            let other = ir::ValueId(function.values.len() - 1);
+            insts.push(ir::Inst { result: Some(n), kind: ir::InstKind::Const(ir::Constant::Int(ir::IntValue::from_i64(3))), span });
+            insts.push(ir::Inst { result: Some(other), kind: ir::InstKind::Call { func, args: vec![n] }, span });
+            other
+        };
+        function.blocks.push(ir::Block { params: vec![param], unwind: None, insts,
+            term: ir::Terminator { kind: ir::TermKind::Ret(Some(returned)), span } });
+        ir::verify(&module).expect("valid IR");
+        (module, param)
+    };
+    let (returned, _) = through(true);
+    ir::linearity::check(&returned).expect("the block parameter hands the resource out");
+    let (dropped, param) = through(false);
+    let error = ir::linearity::check(&dropped).expect_err("the block parameter's resource has no owner");
+    assert!(error.contains(&format!("in P.make: {param} may be in no region")), "{error}");
+}
+
+/// #1093: the `statics` pass alone leaves no region open. It removes a region it emptied, so a failing
+/// `resource.leave` before that region's `region.leave` does not leave it open on the failure path.
+#[test]
+fn the_statics_pass_alone_leaves_no_emptied_region() {
+    let text = "module app v1.0.0; object Guard { has n is int; Guard(:n); destroy { confirm n > 0; } } \
+        object Work { Work(); fail(code is int) is int { confirm code < 0; code; } \
+        guarded(code is int) is int { let outer = Guard(n: code); let inner = Guard(n: code); self.fail(code) + 1; } \
+        single(code is int) is int { let g = Guard(n: code); self.fail(code); } } \
+        main() is int { Work().guarded(1) + Work().single(1); }";
+    let module = lowered(text, "statics");
+    for symbol_name in ["Work.guarded", "Work.single"] {
+        let function = &module.functions[symbol(&module, symbol_name)];
+        let pins = function.blocks.iter().flat_map(|block| &block.insts)
+            .filter(|inst| matches!(inst.kind, ir::InstKind::ResourcePin { .. })).count();
+        assert!(pins >= 1, "{symbol_name} has a static resource: {module}");
+    }
+    ir::linearity::check(&module).expect("no region stays open");
 }
 
 const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \

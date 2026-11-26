@@ -15,14 +15,21 @@
 //!
 //! Ownership (#1073). A *fresh* resource is a value of an object type with its own `destroy` that an instruction
 //! makes: the result of `obj.new`, of a call (`call`, `call.fn`, `call.role`, `call.cap`) or of `await.take`
-//! (an `await` leaves the outcome with its Future), whose identity nobody owns yet. It is free from its definition until `region.track`,
-//! `region.adopt` or `region.transfer` of it, or `resource.pin`, owns it; `region.leave`/`region.settle` with `keep` of it frees it again, and
-//! `await.take` of a Future consumes it. A fresh value may leave the function free only as the value it returns
-//! or throws (the caller or the handler takes it); free at any other exit, or made again by a loop while the one
-//! before is free, it has no owner that would destroy it, and the check refuses it.
-use std::collections::HashMap;
+//! (an `await` leaves the outcome with its Future), whose identity nobody owns yet. Whether a call's result is a
+//! new identity is the ownership census's answer (`ir::ownership`, its creation sites, #1093): a cap field that
+//! returns its owner's field, or a closure that returns its argument, hands back an identity someone else owns.
+//! A fresh value is free from its definition until `region.track`, `region.adopt` or `region.transfer` of it, or
+//! `resource.pin`, owns it; so does a call whose callee adopts the parameter it is passed as (the calling
+//! convention, #555: the callee's root region owns a fresh argument from its entry, on its failure path too; a
+//! worker entry hands the receiver it rebuilds to the action this way). `region.leave`/`region.settle` with
+//! `keep` of it frees it again. A branch that passes it to a block parameter moves its state to the parameter
+//! (#1093): the parameter is the resource from then on, so returning the parameter hands it out. A fresh value
+//! may leave the function free only as the value it returns or throws (the caller or the handler takes it); free
+//! at any other exit, or made again by a loop while the one before is free, it has no owner that would destroy
+//! it, and the check refuses it.
+use std::collections::{HashMap, HashSet};
 
-use super::{Function, InstKind, Module, TermKind, Type, ValueId};
+use super::{Function, InstKind, Module, Target, TermKind, Type, ValueId, ownership};
 
 const UNOPENED: u8 = 1;
 const OPEN: u8 = 2;
@@ -71,18 +78,66 @@ impl State {
 
 /// Check every function; the first violation, named by function.
 pub fn check(module: &Module) -> Result<(), String> {
-    for function in &module.functions {
-        check_function(module, function)
+    let calls = Calls::of(module);
+    for (index, function) in module.functions.iter().enumerate() {
+        check_function(module, &calls, index, function)
             .map_err(|error| format!("ownership linearity in {}: {error}", function.symbol))?;
     }
     Ok(())
 }
 
-/// The resources `function` makes (#1073): values of an object type with its own `destroy` (a resource, the
-/// Bible's ch. 11), made by `obj.new`, returned by a call or taken from a Future by `await.take`. An `await`
-/// leaves the outcome with its Future, whose owner closes it. Containers, roles and Futures that may reach a
-/// resource are left to the regions they are tracked in.
-fn fresh(module: &Module, function: &Function) -> Vec<ValueId> {
+/// What the ownership rule takes from the rest of the compiler (#1093), found once per module.
+struct Calls {
+    /// Per function, the values the ownership census reports as creation sites: the instructions whose result may
+    /// be a new identity. Empty when no function makes a resource (the census is not run then).
+    made: Vec<HashSet<usize>>,
+    /// Per function, the parameters its body adopts: the callee owns a fresh argument (#555).
+    adopts: Vec<Vec<bool>>,
+}
+
+impl Calls {
+    fn of(module: &Module) -> Self {
+        let adopts = module.functions.iter().map(|function| {
+            let adopted: HashSet<ValueId> = function.blocks.iter().flat_map(|block| &block.insts)
+                .filter_map(|inst| match inst.kind {
+                    InstKind::RegionAdopt { value, .. } => Some(value),
+                    _ => None,
+                })
+                .collect();
+            function.params.iter().map(|param| adopted.contains(param)).collect()
+        }).collect();
+        let any = module.functions.iter().any(|function| !candidates(module, function).is_empty());
+        let made = if any {
+            ownership::analyze(module).functions.into_iter()
+                .map(|found| found.creations.into_iter().map(|creation| creation.value).collect())
+                .collect()
+        } else {
+            vec![HashSet::new(); module.functions.len()]
+        };
+        Calls { made, adopts }
+    }
+
+    /// The arguments of the call `kind` that its callee adopts: each function it may run adopts that parameter.
+    fn adopted(&self, module: &Module, function: &Function, kind: &InstKind) -> Vec<ValueId> {
+        if !matches!(kind, InstKind::Call { .. } | InstKind::CallFn { .. } | InstKind::CallRole { .. }) {
+            return Vec::new();
+        }
+        let (targets, arguments) = ownership::resolved_call(module, function, kind);
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        arguments.into_iter().enumerate()
+            .filter(|(position, _)| targets.iter().all(|&target| self.adopts[target].get(*position) == Some(&true)))
+            .map(|(_, argument)| argument)
+            .collect()
+    }
+}
+
+/// The values of `function` that may be resources it makes (#1073): values of an object type with its own
+/// `destroy` (a resource, the Bible's ch. 11), made by `obj.new`, returned by a call or taken from a Future by
+/// `await.take`. An `await` leaves the outcome with its Future, whose owner closes it. Containers, roles and
+/// Futures that may reach a resource are left to the regions they are tracked in.
+fn candidates(module: &Module, function: &Function) -> Vec<ValueId> {
     let mut values = Vec::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         let makes = matches!(
@@ -96,8 +151,7 @@ fn fresh(module: &Module, function: &Function) -> Vec<ValueId> {
         );
         if makes
             && let Some(value) = inst.result
-            && let Type::Object(object) = &function.values[value.0]
-            && module.object(*object).is_some_and(|object| object.destroy.is_some())
+            && resource(module, &function.values[value.0])
         {
             values.push(value);
         }
@@ -107,14 +161,26 @@ fn fresh(module: &Module, function: &Function) -> Vec<ValueId> {
     values
 }
 
+/// An object type with its own `destroy`.
+fn resource(module: &Module, ty: &Type) -> bool {
+    matches!(ty, Type::Object(object) if module.object(*object).is_some_and(|object| object.destroy.is_some()))
+}
+
+/// The resources `function` makes: the candidates the ownership census calls new identities (#1093). A call
+/// whose callee returns an identity it was given or one of its fields (a cap field reading its owner, a closure
+/// returning its argument) makes nothing.
+fn fresh(module: &Module, calls: &Calls, index: usize, function: &Function) -> Vec<ValueId> {
+    let made = &calls.made[index];
+    candidates(module, function).into_iter().filter(|value| made.contains(&value.0)).collect()
+}
+
 /// What owns or frees a fresh value: `Some(true)` owns, `Some(false)` frees.
-fn ownership(kind: &InstKind) -> Option<(ValueId, bool)> {
+fn owner_effect(kind: &InstKind) -> Option<(ValueId, bool)> {
     match kind {
         InstKind::RegionAdopt { value, .. }
         | InstKind::RegionTrack { value, .. }
         | InstKind::RegionTransfer { value, .. }
-        | InstKind::ResourcePin { value }
-        | InstKind::AwaitTake(value) => Some((*value, true)),
+        | InstKind::ResourcePin { value } => Some((*value, true)),
         InstKind::RegionLeave { keep: Some(value), .. } | InstKind::RegionSettle { keep: Some(value), .. } => {
             Some((*value, false))
         }
@@ -186,12 +252,12 @@ fn visit_limit(blocks: usize, values: usize) -> usize {
     blocks.saturating_mul(3usize.saturating_mul(values).saturating_add(1)).saturating_add(1)
 }
 
-fn check_function(module: &Module, function: &Function) -> Result<(), String> {
+fn check_function(module: &Module, calls: &Calls, function_index: usize, function: &Function) -> Result<(), String> {
     if function.blocks.is_empty() {
         return Ok(());
     }
     let values = tracked(function);
-    let made = fresh(module, function);
+    let made = fresh(module, calls, function_index, function);
     if values.is_empty() && made.is_empty() {
         return Ok(());
     }
@@ -217,8 +283,10 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
             kind => closes(kind),
         }
     })));
-    // The ownership entries of the fresh values follow the linearity ones.
-    let owners = Keys::new(made.iter().copied());
+    // The ownership entries of the fresh values follow the linearity ones; a block parameter of a resource type
+    // takes the state of the value a branch passes it (#1093).
+    let owners = Keys::new(made.iter().copied().chain(function.blocks.iter().flat_map(|block| &block.params)
+        .filter(|param| resource(module, &function.values[param.0])).copied()));
     let base = keys.values.len();
     let mut start = State(vec![0; base + owners.values.len()]);
     for &value in &values {
@@ -243,7 +311,21 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
         }
         let block = &function.blocks[block_index];
         let mut state = entry[block_index].clone().expect("reached");
-        let flow = |target: usize, state: &State, entry: &mut Vec<Option<State>>, pending: &mut Vec<usize>| {
+        let flow = |target: &Target, state: &State, entry: &mut Vec<Option<State>>, pending: &mut Vec<usize>| {
+            // The block parameters take the ownership state of their arguments, which pass it on (#1093).
+            let mut moved = None;
+            for (argument, param) in target.args.iter().zip(&function.blocks[target.block.0].params) {
+                if let Some(&to) = owners.index.get(param) {
+                    let next = moved.get_or_insert_with(|| state.clone());
+                    let bits = owners.index.get(argument).map_or(0, |&from| state.0[base + from]);
+                    if let Some(&from) = owners.index.get(argument) {
+                        next.0[base + from] = 0;
+                    }
+                    next.0[base + to] = bits;
+                }
+            }
+            let state = moved.as_ref().unwrap_or(state);
+            let target = target.block.0;
             let changed = match &mut entry[target] {
                 Some(existing) => join(existing, state),
                 none => {
@@ -256,6 +338,12 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
             }
         };
         for (index, inst) in block.insts.iter().enumerate() {
+            // A callee that adopts a fresh argument owns it from its entry, so on the call's failure path too.
+            if !owners.values.is_empty() {
+                for argument in calls.adopted(module, function, &inst.kind) {
+                    set_owner(&mut state, &argument, OWNED);
+                }
+            }
             if can_fail(&inst.kind)
                 && let Some(unwind) = &block.unwind
             {
@@ -263,9 +351,9 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
                     Some(value) => {
                         let mut after = state.clone();
                         after.insert(&keys, value, CLOSED);
-                        flow(unwind.block.0, &after, &mut entry, &mut pending);
+                        flow(unwind, &after, &mut entry, &mut pending);
                     }
-                    None => flow(unwind.block.0, &state, &mut entry, &mut pending),
+                    None => flow(unwind, &state, &mut entry, &mut pending),
                 }
             }
             let at = || format!("block {block_index}, instruction {index}");
@@ -294,7 +382,7 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
                 }
                 set_owner(&mut state, &defined, FREE);
             }
-            if let Some((value, owns)) = ownership(&inst.kind)
+            if let Some((value, owns)) = owner_effect(&inst.kind)
                 && owner_of(&state, &value).is_some()
             {
                 set_owner(&mut state, &value, if owns { OWNED } else { FREE });
@@ -359,7 +447,7 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
             // when it has none.
             TermKind::Raise(_) | TermKind::Throw(_) if block.unwind.is_some() => {
                 let unwind = block.unwind.as_ref().expect("checked");
-                flow(unwind.block.0, &state, &mut entry, &mut pending);
+                flow(unwind, &state, &mut entry, &mut pending);
             }
             TermKind::Ret(_) | TermKind::Raise(_) | TermKind::Throw(_) => {
                 for (value, &bits) in keys.values.iter().zip(&state.0) {
@@ -384,7 +472,7 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
             }
             kind => {
                 for target in kind.targets() {
-                    flow(target.block.0, &state, &mut entry, &mut pending);
+                    flow(target, &state, &mut entry, &mut pending);
                 }
             }
         }

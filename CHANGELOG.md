@@ -45,6 +45,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `main` runs (a malformed `SPARROW_CORE_CODE_SHIFT`, an intrinsic's contract) is a load error with the launcher's
   prefix (`okkama:` under `okkama run` and `okkama exec`, `sparrow:` under `sparrow run`); the exit code stays 1.
   okkama-native's comments name the one test that uses `unsafe` (#1026's `drop_in_place`).
+- **Debug builds refused correct programs with "ownership linearity … may be in no region" (#1093, a regression
+  of #1073).** The check took every call result of a type with its own `destroy` for a new resource. A cap field
+  that returns its owner's field, or a closure that returns its argument, hands back an identity someone else
+  owns, and a worker entry hands the receiver it rebuilds to the action, which adopts it. The check now asks the
+  ownership census which call results are new identities, as the census and the `statics` pass do. A call whose
+  callee adopts a parameter owns the fresh argument, on the call's failure path too, and a resource passed to a
+  block parameter moves there. Packaged releases never run the check, so only debug builds and
+  `OKKAMA_VERIFY_OWNERSHIP=1` were affected. What #1073 refuses is still refused: a resource no region owns, one
+  a loop makes again while the one before is unowned, a region entered while open.
+- **`OKKAMA_IR_PASSES=statics` left an emptied region open on a failure path (#1093).** Without the `regions`
+  pass after it, the `statics` pass left the region of the resources it made static in place, and a failing
+  `destroy` went to the outer handler past that region's close. The region was empty, so nothing leaked, but the
+  check refused the module. The pass now removes the regions it empties. The default passes (`all`) build the
+  same code as before.
+- **An internal compiler error said "internal compiler error: internal compiler error:" (#1093).** The message of
+  a `LoweringError::Internal` is now the bare text. The CLI, `okkama check` and doctests name the kind once.
 - **Sparrow: an intrinsic's error case in the layout before #290 loaded and was raised with its fields mixed up
   (#1090).** The load-time contract still accepted an error enum written as one `[$tag, $0_x: array…]` object.
   The runtime raised such an object by filling the payload arrays, and with a payload the runtime does not have,

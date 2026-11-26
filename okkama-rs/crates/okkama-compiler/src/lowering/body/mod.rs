@@ -337,7 +337,7 @@ fn finish(
     }
     let result = lowerer.result.clone();
     let ((values, blocks, params), remap) = lowerer.b.finish_mapped(&lowerer.params).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     if let Some(sites) = lowerer.ctx.current.and_then(|task| lowerer.ctx.await_regions.get_mut(task)) {
         for (future, (region, bound)) in std::mem::take(sites) {
@@ -413,7 +413,7 @@ fn lower_witness(
     let ResultType::Value(own) = own else {
         return Err(LoweringError::internal(
             span,
-            "internal compiler error: a void witness",
+            "a void witness",
         ));
     };
     // An async action's witness is async: it awaits the action's Future and wraps its result (#790).
@@ -435,7 +435,7 @@ fn lower_witness(
     let wrapped = b.emit(InstKind::RoleWrap(value), result.clone(), span);
     b.terminate(TermKind::Ret(Some(wrapped)), span);
     let (values, blocks, params) = b.finish(&params).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     let mut attrs = vec![ir::Attr::Method(object)];
     if info.is_async {
@@ -468,7 +468,7 @@ fn lower_member(
     let missing = || {
         LoweringError::internal(
             span,
-            format!("internal compiler error: no action {name}/{arity} for a runtime helper"),
+            format!("no action {name}/{arity} for a runtime helper"),
         )
     };
     let mut b = FnBuilder::new();
@@ -525,7 +525,7 @@ fn lower_member(
         }
     }
     let (values, blocks, params) = b.finish(&params).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     let attrs = if bound {
         vec![ir::Attr::Lambda {
@@ -567,7 +567,7 @@ fn lower_worker_entry(
             .ok_or_else(|| {
                 LoweringError::internal(
                     span,
-                    "internal compiler error: a worker receiver has no field constructor",
+                    "a worker receiver has no field constructor",
                 )
             })?;
         let types: Vec<Type> = ctx.objects[object.0]
@@ -626,7 +626,7 @@ fn lower_worker_entry(
     let mut all = ctor_params;
     all.extend(method_params);
     let (values, blocks, params) = b.finish(&all).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     Ok(ir::Function {
         symbol,
@@ -654,7 +654,7 @@ fn lower_worker_bind(
     let (ctor, given, _) = ctx.worker_ctor(object).ok_or_else(|| {
         LoweringError::internal(
             span,
-            "internal compiler error: a worker receiver has no field constructor",
+            "a worker receiver has no field constructor",
         )
     })?;
     let env = ctx.objects[object.0].env.clone();
@@ -727,7 +727,7 @@ fn lower_worker_bind(
     );
     b.terminate(TermKind::Ret(Some(bound)), span);
     let (values, blocks, params) = b.finish(&[receiver]).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     Ok(ir::Function {
         symbol,
@@ -920,7 +920,7 @@ fn lower_system_method(
         );
         b.terminate(TermKind::Ret(Some(text)), span);
         let (values, blocks, params) = b.finish(&[receiver]).map_err(|message| {
-            LoweringError::internal(span, format!("internal compiler error: {message}"))
+            LoweringError::internal(span, message)
         })?;
         return Ok(ir::Function {
             symbol,
@@ -939,7 +939,7 @@ fn lower_system_method(
         .ok_or_else(|| {
             LoweringError::internal(
                 span,
-                format!("internal compiler error: system action {name} has no field"),
+                format!("system action {name} has no field"),
             )
         })?;
     let mut b = FnBuilder::new();
@@ -954,7 +954,7 @@ fn lower_system_method(
     );
     b.terminate(TermKind::Ret(Some(value)), span);
     let (values, blocks, params) = b.finish(&[receiver]).map_err(|message| {
-        LoweringError::internal(span, format!("internal compiler error: {message}"))
+        LoweringError::internal(span, message)
     })?;
     Ok(ir::Function {
         symbol,
@@ -1211,7 +1211,7 @@ fn lower_default(
     else {
         return Err(LoweringError::internal(
             span,
-            "internal compiler error: a default is one expression",
+            "a default is one expression",
         ));
     };
     if let Some(value) = lowerer.value(expr)? {
@@ -1245,7 +1245,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             Some(ty) => self.ir_type(ty, expr.span),
             None => Err(LoweringError::internal(
                 expr.span,
-                "internal compiler error: a value expression has no type",
+                "a value expression has no type",
             )),
         }
     }
@@ -1404,7 +1404,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 if want {
                     return Err(LoweringError::internal(
                         block.span,
-                        "internal compiler error: an action body produced no value",
+                        "an action body produced no value",
                     ));
                 }
                 self.ret(None, tail_span)?;
@@ -1424,13 +1424,13 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     /// иначе — посчитать, запомнить `some` и отдать.
     fn once_let(&mut self, local: thir::LocalId, value: &'r thir::Expr, span: Span) -> Result<Out> {
         let (Some(object), Some(receiver)) = (self.object, self.self_value) else {
-            return Err(LoweringError::internal(span, "internal compiler error: once let outside an object's action"));
+            return Err(LoweringError::internal(span, "once let outside an object's action"));
         };
         let BodyOwner::Method { method, .. } = self.body.owner else {
-            return Err(LoweringError::internal(span, "internal compiler error: once let outside an action"));
+            return Err(LoweringError::internal(span, "once let outside an action"));
         };
         let Some(field) = self.ctx.once_field(object, method, local) else {
-            return Err(LoweringError::internal(span, "internal compiler error: once let without a slot"));
+            return Err(LoweringError::internal(span, "once let without a slot"));
         };
         let slot_ty = self.ctx.objects[object.0].fields[field].1.clone();
         let ty = self.local_type(local, span)?;
@@ -2108,7 +2108,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     .ok_or_else(|| {
                         LoweringError::internal(
                             span,
-                            "internal compiler error: rethrow outside catch",
+                            "rethrow outside catch",
                         )
                     })?;
                 self.b.terminate(TermKind::Raise(handled), span);
@@ -2295,7 +2295,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             Out::Diverged => Ok(None),
             Out::Unit => Err(LoweringError::internal(
                 expr.span,
-                "internal compiler error: a value expression produced no value",
+                "a value expression produced no value",
             )),
         }
     }
@@ -2309,7 +2309,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         Constant::Int(IntValue::parse(text).ok_or_else(|| {
                             LoweringError::internal(
                                 span,
-                                "internal compiler error: malformed integer constant",
+                                "malformed integer constant",
                             )
                         })?)
                     }
@@ -2466,7 +2466,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             ExprKind::Pack { items, spread } => self.pack(items, spread.as_deref(), expr, span),
             ExprKind::Unreachable => Err(LoweringError::internal(
                 span,
-                "internal compiler error: unreachable expression reached lowering",
+                "unreachable expression reached lowering",
             )),
             ExprKind::RatNew {
                 numerator,
@@ -2698,7 +2698,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Type::Fn(sig) = &ty else {
             return Err(LoweringError::internal(
                 span,
-                "internal compiler error: an anonymous action is not a fn value",
+                "an anonymous action is not a fn value",
             ));
         };
         let index = self.ctx.closures.len();
@@ -2838,7 +2838,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 let Type::Future(result) = &ty else {
                     return Err(LoweringError::internal(
                         span,
-                        "internal compiler error: spawn does not produce a future",
+                        "spawn does not produce a future",
                     ));
                 };
                 let params = values
@@ -3115,7 +3115,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 (None, VarKind::Field) => {
                     return Err(LoweringError::internal(
                         span,
-                        "internal compiler error: a loop rebinds an unbound field",
+                        "a loop rebinds an unbound field",
                     ));
                 }
                 (None, VarKind::Staged(field)) => {

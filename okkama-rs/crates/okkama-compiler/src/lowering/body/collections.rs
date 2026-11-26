@@ -914,7 +914,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     Out::Diverged => Ok(None),
                     Out::Unit => Err(crate::lowering::LoweringError::internal(
                         body.span,
-                        "internal compiler error: a for body in value position produced no value",
+                        "a for body in value position produced no value",
                     )),
                 }
             },
@@ -963,7 +963,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         else {
             return Err(crate::lowering::LoweringError::internal(
                 span,
-                "internal compiler error: `<-` without the io/stream roles",
+                "`<-` without the io/stream roles",
             ));
         };
         let slot = reg.roles[writing.0]
@@ -1020,7 +1020,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Type::Array(element) = value.ty.clone() else {
             return Err(crate::lowering::LoweringError::internal(
                 span,
-                "internal compiler error: `<- xs...` of a non-array",
+                "`<- xs...` of a non-array",
             ));
         };
         let empty = thir::Block {
@@ -1060,7 +1060,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             Out::Diverged => Ok(None),
             Out::Unit => Err(crate::lowering::LoweringError::internal(
                 body.span,
-                "internal compiler error: a functional block produced no value",
+                "a functional block produced no value",
             )),
         }
     }

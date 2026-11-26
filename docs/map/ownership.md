@@ -64,6 +64,12 @@ the return had already closed (fixed in `exit_scopes`). Since #1073 it also refu
 with its own destroy made by `obj.new`, a call or `await.take`) that may be in no region (not tracked, adopted,
 transferred or pinned) when the function leaves, other than the value returned or thrown, and a `region.enter` of
 a region that may still be open. A `return` through nested scopes re-tracks the kept value in each next region.
+Since #1093 a call's result is a resource only where the ownership census (`ir/ownership.rs`, its creation sites)
+calls it a new identity: a cap field returning its owner's field or a closure returning its argument makes none
+(call resolution shared through `ownership::resolved_call`). A call whose callee adopts the parameter owns the
+fresh argument (#555; a worker entry's rebuilt receiver), on the call's failure path too, and a branch moves a
+resource's state into the block parameter it is passed to. The `statics` pass removes the regions it empties,
+so it leaves none open when it runs without `regions`.
 
 **Next.** The static pass (#909 2b) takes a resource alone in its region or the oldest member of one (newer
 members close first). Several static resources per region, drop flags for conditional creation and direct JIT

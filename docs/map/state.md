@@ -18,6 +18,20 @@
   failed `configured_runtime` as `ExecutionError::Load`, `core_described` prefixes run_described's load error
   with `okkama:`.
 
+- [x] #1093 (feature/dbg, not committed): `ir/linearity.rs` takes a call result as a resource only where the
+  census reports a creation site (`Calls::of` runs `ownership::analyze` once per module, only when some function
+  has a resource-typed candidate; resolution shared through `ownership::resolved_call`); a call whose callee
+  adopts the parameter owns the fresh argument, also on its unwind edge (`Calls::adopted`); a branch moves an
+  argument's ownership state into a resource-typed block parameter (`flow`); the dead `await.take` owner branch
+  is gone. `ir/statics.rs` removes the regions it empties (`regions::elide_among`): with `OKKAMA_IR_PASSES=statics`
+  37 corpus programs were refused "may still be open" before (a `resource.leave` before `region.leave R` failed
+  to the outer handler; empty region, no leak; since #1058 ran the pass alone). `LoweringError::Internal`
+  messages are bare, Display adds the prefix (CLI, `okkama check`, doctests print the kind once). #1073's two
+  refusal tests now also make `Res.read` borrow its receiver (an adopting callee owns the argument). Corpus with
+  `OKKAMA_VERIFY_OWNERSHIP=1`, release build, passes `all`/`none`/`statics`: std -t 499, t/ 49 + t/gen 93,
+  examples 264 (69 intentional rejects), conformance 601 compiling cases (474 expected rejects): 0 refusals, 0
+  ICE; SPB under `all` byte-identical to release/065 on 1382 files. Found: #1099 (a discarded `call.fn`/`call.cap`
+  result that is a new resource is never destroyed; the check refuses it). Not run: the debug workspace suite.
 - [x] #1090 + #1091 + #1092 (feature/fuzz2, not committed): `contracts.rs::thrown` checks that an error case's
   fields are exactly the raised payload (the legacy `$tag` layout, unemitted since #290, used to load; a
   crafted one read `x` as the tag, 0); an intrinsic's contract errors name the intrinsic; `intrinsics::raised`

@@ -38,7 +38,7 @@ impl BodyLowerer<'_, '_, '_> {
             ty @ Type::Variant(_) => Ok(ty),
             _ => Err(LoweringError::internal(
                 span,
-                "internal compiler error: a search builtin does not produce Maybe<int>",
+                "a search builtin does not produce Maybe<int>",
             )),
         }
     }

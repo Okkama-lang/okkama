@@ -216,6 +216,21 @@ fn callees(module: &Module, function: &Function, kind: &InstKind) -> Vec<usize> 
     }
 }
 
+/// The functions a call may run and the arguments they receive (#1093): a resolved closure's callee takes its
+/// captures before the call's arguments, so the arguments line up with the callee's parameters. The census and
+/// the ownership linearity check (`ir::linearity`) apply a callee's effects through this one resolution.
+pub(super) fn resolved_call(module: &Module, function: &Function, kind: &InstKind) -> (Vec<usize>, Vec<ValueId>) {
+    let targets = callees(module, function, kind);
+    let arguments = match kind {
+        InstKind::CallFn { callee, args } => match definition(function, *callee) {
+            Some(InstKind::FnClosure { captures, .. }) => captures.iter().chain(args).copied().collect(),
+            _ => kind.operands(),
+        },
+        _ => kind.operands(),
+    };
+    (targets, arguments)
+}
+
 /// Cleanup can call user code that publishes an identity or one of its fields.
 fn destroyers(module: &Module, ty: &Type) -> Vec<usize> {
     let mut types = vec![ty];
@@ -495,13 +510,7 @@ impl Flow {
                     }
                     InstKind::Call { .. } | InstKind::CallRole { .. }
                     | InstKind::CallCap { .. } | InstKind::CallFn { .. } => {
-                        let targets = callees(module, function, &inst.kind);
-                        let mut arguments = operands.clone();
-                        if let InstKind::CallFn { callee, args } = &inst.kind
-                            && let Some(InstKind::FnClosure { captures, .. }) = definition(function, *callee)
-                        {
-                            arguments = captures.iter().chain(args).copied().collect();
-                        }
+                        let (targets, arguments) = resolved_call(module, function, &inst.kind);
                         if targets.is_empty() {
                             let reason = match inst.kind {
                                 InstKind::CallCap { .. } => "cap",
