@@ -2,6 +2,16 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1088 + #1089 + #1050 (feature/fuzz, not committed; fuzz run 45890980218 on 08a63b30b):
+  `lowering/intrinsics.rs` `Site::refuse` makes every shape the runtime needs a semantic error at the intrinsic
+  (error enum and its first case, result object with the receiver's type-parameter count, helper field, cap field
+  and action); `core::ArraySequence` missing stays internal. Swept 653 mutants of the eleven intrinsic modules
+  (production and test mode): no internal error. Fuzz `exec` lowers through `support/linking.rs`
+  (`lower_linked`, a loader with no modules) instead of unlinked `lower_program`. `tools/fuzz/coverage.sh`
+  replays coverage with `detect_odr_violation=0` (cargo-fuzz run's default; SQLite FTS3/FTS5 `aiOff` false
+  positive). Crash inputs in `okkama-rs/fuzz/regressions/<target>/`, copied into the corpus by `run.sh`,
+  replayed by `tests/fuzz_lowering.rs`. Not verified on CI yet: a Fuzz dispatch on the pushed branch must
+  show `coverage/spb.txt` and `coverage/exec.txt` with TOTAL.
 - [x] #1086: `bench/micro/toolchain.sh WORKTREE OUT [LAYOUT_SEED]` (release cfg, rust-lld `--shuffle-sections=*=SEED`
   via rustc's gcc-ld wrapper; refuses seed 0 = random and a devtrace binary); `report.py` `binary_spread` per cell
   (per-binary geometric medians by `toolchain.binary_sha256`), band = 2 × max(series spreads, binary spreads),

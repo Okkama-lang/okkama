@@ -5,7 +5,7 @@
 
 use super::ctx::Ctx;
 use super::{LoweringError, Result};
-use crate::analysis::registry::{CtorShape, TypeRef};
+use crate::analysis::registry::{CtorShape, ObjectInfo, TypeRef};
 use crate::analysis::ty::Ty;
 use crate::ir::{self, ObjectId, ResultType, Type};
 use crate::source::Span;
@@ -48,6 +48,30 @@ pub(crate) fn runtime_backed(module: &str, name: &str) -> bool {
 pub(super) enum Member {
     Method(usize),
     Ctor(usize),
+}
+
+/// The parameter names of constructor `ctor`, in order.
+fn ctor_params(info: &ObjectInfo<'_>, ctor: usize) -> Vec<String> {
+    match &info.ctors[ctor].shape {
+        CtorShape::Full { params, .. } => params.iter().map(|(name, _)| name.clone()).collect(),
+        CtorShape::Shorthand { fields, .. } => fields.iter().map(|field| info.fields[*field].name.clone()).collect(),
+    }
+}
+
+/// The intrinsic being lowered, for a diagnostic about its module's shape:
+/// where it is declared and how it reads in source (`Barrier.wait`).
+struct Site {
+    at: Span,
+    shown: String,
+}
+
+impl Site {
+    /// The module of a runtime intrinsic is user input (any source may declare
+    /// `module async/barrier`): a shape the runtime cannot work with is a
+    /// semantic error at the intrinsic, never an internal one (#1088).
+    fn refuse(&self, needs: impl std::fmt::Display) -> LoweringError {
+        LoweringError::invalid(self.at, format!("Runtime intrinsic \"{}\" {needs}", self.shown))
+    }
 }
 
 /// Объекты, которые рантайм создаёт для intrinsic: `Self` — сам объект,
@@ -128,21 +152,10 @@ impl Ctx<'_, '_> {
         let family = module.rsplit('/').next().unwrap_or(module);
         let action = match member {
             Member::Method(method) => info.methods[method].name.clone(),
-            Member::Ctor(ctor) => {
-                let names: Vec<String> = match &info.ctors[ctor].shape {
-                    CtorShape::Full { params, .. } => {
-                        params.iter().map(|(name, _)| name.clone()).collect()
-                    }
-                    CtorShape::Shorthand { fields, .. } => fields
-                        .iter()
-                        .map(|field| info.fields[*field].name.clone())
-                        .collect(),
-                };
-                std::iter::once("new".to_string())
-                    .chain(names)
-                    .collect::<Vec<_>>()
-                    .join("_")
-            }
+            Member::Ctor(ctor) => std::iter::once("new".to_string())
+                .chain(ctor_params(info, ctor))
+                .collect::<Vec<_>>()
+                .join("_"),
         };
         let name = format!("okkama.{family}.{}.{action}", info.name);
         ir::INTRINSICS.contains(&name.as_str()).then_some(name)
@@ -153,6 +166,7 @@ impl Ctx<'_, '_> {
         &mut self,
         object: ObjectId,
         name: &str,
+        site: &Site,
         span: Span,
     ) -> Result<Vec<ObjectId>> {
         let decl = self.objects[object.0].decl;
@@ -186,10 +200,10 @@ impl Ctx<'_, '_> {
                         info.error && info.params.is_empty() && info.cases.first().is_some_and(|c| c == case)
                     });
                     let Some(found) = found else {
-                        return Err(LoweringError::internal(
-                            span,
-                            format!("internal compiler error: intrinsic error {other} must be the first case of an error enum"),
-                        ));
+                        return Err(site.refuse(format_args!(
+                            "throws {other}: its module must declare {name} as an error enum \
+                             without type parameters whose first case is {case}"
+                        )));
                     };
                     match self.ir_type(&Ty::Variant(found, Vec::new()), span)? {
                         Type::Variant(id) => self.variants[id.0].cases[0].1,
@@ -204,13 +218,13 @@ impl Ctx<'_, '_> {
                             (_, Some(name)) => (name, 1),
                             _ => (other, 0),
                         };
-                    let Some(TypeRef::Object(found)) =
-                        self.reg.modules[module].own.types.get(name).copied()
-                    else {
-                        return Err(LoweringError::internal(
-                            span,
-                            format!("internal compiler error: intrinsic object {name} is missing"),
-                        ));
+                    let found = match self.reg.modules[module].own.types.get(name).copied() {
+                        Some(TypeRef::Object(found)) if self.reg.objects[found.0].params.len() == arity => found,
+                        _ => {
+                            return Err(site.refuse(format_args!(
+                                "creates {other}: its module must declare object {name} with {arity} type parameter(s)"
+                            )));
+                        }
                     };
                     let type_args = args.iter().take(arity).cloned().collect();
                     self.object_instance(found, type_args, span)?
@@ -226,6 +240,7 @@ impl Ctx<'_, '_> {
         &mut self,
         object: ObjectId,
         name: &str,
+        site: &Site,
         span: Span,
     ) -> Result<Vec<ir::FuncId>> {
         let decl = self.objects[object.0].decl;
@@ -243,17 +258,12 @@ impl Ctx<'_, '_> {
                     .fields
                     .iter()
                     .find(|field| field.name == path)
-                    .ok_or_else(|| {
-                        LoweringError::internal(
-                            span,
-                            format!("internal compiler error: no field {path}"),
-                        )
-                    })?;
+                    .ok_or_else(|| site.refuse(format_args!("reads field {path}: object {} must declare it", info.name)))?;
                 this.ir_type(&field.ty.subst(&env), span)
             };
             let receiver = resolve(self, path)?;
             if let Some((cap_name, field_name)) = action.split_once("::") {
-                found.push(self.intrinsic_cap_field(&receiver, cap_name, field_name, span)?);
+                found.push(self.intrinsic_cap_field(&receiver, cap_name, field_name, site, span)?);
                 continue;
             }
             let params = if args.is_empty() {
@@ -261,6 +271,19 @@ impl Ctx<'_, '_> {
             } else {
                 Some(args.iter().map(|arg| resolve(self, arg)).collect::<Result<Vec<_>>>()?)
             };
+            let callable = match &receiver {
+                Type::Object(target) => self.member_method(*target, action, *arity, params.as_deref(), span)?.is_some(),
+                Type::Role(role) => self.roles[role.0]
+                    .methods
+                    .iter()
+                    .any(|method| method.name == *action && method.params.len() == *arity),
+                _ => false,
+            };
+            if !callable {
+                return Err(site.refuse(format_args!(
+                    "calls {action} with {arity} argument(s) on {path}: its type must have that action"
+                )));
+            }
             let func = self.member_thunk(receiver.clone(), action, *arity, params.clone(), false);
             // Тип результата действия: для цепочки `^N`.
             let result = match &receiver {
@@ -300,13 +323,11 @@ impl Ctx<'_, '_> {
         receiver: &Type,
         cap_name: &str,
         field_name: &str,
+        site: &Site,
         span: Span,
     ) -> Result<(ir::FuncId, Type)> {
         let missing = || {
-            LoweringError::internal(
-                span,
-                format!("internal compiler error: no cap field {cap_name}::{field_name} for a runtime helper"),
-            )
+            site.refuse(format_args!("reads {cap_name}::{field_name}: its receiver must be an object with that cap field"))
         };
         let Type::Object(target) = receiver else {
             return Err(missing());
@@ -341,6 +362,16 @@ impl Ctx<'_, '_> {
         let span = self.objects[object.0].span;
         let reg = self.reg;
         let info = &reg.objects[decl.0];
+        let site = match member {
+            Member::Method(method) => Site {
+                at: info.methods[method].decl.map_or(span, |decl| decl.span),
+                shown: format!("{}.{}", info.name, info.methods[method].name),
+            },
+            Member::Ctor(ctor) => Site {
+                at: info.ctors[ctor].span,
+                shown: format!("{}({})", info.name, ctor_params(info, ctor).join(", ")),
+            },
+        };
         let mut values = Vec::new();
         let mut attrs = Vec::new();
         let result = match member {
@@ -373,8 +404,8 @@ impl Ctx<'_, '_> {
                 ResultType::Value(Type::Object(object))
             }
         };
-        let objects = self.intrinsic_objects(object, &name, span)?;
-        let helpers = self.intrinsic_helpers(object, &name, span)?;
+        let objects = self.intrinsic_objects(object, &name, &site, span)?;
+        let helpers = self.intrinsic_helpers(object, &name, &site, span)?;
         attrs.push(ir::Attr::Intrinsic {
             name,
             objects,
@@ -390,5 +421,91 @@ impl Ctx<'_, '_> {
             blocks: Vec::new(),
             span,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{SourceFile, ir, lowering::{self, LoweringError}, syntax};
+
+    fn lowered(text: &str) -> (String, Result<ir::Module, LoweringError>) {
+        let source = SourceFile::new("intrinsics.ok", text).unwrap();
+        let program = syntax::parse(&source, &syntax::ParseOptions::default()).unwrap();
+        (text.to_string(), lowering::lower_program(&syntax::prune::strip_test_items(program)))
+    }
+
+    /// The module lowers to OIR with the intrinsic `name`.
+    fn accepted(text: &str, name: &str) {
+        let module = lowered(text).1.unwrap_or_else(|error| panic!("{error:?}"));
+        let found = module.functions.iter().flat_map(|function| &function.attrs).any(|attr| {
+            matches!(attr, ir::Attr::Intrinsic { name: found, .. } if found == name)
+        });
+        assert!(found, "no intrinsic {name}");
+    }
+
+    /// The module is refused with a semantic error at `at` that says `needs`.
+    fn refused(text: &str, at: &str, needs: &str) {
+        let (text, result) = lowered(text);
+        let error = result.unwrap_err();
+        assert!(matches!(error, LoweringError::Invalid { .. }), "{error:?}");
+        assert!(error.message().contains(needs), "{}", error.message());
+        assert!(text[error.span().start as usize..].starts_with(at), "{error:?}");
+    }
+
+    const BARRIER: &str = "module async/barrier v1.0.0;\n\
+        object Barrier { has amount is int; Barrier(parties is int) { amount = parties; }\n\
+        async wait() is int { panic \"intrinsic\"; } }\n";
+
+    /// #1088: the runtime throws the first case of a module's error enum; a
+    /// module without it is refused at the intrinsic, never an internal error.
+    #[test]
+    fn an_intrinsic_throws_the_first_case_of_a_declared_error_enum() {
+        accepted(&format!("{BARRIER}enum BrokenBarrier is Error = (broken);"), "okkama.barrier.Barrier.wait");
+        let needs = "\"Barrier.wait\" throws BrokenBarrier.broken: its module must declare BrokenBarrier as an error enum";
+        for shape in ["", "enum BrokenBarrier is Error = (other, broken);", "enum BrokenBarrier = (broken);",
+                      "object BrokenBarrier { BrokenBarrier(); }"] {
+            refused(&format!("{BARRIER}{shape}"), "async wait()", needs);
+        }
+    }
+
+    const CHANNEL: &str = "module async/channel v1.0.0;\n\
+        enum InvalidChannelCapacity is Error = (capacity(capacity is int));\n";
+
+    /// `Sending<T>`: the runtime makes the result object with every type
+    /// argument of the receiver, so both declare as many parameters.
+    #[test]
+    fn an_intrinsic_result_object_takes_the_receivers_type_parameters() {
+        let program = |params: &str, args: &str| {
+            format!("{CHANNEL}object Channel<{params}> {{ Channel(capacity is int) {{}} sending() is Sending<T> {{ Sending(); }} }}\n\
+                object Sending<T> {{ Sending() {{}} }}\n\
+                main() is int {{ let c is Channel<{args}> = Channel(capacity: 1); let s = c.sending(); 0; }}")
+        };
+        accepted(&program("T", "int"), "okkama.channel.Channel.sending");
+        refused(&program("T", "int").replace("enum InvalidChannelCapacity is Error", "enum InvalidChannelCapacity"),
+            "Channel(capacity is int)", "\"Channel(capacity)\" throws InvalidChannelCapacity.capacity");
+        refused(&program("T, U", "int, bool"), "sending()",
+            "\"Channel.sending\" creates Sending<T>: its module must declare object Sending with 2 type parameter(s)");
+    }
+
+    /// `Within.outcome` reads `limit::Span::seconds` and calls `clock.wait(…)`.
+    #[test]
+    fn an_intrinsic_helper_needs_its_fields_cap_and_action() {
+        let program = |fields: &str| {
+            format!("module async/timeout v1.0.0;\n\
+                object Span5 {{ Span5(); cap Span {{ seconds is int {{ 5; }} }} }}\n\
+                object Clock {{ Clock(); async wait(seconds is int) is void {{}} }}\n\
+                object Still {{ Still(); }}\n\
+                object Within<T> {{ has origin is Future<T>; {fields} Within(origin is Future<T>) {{ self.origin = origin; }}\n\
+                async outcome() is T {{ throw TimedOut.elapsed; }} }}\n\
+                enum TimedOut is Error = (elapsed);\n\
+                object Work {{ Work(); async one() is int {{ 1; }} }}\n\
+                async main() is int {{ await Within(Work().one()).outcome(); }}")
+        };
+        accepted(&program("has limit is Span5 = Span5(); has clock is Clock = Clock();"), "okkama.timeout.Within.outcome");
+        refused(&program("has clock is Clock = Clock();"), "async outcome()", "\"Within.outcome\" reads field limit: object Within must declare it");
+        refused(&program("has limit is int = 5; has clock is Clock = Clock();"), "async outcome()",
+            "\"Within.outcome\" reads Span::seconds: its receiver must be an object with that cap field");
+        refused(&program("has limit is Span5 = Span5(); has clock is Still = Still();"), "async outcome()",
+            "\"Within.outcome\" calls wait with 1 argument(s) on clock: its type must have that action");
     }
 }

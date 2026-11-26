@@ -21,6 +21,7 @@ class CoverageTests(unittest.TestCase):
             executable(bin_ / 'cargo', '''
 case "$RUSTFLAGS" in *force-frame-pointers=yes*) ;; *) exit 9;; esac
 printf '%s\\n' "$@" > args.txt
+printf '%s\\n' "$ASAN_OPTIONS" > asan.txt
 if [ "$MODE" = build-fail ]; then echo "synthetic coverage build failure" >&2; exit 1; fi
 # Check the exact explicit directory is shared by build and report.
 mkdir -p target/coverage/host/release coverage/spb coverage/exec
@@ -37,12 +38,14 @@ if [ "$MODE" = no-total ]; then echo "no coverage summary"; else echo "TOTAL 10 
             env = {**os.environ, 'PATH': str(bin_) + ':' + os.environ['PATH'],
                    'MODE': mode, 'FIXTURE': str(root)}
             env.pop('CARGO_TARGET_DIR', None)
+            env['ASAN_OPTIONS'] = 'allocator_may_return_null=1'
             (root / 'coverage').mkdir()
             report = root / 'coverage' / (target + '.txt')
             report.write_text('TOTAL stale\n')
             result = subprocess.run(['bash', str(HERE / 'coverage.sh'), 'host', target],
                                     cwd=root, env=env, capture_output=True, text=True)
             log = (root / 'logs' / (target + '-coverage.log')).read_text()
+            self.asan = (root / 'asan.txt').read_text().strip()
             return result, log, report.read_text() if report.exists() else None, (root / 'args.txt').read_text()
 
     def test_spb_and_exec_report_coverage(self):
@@ -51,6 +54,9 @@ if [ "$MODE" = no-total ]; then echo "no coverage summary"; else echo "TOTAL 10 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('TOTAL 10', report)
             self.assertIn('--target-dir\ntarget/coverage\n', args)
+            # #1050: the replay runs without ASan's ODR check, as `cargo fuzz run`
+            # does, and keeps the caller's other options.
+            self.assertEqual(self.asan, 'allocator_may_return_null=1:detect_odr_violation=0')
 
     def test_build_report_and_missing_total_are_loud_failures(self):
         for mode, message in [('build-fail', 'synthetic coverage build failure'),

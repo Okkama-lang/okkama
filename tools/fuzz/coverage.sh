@@ -6,7 +6,7 @@ HOST="$1"
 TARGET="$2"
 build_dir="${CARGO_TARGET_DIR:-target}/coverage"
 if [[ "${3:-}" == --dry-run ]]; then
-    echo "cargo +nightly fuzz coverage --target $HOST --target-dir $build_dir $TARGET corpus/$TARGET"
+    echo "ASAN_OPTIONS=detect_odr_violation=0 cargo +nightly fuzz coverage --target $HOST --target-dir $build_dir $TARGET corpus/$TARGET"
     echo "llvm-cov report <coverage binary> -instr-profile=coverage/$TARGET/coverage.profdata"
     exit 0
 fi
@@ -21,7 +21,16 @@ fail() {
     tail -40 "$log" >&2
     exit 1
 }
-if ! CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo +nightly fuzz coverage --target "$HOST" --target-dir "$build_dir" "$TARGET" "corpus/$TARGET" >"$log" 2>&1; then
+# The replay runs the target as `cargo fuzz run` does, with ASan's ODR check
+# off (#1050). cargo-fuzz adds detect_odr_violation=0 to every run's
+# ASAN_OPTIONS but not to its coverage replay, which then aborts at start-up in
+# spb and exec, the targets that link sparrow-core and so SQLite: its
+# amalgamation has two function-local `static const unsigned short aiOff[]`
+# tables (FTS3's and FTS5's copies of one Unicode case-folding routine) with the
+# same contents, placed at one address, and ASan reports that one global as
+# registered twice. Nothing is linked twice; the run itself has never checked ODR.
+replay_asan="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_odr_violation=0"
+if ! ASAN_OPTIONS="$replay_asan" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo +nightly fuzz coverage --target "$HOST" --target-dir "$build_dir" "$TARGET" "corpus/$TARGET" >"$log" 2>&1; then
     fail
 fi
 llvm="$(rustc +nightly --print sysroot)/lib/rustlib/$HOST/bin"

@@ -6,11 +6,12 @@
 # Runs every target of okkama-rs/fuzz for SECONDS (default 300) each:
 # lex, parse (drops the AST, re-parses formatted source), analyze (lowering
 # verifies), ir_verify (mutated OIR), spb (decode, verify, intrinsic
-# contracts), exec (programs on the Sparrow core under budgets, no host
-# natives). Needs nightly Rust and cargo-fuzz; mass runs belong in a container
-# or on CI (.github/workflows/fuzz.yml). Corpora grow in
+# contracts), exec (programs linked with no module to import, on the Sparrow
+# core under budgets, no host natives). Needs nightly Rust and cargo-fuzz; mass
+# runs belong in a container or on CI (.github/workflows/fuzz.yml). Corpora grow in
 # okkama-rs/fuzz/corpus/<target> (seeded from std, conformance, examples and
-# compiled SPB), findings land in okkama-rs/fuzz/artifacts/<target>, and with
+# compiled SPB; past findings from okkama-rs/fuzz/regressions/<target>),
+# findings land in okkama-rs/fuzz/artifacts/<target>, and with
 # --coverage a summary per target in okkama-rs/fuzz/coverage/<target>.txt;
 # each run's output is in okkama-rs/fuzz/logs/<target>.log.
 # Exit status 1 when any target found something, 2 when the targets do not
@@ -43,6 +44,14 @@ for target in lex parse analyze ir_verify exec; do
         while IFS= read -r -d '' file; do
             cp -n "$file" "corpus/$target/$(cksum <"$file" | cut -d' ' -f1).ok"
         done
+done
+# Regressions: each input a run once crashed on (okkama-rs/fuzz/regressions/<target>,
+# also replayed by okkama-compiler's tests/fuzz_lowering.rs) stays in its corpus.
+for dir in "$FUZZ/regressions"/*/; do
+    [[ -d "$dir" ]] || continue
+    target="$(basename "$dir")"
+    mkdir -p "corpus/$target"
+    cp -n "$dir"* "corpus/$target/"
 done
 # SPB seeds: the examples and the fuzz seeds, compiled.
 mkdir -p corpus/spb

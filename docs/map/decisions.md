@@ -694,3 +694,18 @@ every declaration is open (#1005, owner decision).
 - Rust helpers that walk fields take a stub (`word::unbound(repr)`) as unbound: equality refuses it (as
   before), test output prints `null` (as before), the collector and ownership walks skip non-pointers (as
   before); map keys refuse it, `data_items` refuses to box it, `data_kind`/`data_dump` read it as undefined.
+
+## Fuzz harness contracts (#1088, #1089, #1050, lead, 2026-11-27)
+
+- The module of a runtime intrinsic is user input: any source may say `module async/barrier`. Lowering checks
+  the shape the runtime needs where it lowers the intrinsic (`lowering/intrinsics.rs`, `Site::refuse`) and
+  reports a semantic error at its declaration. The runtime keeps checking layouts at load (`sparrow-core`
+  `contracts.rs`). Nothing in analysis duplicates the check.
+- Unlinked OIR is valid OIR: `lower_program` keeps imports unresolved (§2.1), the verifier accepts them, and
+  codegen refuses them. A harness that runs code links first (`fuzz/fuzz_targets/support/linking.rs`). Only
+  `lower_linked*` output is a program.
+- The fuzz coverage replay runs with the same ASan options as `cargo fuzz run` (`detect_odr_violation=0`).
+  The SQLite `aiOff` report is a false positive: two identical internal-linkage tables at one address. It is
+  not a duplicate link.
+- A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
+  and a test replays the target's logic on it.

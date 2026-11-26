@@ -7,6 +7,33 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Compiler: a module whose runtime intrinsic it could not lower ended in an internal compiler error (#1088).**
+  The module of a runtime intrinsic (`async/barrier`, `async/channel`, `async/timeout` …) is source like any
+  other, and the fuzzer found `std/async/barrier.ok` with its `BrokenBarrier` enum commented out. Lowering assumed
+  the shape the runtime needs. Each mismatch is now a semantic error at the intrinsic's declaration. The error
+  enum the intrinsic throws must exist, be an error enum without type parameters and have the thrown case first.
+  A result object (`Sending<T>`) must exist with the receiver's number of type parameters; before, a mismatch
+  lowered silently into another instance. A runtime helper's field, cap field and action (`Within.outcome` reads
+  `limit::Span::seconds` and calls `clock.wait`) must exist. Example: `Runtime intrinsic "Barrier.wait" throws
+  BrokenBarrier.broken: its module must declare BrokenBarrier as an error enum without type parameters whose first
+  case is broken`. The eleven intrinsic modules of std lower as before. A sweep over them made 653 mutants, each
+  lowered in production and in test mode. It deleted each declaration and member, rotated enum cases, dropped
+  `is Error`, and changed payloads, field types and type parameters. None ends in an internal error.
+- **Fuzz `exec`: codegen was handed unlinked OIR (#1089).** `lowering::lower_program` keeps a module's imports
+  unresolved by contract, and codegen refuses such a module ("imports must be resolved before codegen", pinned by
+  `codegen.rs`). So an import nothing used (`import "b";`) verified and then failed the target's `expect`. The
+  target now links the source as `okkama build` does, with no module to import (`support/linking.rs`). An import
+  is refused by the loader, and whatever linking accepts, codegen must generate.
+- **Fuzz: no coverage report for `spb` and `exec` (#1050).** Their coverage replay aborted at start-up with an
+  AddressSanitizer odr-violation on SQLite's `aiOff`. Nothing is linked twice. The amalgamation that sparrow-core
+  bundles has two function-local `static const aiOff[]` tables, FTS3's and FTS5's copies of one case-folding
+  routine. Their contents are identical, so they sit at one address, and ASan reports that one global as
+  registered twice. `cargo fuzz run` starts every target with `detect_odr_violation=0`, but cargo-fuzz leaves it
+  out of the coverage replay. `tools/fuzz/coverage.sh` now replays the same way and keeps the caller's other
+  `ASAN_OPTIONS`.
+- **Fuzz: past findings are kept as regressions.** `okkama-rs/fuzz/regressions/<target>/` holds the crash inputs
+  of #1088 and #1089. `run.sh` adds them to the target's corpus, and okkama-compiler's `tests/fuzz_lowering.rs`
+  replays them through the `analyze` and `exec` logic.
 - **Micro A/B: the layout of the runtime binary itself was not measured (#1086).** `bench/micro/toolchain.sh` builds a
   micro toolchain as the packages are and, with a `LAYOUT_SEED`, links it with rust-lld `--shuffle-sections` (the
   same code, another function order). `report.py` gives every cell of a version run on several builds the spread of
