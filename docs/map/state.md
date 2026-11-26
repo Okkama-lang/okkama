@@ -2,6 +2,11 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1085: `bench/micro/support/harness.ok` — `Measurement.elapsed_since` holds the closing clock read; `start()`
+  runs it once before the start instant. Constant in the interval (slope over N=25k/100k, 3 interleaved rounds,
+  rc 6d84de2fd): baseline no-inline 1.25 → 0.38 ms, default 0.025 → 0.002; async-await default 1.40 → 0.51,
+  no-inline 1.36 → 0.46. A quiet warm call of `finish` itself measured worse (0.76/0.87 ms) and was dropped.
+  The async rest (~0.5 ms with inlining) is outside the harness.
 - [x] #933 (feature/933, not committed): `code_memory` places every function on a page of its own at
   `shift` bytes (`CodeMemory::new(shift)`, `Region::written`, skipped pages untouched); `Jit::new` reads
   `SPARROW_CORE_CODE_SHIFT` through `env_switch::bytes` (refuses a malformed value), `Jit::with_code_shift`;

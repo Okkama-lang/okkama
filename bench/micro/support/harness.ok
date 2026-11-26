@@ -20,9 +20,16 @@ object Measurement {
     }
     n() is int { count; }
     warmup() is int { warming; }
-    start() is MonotonicInstant { clock.monotonic_instant(); }
+    // The span ends at the clock read in elapsed_since. start() runs it once before it reads the start
+    // instant, so its first call (and the compile of the clock path) is not inside the span (#1085).
+    start() is MonotonicInstant {
+        let probe = self.elapsed_since(clock.monotonic_instant());
+        confirm probe >= 0 else panic "the monotonic clock went back";
+        clock.monotonic_instant();
+    }
+    elapsed_since(start is MonotonicInstant) is int { clock.monotonic_instant().minus(start).nanoseconds(); }
     finish(start is MonotonicInstant, checksum is int, warm_checksum is int) is void {
-        let elapsed = clock.monotonic_instant().minus(start).nanoseconds();
+        let elapsed = self.elapsed_since(start);
         Stdout().writeln("micro-v2 ", count, " ", warming, " ", elapsed, " ", checksum, " ", warm_checksum);
     }
 }

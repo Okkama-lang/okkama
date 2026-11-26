@@ -7,6 +7,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Micro harness: the first clock read of `finish` was compiled inside the timed interval (#1085).** The interval
+  ends in `Measurement.elapsed_since`, which `start()` now runs once before it reads the start instant. The constant
+  left in the interval falls from 1.25 to 0.38 ms on baseline without inlining and from 1.40 to 0.51 ms on
+  async-await (N=25k/100k slopes). The suite hash changes, so earlier campaigns compare with no later one.
 - **Micro A/B: a toolchain built without `--cfg okkama_release` was compared as a release one (#1025).** The
   0.6.4 report's async slowdown (4–6%) was not a commit between 7fb98e01f and 29c3dc84a: the rc2 micro toolchain
   kept devtrace, whose gates in the Future, await and allocation helpers cost async programs 2–5%; release builds

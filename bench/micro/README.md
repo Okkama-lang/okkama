@@ -18,6 +18,12 @@ batch. Input parsing, fixture construction, printing and process startup are
 outside the reported clock interval. The interval still includes the call into
 Bench, GC, scheduler work and any compilation/tier transitions occurring inside it.
 The warmup checksum is printed too, so warmup is observable.
+The interval ends at the clock read in `Measurement.elapsed_since`, which `start()` runs once before it reads
+the start instant, so the first call into the clock path and its compile fall before the interval (#1085).
+Measured on 0.6.5 at N=25k/100k, the constant left in the interval went 1.25 → 0.38 ms on baseline with
+`SPARROW_CORE_NO_INLINE=main` (the lazy compile of `finish` itself) and 1.40 → 0.51 ms on async-await, where the rest
+is the async path after the loop, not the harness. At the release N (4·10⁶) that is below 0.13 ns/iteration; at
+N ≤ 10⁵ judge a cell by its slope over two N.
 
 Output is exactly:
 

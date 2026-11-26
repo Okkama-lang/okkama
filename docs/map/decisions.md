@@ -6,6 +6,11 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-27. #1085 micro harness warms the closing clock path, not `finish` (lead decision).** The span ends at
+  the clock read in `Measurement.elapsed_since`; `start()` calls it once before reading the start instant. A quiet
+  warm call of `finish` was measured worse (0.76/0.87 ms left against 0.38/0.51), so `finish` keeps one meaning,
+  report. The rest (`finish`'s own lazy compile without inlining, ~0.4 ms; the async path after the loop, ~0.5 ms)
+  is below 0.13 ns/iteration at the release N; small-N cells are judged by slope.
 - **2026-11-27. #1025 micro toolchains are release builds (lead finding).** A micro A/B toolchain is built as
   the packages are (`--cfg okkama_release -C force-frame-pointers=yes`, `-p okkama-cli -p sparrow-cli -p
   blade-cli`). With devtrace compiled in, async programs run 2–5% slower (gates in the Future, await and
