@@ -127,7 +127,7 @@ pub(crate) fn command(args: &[String]) -> Outcome {
         width: if terminal { columns() } else { 80 },
         ansi: terminal
             && format == Format::Text
-            && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+            && !crate::env_switch::no_color(std::env::var_os("NO_COLOR").as_deref())
             && std::env::var("TERM").map_or(true, |term| term != "dumb"),
     };
     let mut loader = FileLoader::from_env();

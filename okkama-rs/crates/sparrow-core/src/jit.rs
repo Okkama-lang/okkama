@@ -276,7 +276,7 @@ fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::
     // and so the gate's debug tests, keep it; `SPARROW_CORE_VERIFY=1` turns
     // it on in a release build.
     let verify = cfg!(debug_assertions)
-        || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+        || crate::env_switch::enabled("SPARROW_CORE_VERIFY");
     set(&mut flags, "enable_verifier", if verify { "true" } else { "false" })?;
     cranelift_native::builder()
         .map_err(|e| Error(format!("JIT target: {e}")))?
@@ -339,8 +339,7 @@ impl Jit {
             emitted: BTreeMap::new(),
             frontend_maps: Chosen::from_env("SPARROW_CORE_FRONTEND_MAPS"),
             alloc_sites: Vec::new(),
-            profile: std::env::var("SPARROW_CORE_PROFILE_COMPILE")
-                .is_ok_and(|value| !value.is_empty() && value != "0")
+            profile: crate::env_switch::enabled("SPARROW_CORE_PROFILE_COMPILE")
                 .then(|| {
                     eprintln!("{COMPILE_HEADER}");
                     cranelift_codegen::timing::PassTimes::default()

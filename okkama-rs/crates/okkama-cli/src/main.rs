@@ -24,6 +24,8 @@ use sparrow_core::test_report;
 #[global_allocator]
 static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
 
+mod env_switch;
+
 mod core;
 mod doctest;
 mod import_paths;
@@ -164,7 +166,7 @@ RUN OPTIONS:
                           --test-timeout).
                           An uncaught failure on Sparrow also
                           prints its source line and the call stack;
-                          OKKAMA_TRACE=off prints the failure alone.
+                          OKKAMA_TRACE=1 includes the call stack (off by default).
 
 EXIT STATUS:
     0  success
@@ -310,7 +312,7 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
         return Outcome::failure(format!("okkama: cannot read `{path}`: {error}\n"), EXIT_IO);
     }
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = std::env::var("OKKAMA_TRACE").as_deref() != Ok("off");
+    let trace = crate::env_switch::enabled("OKKAMA_TRACE");
     match sparrow_core::run_executable(
         bytes, arguments, core::worker_command(Path::new(path)), limits,
         sparrow_core::ExecutionOptions {
@@ -422,7 +424,7 @@ fn with_trace(
     uncaught: Option<sparrow_core::Uncaught>,
     render: impl Fn(&[sparrow_core::Site]) -> String,
 ) -> Outcome {
-    if outcome.code == 1 && std::env::var("OKKAMA_TRACE").as_deref() != Ok("off")
+    if outcome.code == 1 && crate::env_switch::enabled("OKKAMA_TRACE")
         && let Some(uncaught) = uncaught {
         outcome.stderr = uncaught.render_report(&outcome.stderr, render);
     }
@@ -1238,6 +1240,7 @@ fn lower_source(sources: &[SourceFile], tests: bool) -> Result<(ir::Module, Stri
                 let kind = match error {
                     LoweringError::Unsupported { .. } => "lowering error",
                     LoweringError::Invalid { .. } => "semantic error",
+                    LoweringError::Internal { .. } => "internal compiler error",
                 };
                 ir_error_outcome(
                     imported.as_ref().unwrap_or(source),

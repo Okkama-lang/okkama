@@ -107,7 +107,7 @@ fn deep_recursion_is_bounded_and_its_trace_is_cheap() {
             .args(["run", "--timeout", "60"])
             .arg(&path)
             .env("OKKAMA_STDLIB_DIR", root.join("std"))
-            .env_remove("OKKAMA_TRACE")
+            .env("OKKAMA_TRACE", "1")
             .output()
             .unwrap();
         let _ = std::fs::remove_file(path);

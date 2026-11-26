@@ -22,6 +22,9 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 pub mod budget;
+#[doc(hidden)]
+pub mod env_switch;
+
 mod code_memory;
 mod contracts;
 pub mod drivers;
@@ -620,7 +623,7 @@ pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi
 pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<(), Error> {
     use std::io::{Read, Write};
     #[cfg(unix)]
-    if std::env::var_os("SPARROW_INTERNAL_WORKER_POOL").is_some() {
+    if crate::env_switch::enabled("SPARROW_INTERNAL_WORKER_POOL") {
         use std::os::fd::AsFd;
         let fd = std::io::stdin()
             .as_fd()

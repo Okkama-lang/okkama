@@ -492,7 +492,7 @@ impl Heap {
             positions: Positions::default(),
             allocations: None,
             stress: false,
-            ages: std::env::var_os("SPARROW_CORE_GC_AGES").is_some_and(|value| value == "1").then(Default::default),
+            ages: crate::env_switch::enabled("SPARROW_CORE_GC_AGES").then(Default::default),
         }
     }
 

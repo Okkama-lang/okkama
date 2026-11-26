@@ -19,6 +19,7 @@
 //! - `summary.txt` (also printed on stderr) and `counters.json`: counters and timers (count, total, max).
 //!
 //! Categories are free strings; the ones in use are listed by `OKKAMA_DEV=help` (see [`CATEGORIES`]).
+mod env_switch;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -124,7 +125,8 @@ fn config() -> Option<&'static Config> {
     #[cfg(not(okkama_release))]
     {
         CONFIG.get_or_init(|| {
-            let spec = std::env::var("OKKAMA_DEV").ok().filter(|spec| !spec.trim().is_empty() && spec != "0")?;
+            if !crate::env_switch::enabled("OKKAMA_DEV") { return None; }
+            let spec = std::env::var("OKKAMA_DEV").unwrap_or_default();
             START.get_or_init(Instant::now);
             // `{pid}` in the directory gives each process its own (a corpus run, #909).
             let out = std::env::var("OKKAMA_DEV_OUT").ok()

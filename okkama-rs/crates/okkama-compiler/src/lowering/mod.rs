@@ -29,6 +29,8 @@ pub enum LoweringError {
     Unsupported { span: Span, message: String },
     /// Программа нарушает правило языка: имена, типы, управление потоком.
     Invalid { span: Span, message: String },
+    /// A compiler invariant failed, rather than an error in the input program.
+    Internal { span: Span, message: String },
 }
 
 impl LoweringError {
@@ -46,15 +48,19 @@ impl LoweringError {
         }
     }
 
+    pub(crate) fn internal(span: Span, message: impl Into<String>) -> Self {
+        Self::Internal { span, message: message.into() }
+    }
+
     pub fn span(&self) -> Span {
         match self {
-            Self::Unsupported { span, .. } | Self::Invalid { span, .. } => *span,
+            Self::Unsupported { span, .. } | Self::Invalid { span, .. } | Self::Internal { span, .. } => *span,
         }
     }
 
     pub fn message(&self) -> &str {
         match self {
-            Self::Unsupported { message, .. } | Self::Invalid { message, .. } => message,
+            Self::Unsupported { message, .. } | Self::Invalid { message, .. } | Self::Internal { message, .. } => message,
         }
     }
 }
@@ -409,7 +415,7 @@ fn check_roots(
             LoweringError::Unsupported { .. } => {
                 crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
             }
-            LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
+            LoweringError::Invalid { .. } | LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
         };
         return Err(Ok(vec![CheckError {
             source: source_of(&graph, roots, module),
@@ -562,30 +568,7 @@ fn lower_analyzed(
         sabotage_int_add(&mut module);
     }
     dev_ir("ir after passes", &module);
-    // Lowering обязан выдавать только корректный IR: нарушение — ошибка компилятора.
-    if let Err(error) = ir::verify(&module) {
-        // Отладка компилятора: печать отвергнутого IR.
-        if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-            let _ = std::fs::write(path, module.to_string());
-        }
-        return Err((
-            root,
-            LoweringError::invalid(
-                program.span,
-                format!("internal compiler error: lowering produced invalid IR: {error}"),
-            ),
-        ));
-    }
-    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
-    if verify_ownership() {
-        let _span = okkama_devtrace::span!("lower", "linearity check");
-        if let Err(error) = ir::linearity::check(&module) {
-            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-                let _ = std::fs::write(path, module.to_string());
-            }
-            return Err((root, LoweringError::invalid(program.span, format!("internal compiler error: {error}"))));
-        }
-    }
+    verify_lowered(&module, program.span).map_err(|error| (root, error))?;
     if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
         let mut report = ir::ownership::analyze(&module);
         report.record_param_adopts(&param_adopts_removed);
@@ -792,12 +775,37 @@ pub fn inspect_parsed(
     inspection
 }
 
+fn verify_lowered(module: &ir::Module, span: Span) -> Result<()> {
+    // Invalid output is a compiler failure, never a rejected fuzz input.
+    if let Err(error) = ir::verify(module) {
+        // Preserve rejected IR for diagnostics.
+        if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+            let _ = std::fs::write(path, module.to_string());
+        }
+        return Err(LoweringError::internal(
+            span,
+            format!("internal compiler error: lowering produced invalid IR: {error}"),
+        ));
+    }
+    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
+    if verify_ownership() {
+        let _span = okkama_devtrace::span!("lower", "linearity check");
+        if let Err(error) = ir::linearity::check(module) {
+            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+                let _ = std::fs::write(path, module.to_string());
+            }
+            return Err(LoweringError::internal(span, format!("internal compiler error: {error}")));
+        }
+    }
+    Ok(())
+}
+
 /// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`.
 fn verify_ownership() -> bool {
     if cfg!(okkama_release) {
         return false;
     }
-    cfg!(debug_assertions) || std::env::var("OKKAMA_VERIFY_OWNERSHIP").is_ok_and(|value| value == "1")
+    cfg!(debug_assertions) || crate::env_switch::enabled("OKKAMA_VERIFY_OWNERSHIP")
 }
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
@@ -862,7 +870,7 @@ impl Passes {
         // `none` names no pass, so every pass is off.
         let enabled = (!names.is_empty() && !names.iter().any(|name| name == "all")).then_some(names);
         // Separate from the default pass list; only an explicit opt-in enables it (#555).
-        let param_adopts = prototype == Some("1");
+        let param_adopts = crate::env_switch::value_enabled(prototype.map(std::ffi::OsStr::new));
         Self { enabled, sabotage, param_adopts }
     }
 
@@ -957,7 +965,7 @@ mod param_adopts_tests {
         let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).expect("parse");
         let module = with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&program)).expect("lower");
         let before = module.to_string();
-        for switch in [None, Some("0"), Some("true"), Some(""), Some(" 1")] {
+        for switch in [None, Some("0"), Some("false"), Some("OFF"), Some("No"), Some("")] {
             for spec in ["", "all", "none", "param-adopts"] {
                 let passes = Passes::from_spec(spec, switch);
                 let mut after = module.clone();
@@ -966,8 +974,59 @@ mod param_adopts_tests {
             }
         }
         assert!(!PASSES.contains(&"param-adopts"));
-        let mut enabled = module.clone();
-        assert!(Passes::from_spec("all", Some("1")).elide_param_adopts(&mut enabled).iter().sum::<usize>() > 0);
-        ir::verify(&enabled).expect("prototype verifies");
+        for switch in ["1", "true", "ON", "yes", "anything"] {
+            let mut enabled = module.clone();
+            assert!(Passes::from_spec("all", Some(switch)).elide_param_adopts(&mut enabled).iter().sum::<usize>() > 0);
+            ir::verify(&enabled).expect("prototype verifies");
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod internal_error_tests {
+    use super::*;
+
+    fn module(text: &str) -> ir::Module {
+        let source = SourceFile::new("test.ok", text).unwrap();
+        let ast = syntax_program(&source);
+        with_passes("all", || lower_program(&ast)).unwrap()
+    }
+
+    fn syntax_program(source: &SourceFile) -> ast::Program {
+        crate::syntax::parse(source, &crate::syntax::ParseOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn invalid_oir_is_an_internal_error() {
+        let mut module = module(include_str!("../../../../fuzz/seeds/sum.ok"));
+        verify_lowered(&module, module.span).unwrap();
+        // Mutation: an undefined return operand in otherwise valid lowering.
+        module.functions[0].blocks[0].term.kind = ir::TermKind::Ret(Some(ir::ValueId(usize::MAX)));
+        let error = verify_lowered(&module, module.span).unwrap_err();
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert!(error.message().contains("lowering produced invalid IR"));
+        assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
+    }
+
+    #[test]
+    fn missing_resource_close_is_an_internal_error() {
+        let mut module = module("module app; object R { R(); destroy {} } main() is int { let r = R(); 0; }");
+        let mut removed = 0;
+        for function in &mut module.functions {
+            for block in &mut function.blocks {
+                block.insts.retain(|inst| {
+                    let close = matches!(inst.kind, ir::InstKind::ResourceLeave { .. } | ir::InstKind::RegionLeave { .. });
+                    removed += usize::from(close);
+                    !close
+                });
+            }
+        }
+        assert!(removed > 0);
+        ir::verify(&module).expect("only linearity is broken");
+        let error = verify_lowered(&module, module.span).unwrap_err();
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert!(error.message().contains("may still be open"), "{error}");
+        assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
     }
 }

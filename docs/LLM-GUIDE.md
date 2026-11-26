@@ -205,6 +205,17 @@ The REPL (`okkama-cli/src/repl.rs`, design `okkama-docs/runtime/repl-588.md`):
 - **Tests:** `okkama-cli/tests/repl.rs` (stdin scripts, a destroy oracle, a pty test of the history),
   `sparrow-core/src/session_tests.rs`, `okkama-sparrow/tests/session.rs`.
 
+Environment switches share one rule across Rust crates and std: unset, empty,
+`0`, `false`, `off` and `no` (ASCII case-insensitive) are OFF; every other
+value is ON. Values are not trimmed. This includes test helpers, `OKKAMA_TRACE`
+(default OFF), GC, verification and profiling switches. Explicit CLI flags and
+mandatory debug checks still apply independently. `OKKAMA_DEV` uses this rule
+before parsing its category selection. Paths, numbers, representation choices
+and symbol/pass lists are not boolean switches.
+`NO_COLOR` is the exception specified by no-color.org: automatic colour is off
+when it is present and non-empty (even `0` or `false`), in both `okkama man` and
+std `terminal/capability`; empty or absent does not disable colour.
+
 Environment: `OKKAMA_STDLIB_DIR` (std root),
 `SPARROW_CORE_STATS=1` (= `--stats`: counts of natives, intrinsics, slow paths,
 regions, awaits, heap bytes, compile time and code size per function),
@@ -230,8 +241,8 @@ IR verifier in a release build; debug builds always run it),
 roots in Cranelift's frontend stack maps, as before #354; by default async
 bodies use the core's own root slots and synchronous functions Cranelift's
 maps, #362),
-`SPARROW_CORE_POINTER_FREE=0` (disable #535's whole-register proof in both
-JIT roots and async frame tracing, default enabled; load-time setting).
+`SPARROW_CORE_POINTER_FREE=1` (enable #535's whole-register proof in both
+JIT roots and async frame tracing; default OFF; load-time setting).
 Under `SPARROW_CORE_PROFILE_COMPILE`, `pointer-free analysis` lines separately
 report its load-time cost; `roots` lines under profiling or `SPARROW_CORE_DUMP`
 report traced/omitted registers and the sum of root words across stack maps.
@@ -266,7 +277,8 @@ Worker output and developer diagnostics (paths below are relative to `okkama-rs/
 For differential root checks, `SPARROW_CORE_POINTER_FREE=0` keeps every traced
 register rooted; `SPARROW_CORE_INT_RANGE=0` keeps #535's constant-only proofs
 while disabling #539's operation proofs. Both are read once per loaded program
-and apply to stack maps and suspended-frame layouts (#535, #539).
+and apply to stack maps and suspended-frame layouts (#535, #539). Both default
+to OFF; set them to `1` to enable their proofs.
 
 `SPARROW_TRACE_DESTROY=FILE`
 append `<ObjectTypeName> <creation serial>\n` before each selected sync or async

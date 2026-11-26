@@ -15,6 +15,9 @@
 //! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES`. Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
 
+#[doc(hidden)]
+pub mod env_switch;
+
 pub mod analysis;
 pub mod codegen;
 pub mod diagnostics;
@@ -28,3 +31,10 @@ pub mod syntax;
 
 pub use diagnostics::{Diagnostic, DiagnosticKind};
 pub use source::{LineColumn, SourceFile, Span};
+
+
+#[cfg(test)]
+extern crate self as okkama_compiler;
+#[cfg(test)]
+#[path = "../../../fuzz/fuzz_targets/support/lowering.rs"]
+mod fuzz_lowering_policy;

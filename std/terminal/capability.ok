@@ -9,7 +9,7 @@ module terminal/capability v1.0.0;
 //
 // Colors are decided once, from the terminal, the environment and the program's
 // policy. never turns them off. automatic turns them off for output that is not
-// a terminal, NO_COLOR or TERM=dumb. Otherwise COLORTERM truecolor or 24bit
+// a terminal, non-empty NO_COLOR or TERM=dumb. Otherwise COLORTERM truecolor or 24bit
 // gives true color and a TERM with 256color gives 256 colors.
 
 import "os/environment" take Environment;
@@ -110,7 +110,7 @@ object DetectedTerminalCapabilities {
             || (policy == ColorPolicy.automatic
             && (!output
             || native_depth == TerminalColorDepth.disabled
-            || environment.membership("NO_COLOR")
+            || (environment.membership("NO_COLOR") && environment.text("NO_COLOR") != "")
             || term == "dumb"));
         let depth = if disabled {
             TerminalColorDepth.disabled;
@@ -282,4 +282,19 @@ test "detected capabilities follow the policy, NO_COLOR, TERM, COLORTERM and the
         policy: ColorPolicy.never
     ).capabilities();
     test.is(never::Support::colors == TerminalColorDepth.disabled, true);
+}
+
+test "NO_COLOR disables automatic color only when nonempty" {
+    for ["", "0", "false", "off", "no", "1"] -> value {
+        let found = DetectedTerminalCapabilities(
+            input: true,
+            output: true,
+            native_depth: TerminalColorDepth.basic,
+            columns: 80,
+            rows: 24,
+            environment: Environment(values: ["TERM": "xterm", "NO_COLOR": value]),
+            policy: ColorPolicy.automatic
+        ).capabilities();
+        test.is(found::Support::colors == TerminalColorDepth.disabled, value != "");
+    }
 }

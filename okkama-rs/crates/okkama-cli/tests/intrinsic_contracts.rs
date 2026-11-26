@@ -65,11 +65,11 @@ fn endpoints_of_one_channel_carry_one_payload_type() {
 
 #[test]
 fn scopes_and_races_yield_the_type_they_wait_for() {
-    let program = compiled("L08-async-and-concurrency/channel.close-semantics");
-    if program.functions.iter().any(|f| f.intrinsic.as_ref().is_some_and(|i| i.name == "okkama.scope.FutureScope.outcome")) {
-        let refused = check(&with_retyped_copy(program, "okkama.scope.FutureScope.outcome")).expect_err("a scope of another result type");
-        assert!(refused.contains("scope action does not take the group or yield the result"), "{refused}");
-    }
+    let program = compiled("L08-async-and-concurrency/scope.future-scope-and-deadlines");
+    check(&program).expect("the compiler's SPB is accepted");
+    let refused = check(&with_retyped_copy(program, "okkama.scope.FutureScope.outcome"))
+        .expect_err("a scope of another result type");
+    assert!(refused.contains("scope action does not take the group or yield the result"), "{refused}");
     let program = compiled("L08-async-and-concurrency/collect.race-empty");
     check(&program).expect("the compiler's SPB is accepted");
     let refused = check(&with_retyped_copy(program, "okkama.collect.Raced.winner")).expect_err("a race of another result type");

@@ -1,5 +1,7 @@
 //! `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
 //! size limit, execution, tests, verification, assembler and disassembler.
+mod env_switch;
+
 use std::io::{Read, Write};
 use std::{fs::File, path::Path, process::ExitCode};
 
@@ -27,7 +29,7 @@ USAGE:
 run          Verify and execute bytecode; ARGS are the program's arguments.
              main's integer result in 0..255 becomes the exit status; an
              uncaught failure is reported on stderr (exit 1) with the call
-             stack in Sparrow terms (OKKAMA_TRACE=off: without). `--stats` prints
+             stack in Sparrow terms when OKKAMA_TRACE=1. `--stats` prints
              counts of runtime events at exit (also SPARROW_CORE_STATS=1),
              with the compile time and machine-code size of each function.
              DEBUGGING the compiled code (SYMBOLS: comma-separated, or *):
@@ -118,7 +120,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
         Box::new(move || watchdog(flag)) as Box<dyn FnOnce() + Send>
     });
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = std::env::var("OKKAMA_TRACE").as_deref() != Ok("off");
+    let trace = crate::env_switch::enabled("OKKAMA_TRACE");
     let options = sparrow_core::ExecutionOptions { stats, trace, on_verified, ..Default::default() };
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
     let _ = sparrow_core::stdout::flush();
@@ -169,7 +171,7 @@ fn run() -> Result<u8, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || (2, help());
     let worker = args.first().is_some_and(|a| a == "--worker");
-    if std::env::var_os("SPARROW_INTERNAL_WORKER").is_some() && !worker {
+    if crate::env_switch::enabled("SPARROW_INTERNAL_WORKER") && !worker {
         return Err((2, "worker launch rejected: --worker must precede FILE.spb; refusing to run main".into()));
     }
     let Some((first, rest)) = args.split_first() else {

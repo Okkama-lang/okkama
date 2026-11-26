@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-26. Test/tool audit (owner, #1067/#1051/#1052/#1055).** Boolean
+  switches are OFF when unset, empty, or ASCII-case-insensitive 0/false/off/no,
+  otherwise ON, including previously default-ON proof/trace switches. NO_COLOR
+  uses nonempty presence. Micro rounds aggregate geometrically, requiring every
+  cell VALID; binary versions are checked against declared local revisions before
+  measurement. Fuzzing rejects ordinary compile errors but crashes on typed
+  compiler invariant failures, codegen failure and encoding failure.
+
 - **2026-11-23. #1006 formatter: header comments, width, std fmt-clean (owner).**
   A block comment between a declaration's parameter list (or result) and its `{`/`;` stays on the header
   line; a `//` comment there opens the body (a bodiless header prints it after its `;`); a list ends at its

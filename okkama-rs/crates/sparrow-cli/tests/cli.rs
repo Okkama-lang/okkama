@@ -194,7 +194,8 @@ fn uncaught_failures_are_reported_like_okkama() {
         ))
         .unwrap(),
     );
-    let result = file.run("run");
+    let result = Command::new(env!("CARGO_BIN_EXE_sparrow"))
+        .arg("run").arg(&file.0).env("OKKAMA_TRACE", "1").output().unwrap();
     assert_eq!(result.status.code(), Some(1));
     // The core adds the Sparrow stack (since #10); `OKKAMA_TRACE=off` — only
     // the failure.

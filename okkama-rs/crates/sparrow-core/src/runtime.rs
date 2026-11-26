@@ -368,8 +368,8 @@ impl Runtime {
 
     fn assemble(loaded: Loaded) -> Result<Self, Error> {
         let mut heap = Heap::new(loaded.layouts());
-        heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
-        if std::env::var_os("SPARROW_CORE_STATS").is_some() {
+        heap.set_stress(crate::env_switch::enabled("SPARROW_CORE_GC_STRESS"));
+        if crate::env_switch::enabled("SPARROW_CORE_STATS") {
             heap.allocations = Some(Box::default());
         }
         let invocations = loaded.program.functions.iter().map(|f| {
@@ -404,7 +404,7 @@ impl Runtime {
             held: held_objects(&loaded.program),
             host: Some(Box::new(crate::host::Heap::new(&loaded.program))),
             io: crate::io::Io::default(),
-            stats: std::env::var_os("SPARROW_CORE_STATS").map(|_| Box::default()),
+            stats: crate::env_switch::enabled("SPARROW_CORE_STATS").then(Box::default),
             created: std::time::Instant::now(),
             worker_command: Vec::new(),
             limits: crate::budget::Limits::default(),

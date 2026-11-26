@@ -13,7 +13,7 @@ come from an oracle written here in Python with Okkama's semantics
 float text), never from running Okkama.
 
 Each family writes t/gen/<family>/NN.ok: one program, checks grouped forty
-to an action (to keep generated programs small), TAP through t/support/
+to an action (shared-setup groups stay intact and may exceed forty), TAP through t/support/
 tap.ok. The output is deterministic; t/gen is not committed — the runner
 generates it.
 """
@@ -204,7 +204,7 @@ class Program:
         # Forty checks to a part, cut only between groups.
         parts, part = [], []
         for index, check in enumerate(self.checks):
-            if len(part) >= CHUNK and check[2] != part[-1][2]:
+            if len(part) >= CHUNK and (check[2] == 0 or check[2] != part[-1][2]):
                 parts.append(part)
                 part = []
             part.append(check)

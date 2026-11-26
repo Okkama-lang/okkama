@@ -1,5 +1,75 @@
 # State (update at the end of every task)
 
+
+## Test/tool audit (2026-11-26, feature/065-tools)
+
+Scope: #1048, #1058, #1059, #1053, #1051, #1052, #1067, #1050, #1055.
+No commits or CHANGELOG edits; no Docker, fuzz campaign, full Rust suite,
+clippy or cargo fmt. Only bounded, selected tests and dry tooling checks.
+
+- [x] #1048: all seven listed compiler test files pin their observed pipeline
+  with `with_passes("all", ...)`; all 107 tests pass with `OKKAMA_IR_PASSES=none`.
+- [x] #1058: CLI differential tests enumerate `lowering::PASSES` plus all/none.
+  Pin the std path and require the arithmetic oracle, so missing imports cannot
+  count as equivalent execution. Arithmetic across every selection and the
+  deliberate wrong-pass test pass. The existing failures fixture still checks
+  cleanup, errors and 100000 tail calls; it was not executed locally because
+  the task prohibits long recursion on the host.
+- [x] #1059: the scope fixture contains FutureScope.outcome; absence fails, and
+  both original SPB acceptance and crafted rejection are checked. Both tests pass.
+- [x] #1053: setup-free group 0 splits every 40 checks; shared setup stays intact.
+  Three Python regressions pass. Generated six affected families (31375 checks);
+  the five setup-free families have no action exceeding 40 checks.
+- [x] #1051: in-repo HTML template, geometric aggregation of every engine round,
+  every cell required VALID, missing/invalid/incompatible rounds excluded,
+  duplicate files and mixed version labels rejected. Seven tiny-fixture tests pass,
+  including standalone HTML generation. Archived c/d rounds reproduce 55 reliable
+  non-control pairs and +0.5631095% gross time, rather than keeping round d alone.
+- [x] #1052: record actual --version, compare to the local revision's workspace
+  package version, refuse mismatches before workloads; an explicit override stays
+  visibly flagged and cannot be compared as release evidence. Missing local
+  revisions are UNVERIFIED with a warning. Runner tests: 18 pass; --plan passes.
+- [x] #1067: one boolean helper per consuming Rust crate, used by runtime,
+  compiler, CLI and test switches; NO_COLOR remains nonempty presence. Document
+  unset-OFF defaults, including POINTER_FREE, INT_RANGE and TRACE. Trace tests
+  explicitly request tracing. Boolean matrices, stats subprocesses, prototype
+  selection, and std terminal inline tests pass; std formatted with built okkama.
+- [x] #1055: typed LoweringError::Internal for invariant failures, including OIR
+  verification and linearity; analyze/exec share a rejection policy which panics
+  on that kind, and exec expects successful codegen/encoding. Two compiler
+  mutation tests (undefined return operand in sum.ok and missing resource close)
+  reach the shared fuzz policy and panic; two rejection-policy tests pass.
+- [x] #1050 diagnostics: coverage build/replay/report logs retained per target;
+  stale reports removed, TOTAL required, failure tail printed, final run exits 3
+  after checking all targets. Three dry regression tests pass, including the full
+  driver with fake tools and failure of every coverage target. Explicit coverage
+  build path and bounded build jobs;
+  preserve the frame pointers required by Sparrow when cargo-fuzz sets RUSTFLAGS.
+- [ ] #1050 historical spb/exec failure cause and real coverage replay: the cited
+  job's stderr was discarded, so its cause cannot be recovered from the job log.
+  Instrumented offline `cargo check` of all six targets passes, but does not link
+  or replay them. The permitted dry checks cover failure handling; a real nightly
+  coverage run is required to establish whether another build/replay fix is needed.
+
+Historical #1052 evidence: all four `v0.6.3-...-r064{a,b,c,d}.json` files in
+`okkama-docs/benchmarks/micro/results` declare `7d2b3403e` (Cargo.toml: 0.6.3),
+but record `okkama 0.6.2` and SHA-256
+`8b5484fec30729c3a9f22a1867b9083dbd261f01c1e90922faaed7d86ce7a440`.
+No other archived micro campaign has that hash. The retained micro-tc directory
+contains only v0.6.4; the baseline binary is unavailable. Thus the historical
+0.6.3 → 0.6.4 identity is unverified, even though its numerical aggregation is
+reproducible. No archive was rewritten and no replacement campaign was run.
+
+Final validation: `cargo check --offline -j 4`, all selected Rust tests and 31
+Python tests pass. `okkama fmt --check std/terminal/capability.ok` passes.
+Generated maps are refreshed with `python3 tools/map/gen.py`; `git diff --check`
+is clean. No full suites, campaigns or host long-recursion checks were run.
+
+Mutation checks reject the old unpinned lowering, inactive scope fixture,
+swallowed Internal errors, presence-only stats, oversized group 0, last-round
+aggregation and unchecked binary version. Mutated sources are restored.
+
+
 ## Documentation review (2026-11-26, feature/065-docs)
 
 - [x] #1027, #1028, #1030: source line docs, OIR-2 help and the IR-pass warning.

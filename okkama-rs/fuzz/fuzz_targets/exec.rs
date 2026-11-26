@@ -2,6 +2,9 @@
 //! budgets and with no host access: every outcome is a result, a failure
 //! report or an exhausted budget, never a crash.
 #![no_main]
+#[path = "support/lowering.rs"]
+mod lowering;
+
 use libfuzzer_sys::fuzz_target;
 use okkama_compiler::SourceFile;
 use okkama_compiler::syntax::{self, ParseOptions, prune};
@@ -14,9 +17,9 @@ fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else { return };
     let Ok(source) = SourceFile::new("fuzz.ok", text) else { return };
     let Ok(program) = syntax::parse(&source, &ParseOptions::default()) else { return };
-    let Ok(module) = okkama_compiler::lowering::lower_program(&prune::strip_test_items(program)) else { return };
-    let Ok(program) = okkama_compiler::codegen::sparrow::generate(&module) else { return };
-    let Ok(bytes) = okkama_sparrow::encode(&program) else { return };
+    let Some(module) = lowering::accepted(okkama_compiler::lowering::lower_program(&prune::strip_test_items(program))) else { return };
+    let program = okkama_compiler::codegen::sparrow::generate(&module).expect("codegen of verified OIR");
+    let bytes = okkama_sparrow::encode(&program).expect("encoding generated SPB");
     set_memory_probe(counted_bytes);
     let limits = Limits {
         steps: Some(1_000_000),

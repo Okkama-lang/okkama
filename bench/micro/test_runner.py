@@ -73,4 +73,52 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(cell['status'],'INVALID');self.assertEqual(len(cell['samples']),1)
             self.assertIn('later failure',cell['reason'])
 
+
+class VersionTests(unittest.TestCase):
+    def test_binary_version_is_checked_against_revision_not_label(self):
+        with patch.object(run, 'revision_version', return_value='0.6.3'):
+            self.assertEqual(run.version_check('commit', 'okkama 0.6.3')['status'], 'MATCH')
+            result = run.version_check('commit', 'okkama 0.6.2')
+            self.assertEqual(result['status'], 'MISMATCH')
+            self.assertEqual(result['expected'], 'okkama 0.6.3')
+            self.assertEqual(result['actual'], 'okkama 0.6.2')
+        with patch.object(run, 'revision_version', return_value=None):
+            self.assertEqual(run.version_check('missing', 'okkama 0.6.3')['status'], 'UNVERIFIED')
+
+    def test_override_cannot_be_compared_as_release_evidence(self):
+        result = {'schema': 2, 'toolchain': {'version_check': {'status': 'MISMATCH'}}}
+        self.assertEqual(run.compare(result, result, 'x', 'sparrow')['status'], 'INCOMPATIBLE')
+
+    def test_local_manifest_version_is_used(self):
+        self.assertEqual(run.revision_version('7d2b3403e'), '0.6.3')
+        self.assertIsNone(run.revision_version('not-a-real-revision-1052'))
+
+    def test_mismatch_stops_campaign_before_workloads_and_is_saved(self):
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'manifest.json').write_text(json.dumps({'baseline': {'path': 'lang/baseline.ok'}}))
+            for name in ['run.py', 'oracles.py']:
+                (root / name).write_text('fixture')
+            class FakeDocker:
+                def __init__(self, *args): pass
+                def run(self, command):
+                    if '--version' in command: return 'okkama 0.6.2', ''
+                    if command[0] == 'sha256sum': return 'hash binary', ''
+                    raise AssertionError('workload must not run')
+            def probe(command, **kwargs):
+                return ('[{"Id":"image-id","Architecture":"arm64"}]' if command[1] == 'image' else 'host', '')
+            argv = ['run.py', '--okkama', '/binary', '--image', 'fixture', '--build-profile', 'release',
+                    '--revision', '7d2b3403e', '--label', 'mismatch']
+            with patch.object(run, 'HERE', root), patch.object(run, 'Docker', FakeDocker), \
+                 patch.object(run, 'bounded', probe), patch.object(run, 'revision_version', return_value='0.6.3'), \
+                 patch.object(sys, 'argv', argv):
+                with self.assertRaises(SystemExit) as failed: run.main()
+                self.assertEqual(failed.exception.code, 1)
+            result = json.loads((root / 'results/mismatch.json').read_text())
+            self.assertEqual(result['status'], 'INVALID')
+            self.assertEqual(result['benchmarks'], {})
+            self.assertEqual(result['toolchain']['version'], 'okkama 0.6.2')
+            self.assertEqual(result['toolchain']['version_check']['status'], 'MISMATCH')
+
 if __name__=='__main__':unittest.main()

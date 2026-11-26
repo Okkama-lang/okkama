@@ -12,7 +12,7 @@ const RES: &str = "module app v1.0.0; object Res { has n is int; Res(:n); \
 fn function_text(text: &str, symbol: &str) -> String {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    let module = lower_program(&prune::strip_test_items(program)).unwrap_or_else(|error| panic!("{text}: {error}"));
+    let module = okkama_compiler::lowering::with_passes("all", || lower_program(&prune::strip_test_items(program))).unwrap_or_else(|error| panic!("{text}: {error}"));
     ir::verify(&module).expect("the passes keep the IR valid");
     let function = module.functions.iter().find(|function| function.symbol == symbol).expect(symbol);
     ir::print::function_text(&module, function)
@@ -90,7 +90,7 @@ fn the_linearity_check_refuses_a_missing_or_doubled_close() {
     let source = SourceFile::new("test.ok", format!("{RES} object P {{ P(); run(a is Res, b is Res) is int {{ \
         let r = Res(n: a.read() + b.read()); r.read(); }} }} main() is int {{ 0; }}")).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    let module = lower_program(&prune::strip_test_items(program)).expect("lowers");
+    let module = okkama_compiler::lowering::with_passes("all", || lower_program(&prune::strip_test_items(program))).expect("lowers");
     ir::linearity::check(&module).expect("the lowering's output is linear");
     let index = module.functions.iter().position(|function| function.symbol == "P.run").expect("P.run");
     let closes = |kind: &ir::InstKind| matches!(kind, ir::InstKind::RegionLeave { .. } | ir::InstKind::ResourceLeave { .. });

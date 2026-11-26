@@ -302,7 +302,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     }
                 }
                 _ => {
-                    return Err(LoweringError::invalid(
+                    return Err(LoweringError::internal(
                         part.span,
                         "internal compiler error: a map accumulator grows only by literals",
                     ));
@@ -618,7 +618,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 match self.ctx.ir_type(&crate::analysis::ty::Ty::Variant(*id, Vec::new()), span)? {
                     Type::Variant(variant) => CatchType::Variant(variant),
                     _ => {
-                        return Err(LoweringError::invalid(
+                        return Err(LoweringError::internal(
                             span,
                             "internal compiler error: an error enum lowers to a variant",
                         ))
@@ -741,7 +741,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 let value = matched_params[count + 1];
                 if let Some(cases) = cases {
                     if !matches!(alt_ty, Type::Variant(_)) {
-                        return Err(LoweringError::invalid(
+                        return Err(LoweringError::internal(
                             catch.span,
                             "internal compiler error: a catch case filter needs an enum",
                         ));

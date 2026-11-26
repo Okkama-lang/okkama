@@ -11,6 +11,9 @@ pub mod host;
 pub mod native;
 pub mod ops;
 pub mod range;
+#[cfg(test)]
+mod env_switch;
+
 pub use okkama_runtime_abi as abi;
 pub mod integer;
 pub mod scalar;

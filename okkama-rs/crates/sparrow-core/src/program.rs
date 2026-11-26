@@ -138,9 +138,9 @@ impl Loaded {
         let workers = add_workers(&mut program);
         // One switch for both JIT roots and suspended-frame layouts. Read it
         // once at load time; never change a live runtime's tracing contract.
-        let pointer_free = std::env::var_os("SPARROW_CORE_POINTER_FREE").is_none_or(|value| value != "0");
-        let int_ranges = std::env::var_os("SPARROW_CORE_INT_RANGE").is_none_or(|value| value != "0");
-        let profile = std::env::var("SPARROW_CORE_PROFILE_COMPILE").is_ok_and(|value| !value.is_empty() && value != "0");
+        let pointer_free = crate::env_switch::enabled("SPARROW_CORE_POINTER_FREE");
+        let int_ranges = crate::env_switch::enabled("SPARROW_CORE_INT_RANGE");
+        let profile = crate::env_switch::enabled("SPARROW_CORE_PROFILE_COMPILE");
         let resources = program.objects.iter().any(|o| o.destroy.is_some());
         let functions = program
             .functions

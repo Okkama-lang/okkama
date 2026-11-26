@@ -12,9 +12,7 @@ fn program(name: &str) -> PathBuf {
 fn okkama(args: &[&str], path: &Path, trace: bool) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
     command.args(args).arg(path);
-    if !trace {
-        command.env("OKKAMA_TRACE", "off");
-    }
+    command.env("OKKAMA_TRACE", if trace { "1" } else { "off" });
     command.output().unwrap()
 }
 

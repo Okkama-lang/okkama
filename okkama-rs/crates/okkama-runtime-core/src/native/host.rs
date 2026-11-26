@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn cpu_count_ignores_number_of_processors() {
         let name = "native::host::tests::cpu_count_ignores_number_of_processors";
-        if std::env::var_os("OKKAMA_TEST_CPU_CHILD").is_none() {
+        if !crate::env_switch::enabled("OKKAMA_TEST_CPU_CHILD") {
             let status = std::process::Command::new(std::env::current_exe().expect("the test binary"))
                 .args(["--exact", name, "--test-threads=1"])
                 .env("OKKAMA_TEST_CPU_CHILD", "1")

@@ -310,6 +310,7 @@ fn handle(request: &Json) -> Reply {
             let kind = match error {
                 LoweringError::Unsupported { .. } => "lowering error",
                 LoweringError::Invalid { .. } => "semantic error",
+                LoweringError::Internal { .. } => "internal compiler error",
             };
             let text = format!(
                 "{}:{}:{}: {kind}: {}\n",
@@ -326,6 +327,7 @@ fn handle(request: &Json) -> Reply {
                 LoweringError::Unsupported { .. } => {
                     Reply::unsupported(&mode, "check", text.trim_end().to_string())
                 }
+                LoweringError::Internal { .. } => Reply::internal(&mode, text),
                 LoweringError::Invalid { .. } => {
                     let category = if error.message().starts_with("Import ") {
                         "resolution"

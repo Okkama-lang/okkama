@@ -49,7 +49,7 @@ const EDGE_BUDGET: usize = 1 << 22;
 /// Функция, в которой номер значения — номер регистра после раскраски.
 pub(super) fn allocate(function: &Function) -> Function {
     static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *PROFILE.get_or_init(|| std::env::var_os("OKKAMA_PROFILE_REGISTERS").is_some_and(|v| v == "1")) {
+    if *PROFILE.get_or_init(|| crate::env_switch::enabled("OKKAMA_PROFILE_REGISTERS")) {
         allocate_profiled::<true>(function)
     } else {
         allocate_profiled::<false>(function)

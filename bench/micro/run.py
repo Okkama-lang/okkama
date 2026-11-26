@@ -96,12 +96,40 @@ def compare(before,after,name,engine):
     if before.get('schema')!=SCHEMA:return {'status':'INCOMPATIBLE','reason':'legacy schema lacks comparable provenance'}
     for key in ['suite_hash','protocol','environment','n','warmup','quality_policy']:
         if before.get(key)!=after.get(key):return {'status':'INCOMPATIBLE','reason':key+' differs'}
+    if any(result.get('toolchain',{}).get('version_check',{}).get('status')=='MISMATCH' for result in (before,after)):
+        return {'status':'INCOMPATIBLE','reason':'toolchain version does not match declared revision'}
     a=before.get('benchmarks',{}).get(name,{}).get(engine,{})
     b=after['benchmarks'][name][engine]
     if a.get('status')!='VALID' or b.get('status')!='VALID':return {'status':'INCONCLUSIVE','reason':'invalid/noisy/missing cell'}
     delta=b['ns_per_iteration']/a['ns_per_iteration']-1
     threshold=max(.10,2*max(a['spread'],b['spread']))
     return {'status':'CHANGE' if abs(delta)>threshold else 'WITHIN_NOISE','relative_change':delta,'threshold':threshold,'metric':'gross ns/iteration; heuristic, not statistical significance'}
+
+
+def revision_version(revision):
+    """Read the declared source's version without checking out or executing it."""
+    root = HERE.parent.parent
+    commit = subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', '--end-of-options',
+                             revision + '^{commit}'], capture_output=True, text=True)
+    if commit.returncode:
+        return None
+    manifest = subprocess.run(['git', '-C', str(root), 'show',
+                               commit.stdout.strip() + ':okkama-rs/Cargo.toml'],
+                              capture_output=True, text=True)
+    if manifest.returncode:
+        return None
+    # Only the workspace package table is authoritative, not dependency versions.
+    section = re.search(r'(?ms)^\[workspace\.package\]\s*$(.*?)(?=^\[|\Z)', manifest.stdout)
+    version = re.search(r"(?m)^version\s*=\s*['\"]([^'\"]+)['\"]", section[1]) if section else None
+    return version[1] if version else None
+
+
+def version_check(revision, actual):
+    expected = revision_version(revision)
+    if expected is None:
+        return {'status': 'UNVERIFIED', 'reason': 'revision manifest unavailable locally'}
+    return {'status': 'MATCH' if actual == 'okkama ' + expected else 'MISMATCH',
+            'expected': 'okkama ' + expected, 'actual': actual}
 
 
 def positive(value):
@@ -117,6 +145,7 @@ def main():
     p.add_argument('--toolchain');p.add_argument('--stdlib')
     p.add_argument('--build-profile',help='declared build flags/profile, e.g. release fat-LTO; recorded, not inferred')
     p.add_argument('--revision',help='source revision of the candidate toolchain')
+    p.add_argument('--allow-version-mismatch',action='store_true',help='retain a loudly flagged mismatched campaign; never release evidence')
     p.add_argument('--engines',default='sparrow');p.add_argument('--only',default='')
     p.add_argument('--runs',type=positive,default=7);p.add_argument('--n',type=positive,default=10000)
     p.add_argument('--warmup',type=positive,default=10000)
@@ -158,6 +187,12 @@ def main():
         with tempfile.TemporaryDirectory(prefix='micro-v2-') as work:
             docker=Docker(a,work)
             result['toolchain']={'revision_declared':a.revision,'version':docker.run([a.okkama,'--version'])[0].strip(),'binary_sha256':docker.run(['sha256sum',a.okkama])[0].split()[0]}
+            provenance = version_check(a.revision, result['toolchain']['version'])
+            result['toolchain']['version_check'] = provenance
+            if provenance['status'] != 'MATCH':
+                print('WARNING: toolchain provenance: ' + json.dumps(provenance), file=sys.stderr)
+            if provenance['status'] == 'MISMATCH' and not a.allow_version_mismatch:
+                raise ValueError('toolchain version does not match --revision; use --allow-version-mismatch only for explicitly unverified experiments')
             if a.stdlib:result['environment']['stdlib_hashes']={str(f.relative_to(a.stdlib)):digest(f) for f in sorted(Path(a.stdlib).rglob('*.ok'))}
             if a.toolchain:result['toolchain']['installation_hashes']={str(f.relative_to(a.toolchain)):digest(f) for f in sorted(Path(a.toolchain).rglob('*')) if f.is_file()}
             if 'jvm' in engines:result['toolchain']['java']=docker.run(['java','-version'])[1].strip()

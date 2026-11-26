@@ -13,7 +13,7 @@ fn return_and_instruction_spans_refer_to_original_source() {
         let text = format!("module app/math v1.2.3; main() is int {{ {body} }}");
         let source = SourceFile::new("test.ok", text).unwrap();
         let ast = syntax::parse(&source, &ParseOptions::default()).unwrap();
-        let module = lower_program(&ast).unwrap();
+        let module = okkama_compiler::lowering::with_passes("all", || lower_program(&ast)).unwrap();
 
         assert_eq!(module.name, "app/math");
         assert_eq!(module.version, "v1.2.3");
@@ -58,7 +58,7 @@ fn empty_library_module_keeps_its_import_metadata() {
     )
     .unwrap();
     let ast = syntax::parse(&source, &ParseOptions::default()).unwrap();
-    let module = lower_program(&ast).unwrap();
+    let module = okkama_compiler::lowering::with_passes("all", || lower_program(&ast)).unwrap();
 
     assert_eq!(module.name, "library");
     assert!(module.functions.is_empty());

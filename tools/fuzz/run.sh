@@ -14,7 +14,7 @@
 # --coverage a summary per target in okkama-rs/fuzz/coverage/<target>.txt;
 # each run's output is in okkama-rs/fuzz/logs/<target>.log.
 # Exit status 1 when any target found something, 2 when the targets do not
-# build (logs/build.log).
+# build (logs/build.log), 3 when coverage fails (logs/<target>-coverage.log).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -27,6 +27,9 @@ TARGETS=(lex parse analyze ir_verify spb exec)
 # Keep every build/check/metadata invocation on the checked-in graph.
 export OKKAMA_FUZZ_CARGO="$(command -v cargo)"
 export PATH="$ROOT/tools/fuzz/locked-cargo:$PATH"
+# cargo-fuzz supplies RUSTFLAGS, overriding .cargo/config.toml; Sparrow GC
+# needs frame pointers through every Rust frame, including coverage replay.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C force-frame-pointers=yes"
 # cargo-fuzz builds for the triple it was itself built for unless told; a
 # prebuilt musl cargo-fuzz (CI's install-action) then asks for a static libc
 # that the sanitizers refuse. Build for the nightly host instead.
@@ -61,6 +64,7 @@ if ! CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo +nightly fuzz build --targe
 fi
 
 found=()
+coverage_failed=()
 for target in "${TARGETS[@]}"; do
     echo "==> $target (${TIME}s)"
     mkdir -p "artifacts/$target"
@@ -72,16 +76,16 @@ for target in "${TARGETS[@]}"; do
     fi
     grep -E "^Done|stat::(number_of_executed_units|new_units_added|peak_rss_mb)" "logs/$target.log"
     if [[ $COVERAGE -eq 1 ]]; then
-        mkdir -p coverage
-        if cargo +nightly fuzz coverage --target "$HOST" "$target" "corpus/$target" >/dev/null 2>&1; then
-            llvm="$(rustc +nightly --print sysroot)/lib/rustlib/$HOST/bin"
-            binary="$(find target -path "*/coverage/*/release/$target" -type f | head -1)"
-            "$llvm/llvm-cov" report "$binary" -instr-profile="coverage/$target/coverage.profdata" \
-                -ignore-filename-regex='(\.cargo|rustc)/' >"coverage/$target.txt" 2>&1 || true
-            tail -1 "coverage/$target.txt"
+        if ! "$ROOT/tools/fuzz/coverage.sh" "$HOST" "$target"; then
+            coverage_failed+=("$target")
         fi
     fi
 done
+if [[ ${#coverage_failed[@]} -gt 0 ]]; then
+    echo "COVERAGE FAILED: ${coverage_failed[*]} (okkama-rs/fuzz/logs/*-coverage.log)" >&2
+    [[ ${#found[@]} -gt 0 ]] && echo "FINDINGS: ${found[*]} (okkama-rs/fuzz/artifacts)"
+    exit 3
+fi
 if [[ ${#found[@]} -gt 0 ]]; then
     echo "FINDINGS: ${found[*]} (okkama-rs/fuzz/artifacts)"
     exit 1

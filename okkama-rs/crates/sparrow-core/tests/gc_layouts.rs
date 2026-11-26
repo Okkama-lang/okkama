@@ -163,7 +163,7 @@ fn gc_layout_bounded_fixture_census() {
             let mut layout = vec![if references { Repr::Ref } else { Repr::Raw }; width];
             layout[0] = Repr::Ref;
             let mut heap = Heap::new(Layouts { objects: vec![layout], ..Layouts::default() });
-            heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some());
+            heap.set_stress(sparrow_core::env_switch::enabled("SPARROW_CORE_GC_STRESS"));
             heap.allocations = Some(Box::default());
             let child = heap.allocate_text("shared");
             let mut fields = vec![0; width];

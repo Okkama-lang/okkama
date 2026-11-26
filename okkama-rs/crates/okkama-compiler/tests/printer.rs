@@ -190,7 +190,7 @@ fn snapshot_dir() -> PathBuf {
 
 fn check_snapshot(name: &str, actual: &str) {
     let path = snapshot_dir().join(name);
-    if std::env::var_os("OKKAMA_UPDATE_SNAPSHOTS").is_some() {
+    if okkama_compiler::env_switch::enabled("OKKAMA_UPDATE_SNAPSHOTS") {
         std::fs::create_dir_all(snapshot_dir()).unwrap();
         std::fs::write(&path, actual).unwrap();
         return;

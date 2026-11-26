@@ -168,7 +168,7 @@ impl Ctx<'_, '_> {
                 "Self" => object,
                 "core::ArraySequence" => {
                     let adapter = self.reg.adapters.array_sequence.ok_or_else(|| {
-                        LoweringError::invalid(span, "internal compiler error: no Sequencing role")
+                        LoweringError::internal(span, "internal compiler error: no Sequencing role")
                     })?;
                     let element = args.first().cloned().unwrap_or(Ty::Never);
                     self.object_instance(adapter, vec![element.clone(), element], span)?
@@ -186,7 +186,7 @@ impl Ctx<'_, '_> {
                         info.error && info.params.is_empty() && info.cases.first().is_some_and(|c| c == case)
                     });
                     let Some(found) = found else {
-                        return Err(LoweringError::invalid(
+                        return Err(LoweringError::internal(
                             span,
                             format!("internal compiler error: intrinsic error {other} must be the first case of an error enum"),
                         ));
@@ -207,7 +207,7 @@ impl Ctx<'_, '_> {
                     let Some(TypeRef::Object(found)) =
                         self.reg.modules[module].own.types.get(name).copied()
                     else {
-                        return Err(LoweringError::invalid(
+                        return Err(LoweringError::internal(
                             span,
                             format!("internal compiler error: intrinsic object {name} is missing"),
                         ));
@@ -244,7 +244,7 @@ impl Ctx<'_, '_> {
                     .iter()
                     .find(|field| field.name == path)
                     .ok_or_else(|| {
-                        LoweringError::invalid(
+                        LoweringError::internal(
                             span,
                             format!("internal compiler error: no field {path}"),
                         )
@@ -303,7 +303,7 @@ impl Ctx<'_, '_> {
         span: Span,
     ) -> Result<(ir::FuncId, Type)> {
         let missing = || {
-            LoweringError::invalid(
+            LoweringError::internal(
                 span,
                 format!("internal compiler error: no cap field {cap_name}::{field_name} for a runtime helper"),
             )

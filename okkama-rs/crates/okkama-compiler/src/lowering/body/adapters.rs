@@ -447,7 +447,7 @@ impl Adapter {
 }
 
 fn internal(span: Span, message: &str) -> LoweringError {
-    LoweringError::invalid(span, format!("internal compiler error: {message}"))
+    LoweringError::internal(span, format!("internal compiler error: {message}"))
 }
 
 /// `text()` значения варианта: `Enum.case` или `Enum.case(payload, ...)`;

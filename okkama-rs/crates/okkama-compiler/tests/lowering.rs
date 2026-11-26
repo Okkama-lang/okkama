@@ -8,7 +8,7 @@ use okkama_compiler::syntax::{self, ParseOptions, prune};
 fn lower(text: &str) -> Result<ir::Module, LoweringError> {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    lower_program(&prune::strip_test_items(program))
+    okkama_compiler::lowering::with_passes("all", || lower_program(&prune::strip_test_items(program)))
 }
 
 fn listing(body: &str) -> String {

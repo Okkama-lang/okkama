@@ -31,7 +31,7 @@ fn repo_root() -> Option<PathBuf> {
 }
 
 fn require_repo() -> Option<PathBuf> {
-    if std::env::var_os("OKKAMA_SKIP_CORPUS").is_some() {
+    if okkama_compiler::env_switch::enabled("OKKAMA_SKIP_CORPUS") {
         eprintln!("corpus checks skipped: OKKAMA_SKIP_CORPUS is set");
         return None;
     }

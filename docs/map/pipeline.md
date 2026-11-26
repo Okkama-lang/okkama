@@ -16,7 +16,8 @@ are relative to `okkama-rs/crates/`. `OKKAMA_DEV=lower` covers the compiler stag
 | 8 | run time | `sparrow-core`: `failures.rs` (identities, regions, resource walks, destroy), `tasks.rs` (async frames, `rt_region_settle`), `heap.rs` (GC), `drivers.rs`, `intrinsics.rs` | when each resource is destroyed (reverse serial order), cancellation and settling | at-most-once destroy, `already_closed`, budgets | runtime, gc; cleanup-count / cleanup-time (#329) |
 
 A failure names its stage: `syntax error`, `semantic error`, a lowering error, `internal compiler error: lowering
-produced invalid IR` (`OKKAMA_DUMP_INVALID_IR=FILE` writes it), an SPB verify error, or a run-time failure with its
+produced invalid IR` (`LoweringError::Internal`, also used for linearity failures;
+`OKKAMA_DUMP_INVALID_IR=FILE` writes rejected OIR), an SPB verify error, or a run-time failure with its
 trace.
 
 Where one ownership rule lives in several rows, rules.md lists them. The aim is lowering plus the runtime, with

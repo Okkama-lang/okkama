@@ -232,7 +232,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     return Ok(Out::Diverged);
                 };
                 let Type::Object(object) = target.ty.taken() else {
-                    return Err(LoweringError::invalid(
+                    return Err(LoweringError::internal(
                         span,
                         "internal compiler error: a method receiver is not an object",
                     ));
@@ -593,7 +593,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             ),
             Builtin::Bits { name, byte } => {
                 let op = BitOp::from_action(name).ok_or_else(|| {
-                    LoweringError::invalid(
+                    LoweringError::internal(
                         span,
                         format!("internal compiler error: bit action {name}"),
                     )
@@ -680,7 +680,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
             Builtin::Order(kind) => {
                 let Type::Enum(order) = self.expr_type(expr)? else {
-                    return Err(LoweringError::invalid(
+                    return Err(LoweringError::internal(
                         span,
                         "internal compiler error: order() result is not compare.Order",
                     ));
