@@ -117,7 +117,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2353 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 65 files, 34928 lines
+## sparrow — 65 files, 34978 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
@@ -127,7 +127,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/heap.rs` 2320 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 1093 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2985 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/jit.rs` 3031 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 607 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — The natives the core serves itself, and the dispatch to the host's
@@ -135,7 +135,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 395 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 241 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 1148 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1152 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB

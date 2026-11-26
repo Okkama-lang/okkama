@@ -17,6 +17,12 @@
 - [x] #1072 (feature/1072): `Emitter::instruction` (sparrow-core/src/jit.rs) compiles `unreachable` as a trap
   (`jit::UNREACHABLE`, "Unreachable code reached", a program error a handler catches); SparrowBook table text.
   No corpus SPB holds opcode 145 (1245 programs of std -t, examples, bench/micro; 552 of t/ and conformance).
+- [x] #1074 (feature/1074): `Jit::spread` (sparrow-core/src/jit.rs), one Cranelift adapter per arity over 8,
+  called by `jit::invoke`; `rt_call_closure` takes a vector past 8 words; `Invocation::capture_count` has no
+  width limit; `closure_call` calls wide closures directly. No corpus program has a closure over more than 8
+  parameters or a `call.fn` with 7+ arguments, so no emitted code changes; the closure helper's path for
+  async and 3+ captures runs as before: std `run -t` 395 modules, examples 75, bench/micro check 773, t/ 142
+  files (50972 checks) identical to release/065 (0269ef0e7) in the cage.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

@@ -196,6 +196,8 @@ pub struct Jit {
     /// #345): a line per function on stderr, and Cranelift's own passes,
     /// summed, when the JIT is dropped.
     profile: Option<cranelift_codegen::timing::PassTimes>,
+    /// #1074: the adapter that calls compiled code of each arity over 8 from Rust (see [`Jit::spread`]).
+    spreads: BTreeMap<usize, u64>,
 }
 
 impl Drop for Jit {
@@ -361,7 +363,57 @@ impl Jit {
                     eprintln!("{COMPILE_HEADER}");
                     cranelift_codegen::timing::PassTimes::default()
                 }),
+            spreads: BTreeMap::new(),
         })
+    }
+
+    /// #1074: code `extern "C" fn(ctx, words: *const Word, code) -> Word` that calls `code`, a function
+    /// compiled here taking `arity` words after the context, with the `arity` words at `words`. Rust calls
+    /// compiled code through a signature it names, which [`invoke`] does for up to 8 words; a wider call
+    /// (a closure over a function of many parameters) goes through this adapter, one per arity, compiled on
+    /// its first use. It holds no value across its call, and the collector passes over its frame as over a
+    /// Rust one: it is not in `ranges`.
+    pub(crate) fn spread(&mut self, arity: usize) -> Result<u64, Error> {
+        if let Some(&code) = self.spreads.get(&arity) {
+            return Ok(code);
+        }
+        let mut signature = self.module.make_signature();
+        for _ in 0..3 {
+            signature.params.push(AbiParam::new(types::I64));
+        }
+        signature.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function(&format!("spread{arity}"), Linkage::Local, &signature)
+            .map_err(|e| Error(format!("JIT declare: {e}")))?;
+        let mut context = self.module.make_context();
+        context.func.signature = signature;
+        let mut frontend = FunctionBuilderContext::new();
+        {
+            let config = self.module.target_config();
+            let mut builder = FunctionBuilder::new(&mut context.func, &mut frontend);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let (ctx, words, code) = (builder.block_params(entry)[0], builder.block_params(entry)[1], builder.block_params(entry)[2]);
+            let mut values = Vec::with_capacity(1 + arity);
+            values.push(ctx);
+            for index in 0..arity {
+                let offset = i32::try_from(index * 8).map_err(|_| Error(format!("a call of {arity} words is too wide")))?;
+                values.push(builder.ins().load(types::I64, MEMORY, words, offset));
+            }
+            let callee = builder.import_signature(self.signature(arity));
+            let call = builder.ins().call_indirect(callee, code, &values);
+            let result = builder.inst_results(call)[0];
+            builder.ins().return_(&[result]);
+            builder.seal_all_blocks();
+            builder.finalize(config);
+        }
+        self.module.define_function(id, &mut context).map_err(|e| Error(format!("spread{arity}: {e:?}")))?;
+        self.module.finalize_definitions().map_err(|e| Error(format!("JIT finalize: {e}")))?;
+        let code = self.module.get_finalized_function(id) as u64;
+        self.spreads.insert(arity, code);
+        Ok(code)
     }
 
     /// `--stats` lines of the helpers machine code called, and the largest
@@ -448,7 +500,8 @@ impl Jit {
     }
 }
 
-/// Call compiled code with the context and `words` as parameters.
+/// Call compiled code with the context and `words` as parameters: up to 8
+/// words directly, more through [`Jit::spread`] (#1074).
 ///
 /// SAFETY: `code` is a function compiled here taking exactly `words.len()`
 /// parameters after the context.
@@ -467,9 +520,13 @@ pub(crate) unsafe fn invoke(code: u64, ctx: *mut Ctx, words: &[Word]) -> Word {
             6 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5]),
             7 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5], w[6]),
             8 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]),
-            _ => {
+            // #1074: wider calls through the adapter of their arity.
+            arity => {
                 let runtime = &mut *(*c).runtime;
-                crate::runtime::fatal(&mut *c, runtime, "closure with more than 8 parameters".into())
+                match runtime.jit.spread(arity) {
+                    Ok(spread) => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, *const W, u64) -> W>(spread)(c, w.as_ptr(), code),
+                    Err(error) => crate::runtime::fatal(&mut *c, runtime, error.0),
+                }
             }
         }
     }
@@ -1416,9 +1473,6 @@ impl Emitter<'_, '_> {
         let merge = self.builder.create_block();
         self.builder.append_block_param(merge, types::I64);
         for captured in 0..=CLOSURE_DIRECT_CAPTURES {
-            if args.len() + captured > 8 {
-                break;
-            }
             let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
             let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
             let direct = self.builder.ins().band(arity, sync);
@@ -3428,6 +3482,8 @@ mod inline_tests;
 mod closure_call_tests;
 #[cfg(test)]
 mod unreachable_tests;
+#[cfg(test)]
+mod wide_closure_tests;
 
 #[cfg(test)]
 mod placement_tests;

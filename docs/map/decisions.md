@@ -596,3 +596,13 @@ every declaration is open (#1005, owner decision).
 - `unreachable` stays in SPB (opcode 145, verifier and codegen unchanged): Sparrow compiles it as
   `trap unreachable` would, a program error "Unreachable code reached" that a handler catches, so a verified
   function holding it runs. Dropping it from the instruction set would be an SPB version bump for nothing.
+
+## Closures of any width (#1074, 2026-11-27)
+
+- Supported rather than refused: a verifier limit would have been the only width limit of SPB (static calls
+  take any number of parameters), and an Okkama lambda of 9 parameters would have failed in the verifier at
+  compile time. Rust's calls of compiled code (`jit::invoke`, used by the closure helper, `run_function_with`
+  and intrinsic calls) take up to 8 words through named signatures; a wider one goes through `Jit::spread`, a
+  Cranelift adapter per arity that loads the words and calls the code. It holds no value across the call and
+  is not in `ranges`, so the collector passes over its frame as over a Rust one. Machine code calls a wide
+  closure directly, as a narrow one (the `args + captures > 8` cut is gone).

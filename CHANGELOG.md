@@ -13,6 +13,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   It now compiles as a trap: if control does get there, the program fails with "Unreachable code reached", a
   program error as `trap` makes, which a handler catches. The compiler does not emit it (`ir/cfg.rs` removes
   unreachable blocks): no SPB of std, t/, examples, conformance or bench/micro contains it.
+- **Sparrow: a closure over a function with more than 8 parameters verified, then `call.fn` died with an
+  uncatchable fatal error (#1074).** Rust calls compiled code through signatures it names, and the runtime's
+  closure helper (and so `SPARROW_CORE_PLAIN`, more than two captures, async closures) stopped at 8 words with
+  "closure with more than 8 parameters". A wider call now goes through a small adapter compiled once per arity
+  (`Jit::spread`: it loads the words and calls the code, holding nothing across the call, and the collector
+  passes over its frame as over a Rust one); machine code calls such closures directly as it does narrower
+  ones. Any number of parameters works, as for static calls. No program of std, t/, examples, conformance or
+  bench/micro has such a closure or a `call.fn` with 7 or more arguments, so their code is unchanged.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

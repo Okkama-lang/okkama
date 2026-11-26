@@ -107,13 +107,10 @@ pub struct Invocation {
 
 impl Invocation {
     fn capture_count(self, count: u64) -> Result<usize, &'static str> {
-        if self.params > 8 {
-            return Err("closure with more than 8 parameters");
-        }
         if count > u64::from(self.params) {
             return Err("closure argument count exceeds parameter count");
         }
-        // Both operands are now in 0..=8, before conversion/subtraction.
+        // count <= params < 2^32, before conversion/subtraction.
         Ok(self.params as usize - count as usize)
     }
 }
@@ -1140,11 +1137,19 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
     let params = entry.params as usize;
     // Keep initialized storage until removing it has a measured benefit.
     // No uninitialized Word or partially initialized slice reaches any path.
-    let mut words = [UNBOUND; 8];
+    // More than 8 parameters (#1074) take a vector, called through `jit::spread`.
+    let mut short = [UNBOUND; 8];
+    let mut long = Vec::new();
+    let words: &mut [Word] = if params <= 8 {
+        &mut short
+    } else {
+        long.resize(params, UNBOUND);
+        &mut long
+    };
     for (i, word) in words.iter_mut().enumerate().take(captured) {
         *word = runtime.heap.field(closure, i);
     }
-    if runtime.closure_bridge_reference {
+    if runtime.closure_bridge_reference || params > 8 {
         words[captured..params].copy_from_slice(unsafe { std::slice::from_raw_parts(arguments, count as usize) });
     } else {
         // Bound the short copy explicitly. Inspect optimized target code:
@@ -1238,7 +1243,8 @@ mod embedding_tests {
 
     #[test]
     fn closure_bridge_counts_are_checked_before_access() {
-        for params in [0, 1, 2, 8] {
+        // #1074: any number of parameters, more than 8 as well.
+        for params in [0, 1, 2, 8, 9, 20] {
             let entry = Invocation { code: 0, params, is_async: false };
             for count in 0..=u64::from(params) {
                 assert_eq!(entry.capture_count(count), Ok(params as usize - count as usize));
@@ -1246,9 +1252,9 @@ mod embedding_tests {
             assert_eq!(entry.capture_count(u64::from(params) + 1), Err("closure argument count exceeds parameter count"));
             assert_eq!(entry.capture_count(u64::MAX), Err("closure argument count exceeds parameter count"));
         }
-        let entry = Invocation { code: 0, params: 9, is_async: true };
-        assert_eq!(entry.capture_count(0), Err("closure with more than 8 parameters"));
-        assert_eq!(entry.capture_count(u64::MAX), Err("closure with more than 8 parameters"));
+        let entry = Invocation { code: 0, params: u32::MAX, is_async: true };
+        assert_eq!(entry.capture_count(u64::from(u32::MAX)), Ok(0));
+        assert_eq!(entry.capture_count(0), Ok(u32::MAX as usize));
     }
 
     /// #1009: outside the crate a `Loaded` is made only from a verified
