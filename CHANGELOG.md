@@ -7,6 +7,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
+  obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
+  last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of
+  `array.lookup`/`map.lookup`, normal paths where nobody took it. It now applies only to `unwind` targets; on
+  the other edges the types must match, and a `^C` parameter there is checked as any other ("successor value
+  reaches `ret` without succ.take"). Not reachable from Okkama source (analysis checks the obligation first);
+  every program of the corpus lowers as before.
 - **Sparrow (#1033).** `builder.finish` (the array of a `map` or `filter`) and an int's decimal text check the
   length limit before they allocate, in machine code as in the generic path: past 2^32 − 1 elements or 4 GiB
   they fail the program instead of aborting the process.

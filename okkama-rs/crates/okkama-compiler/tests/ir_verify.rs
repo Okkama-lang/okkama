@@ -662,3 +662,108 @@ fn undef_of_a_builder_names_the_violation() {
     module.functions[0].blocks[0].insts.push(inst(4, InstKind::Undef));
     rejects(&module, "`undef` must not define a builder");
 }
+
+/// `main` of the #1063 report: `%1: ^C` goes to `^b1`, the `found` (or a map
+/// lookup's) path, and to `^b2`, which takes it. `found_param` is the type of
+/// `^b1`'s first parameter; with `take`, `^b1` takes it too.
+fn successor_through_lookup(map: bool, found_param: Type, take: bool) -> Module {
+    let mut module = lowered(OBJECTS);
+    let main = symbol(&module, "main");
+    let (ctor, inc) = (symbol(&module, "C.new#0"), symbol(&module, "C.inc"));
+    let object = Type::Object(ir::ObjectId(0));
+    let successor = Type::Successor(ir::ObjectId(0));
+    let (container, new) = if map {
+        (Type::Map(Box::new(Type::Int), Box::new(Type::Int)), InstKind::MapNew(Vec::new()))
+    } else {
+        (Type::Array(Box::new(Type::Int)), InstKind::ArrayNew(Vec::new()))
+    };
+    let (found, missing) = (
+        Target { block: BlockId(1), args: vec![ValueId(1)] },
+        Target { block: BlockId(2), args: vec![ValueId(1)] },
+    );
+    let lookup = if map {
+        TermKind::MapLookup { map: ValueId(2), key: ValueId(3), found, missing }
+    } else {
+        TermKind::ArrayLookup { array: ValueId(2), index: ValueId(3), found, missing }
+    };
+    let function = &mut module.functions[main];
+    function.values = vec![
+        object.clone(),
+        successor.clone(),
+        container,
+        Type::Int,
+        found_param,
+        Type::Int,
+        successor,
+        object.clone(),
+        Type::Int,
+    ];
+    if take {
+        function.values.push(object);
+    }
+    let mut found_block = block(Vec::new(), TermKind::Ret(Some(ValueId(5))));
+    found_block.params = vec![ValueId(4), ValueId(5)];
+    if take {
+        found_block.insts.push(inst(9, InstKind::SuccTake(ValueId(4))));
+    }
+    let mut missing_block = block(
+        vec![inst(7, InstKind::SuccTake(ValueId(6))), inst(8, int(0))],
+        TermKind::Ret(Some(ValueId(8))),
+    );
+    missing_block.params = vec![ValueId(6)];
+    function.blocks = vec![
+        block(
+            vec![
+                inst(0, InstKind::Call { func: FuncId(ctor), args: vec![] }),
+                inst(1, InstKind::Call { func: FuncId(inc), args: vec![ValueId(0)] }),
+                inst(2, new),
+                inst(3, int(0)),
+            ],
+            lookup,
+        ),
+        found_block,
+        missing_block,
+    ];
+    module
+}
+
+/// #1063: the `found` path of a lookup is a normal path. A successor value
+/// passed there keeps its obligation; only an `unwind` edge (cleanup) may pass
+/// `^C` for `C`.
+#[test]
+fn a_lookup_found_edge_keeps_the_successor_obligation() {
+    for map in [false, true] {
+        let object = Type::Object(ir::ObjectId(0));
+        let successor = Type::Successor(ir::ObjectId(0));
+        rejects(
+            &successor_through_lookup(map, object, false),
+            "branch to ^b1 passes %1: ^object#0 for %4: object#0",
+        );
+        rejects(
+            &successor_through_lookup(map, successor.clone(), false),
+            "successor value %4 reaches `ret` in ^b1 without succ.take",
+        );
+        ir::verify(&successor_through_lookup(map, successor, true)).unwrap();
+    }
+}
+
+/// #1063: the handler of `catch` is a normal path too. In FAILURES, `^b3`
+/// (the unwind target) holds `c` and passes it to the handler `^b4` and to
+/// `^b7`; made a successor there (an unwind edge may pass `C` for `^C`), it
+/// may not reach the handler's plain parameter.
+#[test]
+fn a_catch_handler_edge_keeps_the_successor_obligation() {
+    let module = lowered(FAILURES);
+    let main = symbol(&module, "main");
+    let blocks = &module.functions[main].blocks;
+    assert!(matches!(blocks[3].term.kind, TermKind::Catch { .. }), "^b3 catches");
+    let (held, handler_param, next_param) = (blocks[3].params[0], blocks[4].params[0], blocks[7].params[0]);
+    let mut module = module;
+    let values = &mut module.functions[main].values;
+    values[held.0] = Type::Successor(ir::ObjectId(0));
+    values[next_param.0] = Type::Successor(ir::ObjectId(0));
+    rejects(
+        &module,
+        &format!("branch to ^b4 passes {held}: ^object#0 for {handler_param}: object#0"),
+    );
+}

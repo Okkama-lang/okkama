@@ -4,6 +4,9 @@
 
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
+- [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets
+  (catch handler and lookup `found` edges are normal paths). Compile sweep (3170 files, passes on; 2122 with
+  OKKAMA_IR_PASSES=none): SPB identical to release/065 but the nondeterministic `L03.anonymous.lexical-scope`.
 - [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
   `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
   program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with

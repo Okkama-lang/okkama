@@ -527,3 +527,8 @@ every declaration is open (#1005, owner decision).
 
 - `Role::slot_name` returns `Option`, like the other lookups by index (`Module::role`, fields, enum cases): the
   printer must print a damaged module (#1003), so it never indexes; only code after `ir::verify` may unwrap.
+## `^C` passes for `C` only on unwind edges (#1063, 2026-11-26)
+
+- The cleanup relaxation of OIR edge types (`^C` and `C` compatible) is for `block.unwind` targets only. The
+  handler of `catch` and the `found` target of lookups also fill an implicit last parameter but are normal
+  paths: a successor keeps its type there and its obligation is followed into the parameter.

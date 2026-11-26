@@ -779,7 +779,7 @@ impl<'a> FunctionVerifier<'a> {
                 TermKind::Catch {
                     ty, handler, next, ..
                 } => {
-                    self.check_target_with(handler, Some(ty.ty()))?;
+                    self.check_target_with(handler, Some(ty.ty()), false)?;
                     self.check_target(next)?;
                 }
                 // Ветвь found получает элемент последним параметром.
@@ -790,7 +790,7 @@ impl<'a> FunctionVerifier<'a> {
                     ..
                 } => {
                     let element = self.element_of(*array)?.clone();
-                    self.check_target_with(found, Some(element))?;
+                    self.check_target_with(found, Some(element), false)?;
                     self.check_target(missing)?;
                 }
                 TermKind::MapLookup {
@@ -800,7 +800,7 @@ impl<'a> FunctionVerifier<'a> {
                     ..
                 } => {
                     let (_, value) = self.entry_of(*map)?;
-                    self.check_target_with(found, Some(value.clone()))?;
+                    self.check_target_with(found, Some(value.clone()), false)?;
                     self.check_target(missing)?;
                 }
                 kind => {
@@ -810,22 +810,24 @@ impl<'a> FunctionVerifier<'a> {
                 }
             }
             if let Some(unwind) = &block.unwind {
-                self.check_target_with(unwind, Some(Type::Failure))?;
+                self.check_target_with(unwind, Some(Type::Failure), true)?;
             }
         }
         Ok(())
     }
 
     fn check_target(&self, target: &Target) -> std::result::Result<(), String> {
-        self.check_target_with(target, None)
+        self.check_target_with(target, None, false)
     }
 
     /// Аргументы перехода и, если задано, тип последнего параметра,
-    /// который заполняет сам переход (пойманная ошибка, `failure`).
+    /// который заполняет сам переход (пойманная ошибка, элемент, `failure`);
+    /// `unwind` — переход по отказу (`block.unwind`).
     fn check_target_with(
         &self,
         target: &Target,
         implicit: Option<Type>,
+        unwind: bool,
     ) -> std::result::Result<(), String> {
         let Some(block) = self.function.blocks.get(target.block.0) else {
             return Err(format!("branch to missing block ^b{}", target.block.0));
@@ -857,8 +859,10 @@ impl<'a> FunctionVerifier<'a> {
         for (arg, param) in target.args.iter().zip(&block.params) {
             let (arg_type, param_type) = (self.ty(*arg)?, self.ty(*param)?);
             // Путь отказа несёт значения только для cleanup: обязательство
-            // `^C` на нём не действует, `^C` и `C` совместимы.
-            let unwind_compatible = implicit.is_some()
+            // `^C` на нём не действует, `^C` и `C` совместимы. Ветви handler
+            // у `catch` и found у поиска — обычные пути: там `^C` остаётся
+            // `^C`, иначе обязательство теряется (#1063).
+            let unwind_compatible = unwind
                 && matches!(
                     (arg_type, param_type),
                     (Type::Successor(a), Type::Object(b)) | (Type::Object(a), Type::Successor(b)) if a == b
