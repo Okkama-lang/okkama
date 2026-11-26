@@ -51,12 +51,25 @@ fn native_identity_and_signature_are_checked_before_execution() {
     // неизвестный provider — ошибка запуска, а не генерации.
     assert!(!matches!(support::sparrow(&module), support::Ending::Value(_)));
 
+    // A declaration unlike the table's native of its symbol is refused by lowering, at the declaration (#1098).
     let source = SourceFile::new("bad-native.ok", "module runtime/utf v1.0.0; native utf8_encode(text is int) is int; main() is int { utf8_encode(1); }").unwrap();
-    let module =
-        lowering::lower_program(&syntax::parse(&source, &syntax::ParseOptions::default()).unwrap())
-            .unwrap();
+    let refused =
+        lowering::lower_program(&syntax::parse(&source, &syntax::ParseOptions::default()).unwrap());
+    assert!(
+        matches!(&refused, Err(error) if error.to_string().contains("does not match runtime/utf@1::utf8_encode/1 of the runtime")),
+        "{refused:?}"
+    );
 
-    // SPB сверяет native с таблицей ABI при проверке программы (#16).
+    // SPB still checks a native against the ABI table when it verifies the program (#16): OIR whose extern
+    // names another native of the table, with another signature, does not generate.
+    let mut module = lower(r#"utf8_encode("x").size();"#);
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|f| f.extern_symbol() == Some("runtime/utf@1::utf8_encode/1"))
+        .unwrap();
+    let attr = function.attrs.iter_mut().find(|a| matches!(a, ir::Attr::Extern(_))).unwrap();
+    *attr = ir::Attr::Extern("runtime/utf@1::utf8_valid_prefix/1".into());
     assert!(
         matches!(codegen::sparrow::generate(&module), Err(error) if error.message.contains("does not match the signature"))
     );
