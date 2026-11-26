@@ -69,3 +69,14 @@ p.caption { font-size: 8pt; margin-top: -0.3em; }
 .tailpiece { text-align: center; margin: 8mm 0 0; page-break-inside: avoid; }
 .tailpiece .drollery { width: 34mm; }
 .title-ornament .orn, .part-ornament .orn { display: block; width: 100%; }
+
+/* Listings, tables, notes and quotes are not cut across pages (owner,
+   2026-11-26). A block that fits on a page moves whole to the next one, leaving
+   the space blank; a longer one starts on a fresh page and breaks no closer than
+   four lines to either end. Table rows are never split and the header repeats.
+   A lead-in paragraph stays with the listing or table it introduces. */
+pre, .table-wrap, table, p.note, blockquote { break-inside: avoid; page-break-inside: avoid; }
+pre { orphans: 4; widows: 4; }
+th, td { break-inside: avoid; }
+thead { display: table-header-group; }
+p.lead-in { break-after: avoid; page-break-after: avoid; }

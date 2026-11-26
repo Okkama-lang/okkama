@@ -110,6 +110,9 @@ def structure(fragment, language):
 
     fragment = re.sub(r"<h2([^>]*)>(.*?)</h2>", h2, fragment, flags=re.S)
     fragment = re.sub(r"<table>", '<div class="table-wrap"><table>', fragment)
+    # A paragraph right before a listing or a table stays on its page (print).
+    fragment = re.sub(r'<p>((?:(?!</p>).)*)</p>(\s*<(?:div class="sourceCode"|pre|div class="table-wrap"))',
+                      r'<p class="lead-in">\1</p>\2', fragment, flags=re.S)
     fragment = re.sub(r"</table>", "</table></div>", fragment)
     for kind in ("why", "cost"):
         for word in w[kind]:
