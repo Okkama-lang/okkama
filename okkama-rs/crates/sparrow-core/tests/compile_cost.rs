@@ -54,6 +54,13 @@ fn many_values_live_across_fallible_instructions_are_refused_before_compiling() 
     assert_eq!(run(chain(100), 16 << 20).unwrap(), 0);
 }
 
+/// #1066: under a budget below 1 MiB the refusal names the limit in KiB, not as 0 MiB.
+#[test]
+fn a_sub_mib_budget_names_its_compile_limit_in_kib() {
+    let error = run(chain(100), 256 << 10).unwrap_err();
+    assert!(error.0.starts_with("deep: compiling it would take more than 256 KiB"), "{}", error.0);
+}
+
 #[test]
 fn the_cost_check_skips_small_functions() {
     // Without a budget the limit is 256 MiB; k = 200 is far below it.

@@ -299,6 +299,16 @@ const BYTES_PER_LIVE_BLOCK: u64 = 64;
 /// No instruction emits more blocks than this (inline allocation, checks).
 const MAX_BLOCKS_PER_INSTRUCTION: u64 = 16;
 
+/// The compile-cost limit for its refusal (#1066): whole MiB from 1 MiB, KiB
+/// below (a budget under 1 MiB printed "more than 0 MiB"), bytes below 1 KiB.
+fn compile_limit_text(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} bytes"),
+        1024..0x10_0000 => format!("{} KiB", bytes >> 10),
+        _ => format!("{} MiB", bytes >> 20),
+    }
+}
+
 impl std::fmt::Debug for Jit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Jit")
@@ -1613,10 +1623,10 @@ impl Emitter<'_, '_> {
                 self.cost = self.cost.saturating_add(u64::from(live[pc]) * blocks as u64);
                 if self.cost > self.cost_limit {
                     return Err(Error(format!(
-                        "{}: compiling it would take more than {} MiB (registers live across its blocks, at instruction {pc}); \
+                        "{}: compiling it would take more than {} (registers live across its blocks, at instruction {pc}); \
                          keep fewer values alive at once or split the function",
                         source.symbol,
-                        (self.cost_limit * BYTES_PER_LIVE_BLOCK) >> 20
+                        compile_limit_text(self.cost_limit * BYTES_PER_LIVE_BLOCK)
                     )));
                 }
             }
@@ -3303,6 +3313,24 @@ fn int_condition(op: Cmp) -> IntCC {
         Cmp::Le => IntCC::SignedLessThanOrEqual,
         Cmp::Gt => IntCC::SignedGreaterThan,
         Cmp::Ge => IntCC::SignedGreaterThanOrEqual,
+    }
+}
+
+#[cfg(test)]
+mod compile_limit_tests {
+    use super::compile_limit_text;
+
+    /// #1066: the limit is never printed as 0 of its unit.
+    #[test]
+    fn the_compile_cost_limit_prints_in_a_unit_it_fills() {
+        assert_eq!(compile_limit_text(256 << 20), "256 MiB");
+        assert_eq!(compile_limit_text(4 << 20), "4 MiB");
+        assert_eq!(compile_limit_text(1 << 20), "1 MiB");
+        assert_eq!(compile_limit_text((1 << 20) - 64), "1023 KiB");
+        assert_eq!(compile_limit_text(256 << 10), "256 KiB");
+        assert_eq!(compile_limit_text(1024), "1 KiB");
+        assert_eq!(compile_limit_text(960), "960 bytes");
+        assert_eq!(compile_limit_text(0), "0 bytes");
     }
 }
 

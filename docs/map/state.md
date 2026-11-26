@@ -59,6 +59,8 @@ no full test suites, Docker, cargo fmt or clippy.
   `zeroize` (Cargo.lock and fuzz/Cargo.lock).
 - [x] #1062 (feature/1062): `typing::non_finite` walks `GlobalDecl.data` after `fits`;
   the global check refuses the first non-finite float; unit test `typing::data_tests`.
+- [x] #1066 (feature/1066): `jit::compile_limit_text` (MiB / KiB / bytes) in the compile-cost
+  refusal; unit test `compile_limit_tests`, integration `compile_cost.rs` at 256 KiB.
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 

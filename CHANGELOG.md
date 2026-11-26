@@ -21,6 +21,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Sparrow verifier (#1062).** A NaN or an infinity in a module constant's data (a scalar, an array element, a map
   key or value) is refused as it is in `const` ("float 0x7ff8000000000000 in the data of global g0 is not finite");
   it used to verify and run.
+- **JIT (#1066).** The compile-cost refusal names its limit in KiB under a memory budget below 1 MiB (bytes below
+  1 KiB); it said "more than 0 MiB".
 
 ## [0.6.4] — 2026-11-23
 
