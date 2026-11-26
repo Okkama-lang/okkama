@@ -540,7 +540,7 @@ not needed (#292).
 |---|---|---|---|
 | SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 18 (every new opcode bumps it, #1061; 17 was Champ's) |
 | Кадры process worker (`OKW2`) | `sparrow-core` workers | `sparrow-core` worker reader | OKW2 |
-| Дамп OIR-1 (`oir 1 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 1; удаляется с OIR-1 (#576) |
+| Дамп OIR-2 (`oir 2 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 2 (#1043) |
 | OCS cases, contracts, profiles, fixtures, adapter protocol/config и run/coverage/gate/diff/mutation reports | `conformance/runner/ocs`, suite files и `tools/write_schemas.py` | OCS runner/validators и consumers | schema/protocol 2 |
 | Ownership census JSON (`schema`) | `tools/ownership/oracle.py` | oracle report consumers | 2 |
 | Blade manifests и lockfiles | `okkama-rs/crates/blade` | Blade | не изменялось: формат относится к package workflow |

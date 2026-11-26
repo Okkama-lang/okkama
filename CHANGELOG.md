@@ -50,6 +50,27 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `undef`: no binding check proves it bound". Every program of std, t/, examples, conformance, the Bible and
   bench/micro compiles as before. A stub stored in a field and read back with `obj.get` is not tracked
   through the heap yet (`docs/security-model.md` §2).
+- **Compiler: an awaited result is tracked and adopted once (#1044).** `let a = await self.make(1)` lowered to
+  `await.take`, `region.track R, %a` and the binding's `region.adopt R, %a`, and the take-extraction pass did the
+  same for the `await` of a fresh Future from a plain factory; #999 had removed only the repeated adopt of a bound
+  Future's result. The binding's adopt now takes the track's place (an adopt takes everything the track would
+  follow). Programs behave as before; with the passes on, 90 of 2382 corpus files (std -t, t/, examples,
+  conformance, the Bible's examples) compile with 1106 fewer `region.track` and nothing else changed, 102 files
+  and 1230 with `OKKAMA_IR_PASSES=none`.
+- **`okkama ir --passes` refuses a name that is not a pass (#1044)**, as `--after` does: "unknown pass `hoistt`
+  (passes: all, none, statics, …)", exit 2. It ran with exit 0 and warned "OKKAMA_IR_PASSES: unknown pass …"
+  although the variable was not set. The warning for the variable, or for a pass list a library caller selects,
+  names where the list came from.
+- **Compiler messages (#1044).** A conversion lowering does not support says "IR lowering of `char` to `float`
+  conversion is not implemented yet." (it said "conversion of char to Float", one notation per type and "of"
+  twice).
+- **Codegen: the register check covers edge values (#1043).** The independent check of register allocation
+  (debug builds, `OKKAMA_CHECK_REGISTERS`) now refuses an instruction's result or a terminator's edge value (the
+  found value of a lookup, the value `catch` gives its handler) in the register of an operand the same
+  instruction or terminator reads: the allocator's rule since #1007, which the check did not model. Every
+  corpus file compiles with it. `TermKind`'s targets and operands come from one description each, like
+  `InstKind`'s; tests for #1007's `FutureGroup` plainness and the linearity check's refusal of region block
+  parameters.
 ### Security
 - **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at
@@ -69,6 +90,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   ("the session changes the published constant const.LIMIT"), as the other tables name their items; it said
   `FuncRef(1)`.
 ### Changed
+- **IR text (#1043).** `okkama ir` prints `oir 2 high` (it said `oir 1 high`), and the compiler's documentation
+  names the current IR OIR-2.
 - **SPB 18 (#1061).** `resource.settle` and `resource.settle_unwind` (opcodes 161, 162, since 0.6.2) came without a
   format version, so a 0.6.0 or 0.6.1 runtime refused such a program with "unknown opcode 161". SPB is now version
   18 (17 was Champ's, retired), the assembly header `sparrow 18`; a program built by 0.6.0–0.6.4 is refused with

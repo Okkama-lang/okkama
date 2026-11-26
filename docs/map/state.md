@@ -21,6 +21,18 @@
   examples, bench/micro (3170 files): SPB identical to release/065 but the nondeterministic
   `L03.anonymous.lexical-scope` (closure capture order varies run to run). Open: a stub stored in a field and read by
   `obj.get` (heap) is not tracked (ticket to file).
+- [x] #1043 (feature/065-ir): `codegen::sparrow::check` refuses a result or an edge value in an operand's
+  register (`early_write`); `TermKind` targets/operands from the macros `terminator_targets`/
+  `terminator_operands`; IR text `oir 2 high`, OIR-2 naming; tests for #1007 (`FutureGroup` not plain in
+  `param_adopts`, the linearity check's refusal of region block parameters, a catch value's register).
+- [x] #1044 (feature/065-ir): `FnBuilder::adopt_tracked_await` (lowering/builder.rs, called from
+  `BodyLowerer::adopt`) and `take_unique` (futures.rs): one adopt for an awaited result; `okkama ir --passes`
+  refuses unknown names (`lowering::unknown_passes`); the warning names its origin; the conversion gap message
+  is "`char` to `float` conversion". Compile sweep of 2382 files (std -t, t/ with t/gen, examples,
+  conformance, Bible examples) against release/065: exit codes identical; SPB differs in 90 files with the passes
+  on (1106 `region.track` fewer, no other opcode) and 102 with them off (1230); the rest are run-to-run closure
+  order (`L03.anonymous.lexical-scope`, t/lang/closures, t/gen nesting), same opcodes. Not done: #1043's
+  `codegen::Backend::from_name` without a caller; call results bound by `let` keep track then adopt.
 - [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
   `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
   program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with

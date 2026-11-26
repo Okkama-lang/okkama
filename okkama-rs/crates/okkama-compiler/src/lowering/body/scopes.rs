@@ -149,6 +149,10 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         // A builder is never walked: what it holds is handed over on push.
         if !self.ctx.is_plain(&value.ty) && !value.ty.is_builder() {
             self.note_owned(&value.ty);
+            // An awaited temporary's result, just tracked, is adopted in place of the track (#999, #1044).
+            if self.b.adopt_tracked_await(region, value.value) {
+                return;
+            }
             self.b.emit_void(
                 InstKind::RegionAdopt {
                     region,

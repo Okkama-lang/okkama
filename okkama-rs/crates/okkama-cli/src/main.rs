@@ -831,6 +831,12 @@ fn ir_command(args: &[String]) -> Outcome {
                     return Outcome::usage(&format!("{arg} needs a value"));
                 };
                 let spec = if arg == "--passes" {
+                    // A name that selects nothing is refused, as for `--after` (#1044).
+                    let unknown = lowering::unknown_passes(value);
+                    if !unknown.is_empty() {
+                        return Outcome::usage(&format!("unknown pass `{}` (passes: all, none, {})",
+                            unknown.join("`, `"), lowering::PASSES.join(", ")));
+                    }
                     value.clone()
                 } else {
                     let Some(at) = lowering::PASSES.iter().position(|pass| pass == value) else {

@@ -758,9 +758,8 @@ pub(crate) fn expr_uses_receiver(expr: &Expr) -> bool {
 
 /// Is `acc`, a `reduce` accumulator, used in `body` only as the value the
 /// block returns — alone, or as the left end of `acc + ...` (#243)? Then
-/// lowering keeps it in a builder (OIR-1) or appends what the block adds to
-/// one (OIR-2, #831): growing it by one element is amortized O(1), and
-/// nothing else can hold an intermediate accumulator. A map accumulator
+/// lowering keeps it in a builder: growing it by one element is amortized
+/// O(1), and nothing else can hold an intermediate accumulator. A map accumulator
 /// grows by literal entries only.
 pub fn linear_accumulator(body: &Block, acc: LocalId, map: bool) -> bool {
     let mut allowed = 0;

@@ -12,7 +12,7 @@
 //!
 //! The library never reads command-line arguments and never terminates the process; it prints only
 //! development diagnostics requested by `OKKAMA_PROFILE_REGISTERS` and `OKKAMA_DEV`,
-//! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES`. Callers receive values and diagnostics and decide
+//! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES` or a selected pass list. Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
 
 #[doc(hidden)]

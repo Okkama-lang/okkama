@@ -846,25 +846,40 @@ pub fn select_passes(spec: &str) {
     *SELECTED.write().expect("pass selection") = Some(spec.to_string());
 }
 
+/// The names of a pass list (`OKKAMA_IR_PASSES`, `okkama ir --passes`) that select nothing: neither a pass nor
+/// `all`, `none` or the test-only `sabotage-int-add`. A misspelt pass would be left out silently and weaken a
+/// passes-on/off comparison (#999), so `okkama ir --passes` refuses them and lowering warns about them.
+pub fn unknown_passes(spec: &str) -> Vec<&str> {
+    spec.split(',').map(str::trim)
+        .filter(|name| !name.is_empty() && !PASSES.contains(name) && !matches!(*name, "all" | "none" | "sabotage-int-add"))
+        .collect()
+}
+
+/// The warning about the unknown names of `spec`, which came from `origin` (#1044): the variable, or the API
+/// call that selected the passes.
+fn unknown_passes_warning(spec: &str, origin: &str) -> Option<String> {
+    let unknown = unknown_passes(spec);
+    (!unknown.is_empty()).then(|| format!("{origin}: unknown pass {} (known: all, none, {})", unknown.join(", "), PASSES.join(", ")))
+}
+
 impl Passes {
     fn from_env() -> Self {
-        let selected = THREAD_PASSES.with(|passes| passes.borrow().clone())
-            .or_else(|| SELECTED.read().expect("pass selection").clone());
-        let spec = selected.unwrap_or_else(|| std::env::var("OKKAMA_IR_PASSES").unwrap_or_default());
+        let (spec, origin) = match THREAD_PASSES.with(|passes| passes.borrow().clone()) {
+            Some(spec) => (spec, "lowering::with_passes"),
+            None => match SELECTED.read().expect("pass selection").clone() {
+                Some(spec) => (spec, "lowering::select_passes"),
+                None => (std::env::var("OKKAMA_IR_PASSES").unwrap_or_default(), "OKKAMA_IR_PASSES"),
+            },
+        };
+        if let Some(warning) = unknown_passes_warning(&spec, origin) {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| eprintln!("{warning}"));
+        }
         Self::from_spec(&spec, std::env::var("OKKAMA_OWNERSHIP_PROTOTYPE").ok().as_deref())
     }
 
     fn from_spec(spec: &str, prototype: Option<&str>) -> Self {
         let mut names: Vec<String> = spec.split(',').map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).collect();
-        // A misspelt pass would be left out silently and weaken a passes-on/off comparison (#999).
-        let unknown: Vec<&str> = names.iter().map(String::as_str)
-            .filter(|name| !PASSES.contains(name) && !matches!(*name, "all" | "none" | "sabotage-int-add"))
-            .collect();
-        if !unknown.is_empty() {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| eprintln!("OKKAMA_IR_PASSES: unknown pass {} (known: all, none, {})",
-                unknown.join(", "), PASSES.join(", ")));
-        }
         let sabotage = names.iter().any(|name| name == "sabotage-int-add");
         names.retain(|name| name != "sabotage-int-add");
         // `none` names no pass, so every pass is off.
@@ -982,6 +997,23 @@ mod param_adopts_tests {
     }
 }
 
+
+#[cfg(test)]
+mod pass_list_tests {
+    use super::*;
+
+    /// #1044: the warning names where the list came from, and only names that select nothing.
+    #[test]
+    fn an_unknown_pass_is_named_with_the_origin_of_its_list() {
+        assert_eq!(unknown_passes(" fold , hoistt,,all,none,sabotage-int-add,dce2"), ["hoistt", "dce2"]);
+        assert!(unknown_passes("").is_empty());
+        assert!(unknown_passes(&PASSES.join(",")).is_empty());
+        assert_eq!(unknown_passes_warning("fold,hoistt", "OKKAMA_IR_PASSES").as_deref(),
+            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, fold, hoist, dce, undef, jumps)"));
+        assert!(unknown_passes_warning("fold,hoistt", "lowering::select_passes").unwrap().starts_with("lowering::select_passes: unknown pass hoistt "));
+        assert_eq!(unknown_passes_warning("all", "OKKAMA_IR_PASSES"), None);
+    }
+}
 
 #[cfg(test)]
 mod internal_error_tests {

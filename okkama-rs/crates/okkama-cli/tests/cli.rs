@@ -938,7 +938,7 @@ fn ir_file_and_stdin_include_module_function_and_return() {
     let source = b"module app v1.0.0; main() is int { 1 + 1; }";
     let file = TempFile::new("ir-addition.ok", source);
     let expected = concat!(
-        "oir 1 high\n",
+        "oir 2 high\n",
         "module app v1.0.0\n",
         "requires core\n",
         "entry @main\n",
@@ -970,7 +970,7 @@ fn ir_keeps_all_statements_and_nested_additions() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "oir 1 high\n",
+            "oir 2 high\n",
             "module app v1.0.0\n",
             "requires core\n",
             "entry @main\n",
@@ -1009,7 +1009,7 @@ fn ir_explicit_return_is_canonical_and_missing_imports_are_errors() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "oir 1 high\n",
+            "oir 2 high\n",
             "module app/math v1.2.3\n",
             "requires core\n",
             "entry @main\n",
@@ -1038,6 +1038,30 @@ fn ir_control_flow_uses_blocks_and_parameters() {
     );
     assert!(text.contains("cond %2, ^b1, ^b2\n"), "{text}");
     assert!(text.contains("^b3(%5: int):\n    ret %5\n"), "{text}");
+}
+
+/// #1044: a name in `--passes` that selects nothing is a usage error, as in `--after`, not a warning that blames
+/// `OKKAMA_IR_PASSES`.
+#[test]
+fn ir_refuses_an_unknown_pass_in_either_option() {
+    let program = b"module app v1.0.0; main() is int { 0; }";
+    for (args, named) in [
+        (&["ir", "-", "--passes", "fold,hoistt"][..], "`hoistt`"),
+        (&["ir", "-", "--passes", "hoistt, dce2"][..], "`hoistt`, `dce2`"),
+        (&["ir", "-", "--after", "hoistt"][..], "`hoistt`"),
+    ] {
+        let output = run_stdin(args, program);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", stderr(&output));
+        assert!(stdout(&output).is_empty(), "{args:?}");
+        let error = stderr(&output);
+        assert!(error.contains(&format!("unknown pass {named} (passes: ")), "{args:?}: {error}");
+        assert!(!error.contains("OKKAMA_IR_PASSES"), "{args:?}: {error}");
+    }
+    for spec in ["all", "none", "fold,hoist"] {
+        let output = run_stdin(&["ir", "-", "--passes", spec], program);
+        assert_eq!(output.status.code(), Some(0), "{spec}: {}", stderr(&output));
+        assert!(stderr(&output).is_empty(), "{spec}: {}", stderr(&output));
+    }
 }
 
 #[test]

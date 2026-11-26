@@ -1,4 +1,4 @@
-//! Канонический текст OIR-1 (§18 спецификации).
+//! Канонический текст OIR-2 (форма — §18 спецификации OIR-1).
 //!
 //! Значения печатаются как `%N`, блоки как `^bN`, по их индексам; объекты,
 //! поля и функции — по именам из модуля. Принтер не проверяет модуль:
@@ -115,7 +115,7 @@ fn write_term(f: &mut Formatter<'_>, module: Option<&Module>, kind: &TermKind) -
 
 impl Display for Module {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "oir 1 high")?;
+        writeln!(f, "oir 2 high")?;
         match self.version.as_str() {
             "" => writeln!(f, "module {}", self.name)?,
             version => writeln!(f, "module {} {version}", self.name)?,

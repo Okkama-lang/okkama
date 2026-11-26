@@ -429,3 +429,36 @@ fn loops_keep_owned_block_parameters_but_reject_fresh_backedges() {
         caller.check(usize::from(fresh));
     }
 }
+
+/// Loads `std` modules (the program's imports).
+struct Stdlib;
+
+impl lowering::ModuleLoader for Stdlib {
+    fn load(&mut self, path: &str, _importer: &str) -> Result<Option<lowering::LoadedModule>, String> {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std").join(format!("{path}.ok"));
+        let Ok(text) = std::fs::read_to_string(&file) else { return Ok(None) };
+        let id = file.to_string_lossy().into_owned();
+        let source = SourceFile::new(id.clone(), text).map_err(|error| error.to_string())?;
+        let program = syntax::parse(&source, &ParseOptions::default()).map_err(|error| format!("{error:?}"))?;
+        Ok(Some(lowering::LoadedModule { id, source, program: prune::strip_test_items(program) }))
+    }
+}
+
+/// #1007: a `FutureGroup` keeps its registered Futures as intrinsic state, not in fields, so it is never plain
+/// here, as in region elision: a fresh group passed to an action keeps the action's adopt of it.
+#[test]
+fn a_future_group_is_not_plain_so_a_fresh_one_keeps_the_adopt() {
+    // A group of resources (`FutureGroup<Res>`): the lowering adopts it, yet the object has no field or destroy.
+    let text = &format!("{} import \"async/scope\" take FutureGroup; {} \
+        object Use {{ Use(); hold(g is FutureGroup<Res>) is int {{ g.active(); }} }} \
+        main() is int {{ Use().hold(FutureGroup()); }}", "module app v1.0.0;", RES.trim_start_matches("module app v1.0.0;"));
+    let source = SourceFile::new("test.ok", text).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let mut module = lowering::with_passes("none", || lowering::lower_linked(&prune::strip_test_items(program), "test.ok", &mut Stdlib))
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    ir::verify(&module).expect("lowering output verifies");
+    let hold = module.functions.iter().find(|function| function.symbol.ends_with("Use.hold")).expect("Use.hold").symbol.clone();
+    assert_eq!(adopts(&module, &hold, 1), 1, "{module}");
+    run(&mut module);
+    assert_eq!(adopts(&module, &hold, 1), 1, "{module}");
+}

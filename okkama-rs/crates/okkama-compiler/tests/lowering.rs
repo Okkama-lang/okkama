@@ -1,4 +1,4 @@
-//! Lowering Okkama → OIR-1: канонические листинги и диагностика.
+//! Lowering Okkama → OIR-2: канонические листинги и диагностика.
 
 use okkama_compiler::SourceFile;
 use okkama_compiler::ir;
@@ -33,7 +33,7 @@ fn integer_addition_has_the_canonical_module_text() {
     assert_eq!(
         listing("1 + 1;"),
         concat!(
-            "oir 1 high\n",
+            "oir 2 high\n",
             "module app v1.0.0\n",
             "requires core\n",
             "entry @main\n",

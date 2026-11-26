@@ -551,3 +551,24 @@ every declaration is open (#1005, owner decision).
   bound on some arms and a `for` in value position: a `bool` guard false wherever the stub may remain, read by
   `br`. `obj.new`/`obj.init` may store stubs (a constructor whose `self` escapes early, #271, needs it: std/http
   breaks otherwise), so the heap is outside the rule.
+## The register check refuses early writes (#1043, 2026-11-26)
+
+- An instruction's result and a terminator's edge value (the found value of `arr.lookup`/`map.lookup`, the
+  value `catch` gives its handler: the target's parameters beyond the edge's arguments) may be written before
+  the operands are read, so `codegen::sparrow::check` refuses either in the register of an operand of the same
+  instruction or terminator. This is the allocator's conservative rule (#1007), now checked independently of
+  it; the JIT happens to write the found value after the edge moves, and the rule does not rely on that.
+- `TermKind::targets`/`targets_mut` and `operands`/`operands_mut` come from one macro each, as `InstKind`'s
+  operands (#1006).
+- The current IR is OIR-2 in names and in its text (`oir 2 high`); "OIR-1 §N" stays where it cites a section
+  of the OIR-1 specification (`okkama-docs/docs/compiler/OIR-1.md`), whose numbering the code still follows.
+## One adopt for an awaited result; strict `--passes` (#1044, 2026-11-26)
+
+- The result of `await.take`, tracked as it is taken, then adopted by its binding: the adopt replaces the track
+  (`FnBuilder::adopt_tracked_await`), and the take-extraction pass emits neither track nor adopt when the
+  binding adopts right after (temporary or bound Future, #999). Track then adopt of one value in one region
+  equals the adopt (`region_add` with `own` takes every identity the track would follow). Call results bound
+  by `let` (`call`, `region.track`, `region.adopt`) are left as they are: not in #1044's scope.
+- `okkama ir --passes` refuses a name that selects nothing (usage error, as `--after`), through
+  `lowering::unknown_passes`, the one list check; lowering warns once for `OKKAMA_IR_PASSES` or a list
+  selected through the library and names which.

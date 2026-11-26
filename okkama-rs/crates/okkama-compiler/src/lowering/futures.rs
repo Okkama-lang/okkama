@@ -134,8 +134,10 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
                         // them immediately at the binding's cleanup boundary.
                         let kind = if bound { InstKind::RegionAdopt { region, value } }
                             else { InstKind::RegionTrack { region, value } };
-                        // The binding's own lowering already adopts it right after (#999): one adopt, not two.
-                        let adopted_next = bound && pending.peek().is_some_and(|next| {
+                        // The binding's own lowering already adopts it right after (#999): one adopt, not two,
+                        // and no track before it either, when the awaited Future is a temporary (#1044): an adopt
+                        // takes what a track would have followed (`region_add` with `own`).
+                        let adopted_next = pending.peek().is_some_and(|next| {
                             matches!(next.kind, InstKind::RegionAdopt { region: r, value: v } if r == region && v == value)
                         });
                         if !adopted_next {

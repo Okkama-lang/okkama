@@ -112,6 +112,36 @@ fn the_linearity_check_refuses_a_missing_or_doubled_close() {
     assert!(error.contains("already closed"), "{error}");
 }
 
+/// #1007: a region passed between blocks as a parameter is out of the linearity check's reach, so the check
+/// refuses it instead of accepting the function unchecked. The lowering never makes one.
+#[test]
+fn the_linearity_check_refuses_a_region_block_parameter() {
+    let source = SourceFile::new("test.ok", format!("{RES} object P {{ P(); run(flag is bool) is int {{ \
+        let r = Res(n: 1); if flag {{ r.read(); }} else {{ 0; }} }} }} main() is int {{ 0; }}")).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let module = okkama_compiler::lowering::with_passes("none", || lower_program(&prune::strip_test_items(program))).expect("lowers");
+    ir::linearity::check(&module).expect("the lowering's output is linear");
+    let index = module.functions.iter().position(|function| function.symbol == "P.run").expect("P.run");
+    let mut passed = module.clone();
+    let function = &mut passed.functions[index];
+    let region = function.blocks.iter().flat_map(|block| &block.insts)
+        .find_map(|inst| matches!(inst.kind, ir::InstKind::RegionEnter).then_some(inst.result).flatten())
+        .expect("a region");
+    // Pass the region along every branch edge into a block other than the entry.
+    let target = function.blocks.iter().flat_map(|block| block.term.kind.targets()).map(|target| target.block)
+        .find(|block| block.0 != 0).expect("a branch target");
+    let param = ir::ValueId(function.values.len());
+    function.values.push(ir::Type::Region);
+    function.blocks[target.0].params.push(param);
+    for block in &mut function.blocks {
+        for edge in block.term.kind.targets_mut().into_iter().filter(|edge| edge.block == target) {
+            edge.args.push(region);
+        }
+    }
+    let error = ir::linearity::check(&passed).expect_err("a region block parameter");
+    assert!(error.contains("a region passed as a block parameter"), "{error}");
+}
+
 const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \
     async destroy { confirm n > 0; } }";
 

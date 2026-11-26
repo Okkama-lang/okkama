@@ -6,7 +6,8 @@
 //! пронумерованы индексами; вход функции — блок 0, его значения — параметры
 //! функции.
 //!
-//! [`verify`] проверяет правила §17 спецификации, текстовая форма (§18)
+//! [`verify`] проверяет правила §17 спецификации (её разделы — по OIR-1,
+//! `okkama-docs/docs/compiler/OIR-1.md`), текстовая форма (§18)
 //! выводится через `Display` у [`Module`].
 
 pub mod cfg;
@@ -1807,9 +1808,11 @@ impl CatchType {
     }
 }
 
-impl TermKind {
-    pub fn targets(&self) -> Vec<&Target> {
-        match self {
+/// The targets of a terminator, once for both borrows (#1003): the default
+/// binding mode makes each arm `&Target` or `&mut Target`.
+macro_rules! terminator_targets {
+    ($kind:expr) => {
+        match $kind {
             TermKind::Br(target) => vec![target],
             TermKind::Cond {
                 then_target,
@@ -1826,61 +1829,46 @@ impl TermKind {
             | TermKind::Throw(_)
             | TermKind::Raise(_) => Vec::new(),
         }
+    };
+}
+
+/// The operands of a terminator, once for both borrows (#1003), as
+/// `instruction_operands`: `$m` turns a reference into the element.
+macro_rules! terminator_operands {
+    ($kind:expr, $m:ident) => {
+        match $kind {
+            TermKind::Cond { condition, .. } => vec![$m!(condition)],
+            TermKind::Ret(Some(value))
+            | TermKind::Panic(value)
+            | TermKind::Throw(value)
+            | TermKind::Raise(value)
+            | TermKind::Catch { failure: value, .. } => vec![$m!(value)],
+            TermKind::ArrayLookup { array, index, .. } => vec![$m!(array), $m!(index)],
+            TermKind::MapLookup { map, key, .. } => vec![$m!(map), $m!(key)],
+            TermKind::Br(_)
+            | TermKind::Ret(None)
+            | TermKind::Trap { .. }
+            | TermKind::Unreachable => Vec::new(),
+        }
+    };
+}
+
+impl TermKind {
+    pub fn targets(&self) -> Vec<&Target> {
+        terminator_targets!(self)
     }
 
     pub fn targets_mut(&mut self) -> Vec<&mut Target> {
-        match self {
-            TermKind::Br(target) => vec![target],
-            TermKind::Cond {
-                then_target,
-                else_target,
-                ..
-            } => vec![then_target, else_target],
-            TermKind::Catch { handler, next, .. } => vec![handler, next],
-            TermKind::ArrayLookup { found, missing, .. }
-            | TermKind::MapLookup { found, missing, .. } => vec![found, missing],
-            TermKind::Ret(_)
-            | TermKind::Panic(_)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable
-            | TermKind::Throw(_)
-            | TermKind::Raise(_) => Vec::new(),
-        }
+        terminator_targets!(self)
     }
 
     /// Значения, которые читает терминатор, кроме аргументов переходов.
     pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            TermKind::Cond { condition, .. } => vec![*condition],
-            TermKind::Ret(Some(value))
-            | TermKind::Panic(value)
-            | TermKind::Throw(value)
-            | TermKind::Raise(value)
-            | TermKind::Catch { failure: value, .. } => vec![*value],
-            TermKind::ArrayLookup { array, index, .. } => vec![*array, *index],
-            TermKind::MapLookup { map, key, .. } => vec![*map, *key],
-            TermKind::Br(_)
-            | TermKind::Ret(None)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable => Vec::new(),
-        }
+        terminator_operands!(self, copied)
     }
 
     pub fn operands_mut(&mut self) -> Vec<&mut ValueId> {
-        match self {
-            TermKind::Cond { condition, .. } => vec![condition],
-            TermKind::Ret(Some(value))
-            | TermKind::Panic(value)
-            | TermKind::Throw(value)
-            | TermKind::Raise(value)
-            | TermKind::Catch { failure: value, .. } => vec![value],
-            TermKind::ArrayLookup { array, index, .. } => vec![array, index],
-            TermKind::MapLookup { map, key, .. } => vec![map, key],
-            TermKind::Br(_)
-            | TermKind::Ret(None)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable => Vec::new(),
-        }
+        terminator_operands!(self, borrowed)
     }
 
     /// Терминатор передаёт отказ (в цель unwind блока или из функции).
