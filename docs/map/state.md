@@ -39,6 +39,21 @@
   t/gen, examples, conformance, Bible examples): exit codes as release/065; SPB differs in 22 files, all with
   nested closures (16 were already nondeterministic on release/065), their runs print the same; three branch
   sweeps byte-identical.
+- [x] #1025 (no code): the 0.6.4 async slowdown is not a regression. The rc2 micro toolchain
+  (`okkama-work/micro-tc/v0.6.4`, okkama b80691b5…, measured in r064c/d) was built without
+  `--cfg okkama_release`, so devtrace is compiled in (`OKKAMA_DEV=runtime` writes `counters.json`; a
+  release build writes nothing): its gates in `Runtime::future_new`/`run_body` (span + count),
+  `rt_future_new`/`rt_await_take`/`rt_complete` and `Heap::allocate`/`allocate_class` run on every
+  iteration. Same source 29c3dc84a, okkama-dev, marginal ns/iteration (slope between N=25 000 and 10⁵,
+  5 interleaved rounds, two seeds): release cfg vs devtrace in — async-await 42.07/42.23 vs 44.09/44.31
+  (+4.8%), spawn +2.5/+1.4%, event-wake +2.7/+2.0%, cancel +2.8/+2.2%; the rc2 binary itself +3.0…+4.1%
+  on async-await, also when it runs SPB built by 7fb98e01f. 7fb98e01f → 29c3dc84a, both release cfg:
+  async-await −0.6…+1.0%, spawn −1.3…+3.2% over six runs; #1009/#1011/#1013 points (44a4b151b, d1d2b17c5,
+  486af1b02, 94eba7fb9) within −0.4…+1.6% on async-await. The hot loop takes no `rt_exec` (stats: helpers
+  future_new, await_take, complete only), so #1009's `catch_unwind` is not on it. JIT placement spread on
+  release/065 (`SPARROW_CORE_CODE_SHIFT` 0/64/1024): 1.1% async-await, 1.0% spawn. At N ≤ 10⁵ the timed
+  interval carries a fixed 1.2–1.5 ms (#1085), which follows the SPB, so medians at one N are biased; compare
+  slopes. Shipped 0.6.4 (packages.yml, ~/.local) has devtrace out.
 - [x] #1071 (feature/1071): `ir::verify` checks cap declarations (`check_cap`: owner exists, distinct field
   names, each field a synchronous `[method Owner]` function of the owner alone returning a value),
   `worker.bind` (entry `fn(field types…, action params…)` with the action's result) and `worker.spawn` (the

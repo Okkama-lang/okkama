@@ -6,6 +6,12 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-27. #1025 micro toolchains are release builds (lead finding).** A micro A/B toolchain is built as
+  the packages are (`--cfg okkama_release -C force-frame-pointers=yes`, `-p okkama-cli -p sparrow-cli -p
+  blade-cli`). With devtrace compiled in, async programs run 2–5% slower (gates in the Future, await and
+  allocation helpers); that, not a commit, was 0.6.4's async "slowdown". Judge a small-N cell by its slope
+  over two N (the timed interval holds a fixed ~1.3 ms, #1085), never by one median.
+
 - **2026-11-26. #933 JIT code placement (lead task, implementer measurement).** Keep one page per
   function (entries page-aligned, in-page offsets independent of compile order, now a tested rule in
   `code_memory`); no 16/64 KiB granule, cache-line padding or index-derived pages: on Apple silicon (macOS

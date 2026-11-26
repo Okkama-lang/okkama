@@ -63,6 +63,12 @@ python3 run.py --image okkama-dev \
   --label candidate-unique-id --build-profile "release fat-LTO" --revision COMMIT
 ```
 
+Build the toolchain as the packages are: `RUSTFLAGS="--cfg okkama_release -C force-frame-pointers=yes" cargo build
+--release --locked -p okkama-cli -p sparrow-cli -p blade-cli` in the `okkama-dev` image. Without `okkama_release`
+devtrace stays compiled in and its gates cost the Future, await and allocation helpers 2–5% (#1025: the 0.6.4
+report's "async 4–6% slower" was this). The runner records `toolchain.devtrace` (the binary carries the name of
+`OKKAMA_DEV_OUT` only then), warns, and compares such a campaign with no other.
+
 Alternatively, use a compiler already installed in an immutable image and pass
 its absolute container path without `--toolchain`. An external toolchain requires
 an explicit std directory; it must be a complete matching installation, not a

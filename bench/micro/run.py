@@ -130,6 +130,8 @@ def compare(before,after,name,engine):
         if before.get(key)!=after.get(key):return {'status':'INCOMPATIBLE','reason':key+' differs'}
     if any(result.get('toolchain',{}).get('version_check',{}).get('status')=='MISMATCH' for result in (before,after)):
         return {'status':'INCOMPATIBLE','reason':'toolchain version does not match declared revision'}
+    if any(result.get('toolchain',{}).get('devtrace') for result in (before,after)):
+        return {'status':'INCOMPATIBLE','reason':'devtrace is compiled into a toolchain: not built as the packages are (--cfg okkama_release, #1025)'}
     a=before.get('benchmarks',{}).get(name,{}).get(engine,{})
     b=after['benchmarks'][name][engine]
     if a.get('status')!='VALID' or b.get('status')!='VALID':return {'status':'INCONCLUSIVE','reason':'invalid/noisy/missing cell'}
@@ -154,6 +156,15 @@ def revision_version(revision):
     section = re.search(r'(?ms)^\[workspace\.package\]\s*$(.*?)(?=^\[|\Z)', manifest.stdout)
     version = re.search(r"(?m)^version\s*=\s*['\"]([^'\"]+)['\"]", section[1]) if section else None
     return version[1] if version else None
+
+
+# A binary built without --cfg okkama_release keeps devtrace (#1025): its gates cost the async and allocation
+# helpers 2-5%, and only such a binary carries the name of the switch that sends its output.
+DEVTRACE_MARKER='OKKAMA_DEV_OUT'
+
+
+def devtrace_compiled_in(docker,okkama):
+    return int(docker.run(['sh','-c',f'grep -c -a {DEVTRACE_MARKER} "$0" || true',okkama])[0].strip() or 0)>0
 
 
 def version_check(revision, actual):
@@ -222,6 +233,9 @@ def main():
         with tempfile.TemporaryDirectory(prefix='micro-v2-') as work:
             docker=Docker(a,work)
             result['toolchain']={'revision_declared':a.revision,'version':docker.run([a.okkama,'--version'])[0].strip(),'binary_sha256':docker.run(['sha256sum',a.okkama])[0].split()[0]}
+            result['toolchain']['devtrace']=devtrace_compiled_in(docker,a.okkama)
+            if result['toolchain']['devtrace']:
+                print('WARNING: devtrace is compiled into the toolchain (no --cfg okkama_release): this campaign compares with no other',file=sys.stderr)
             provenance = version_check(a.revision, result['toolchain']['version'])
             result['toolchain']['version_check'] = provenance
             if provenance['status'] != 'MATCH':

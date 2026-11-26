@@ -7,6 +7,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Micro A/B: a toolchain built without `--cfg okkama_release` was compared as a release one (#1025).** The
+  0.6.4 report's async slowdown (4–6%) was not a commit between 7fb98e01f and 29c3dc84a: the rc2 micro toolchain
+  kept devtrace, whose gates in the Future, await and allocation helpers cost async programs 2–5%; release builds
+  of both commits are within ±1.6%. `bench/micro/run.py` now records `toolchain.devtrace`, warns, and refuses to
+  compare a campaign whose toolchain has it; the README says how to build a micro toolchain.
 - **Sparrow: a verified function holding `unreachable` could not be compiled (#1072).** `unreachable` (opcode
   145) assembles, verifies and is what codegen maps `TermKind::Unreachable` to, but the JIT had no arm for it,
   so any function containing it failed with "unreachable is not supported by sparrow-core yet", reached or not.

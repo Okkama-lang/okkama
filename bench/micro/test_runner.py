@@ -56,6 +56,7 @@ class RunnerTests(unittest.TestCase):
                 def run(self,command,env=None):
                     if '--version' in command:return 'okkama test',''
                     if command[0]=='sha256sum':return 'abc binary',''
+                    if command[0]=='sh':return '0\n',''
                     n,w=map(int,command[-2:])
                     if n==101:
                         self.timed+=1
@@ -98,6 +99,20 @@ class PlacementTests(unittest.TestCase):
         b={'placements':[0,1024],'benchmarks':{'x':{'ir':{'status':'VALID','ns_per_iteration':100,'spread':.01}}}}
         self.assertEqual(run.compare(a,b,'x','ir')['status'],'INCOMPATIBLE')
         self.assertEqual(run.compare(a,dict(b,placements=[0,64]),'x','ir')['status'],'WITHIN_NOISE')
+    def test_a_toolchain_with_devtrace_compares_with_nothing(self):
+        cell={'x':{'ir':{'status':'VALID','ns_per_iteration':100,'spread':.01}}}
+        a={'schema':2,'toolchain':{'devtrace':False},'benchmarks':cell}
+        self.assertEqual(run.compare(a,dict(a,toolchain={'devtrace':True}),'x','ir')['status'],'INCOMPATIBLE')
+        self.assertEqual(run.compare(dict(a,toolchain={'devtrace':True}),a,'x','ir')['status'],'INCOMPATIBLE')
+        self.assertEqual(run.compare(a,a,'x','ir')['status'],'WITHIN_NOISE')
+    def test_devtrace_is_found_by_the_switch_name_in_the_binary(self):
+        class Fake:
+            def __init__(self,count):self.count=count;self.commands=[]
+            def run(self,command):self.commands.append(command);return (f'{self.count}\n','')
+        self.assertTrue(run.devtrace_compiled_in(Fake(1),'/toolchain/bin/okkama'))
+        self.assertFalse(run.devtrace_compiled_in(Fake(0),'/toolchain/bin/okkama'))
+        fake=Fake(0);run.devtrace_compiled_in(fake,'/toolchain/bin/okkama')
+        self.assertIn('OKKAMA_DEV_OUT',fake.commands[0][2]);self.assertEqual(fake.commands[0][-1],'/toolchain/bin/okkama')
     def test_every_round_runs_every_placement(self):
         import tempfile,json
         with tempfile.TemporaryDirectory() as directory:
@@ -111,6 +126,7 @@ class PlacementTests(unittest.TestCase):
                 def run(self,command,env=None):
                     if '--version' in command:return 'okkama test',''
                     if command[0]=='sha256sum':return 'abc binary',''
+                    if command[0]=='sh':return '0\n',''
                     n,w=map(int,command[-2:])
                     shift=int((env or {}).get(run.PLACEMENT_SWITCH,-1))
                     if n==101:seen.append(shift)
@@ -167,6 +183,7 @@ class VersionTests(unittest.TestCase):
                 def run(self, command):
                     if '--version' in command: return 'okkama 0.6.2', ''
                     if command[0] == 'sha256sum': return 'hash binary', ''
+                    if command[0] == 'sh': return '0\n', ''
                     raise AssertionError('workload must not run')
             def probe(command, **kwargs):
                 return ('[{"Id":"image-id","Architecture":"arm64"}]' if command[1] == 'image' else 'host', '')
