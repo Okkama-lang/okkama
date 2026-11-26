@@ -457,7 +457,7 @@ impl Instruction {
     }
 }
 
-/// Тип таблицы типов (OIR-1 §3); вложенные типы — ссылки на более ранние записи.
+/// A type-table entry for bytecode lowered from OIR-2; nested types refer to earlier entries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,

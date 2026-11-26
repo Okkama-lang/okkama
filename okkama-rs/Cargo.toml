@@ -26,11 +26,11 @@ unimplemented = "warn"
 lto = "fat"
 codegen-units = 1
 
-# Release-тесты ворот (`cargo test --profile gate`): оптимизации release, но
-# без fat LTO и с параллельной кодогенерацией. Каждый из ~90 тестовых
-# бинарников иначе линкуется полной LTO (20 минут сборки на 30 секунд
-# тестов). Бинарники с fat LTO собирает шаг build ворот, и их проверяют
-# conformance, std и t/.
+# Gate tests (`cargo test --profile gate`): release optimizations without
+# fat LTO, with parallel code generation to avoid full LTO for each test binary.
+# The gate build step produces fat-LTO release binaries for std and t/ tests.
+# Conformance builds its own debug binary in conformance/adapters/rust/.target;
+# the Wave corpora also use that debug binary.
 [profile.gate]
 inherits = "release"
 lto = "off"

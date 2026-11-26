@@ -114,7 +114,7 @@ fn ascii85() -> String {
     (33u8..=117).map(char::from).collect()
 }
 
-/// Символ на каждые `width` бит, затем `=` до кратности `quantum`.
+/// One character per `width` bits, padded with `=` to a multiple of `quantum`.
 fn encoded(octets: &[u8], alphabet: &[u8], width: u32, quantum: usize) -> String {
     let octets_per_quantum = quantum * width as usize / 8;
     let capacity = octets
@@ -388,7 +388,7 @@ fn qp_token(octet: u8, trailing: bool) -> ([u8; 3], usize) {
     }
 }
 
-/// Мягкие переносы `=\r\n`: строка не длиннее 76 (75, если токены ещё есть).
+/// Soft breaks `=\r\n`: at most 76 columns (75 before the break marker).
 fn qp_folded(result: &mut Vec<u8>, column: &mut usize, octet: u8, trailing: bool) {
     let (token, width) = qp_token(octet, trailing);
     let limit = if trailing { 76 } else { 75 };

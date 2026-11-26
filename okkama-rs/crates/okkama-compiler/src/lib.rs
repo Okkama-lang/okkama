@@ -11,7 +11,8 @@
 //! * [`jit`] — an empty boundary: machine code is Sparrow's business.
 //!
 //! The library never reads command-line arguments and never terminates the process; it prints only
-//! development diagnostics a variable asks for (`OKKAMA_PROFILE_REGISTERS`, `OKKAMA_DEV`). Callers receive values and diagnostics and decide
+//! development diagnostics requested by `OKKAMA_PROFILE_REGISTERS` and `OKKAMA_DEV`,
+//! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES`. Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
 
 pub mod analysis;

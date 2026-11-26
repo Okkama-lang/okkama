@@ -1,9 +1,9 @@
-//! Типы операндов и результатов инструкций (OIR-1, как верификатор IR
-//! `okkama-compiler/src/ir/verify.rs`): тип регистра назначения совместим с
-//! результатом инструкции, операнды — с её ожиданием, арность и типы
-//! аргументов вызовов — с сигнатурой, перемещения на переходах — с типами
-//! параметров. Ядро Sparrow выбирает машинное представление регистра по его
-//! типу, поэтому программа с ложными типами отвергается до исполнения.
+//! Instruction operand and result types for bytecode lowered from OIR-2
+//! (see also `okkama-compiler/src/ir/verify.rs`): destination registers agree
+//! with instruction results, operands with their expected types, call arity
+//! and argument types with signatures, and branch moves with parameter types.
+//! Sparrow chooses each register's machine representation from its type, so
+//! programs with inconsistent types are rejected before execution.
 use crate::{
     CatchKind, Cmp, Constant, Data, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
 };

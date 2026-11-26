@@ -8,7 +8,7 @@ are relative to `okkama-rs/crates/`. `OKKAMA_DEV=lower` covers the compiler stag
 |---|---|---|---|---|---|
 | 1 | parse | `syntax::parse` (okkama-compiler/src/syntax) | AST | syntax errors | — |
 | 2 | imports, analysis | `lowering::modules::load_graph`, `analysis::analyze_mode` (okkama-compiler/src/analysis) | names, types, roles, caps, errors (THIR) | the language's static rules (semantic errors) | — |
-| 3 | lowering | `lowering::lower_linked*` → `lower_modules` (okkama-compiler/src/lowering) | OIR-1: typed SSA with unwind targets and **cleanup regions** (`region.enter/adopt/track/transfer/leave/unwind/settle`), the ownership rules of the Bible | refuses what it cannot lower | lower (`ir lowered`) |
+| 3 | lowering | `lowering::lower_linked*` → `lower_modules` (okkama-compiler/src/lowering) | OIR-2: typed SSA with unwind targets and **cleanup regions** (`region.enter/adopt/track/transfer/leave/unwind/settle`), the ownership rules of the Bible | refuses what it cannot lower | lower (`ir lowered`) |
 | 4 | IR passes | `lower_modules`: `statics`, `regions` (plainness, unused regions), `tail-calls`, `fold`, `hoist`, `dce`, `undef`, `jumps` (okkama-compiler/src/ir) | the same meaning with fewer operations | `ir::verify` after them, then the ownership linearity check in debug builds or with `OKKAMA_VERIFY_OWNERSHIP=1` (#910); `OKKAMA_IR_PASSES=none` turns them off | lower (`ir after passes`, pass timers) |
 | 5 | Sparrow codegen | `codegen::sparrow::generate` (okkama-compiler/src/codegen/sparrow) | SPB 16: registers, instructions, handlers | register allocation check (debug, gate) | — (#912) |
 | 6 | SPB load | `okkama_sparrow::decode`, `Program::verify`, `sparrow-core` contracts | a verified program | types, budgets, intrinsic contracts | — |

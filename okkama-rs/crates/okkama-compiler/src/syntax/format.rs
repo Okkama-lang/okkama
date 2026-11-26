@@ -29,7 +29,7 @@ use crate::source::{SourceFile, Span};
 use crate::syntax::ast::*;
 use crate::syntax::{ParseMode, ParseOptions, lexer, parse, token::TokenKind};
 
-/// Ширина строки, после которой списки переносятся.
+/// Target line width for breaking lists, operator and call chains, roles and case patterns.
 pub const WIDTH: usize = 100;
 const INDENT: &str = "    ";
 

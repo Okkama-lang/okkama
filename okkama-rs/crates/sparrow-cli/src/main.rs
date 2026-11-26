@@ -53,7 +53,7 @@ check        Verify bytecode (types, calls, intrinsic contracts) without
 /// The help text; the bytecode version comes from the codec, so it cannot go stale (#973).
 fn help() -> String {
     format!(
-        "{HELP_BODY}\nSPB {} is supported. Source files and the Okkama compiler are not\n\
+        "{HELP_BODY}SPB {} is supported. Source files and the Okkama compiler are not\n\
          required. Format/runtime errors exit 1, usage errors 2, I/O errors 3.\n",
         okkama_sparrow::VERSION
     )

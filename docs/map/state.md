@@ -1,5 +1,33 @@
 # State (update at the end of every task)
 
+## Documentation review (2026-11-26, feature/065-docs)
+
+- [x] #1027, #1028, #1030: source line docs, OIR-2 help and the IR-pass warning.
+- [x] #1035: remaining Russian host comments translated after checking their code.
+- [x] #1036 points 2–4: REPL declarations, Sparrow help spacing, OIR-2 bytecode docs.
+- [ ] #1036 point 1: `main()` still dispatches lsp/repl before parsing trailing
+  arguments. Fixing `--help` and rejecting extra arguments changes program behavior,
+  which this documentation-only task explicitly forbids. Use `okkama help lsp`
+  or `okkama help repl` for now; a behavioral patch is outside this task's authorization.
+- [x] #1038, #1045: pruning/format-width descriptions and reserved-name docs.
+- [x] #1065: string comparison, capability field syntax, complete map-key types,
+  accurately named map test, OIR type spelling in array.remove errors; also remove
+  the repeated map operand in map.keys/map.values errors as explicitly permitted.
+- [x] #1068: remove obsolete JIT/PostgreSQL settings, correct the Rust OCS endpoint
+  description, document worker output limits and developer switches with readers/defaults.
+  The Python conformance adapter still reads OCS_RUST_ENGINE; its invocation stays valid.
+- [x] #1054: generated index documents non-rule exclusions without changing extraction;
+  current release branch, benchmark references/engine, rc2 numbers, gate steps/triggers,
+  and debug conformance versus fat-LTO std/t binaries. Remove stale test-binary counts.
+- [x] #1049: stale JSON/corpus/recovery comments corrected; corpus inventory verified
+  as 499 + 13 files; parser rejection assertions compare complete intended messages.
+  The unused corpus metadata fallback stays unchanged under the no-behavior-change rule.
+- [x] Targeted integration files: parser_expressions 39/39, ir_verify 16/16.
+- [x] `cargo check --offline -j 4`, `python3 tools/map/gen.py --check` and
+  `git diff --check` pass; maps regenerated with `python3 tools/map/gen.py`.
+
+No commits or CHANGELOG edits. No full suites, application binaries, Docker, fmt or clippy run.
+
 ## Release 0.6.4 (2026-11-23, release/064)
 
 - [x] Hotfixes from reading 0.6.3 end to end (milestone "Hotfixes TBD", board project 1): #973–#1004
@@ -8,8 +36,9 @@
 - [x] Deferred: #1000 (macOS TLS flake, not reproducible), #1005 (owner decision: overload names,
   object named Maybe), #1006 (refactors, Unicode version contract, formatter width and std fmt-clean).
 - [x] wave/rel064 green (it caught t/gen against #984 and a clippy lint, fixed in b09f9dfa8); release CI
-  green; micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
-  (okkama-docs reports/2026-11-23-v0.6.4/micro.html); version 0.6.4.
+  green; initial rc1 micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
+  (candidate 7fb98e01f); superseded by rc2 29c3dc84a, +0.6% over 55 reliable pairs
+  in the final release report (okkama-docs reports/2026-11-23-v0.6.4/micro.html).
 - [ ] Tag v0.6.4 (owner pushes), Packages and GitHub Release, install-pgo, man site, cleanup.
 - [x] #1016 (feature/1016-twins): runtime-core native twins removed (network, tls, sqlite, db, postgres,
   host_crypto, process, input, system, stdio, buffer, encoding, numbers, bytes, jre; regex, fs, json, idna,

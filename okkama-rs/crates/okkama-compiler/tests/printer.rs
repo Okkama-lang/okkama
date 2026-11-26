@@ -346,7 +346,7 @@ fn spans_are_byte_ranges_with_line_columns() {
     );
 }
 
-/// A minimal JSON validator (the crate has no dependencies).
+/// A minimal JSON validator for the printer output.
 mod json_check {
     pub fn validate(text: &str) -> Result<(), String> {
         let bytes = text.as_bytes();

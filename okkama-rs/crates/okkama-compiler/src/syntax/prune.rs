@@ -1,9 +1,9 @@
 //! Production pruning: removing test-only declarations from a parsed tree.
 //!
-//! The parser never drops nodes on its own. A production build that must
-//! not see test code (`okkama ast --mode production`, or a program that is
-//! about to run) calls [`strip_test_items`] explicitly; a test build turns
-//! fakes and object tests into ordinary items ([`desugar_test_items`]).
+//! `okkama ast --prune-tests` calls [`strip_test_items`] to remove test-only
+//! declarations. `--mode production` alone skips test and fake bodies in the
+//! parser but keeps their declarations. A test build turns fakes and object
+//! tests into ordinary items ([`desugar_test_items`]).
 
 use crate::syntax::ast::{
     ConstructorDecl, ConstructorForm, FakeBody, Item, Name, ObjectDecl, ObjectMember, Program,

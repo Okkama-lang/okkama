@@ -38,9 +38,10 @@ jobs:
         with:
           tool: nextest
       # The gate profile: release optimisations without fat LTO. Linking each
-      # of the ~90 test binaries with fat LTO took most of the job (#557); the
-      # fat-LTO binaries are built and exercised by the conformance and std
-      # jobs and by the packages workflow.
+      # test binary with fat LTO took most of the job (#557). The std job and
+      # packages gate exercise fat-LTO release binaries (the gate also runs t/).
+      # Conformance builds its own debug binary in adapters/rust/.target;
+      # the Wave corpora use that debug binary too.
       - name: Build
         working-directory: okkama-rs
         run: cargo build --profile gate --locked -p okkama-cli -p sparrow-cli -p blade-cli

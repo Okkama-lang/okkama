@@ -149,7 +149,6 @@ impl SourceFile {
         self.text.get(span.range()).unwrap_or("")
     }
 
-    /// Number of lines (a trailing LF starts one more, empty line).
     /// The offset where 1-based `line` starts, the end of the text past the
     /// last line; O(1) through the line index (#1008).
     pub fn line_start(&self, line: u32) -> u32 {
@@ -159,6 +158,7 @@ impl SourceFile {
         }
     }
 
+    /// Number of lines (a trailing LF starts one more, empty line).
     pub fn line_count(&self) -> u32 {
         self.line_starts.len() as u32
     }

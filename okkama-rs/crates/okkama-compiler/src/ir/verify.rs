@@ -1305,7 +1305,7 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_int(*index)?;
                 match self.ty(*array)? {
                     Type::Array(_) => self.ty(*array)?.clone(),
-                    other => return Err(format!("array.remove of {other:?}")),
+                    other => return Err(format!("array.remove of {other}")),
                 }
             }
             InstKind::ArrayJoin { array, separator } => {
@@ -1888,7 +1888,7 @@ impl<'a> FunctionVerifier<'a> {
                     };
                     Type::Array(part.clone())
                 }
-                other => return Err(format!("{kind} of {map}: {other}")),
+                other => return Err(format!("{kind} of non-map type {other}")),
             },
             InstKind::MapRetag(map) => {
                 let Some(result) = result else {

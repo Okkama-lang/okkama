@@ -3427,9 +3427,6 @@ fn hidden_names(program: &ast::Program) -> HashSet<String> {
         .collect()
 }
 
-/// The system type a declaration cannot take the name of (#987): the role
-/// `Error` and the enums `Maybe` and `Presence` are declared by the
-/// language, not by the program.
 /// The system type names (#1005): no declaration of any kind, nor a type
 /// parameter, may take one.
 fn reserved_type_name(name: &str) -> Option<String> {

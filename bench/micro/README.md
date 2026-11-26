@@ -14,7 +14,7 @@ code and use separate instrumentation before attributing a change to one operati
 
 All programs import `support/harness.ok`. Arguments are `N WARMUP`, with positive
 N and nonnegative WARMUP. A single Bench instance runs the warmup and the measured
-batch. Input parsing, fixture construction, printing and JVM process startup are
+batch. Input parsing, fixture construction, printing and process startup are
 outside the reported clock interval. The interval still includes the call into
 Bench, GC, scheduler work and any compilation/tier transitions occurring inside it.
 The warmup checksum is printed too, so warmup is observable.
@@ -25,8 +25,8 @@ Output is exactly:
 micro-v2 N WARMUP ELAPSED_NS CHECKSUM WARMUP_CHECKSUM
 ```
 
-This is a **warmed batch**, not proof of stationary steady state. HotSpot can still
-compile during measurement. Establish warmup sensitivity with W/2W/4W and inspect
+This is a **warmed batch**, not proof of stationary steady state. JIT compilation
+may still occur during measurement. Establish warmup sensitivity with W/2W/4W and inspect
 compilation/GC counters in separate diagnostic runs. Do not mix instrumented and
 uninstrumented samples or subtract JIT timing from wall time to invent steady state.
 
@@ -52,7 +52,7 @@ comparing because it can change input distribution, GC frequency and JIT behavio
 The runner requires Docker and a **Linux** Okkama installation. It never falls
 back to host execution and does not lower priority with `taskpolicy`.
 The image must already exist locally and contain the runtime dependencies, Python
-for debugging if desired, `sha256sum`, and JDK 22+ for JVM measurements.
+for debugging if desired, and `sha256sum`.
 
 ```sh
 python3 run.py --image okkama-dev \
@@ -72,8 +72,7 @@ Crypto-dependent programs also require the matching native library in that insta
 `--engines tomato` remains an alias for Sparrow. Since 0.6.0 Sparrow is the only engine and `okkama run` has no
 `--engine`; the runner passes it only to an older toolchain that knows it (whose default before #584 was IR). `--only NAME,NAME` validates all
 names; `--plan` prints the selection without executing it. `--n` is now one positive
-integer, not the old per-engine assignment string. JVM artifacts are built once
-per campaign inside the same limited environment. IR/Sparrow source setup occurs
+integer, not the old per-engine assignment string. Sparrow source setup occurs
 outside the internal measured interval; it can still affect process history.
 
 Every invocation has a wall deadline, CPU-time ulimit, CPU quota, memory+swap cap,
@@ -122,7 +121,7 @@ A change must exceed 10% and twice the larger full-range spread. This is a
 
 Results use schema 2 and include source hashes, image ID, architecture, Docker host
 identity/kernel, binary hash/version, declared source revision/build profile, installation hashes when mounted, explicit
-stdlib hashes, Java version, configuration, sample order and raw samples.
+stdlib hashes, configuration, sample order and raw samples.
 
 - Labels are safe filename stems. Existing result names are never overwritten.
 - Reserve unique candidate names, e.g. `v0.5.5-rc1-commit-host-run01`.
@@ -140,11 +139,11 @@ The whole micro directory is versioned in the repository (`bench/micro`, #894):
 results without exact programs, oracles and runner do not establish reproducibility.
 Result files are not committed (`bench/micro/results/` is ignored); the archive lives
 in `okkama-docs/benchmarks/micro/results`, which `--results` names. Do not commit
-generated JAR/SPB artifacts or machine caches.
+generated SPB artifacts or machine caches.
 
 `check.py` runs the programs as correctness tests without timing or Docker: N=17
 and N=31 against the oracles on Sparrow. The Wave CI
-runs it on both engines; locally use `--cage`.
+runs it on Sparrow; locally use `--cage`.
 
 ## Verification and coverage
 
@@ -156,8 +155,9 @@ python3 run.py --image IMAGE --okkama /path/in/image/okkama --plan
 
 `test_runner.py` tests protocol/oracles, partial/noisy data, comparison compatibility,
 late-failure retention, bounded output, timeouts and failed subprocesses.
-See `REVIEW-2026-11-13.md` for findings, the full workload inventory and actual
-validation results. This suite does not replace conformance or release gates.
+The historical review lives outside this repository at
+`okkama-docs/benchmarks/micro/REVIEW-2026-11-13.md`. The current workload inventory
+is `manifest.json`. This suite does not replace conformance or release gates.
 
 ## Public action inventory and scaffolds (#244)
 
@@ -236,11 +236,9 @@ python3 -m unittest discover -s bench/micro -p 'test_*.py'
 to check parsing, visibility, constructors, overloads, typed signatures,
 determinism, stale checks, manifest errors and scaffold/oracle shape.
 
-The #244 http/web/mail addition is documented in [review-244-http/REPORT.txt](review-244-http/REPORT.txt): 121 new workloads, independent checksums, direct timings and explicit resource-dependent exclusions.
-
-The #244 work-action expansion adds 129 programs and covers the remaining reachable
-http/web/mail work targets. See [review-244-work/REPORT.txt](review-244-work/REPORT.txt)
-for independent-oracle validation, exclusions, the HTTP/2 EOF repro and N=2000
-host observations. File fixtures create private temporary directories in the writable current working
+The #244 http/web/mail and work-action additions are included in `manifest.json`;
+`STD-ACTIONS.md` records their measured targets and `oracles.py` their checksums.
+The historical review reports are not included in this repository.
+File fixtures create private temporary directories in the writable current working
 directory: the program directory under `check.py`, or `/work` under `run.py`.
 They remove the directories on destruction.

@@ -1,4 +1,4 @@
-//! Verifier rules of OIR-1 §17 on hand-built modules.
+//! OIR-2 verifier rules on hand-built modules.
 
 use okkama_compiler::Span;
 use okkama_compiler::ir::{
@@ -528,7 +528,7 @@ fn builders_are_used_at_most_once_on_every_path() {
 }
 
 #[test]
-fn map_keys_are_int_bool_or_str() {
+fn map_keys_reject_arrays_but_allow_untyped_empty_maps() {
     let bad = Type::Map(
         Box::new(Type::Array(Box::new(Type::Int))),
         Box::new(Type::Int),

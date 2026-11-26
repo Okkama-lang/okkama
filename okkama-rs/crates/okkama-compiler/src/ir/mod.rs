@@ -59,8 +59,9 @@ pub enum Type {
     Never,
     /// Служебный: линейный сборщик массива (§12.2).
     Builder(Box<Type>),
-    /// Неизменяемый словарь (§12.3): ключ `int`, `bool` или `str`;
-    /// `map<never,never>` — нетегированный `[:]`.
+    /// Immutable map (§12.3): keys may be `int`, `bool`, `byte`, `char`,
+    /// `float`, `rat`, `str`, enums or objects (see [`Type::is_map_key`]).
+    /// `map<never,never>` is the untyped empty literal `[:]`.
     Map(Box<Type>, Box<Type>),
     /// Служебный: линейный сборщик словаря.
     MapBuilder(Box<Type>, Box<Type>),
@@ -1047,7 +1048,7 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
-    /// Только `Eq` и `Ne`.
+    /// String equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`.
     StrCompare {
         op: CompareOp,
         left: ValueId,
@@ -1126,7 +1127,7 @@ pub enum InstKind {
     },
     /// `cap.make %owner` (§8.5): capability владельца; тип — у результата.
     CapMake(ValueId),
-    /// `call.cap %k, field()`: вычислить поле cap заново.
+    /// `call.cap %k, #N()`: recompute the cap field at index N.
     CallCap {
         cap: ValueId,
         field: usize,

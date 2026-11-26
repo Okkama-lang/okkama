@@ -1,7 +1,7 @@
-//! Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
-//! текстовых файлов, распаковываются один раз при первом обращении.
+//! Runtime tables (`okkama-runtime-core/data/*.dat`): gzip-compressed text,
+//! decompressed once on first access.
 
-/// Содержимое gzip-файла (RFC 1952: заголовок, deflate, CRC и длина).
+/// Decompress a gzip payload, skipping the header and the CRC/length trailer.
 pub fn gunzip(bytes: &[u8]) -> Vec<u8> {
     assert!(
         bytes.len() > 18 && bytes[..3] == [0x1f, 0x8b, 8],
@@ -45,14 +45,14 @@ table!(unicode, "unicode.dat");
 table!(idna, "idna.dat");
 table!(public_suffixes, "psl.dat");
 
-/// Общая категория Unicode (`Lu`, `Nd`, …) из `unicode.dat`.
+/// Unicode general category (`Lu`, `Nd`, …) from `unicode.dat`.
 pub fn category(point: u32) -> &'static str {
     static RANGES: std::sync::OnceLock<Vec<(u32, u32, &'static str)>> = std::sync::OnceLock::new();
     let ranges = RANGES.get_or_init(|| ranges(unicode(), "G"));
     find(ranges, point).unwrap_or("Cn")
 }
 
-/// Диапазоны `<tag> <value> <from> <to>` таблицы (`G`, `C`, `S`, …).
+/// Table ranges stored as `<tag> <value> <from> <to>` (`G`, `C`, `S`, …).
 pub fn ranges(text: &'static str, tag: &str) -> Vec<(u32, u32, &'static str)> {
     text.lines()
         .filter_map(|line| {
@@ -66,7 +66,7 @@ pub fn ranges(text: &'static str, tag: &str) -> Vec<(u32, u32, &'static str)> {
         .collect()
 }
 
-/// Значение диапазона, содержащего `point`.
+/// The value of the range containing `point`.
 pub fn find(ranges: &[(u32, u32, &'static str)], point: u32) -> Option<&'static str> {
     ranges
         .binary_search_by(|(from, to, _)| {
@@ -82,7 +82,7 @@ pub fn find(ranges: &[(u32, u32, &'static str)], point: u32) -> Option<&'static 
         .map(|index| ranges[index].2)
 }
 
-/// Canonical Combining Class (0 — не указан в таблице).
+/// Canonical Combining Class (0 when absent from the table).
 pub fn combining_class(point: u32) -> u32 {
     static RANGES: std::sync::OnceLock<Vec<(u32, u32, &'static str)>> = std::sync::OnceLock::new();
     let ranges = RANGES.get_or_init(|| ranges(unicode(), "C"));

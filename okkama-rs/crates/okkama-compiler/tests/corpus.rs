@@ -83,7 +83,7 @@ fn std_and_examples_parse_in_both_modes() {
         .map(|line| line.split('\t').next().unwrap())
         .collect();
     let mut files = Vec::new();
-    // examples/ moved out of the repository (okkama-docs) for 0.4.0.
+    // This parser corpus scans std/ and the Rust workspace examples only.
     for dir in ["std", "okkama-rs/examples"] {
         ok_files(&root.join(dir), &mut files);
     }
@@ -146,9 +146,8 @@ fn requirement(case: &Json) -> Requirement {
     };
     let stages = match outcome {
         "reject" => stages_of("rejection"),
-        // Five L04.projection.* cases declare `outcome: error` with a
-        // `rejection` block instead of `failure` (a metadata slip in the
-        // conformance suite, see docs/compatibility.md); read either.
+        // Error outcomes read failure stages, with a legacy rejection fallback.
+        // Current cases need no fallback; L04.projection.* uses outcome: reject.
         "error" => {
             let failure = stages_of("failure");
             if failure.is_empty() {

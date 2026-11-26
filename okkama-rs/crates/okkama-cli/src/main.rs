@@ -224,9 +224,9 @@ OPTIONS:
 
 Input is a complete Okkama program: one or several source files of one module
 (spec §5.1). Imports are loaded (import directories, the importing file's
-directory, std) and linked into one OIR-1 module: declarations, functions with
+directory, std) and linked into one OIR-2 module: declarations, functions with
 blocks ending in `ret`, `br`, `cond`, … Analysis warnings go to stderr.
-Constructs the IR does not support yet produce a lowering error; no source
+Source constructs not yet supported by the IR produce a lowering error; no source
 declarations or statements are silently discarded.
 
 Use `-` as FILE to read standard input. This command prints IR without

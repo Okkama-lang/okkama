@@ -1,6 +1,6 @@
 //! Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 //!
-//! `--ocs-capabilities` reports supported modes for OCS_RUST_ENGINE.
+//! `--ocs-capabilities` reports supported modes for the fixed `sparrow` engine.
 //! `--ocs-request R --ocs-response P` parses/checks the linked source and runs
 //! it with serialized Sparrow bytecode, as `okkama run`.
 //! Unsupported operations are reported explicitly.

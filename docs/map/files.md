@@ -108,7 +108,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/liveness.rs` 523 — Registers live before each instruction of a function.
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
 - `okkama-sparrow/src/session.rs` 298 — #588 phase B: the program of a REPL session, append-only.
-- `okkama-sparrow/src/typing.rs` 1161 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
+- `okkama-sparrow/src/typing.rs` 1161 — Instruction operand and result types for bytecode lowered from OIR-2
 - `okkama-sparrow/src/verify.rs` 522 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
 ## ownership-runtime — 2 files, 3134 lines
@@ -146,7 +146,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
-- `sparrow-core/src/host/native_data.rs` 76 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
+- `sparrow-core/src/host/native_data.rs` 76 — Runtime tables (`okkama-runtime-core/data/*.dat`): gzip-compressed text,
 - `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
 - `sparrow-core/src/host/native_debug.rs` 281 — `any` values for the bridged origin natives, and the parts of a value for
 - `sparrow-core/src/host/native_directory.rs` 224 — Host paths and directory snapshots, scoped to each VM's working directory.
