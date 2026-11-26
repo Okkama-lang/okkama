@@ -168,7 +168,12 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(run.compare(result, result, 'x', 'sparrow')['status'], 'INCOMPATIBLE')
 
     def test_local_manifest_version_is_used(self):
-        self.assertEqual(run.revision_version('7d2b3403e'), '0.6.3')
+        # HEAD, not an old release commit: CI checks out one commit only (#1092).
+        import re
+        manifest = (run.HERE.parent.parent / 'okkama-rs' / 'Cargo.toml').read_text()
+        section = manifest.split('[workspace.package]', 1)[1]
+        version = re.search(r'(?m)^version\s*=\s*"([^"]+)"', section)[1]
+        self.assertEqual(run.revision_version('HEAD'), version)
         self.assertIsNone(run.revision_version('not-a-real-revision-1052'))
 
     def test_mismatch_stops_campaign_before_workloads_and_is_saved(self):
