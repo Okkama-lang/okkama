@@ -566,3 +566,35 @@ fn the_printer_marks_a_damaged_global_initializer_invalid() {
     let text = module.to_string();
     assert!(text.contains("= @<invalid>()"), "{text}");
 }
+
+/// #1064: a role slot the role lacks prints `<invalid>` too, in `call.role`
+/// (`R.<invalid>(…)`) and in an object's `does` list, instead of panicking in
+/// `Role::slot_name`.
+#[test]
+fn the_printer_marks_a_role_slot_the_role_lacks_invalid() {
+    let source = "module app v1.0.0;\nrole R { go() is int; }\nobject C does R { C() {} go() is int { 1; } }\nmain() is int { let r is R = C(); r.go(); }\n";
+    let mut module = lower(source).expect("lowers");
+    let printed = module.to_string();
+    assert!(printed.contains("call.role") && printed.contains("R.go("), "{printed}");
+    let call = module
+        .functions
+        .iter_mut()
+        .flat_map(|function| function.blocks.iter_mut())
+        .flat_map(|block| block.insts.iter_mut())
+        .find_map(|inst| match &mut inst.kind {
+            ir::InstKind::CallRole { slot, .. } => Some(slot),
+            _ => None,
+        })
+        .expect("a call.role");
+    *call = 5;
+    let text = module.to_string();
+    assert!(text.contains("R.<invalid>("), "{text}");
+    let refused = ir::verify(&module).unwrap_err().to_string();
+    assert!(refused.contains("role R has no slot #5"), "{refused}");
+    // A witness with more slots than the role has methods.
+    let witness = module.objects.iter_mut().flat_map(|object| object.does.iter_mut()).next().expect("C does R");
+    let first = witness.slots[0];
+    witness.slots.push(first);
+    let text = module.to_string();
+    assert!(text.contains("go = @") && text.contains(", <invalid> = @"), "{text}");
+}

@@ -313,7 +313,7 @@ fn check_witness(
                 "@{} does not implement {}.{}",
                 function.symbol,
                 declared.name,
-                declared.slot_name(slot)
+                declared.slot_name(slot).unwrap_or_else(|| format!("#{slot}"))
             ));
         }
     }
@@ -1240,7 +1240,7 @@ impl<'a> FunctionVerifier<'a> {
                     return Err(format!(
                         "call.role {}.{} passes {} arguments for {} parameters",
                         declared.name,
-                        declared.slot_name(*slot),
+                        declared.slot_name(*slot).unwrap_or_else(|| format!("#{slot}")),
                         args.len(),
                         method.params.len()
                     ));

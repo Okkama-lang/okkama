@@ -13,6 +13,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Sparrow (#1034).** A failure trace cut at its million activations keeps the outermost ones too, so a stack
   overflow's report ends with `main` again; a cause whose trace was cut says how many activations it left out, as
   the root does ("... and N more activations in the middle, not recorded").
+- **IR printer: a role slot the role lacks panicked (#1064).** `Role::slot_name` indexed the role's methods,
+  so printing a damaged module (`OKKAMA_DUMP_INVALID_IR`) with `call.role` on a missing slot, or an object's
+  `does` list longer than its role, panicked and lost the dump. `slot_name` is `None` for a missing slot; the
+  printer writes `call.role %0, R.<invalid>()` and `<invalid> = @…`, as it does for other damaged references
+  (#1003).
 ### Security
 - **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at

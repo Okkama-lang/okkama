@@ -522,3 +522,8 @@ every declaration is open (#1005, owner decision).
   it fails, bump the version and record the new pair.
 - SPB 17 was Champ's format (retired, #911) and is skipped: SPB 16 → 18.
   The assembly text version stays equal to the SPB version.
+
+## Model lookups the printer uses are fallible (#1064, 2026-11-26)
+
+- `Role::slot_name` returns `Option`, like the other lookups by index (`Module::role`, fields, enum cases): the
+  printer must print a damaged module (#1003), so it never indexes; only code after `ir::verify` may unwrap.

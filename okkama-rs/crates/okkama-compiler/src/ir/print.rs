@@ -224,8 +224,8 @@ impl Display for Module {
                 f.write_str(" {")?;
                 for (slot, func) in witness.slots.iter().enumerate() {
                     f.write_str(if slot == 0 { " " } else { ", " })?;
-                    match self.role(witness.role) {
-                        Some(role) => f.write_str(&role.slot_name(slot))?,
+                    match self.role(witness.role).and_then(|role| role.slot_name(slot)) {
+                        Some(name) => f.write_str(&name)?,
                         None => f.write_str("<invalid>")?,
                     }
                     f.write_str(" = ")?;
@@ -554,7 +554,10 @@ fn write_inst(
                     _ => None,
                 });
             match role {
-                Some(role) => write!(f, "{}.{}", role.name, role.slot_name(*slot))?,
+                Some(role) => match role.slot_name(*slot) {
+                    Some(name) => write!(f, "{}.{name}", role.name)?,
+                    None => write!(f, "{}.<invalid>", role.name)?,
+                },
                 None => write!(f, "#{slot}")?,
             }
             f.write_char('(')?;

@@ -393,17 +393,18 @@ impl Role {
         self.builtin && self.name == "Error"
     }
 
-    /// Имя слота: `name`, а у перегруженного имени — `name#k` по порядку.
-    pub fn slot_name(&self, slot: usize) -> String {
-        let method = &self.methods[slot];
+    /// Имя слота: `name`, а у перегруженного имени — `name#k` по порядку;
+    /// `None`, если такого слота у роли нет (повреждённый модуль, #1064).
+    pub fn slot_name(&self, slot: usize) -> Option<String> {
+        let method = self.methods.get(slot)?;
         let same: Vec<usize> = (0..self.methods.len())
             .filter(|index| self.methods[*index].name == method.name)
             .collect();
         if same.len() == 1 {
-            method.name.clone()
+            Some(method.name.clone())
         } else {
             let position = same.iter().position(|index| *index == slot).unwrap_or(0);
-            format!("{}#{position}", method.name)
+            Some(format!("{}#{position}", method.name))
         }
     }
 }

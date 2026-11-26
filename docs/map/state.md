@@ -2,6 +2,8 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
+  the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
   `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
   program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with
