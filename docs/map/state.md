@@ -64,6 +64,8 @@ no full test suites, Docker, cargo fmt or clippy.
 - [x] #1056 (feature/1056): `asm::Parser::error_after` (line of the consumed token) at the 14
   consume-then-fail sites of asm.rs, operand.rs and `instructions!`; `unknown_escape` prints an
   invisible escape by code point; unit tests `asm::line_tests`.
+- [x] #1057 (feature/1057): `session::place` names a changed item by (fresh position, item);
+  constants by their init's symbol (`fresh_globals`); test `tests/session.rs`.
 
 
 ## Test/tool audit (2026-11-26, feature/065-tools)

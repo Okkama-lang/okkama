@@ -28,6 +28,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   invalid `char`, a wrong table index or instruction number, data nested too deep) names that token's line, not
   the next token's; a backslash before a raw newline in a string is reported as "`\` followed by U+000A" instead
   of breaking the message.
+- **Session merge (#1057).** A REPL session that changes a published module constant names it by its init's symbol
+  ("the session changes the published constant const.LIMIT"), as the other tables name their items; it said
+  `FuncRef(1)`.
 
 ## [0.6.4] — 2026-11-23
 

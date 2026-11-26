@@ -143,16 +143,17 @@ pub fn extend(published: &Program, fresh: &Program) -> Result<Program, SessionEr
         }
     }
 
-    place(&mut out.objects, &maps.objects, fresh.objects.iter().map(|o| object(o, &maps)), "object", |o| o.name.clone())?;
-    place(&mut out.roles, &maps.roles, fresh.roles.iter().map(|r| role(r, &maps)), "role", |r| r.name.clone())?;
-    place(&mut out.enums, &maps.enums, fresh.enums.iter().cloned(), "enum", |e: &EnumDecl| e.name.clone())?;
-    place(&mut out.variants, &maps.variants, fresh.variants.iter().map(|v| variant(v, &maps)), "variant", |v| v.name.clone())?;
-    place(&mut out.caps, &maps.caps, fresh.caps.iter().map(|c| cap(c, &maps)), "cap", |c| c.name.clone())?;
-    place(&mut out.handles, &maps.handles, fresh.handles.iter().cloned(), "handle", Clone::clone)?;
+    place(&mut out.objects, &maps.objects, fresh.objects.iter().map(|o| object(o, &maps)), "object", |_, o| o.name.clone())?;
+    place(&mut out.roles, &maps.roles, fresh.roles.iter().map(|r| role(r, &maps)), "role", |_, r| r.name.clone())?;
+    place(&mut out.enums, &maps.enums, fresh.enums.iter().cloned(), "enum", |_, e: &EnumDecl| e.name.clone())?;
+    place(&mut out.variants, &maps.variants, fresh.variants.iter().map(|v| variant(v, &maps)), "variant", |_, v| v.name.clone())?;
+    place(&mut out.caps, &maps.caps, fresh.caps.iter().map(|c| cap(c, &maps)), "cap", |_, c| c.name.clone())?;
+    place(&mut out.handles, &maps.handles, fresh.handles.iter().cloned(), "handle", |_, h| h.clone())?;
     let globals: Vec<GlobalDecl> = fresh.globals.iter().map(|g| global(g, &maps)).collect();
-    place(&mut out.globals, &maps.globals, globals.into_iter(), "constant", |g| format!("{:?}", g.init))?;
+    // A constant is named by its init's symbol, its key in the merge (#1057), not by a FuncRef.
+    place(&mut out.globals, &maps.globals, globals.into_iter(), "constant", |position, _| fresh_globals[position].clone())?;
     let functions = fresh.functions.iter().map(|f| function(f, &maps)).collect::<Result<Vec<_>, _>>()?;
-    place(&mut out.functions, &maps.functions, functions.into_iter(), "function", |f| f.symbol.clone())?;
+    place(&mut out.functions, &maps.functions, functions.into_iter(), "function", |_, f| f.symbol.clone())?;
 
     let func = |f: FuncRef| FuncRef(maps.functions[f.0 as usize]);
     out.entry = fresh.entry.map(func);
@@ -163,19 +164,21 @@ pub fn extend(published: &Program, fresh: &Program) -> Result<Program, SessionEr
 }
 
 /// Put each translated fresh item at its mapped index: a published one must be equal, a new one is appended
-/// (in index order, which is the fresh order).
+/// (in index order, which is the fresh order). `name` names a changed one by its fresh position and itself.
 fn place<T: PartialEq>(
     out: &mut Vec<T>,
     map: &[u32],
     items: impl Iterator<Item = T>,
     kind: &str,
-    name: impl Fn(&T) -> String,
+    name: impl Fn(usize, &T) -> String,
 ) -> Result<(), SessionError> {
     let mut appended: Vec<(u32, T)> = Vec::new();
-    for (item, &target) in items.zip(map) {
+    for (position, (item, &target)) in items.zip(map).enumerate() {
         match out.get(target as usize) {
             Some(published) if *published == item => {}
-            Some(_) => return Err(SessionError(format!("the session changes the published {kind} {}", name(&item)))),
+            Some(_) => {
+                return Err(SessionError(format!("the session changes the published {kind} {}", name(position, &item))));
+            }
             None => appended.push((target, item)),
         }
     }

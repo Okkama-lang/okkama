@@ -61,6 +61,23 @@ fn a_changed_published_item_is_an_error() {
     assert!(error.0.contains("changes the published object A"), "{}", error.0);
 }
 
+/// #1057: a changed published constant is named by its init's symbol, as the merge keys it.
+#[test]
+fn a_changed_published_constant_is_named_by_its_symbol() {
+    let constant = |value: u32| {
+        program(&format!(
+            "sparrow {}\nmodule \"repl\" \"1.0.0\"\ntype t0 int\nglobal g0 t0 f1 data int {value}\n\
+             function f0 \"main\" {{\n registers [t0]\n params []\n result t0\n 0: global.get r0, 0\n 1: ret r0\n}}\n\
+             function f1 \"const.LIMIT\" {{\n registers [t0]\n params []\n result t0\n 0: global.get r0, 0\n 1: ret r0\n}}\n",
+            okkama_sparrow::VERSION
+        ))
+    };
+    let published = constant(40);
+    assert_eq!(extend(&published, &constant(40)).unwrap(), published);
+    let error = extend(&published, &constant(41)).unwrap_err();
+    assert_eq!(error.0, "the session changes the published constant const.LIMIT");
+}
+
 /// Two equal new names in one recompiled session are refused by the merge that brings them, with the table, the
 /// name and both entries; they never get two indices that only the next merge notices (#975).
 #[test]
