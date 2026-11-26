@@ -14,8 +14,8 @@ fn lower(module: &str, natives: &str, body: &str) -> ir::Module {
         .unwrap()
 }
 
-/// Проверка результата Sparrow.
-fn both(module: &str, natives: &str, body: &str, expected: &str) {
+/// `main` из `body` возвращает на Sparrow `expected`.
+fn expect(module: &str, natives: &str, body: &str, expected: &str) {
     let lowered = lower(module, natives, body);
 
     support::assert_value(&lowered, expected);
@@ -27,7 +27,7 @@ const HEX: &str = "native hex_encode(origin is @byte) is string;
 
 #[test]
 fn hex_round_trips_and_rejects_odd_input() {
-    both(
+    expect(
         "runtime/hex",
         HEX,
         r#"if hex_encode([0.byte(), 171.byte(), 255.byte()]) == "00abff" && hex_decode("00ABff").size() == 3 && hex_valid_prefix("12xz") == 2 { 42; } else { 0; }"#,
@@ -40,7 +40,7 @@ fn hex_round_trips_and_rejects_odd_input() {
 
 #[test]
 fn base64_alphabets_and_padding_follow_rfc_4648() {
-    both(
+    expect(
         "runtime/base64",
         "native base64_encode(origin is @byte, alphabet is string) is string;
          native base64_invalid_offset(origin is string, alphabet is string) is int;
@@ -55,7 +55,7 @@ fn base64_alphabets_and_padding_follow_rfc_4648() {
 #[test]
 fn bigint_and_decimal_are_exact() {
     // BigInt arithmetic is the builtin's (#511); its natives went in #13.
-    both(
+    expect(
         "runtime/bigint",
         "native bigint_bits(origin is string) is int;
          native bigint_valid(origin is string) is bool;",
@@ -63,7 +63,7 @@ fn bigint_and_decimal_are_exact() {
               && bigint_valid("-0012") && !bigint_valid("1e3") { 42; } else { 0; }"#,
         "42",
     );
-    both(
+    expect(
         "runtime/decimal",
         "native decimal_canonical(origin is string) is string;
          native decimal_order(left is string, right is string) is int;",
@@ -87,7 +87,7 @@ fn host_crypto_digests_preserve_branches() {
         let first = digest_bytes(abc, 32);
         let again = digest_bytes(digest_update(base, [97.byte(), 98.byte(), 99.byte()]), 32);
         if first[0] == 186.byte() && first[31] == 173.byte() && again == first && digest_bytes(other, 32) != first { 42; } else { 0; }"#;
-    both("runtime/host_crypto", natives, body, "42");
+    expect("runtime/host_crypto", natives, body, "42");
 }
 
 #[test]

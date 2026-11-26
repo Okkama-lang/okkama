@@ -1,4 +1,4 @@
-//! Variant values use the same typed representation on IR and Sparrow.
+//! Variant values (payloads, fallbacks, matches) compiled to SPB and run on Sparrow.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};

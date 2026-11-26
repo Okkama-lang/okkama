@@ -1,7 +1,7 @@
 //! A terminal read interrupted by a timeout or a cancelled task gives its
 //! late bytes back to the session, and a resize reports the new geometry
 //! (#12). Runs `tests/terminal/cancel.ok` under a pseudo-terminal driven by
-//! `tests/terminal/pty_driver.py`, on every engine that can read a terminal.
+//! `tests/terminal/pty_driver.py`.
 
 use std::path::Path;
 use std::process::Command;
@@ -17,28 +17,19 @@ fn terminal_reads_survive_cancellation_and_resizes_report_geometry() {
     let std = here.join("../../../std");
     let driver = here.join("tests/terminal/pty_driver.py");
     let program = here.join("tests/terminal/cancel.ok");
-    let engines = vec!["sparrow"];
-    let failures: Vec<String> = engines
-        .into_iter()
-        .filter_map(|engine| {
-            let output = Command::new("python3")
-                .arg(&driver)
-                .arg(env!("CARGO_BIN_EXE_okkama"))
-                .arg(engine)
-                .arg(&program)
-                .env("OKKAMA_STDLIB_DIR", &std)
-                .output()
-                .expect("run the pty driver");
-            (!output.status.success()).then(|| {
-                format!(
-                    "{engine}:\n{}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                )
-            })
-        })
-        .collect();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let output = Command::new("python3")
+        .arg(&driver)
+        .arg(env!("CARGO_BIN_EXE_okkama"))
+        .arg(&program)
+        .env("OKKAMA_STDLIB_DIR", &std)
+        .output()
+        .expect("run the pty driver");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// #1017: on a terminal without `COLUMNS`, `okkama man` wraps its page to the

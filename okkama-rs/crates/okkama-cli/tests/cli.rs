@@ -122,7 +122,7 @@ fn standard_stdout_uses_real_native_providers_on_sparrow() {
 }
 
 #[test]
-fn ocs_native_engines_report_execution_and_limitations_without_java() {
+fn ocs_runs_report_execution_and_limitations_without_java() {
     let source = TempFile::new("ocs-native.ok", HELLO.as_bytes());
     let request = TempFile::new("ocs-request.json", b"");
     let response = TempFile::new("ocs-response.json", b"");
@@ -134,52 +134,48 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
         ),
     )
     .unwrap();
-    {
-        let engine = "sparrow";
-        for (body, outcome, code) in [
-            ("6 * 7;", "completed", 42),
-            ("256;", "failed", 1),
-            ("7 % 0;", "failed", 1),
-            ("panic \"stop\";", "failed", 1),
-            ("if -7 % 3 == -1 { 42; } else { 0; }", "completed", 42),
-            (
-                "let x = 1.5; if x * 2.0 == 3.0 { 42; } else { 0; }",
-                "completed",
-                42,
-            ),
-            ("let b is int = \"world\"; 0;", "rejected", 1),
-        ] {
-            std::fs::write(
-                &source.0,
-                format!("module app v1.0.0; main() is int {{ {body} }}"),
-            )
+    for (body, outcome, code) in [
+        ("6 * 7;", "completed", 42),
+        ("256;", "failed", 1),
+        ("7 % 0;", "failed", 1),
+        ("panic \"stop\";", "failed", 1),
+        ("if -7 % 3 == -1 { 42; } else { 0; }", "completed", 42),
+        (
+            "let x = 1.5; if x * 2.0 == 3.0 { 42; } else { 0; }",
+            "completed",
+            42,
+        ),
+        ("let b is int = \"world\"; 0;", "rejected", 1),
+    ] {
+        std::fs::write(
+            &source.0,
+            format!("module app v1.0.0; main() is int {{ {body} }}"),
+        )
+        .unwrap();
+        let output = okkama()
+            .args([
+                "--ocs-request",
+                request.path(),
+                "--ocs-response",
+                response.path(),
+            ])
+            .env("PATH", "")
+            .output()
             .unwrap();
-            let output = okkama()
-                .args([
-                    "--ocs-request",
-                    request.path(),
-                    "--ocs-response",
-                    response.path(),
-                ])
-                .env("OCS_RUST_ENGINE", engine)
-                .env("PATH", "")
-                .output()
-                .unwrap();
-            let reply = std::fs::read_to_string(&response.0).unwrap();
-            assert_eq!(output.status.code(), Some(code), "{engine}: {reply}");
-            assert!(
-                reply.contains(&format!("\"outcome\": \"{outcome}\"")),
-                "{reply}"
-            );
-            assert!(output.stdout.is_empty());
-            if body.starts_with("panic ") {
-                assert!(reply.contains("\"category\": \"panic\""), "{reply}");
-                assert!(reply.contains("Panic: stop"), "{reply}");
-            }
-            if outcome == "completed" {
-                assert!(reply.contains("\"exit_status\": 42"));
-                assert!(output.stderr.is_empty());
-            }
+        let reply = std::fs::read_to_string(&response.0).unwrap();
+        assert_eq!(output.status.code(), Some(code), "{reply}");
+        assert!(
+            reply.contains(&format!("\"outcome\": \"{outcome}\"")),
+            "{reply}"
+        );
+        assert!(output.stdout.is_empty());
+        if body.starts_with("panic ") {
+            assert!(reply.contains("\"category\": \"panic\""), "{reply}");
+            assert!(reply.contains("Panic: stop"), "{reply}");
+        }
+        if outcome == "completed" {
+            assert!(reply.contains("\"exit_status\": 42"));
+            assert!(output.stderr.is_empty());
         }
     }
 }
@@ -204,7 +200,7 @@ fn ocs_request_with_an_unpaired_high_surrogate_is_read() {
 #[test]
 fn ocs_capabilities_report_sparrow_with_every_mode() {
     // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
-    let output = okkama().arg("--ocs-capabilities").env_remove("OCS_RUST_ENGINE").output().unwrap();
+    let output = okkama().arg("--ocs-capabilities").output().unwrap();
     assert!(output.status.success());
     assert!(stdout(&output).contains("\"engine\": \"sparrow\""));
     for mode in ["\"parse\"", "\"check\"", "\"run\"", "\"test\""] {
@@ -257,30 +253,20 @@ fn every_run_form_executes_on_sparrow_whatever_the_environment() {
 }
 
 #[test]
-fn native_run_engines_execute_source_without_java() {
+fn run_executes_source_in_process_without_java() {
     let source = TempFile::new(
-        "native-engines.ok",
+        "in-process.ok",
         b"module app v1.0.0; main() is int { 6 * 7; }",
     );
-    // По умолчанию `run` — Sparrow в процессе: java не нужна.
+    // `run` — Sparrow в процессе: java не нужна, на PATH ничего нет.
     let output = okkama()
         .args(["run", source.path()])
         .env("PATH", "")
-        .env_remove("OKKAMA_ENGINE")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
-    {
-        let output = okkama()
-            .args(["run", source.path()])
-            .env("PATH", "")
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
-        assert!(output.stdout.is_empty());
-        assert!(output.stderr.is_empty());
-    }
     let output = run_stdin(
         &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [[1, 2], [40]]; xs[0][1] + xs[1][0]; }",
@@ -295,7 +281,7 @@ fn native_run_engines_execute_source_without_java() {
 }
 
 #[test]
-fn skipped_and_filtered_tests_report_alike_on_every_engine() {
+fn skipped_and_filtered_tests_report_their_outcomes() {
     // #277: a test among hidden actions is an object test; `test.skip` ends its
     // test past any `catch` and does not fail the run unless an assertion
     // failed first; `--filter` keeps the tests whose names contain a text.
@@ -312,35 +298,30 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
           test \"through catch\" { try { test.skip(\"uncaught\"); } catch e is Error { test.fail(\"caught\"); } }\n\
           test \"failed first\" { test.is(1, 2); test.skip(\"too late\"); }\n",
     );
-    {
-        let engine = "sparrow";
-        let output = run(&["run", "-t", source.path()]);
-        assert_eq!(output.status.code(), Some(1), "{engine}: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            "=== RUN   Account :: public\n--- PASS: Account :: public\n\
-             === RUN   Account :: among private\n--- PASS: Account :: among private\n\
-             === RUN   skipped\n--- SKIP: skipped\n    not today\n\
-             === RUN   through catch\n--- SKIP: through catch\n    uncaught\n\
-             === RUN   failed first\n--- FAIL: failed first\n    expected 2, got 1\nFAIL\n",
-            "{engine}"
-        );
-        let output = run(&[
-            "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
-        ]);
-        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            "=== RUN   Account :: among private\n--- PASS: Account :: among private\n\
-             === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
-            "{engine}"
-        );
-        // A filter that selects nothing keeps its existing error behaviour
-        // (owner's #339 review): exit 1, not the runner's 4.
-        let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
-        assert_eq!(output.status.code(), Some(1));
-        assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
-    }
+    let output = run(&["run", "-t", source.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   Account :: public\n--- PASS: Account :: public\n\
+         === RUN   Account :: among private\n--- PASS: Account :: among private\n\
+         === RUN   skipped\n--- SKIP: skipped\n    not today\n\
+         === RUN   through catch\n--- SKIP: through catch\n    uncaught\n\
+         === RUN   failed first\n--- FAIL: failed first\n    expected 2, got 1\nFAIL\n"
+    );
+    let output = run(&[
+        "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   Account :: among private\n--- PASS: Account :: among private\n\
+         === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n"
+    );
+    // A filter that selects nothing keeps its existing error behaviour
+    // (owner's #339 review): exit 1, not the runner's 4.
+    let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
     let output = run(&["run", "--filter", "skip", source.path()]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("--filter selects tests: use it with -t"));
@@ -588,12 +569,9 @@ fn channel_examples_print_their_expected_output() {
             continue;
         }
         let expected = std::fs::read_to_string(path.with_extension("expected")).unwrap();
-        {
-            let engine = "sparrow";
-            let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
-            assert_eq!(output.status.code(), Some(0), "{} {engine}: {}", path.display(), stderr(&output));
-            assert_eq!(stdout(&output), expected, "{} {engine}", path.display());
-        }
+        let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(0), "{}: {}", path.display(), stderr(&output));
+        assert_eq!(stdout(&output), expected, "{}", path.display());
         checked += 1;
     }
     assert_eq!(checked, 5);
@@ -602,26 +580,23 @@ fn channel_examples_print_their_expected_output() {
 #[test]
 fn uncaught_failure_prints_place_and_call_stack() {
     let source = b"module app v1.0.0;\nobject Box {\n    Box();\n    at(i is int) is int { [1, 2][i]; }\n}\nmain() is int {\n    Box().at(5);\n}\n";
-    // Every engine reports the place and the call stack (the core since #10).
-    {
-        let engine = "sparrow";
-        let output = run_stdin(&["run", "-"], source);
-        assert_eq!(output.status.code(), Some(1));
-        let text = stderr(&output);
-        assert!(
-            text.starts_with("RuntimeError: Array index out of bounds\n"),
-            "{engine}: {text}"
-        );
-        assert!(
-            text.contains(":4:27\n  |\n4 |     at(i is int) is int { [1, 2][i]; }\n"),
-            "{engine}: {text}"
-        );
-        assert!(
-            text.contains("Stack trace (most recent call first):\n  at Box.at ("),
-            "{engine}: {text}"
-        );
-        assert!(text.contains(":7:5)\n"), "{engine}: {text}");
-    }
+    // `run` reports the place and the call stack (#10).
+    let output = run_stdin(&["run", "-"], source);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.starts_with("RuntimeError: Array index out of bounds\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains(":4:27\n  |\n4 |     at(i is int) is int { [1, 2][i]; }\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Stack trace (most recent call first):\n  at Box.at ("),
+        "{text}"
+    );
+    assert!(text.contains(":7:5)\n"), "{text}");
     let mut command = okkama();
     command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
     command
@@ -1719,17 +1694,14 @@ fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
     // #306: a string payload is an Okkama literal, so a newline in it does
     // not split the report.
     let source = b"module app v1.0.0;\nenum Ferr is Error = (text(s is string));\nmain() is int { throw Ferr.text(\"line1\\nline2 \\\"q\\\"\"); }\n";
-    {
-        let engine = "sparrow";
-        let mut command = okkama();
-        command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        child.stdin.take().unwrap().write_all(source).unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{engine}");
-        assert_eq!(stderr(&output), "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")\n", "{engine}");
-    }
+    let mut command = okkama();
+    command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stderr(&output), "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")\n");
 }
 
 /// A cancelled process worker (#359): its Future settles Cancelled once the
@@ -1758,14 +1730,11 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
             Stdout().writeln(\"end\");\n\
             0;\n}\n";
     let file = TempFile::new("cancelled-worker.ok", source.as_bytes());
-    {
-        let engine = "sparrow";
-        let started = std::time::Instant::now();
-        let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
-        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
-        assert_eq!(stdout(&output), "-1 -1 true true\nend\n", "{engine}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{engine}");
-    }
+    let started = std::time::Instant::now();
+    let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "-1 -1 true true\nend\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
 
 /// #483, #484: a cursor loop owns each cursor for one step. The step's region

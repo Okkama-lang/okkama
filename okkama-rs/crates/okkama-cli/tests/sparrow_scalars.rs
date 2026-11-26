@@ -1,4 +1,4 @@
-//! Exact scalar conversions through both engines and the bytecode file format.
+//! Exact scalar conversions compiled to SPB, encoded, decoded and run on Sparrow.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};

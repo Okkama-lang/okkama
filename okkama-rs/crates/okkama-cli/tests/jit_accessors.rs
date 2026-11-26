@@ -1,6 +1,6 @@
 //! #541: a field accessor's call is compiled as its load, and the program
 //! cannot tell: same output, and the same step count (an accessor's entry is
-//! still a step), as with the core's fast paths off (`SPARROW_CORE_PLAIN=*`).
+//! still a step), as with Sparrow's fast paths off (`SPARROW_CORE_PLAIN=*`).
 
 use std::process::Command;
 

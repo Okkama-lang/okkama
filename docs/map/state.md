@@ -10,6 +10,11 @@
 - [x] #1039 (feature/1039): `blade new` (blade/src/lib.rs `new_project`) refuses an existing NAME, a missing or
   extra argument and an invalid package name; creates with `create_dir`/`File::create_new`; output from
   `project::default_output` (shared with `Project::parse`); no `bin/`.
+- [x] #1060 (feature/1060): okkama-cli tests describe one engine: docs of sparrow_scalars/variants/strings/
+  objects/native/providers, traces, budgets, signals, strings, terminal_pty, jit_accessors; one-element engine
+  loops and `{ let engine = "sparrow"; … }` blocks collapsed (signals `engines()`, budgets `run(engine, …)`,
+  terminal_pty, cli.rs); `both()` → `expect()`; the pty driver takes no engine; cli.rs no longer sets
+  `OCS_RUST_ENGINE` (engine_selection.rs keeps the test that stale engine variables are ignored).
 - [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
   (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
   sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to
