@@ -352,6 +352,10 @@ runs. A file the verifier accepts has:
   bounds; no instruction falls off the end of the code;
 - every register written before it is read, on every path, including the
   sources of edge moves and handler targets;
+- the stub `undef` writes only carried (`move`, edge moves, the fields of
+  `obj.new` and `obj.init`) or read under a binding check: a `bool` register
+  that is `false` wherever the stub may still be there, read on the `true`
+  side of `br`;
 - types that fit: the operands and result of every instruction, the arity and
   argument and result types of every call, edge moves, `ret`, role slots, cap
   fields, `destroy`, the entry (no parameters, `int` result), tests, and

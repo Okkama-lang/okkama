@@ -2,7 +2,11 @@
 use super::*;
 
 fn range_runtime(source: &str, ranges: bool, frontend: bool) -> Box<Runtime> {
-    let mut runtime = runtime(source, true, frontend);
+    range_runtime_of(okkama_sparrow::assemble(source).unwrap(), ranges, frontend)
+}
+
+fn range_runtime_of(program: okkama_sparrow::Program, ranges: bool, frontend: bool) -> Box<Runtime> {
+    let mut runtime = runtime_of(program, true, frontend);
     for (f, info) in runtime.loaded.program.functions.iter().zip(&mut runtime.loaded.functions) {
         info.pointer_free = crate::pointer_free::analyze_with_ranges(f, &info.kinds, &runtime.loaded.program, ranges);
     }
@@ -192,12 +196,16 @@ fn pointer_free_operation_results_survive_await_and_keep_big_aliases_and_cleanup
 fn pointer_free_unbound_conversion_generic_fallback_remains_rooted() {
     crate::on_vm_thread(|| {
         for ty in ["t3", "t4"] {
+            // The verifier refuses a stub read without a binding check (#1069); the conversion is
+            // put in after it, as a caller-constructed program the JIT must still keep rooted.
             let source = source(&format!("t0, {ty}"), &[
-                "undef r1".into(), "cvt r0, r1".into(),
+                "undef r1".into(), "const r0, int 0".into(),
                 "call _, f1, []".into(), "ret r0".into(),
             ]);
+            let mut program = okkama_sparrow::assemble(&source).unwrap();
+            program.functions[0].code[1] = I::Convert { dst: okkama_sparrow::Dst(okkama_sparrow::Register(0)), source: okkama_sparrow::Register(1) };
             for ranges in [false, true] {
-                let mut runtime = range_runtime(&source, ranges, false);
+                let mut runtime = range_runtime_of(program.clone(), ranges, false);
                 runtime.jit.plain.all = true;
                 assert!(!runtime.loaded.functions[0].pointer_free[0]);
                 let result = runtime.run_function(0, crate::STACK_BYTES).unwrap();

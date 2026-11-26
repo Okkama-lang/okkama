@@ -100,7 +100,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
 - `okkama-compiler/src/source/mod.rs` 199 — Source text, byte spans and human-facing positions.
 
-## spb — 9 files, 5100 lines
+## spb — 9 files, 5322 lines
 
 - `okkama-sparrow/src/asm.rs` 835 — Текстовая форма Sparrow (ассемблер): [`disassemble`] печатает программу,
 - `okkama-sparrow/src/codec.rs` 654 — SPB (версия формата — [`VERSION`]): магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
@@ -110,7 +110,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
 - `okkama-sparrow/src/session.rs` 300 — #588 phase B: the program of a REPL session, append-only.
 - `okkama-sparrow/src/typing.rs` 1210 — Instruction operand and result types for bytecode lowered from OIR-2
-- `okkama-sparrow/src/verify.rs` 522 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
+- `okkama-sparrow/src/verify.rs` 744 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
 ## ownership-runtime — 2 files, 3140 lines
 

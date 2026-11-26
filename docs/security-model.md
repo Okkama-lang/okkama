@@ -64,6 +64,11 @@ filesystem access for untrusted source.
   (`okkama-sparrow/src/verify.rs` and `okkama-sparrow/src/typing.rs`). Regressions:
   `okkama-sparrow/tests/verify.rs`, `rejects_false_register_types_and_signatures`;
   `rejects_runtime_tables_with_false_signatures` ([#16]).
+- The stub `undef` writes is read only under a binding check; it may be carried by moves and stored by
+  `obj.new`/`obj.init` (`okkama-sparrow/src/verify.rs`, `State`). Regressions: `okkama-sparrow/tests/verify.rs`,
+  `a_stub_of_undef_is_read_only_under_a_binding_check`, `the_binding_check_the_compiler_emits_proves_the_stub_bound`
+  (#1069). Not checked: a stub stored in an object field and read back by `obj.get` before `obj.init` binds it;
+  the field's word 0 then reaches machine code as for #1069.
 - Verifier initialization analysis is limited to 64 MiB per function (`okkama-sparrow/src/verify.rs`,
   `MAX_ANALYSIS_BYTES`, [#24]). Decode-to-verifier coverage: `okkama-sparrow/tests/codec.rs`,
   `decoding_verifies_the_program` (no dedicated limit regression).

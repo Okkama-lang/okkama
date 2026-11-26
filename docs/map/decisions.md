@@ -543,3 +543,11 @@ every declaration is open (#1005, owner decision).
   `>>`/`>>>` that a nested type closes too; a type closed by the first half of a shift would leave the
   other `>` comparing a type value, so the comparison reading wins (`Count < a >> 2` = `Count < (a >> 2)`).
   `>=` is not treated so: neither reading of `Count < a >= 2` is valid.
+## undef stubs are checked by the SPB verifier (#1069, 2026-11-26)
+
+- A read of an `undef` stub is refused by the verifier, not checked by Sparrow: the JIT trusts the verifier's
+  initialization proof ("Registers start unbound; the verifier proves defined use", jit.rs), and a check at
+  every dereference would tax every program. The rule covers the compiler's two shapes, a constructor field
+  bound on some arms and a `for` in value position: a `bool` guard false wherever the stub may remain, read by
+  `br`. `obj.new`/`obj.init` may store stubs (a constructor whose `self` escapes early, #271, needs it: std/http
+  breaks otherwise), so the heap is outside the rule.

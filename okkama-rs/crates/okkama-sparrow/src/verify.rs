@@ -299,6 +299,9 @@ impl Set {
     fn insert(&mut self, register: Register) {
         self.0[register.0 as usize / 64] |= 1 << (register.0 % 64);
     }
+    fn remove(&mut self, register: Register) {
+        self.0[register.0 as usize / 64] &= !(1 << (register.0 % 64));
+    }
     fn contains(&self, register: Register) -> bool {
         self.0[register.0 as usize / 64] & (1 << (register.0 % 64)) != 0
     }
@@ -311,6 +314,248 @@ impl Set {
             *word = next;
         }
         changed
+    }
+}
+
+/// What the initialization analysis knows at one point (#1069).
+///
+/// `undef` writes a stub (unbound storage), so its register counts as written,
+/// but the stub may only be carried, never used: copied by `move` and edge
+/// moves, or stored by `obj.new`/`obj.init`, as the compiler places a
+/// constructor's fields not bound yet. Any other read needs a binding check:
+/// a `bool` register, the guard, that is `false` wherever the stub may still be
+/// there, so its `true` branch proves the register bound. That is the shape the
+/// compiler emits for a field bound on some arms and for the last value of a
+/// `for` in value position (`ran`, `last`).
+#[derive(Clone, PartialEq, Eq)]
+struct State {
+    /// Registers written on every path.
+    written: Set,
+    /// `bool` registers that hold `false` on every path (a `const false`, a
+    /// copy of one, the `else` edge of a branch on it). A false register
+    /// guards every stub.
+    falses: Set,
+    /// Registers that may hold a stub.
+    stubs: Set,
+    /// Further guards of a stub, beyond `falses`: sorted, disjoint from
+    /// `falses`, at most [`MAX_GUARDS`], never empty.
+    guards: std::collections::BTreeMap<u32, Vec<u32>>,
+}
+
+/// Guards kept per stub besides the false registers. Dropping one only makes
+/// the analysis stricter; the compiler's checks need one.
+const MAX_GUARDS: usize = 4;
+
+/// The registers of a set, in order.
+fn members(set: &Set) -> impl Iterator<Item = u32> + '_ {
+    set.0.iter().enumerate().flat_map(|(index, word)| {
+        let mut bits = *word;
+        std::iter::from_fn(move || {
+            (bits != 0).then(|| {
+                let bit = bits.trailing_zeros();
+                bits &= bits - 1;
+                index as u32 * 64 + bit
+            })
+        })
+    })
+}
+
+/// The first [`MAX_GUARDS`] registers of two sorted lists together.
+fn union_head(left: impl Iterator<Item = u32>, right: impl Iterator<Item = u32>) -> Vec<u32> {
+    let mut all: Vec<u32> = left.take(MAX_GUARDS).chain(right.take(MAX_GUARDS)).collect();
+    all.sort_unstable();
+    all.dedup();
+    all.truncate(MAX_GUARDS);
+    all
+}
+
+impl State {
+    fn new(size: usize) -> Self {
+        State {
+            written: Set::empty(size),
+            falses: Set::empty(size),
+            stubs: Set::empty(size),
+            guards: Default::default(),
+        }
+    }
+
+    /// Guard entries this state stores (for the memory bound).
+    fn entries(&self) -> usize {
+        self.guards.values().map(Vec::len).sum::<usize>() + self.guards.len()
+    }
+
+    fn explicit(&self, register: u32) -> &[u32] {
+        self.guards.get(&register).map_or(&[], Vec::as_slice)
+    }
+
+    fn set_guards(&mut self, register: u32, mut guards: Vec<u32>) {
+        guards.retain(|guard| *guard != register && !self.falses.contains(Register(*guard)));
+        guards.sort_unstable();
+        guards.dedup();
+        guards.truncate(MAX_GUARDS);
+        if guards.is_empty() {
+            self.guards.remove(&register);
+        } else {
+            self.guards.insert(register, guards);
+        }
+    }
+
+    /// `register` is overwritten: it holds no stub, is no longer known false and guards nothing.
+    fn clobber(&mut self, register: Register) {
+        self.written.insert(register);
+        self.falses.remove(register);
+        self.stubs.remove(register);
+        self.guards.remove(&register.0);
+        self.guards.retain(|_, guards| {
+            guards.retain(|guard| *guard != register.0);
+            !guards.is_empty()
+        });
+    }
+
+    /// A def by an instruction: `undef` writes a stub, `move` copies what its source is known to hold,
+    /// `const false` is a false register.
+    fn define(&mut self, register: Register, instruction: &Instruction) {
+        let (stub, falsy) = match instruction {
+            Instruction::Undef { .. } => (Some(Vec::new()), false),
+            Instruction::Move { source, .. } => (
+                self.stubs.contains(*source).then(|| self.explicit(source.0).to_vec()),
+                self.falses.contains(*source),
+            ),
+            Instruction::Const {
+                value: crate::Constant::Bool(false),
+                ..
+            } => (None, true),
+            _ => (None, false),
+        };
+        self.clobber(register);
+        if falsy {
+            self.falses.insert(register);
+        }
+        if let Some(guards) = stub {
+            self.stubs.insert(register);
+            self.set_guards(register.0, guards);
+        }
+    }
+
+    /// Parallel edge moves: each destination gets what its source held before the edge, and a guard
+    /// moved along with its stub keeps guarding it under the destination's name.
+    fn transfer(&mut self, moves: &[(Register, Register)]) {
+        if moves.is_empty() {
+            return;
+        }
+        let before = self.clone();
+        for (dst, _) in moves {
+            self.clobber(*dst);
+        }
+        for (dst, source) in moves {
+            if before.falses.contains(*source) {
+                self.falses.insert(*dst);
+            }
+        }
+        for (dst, source) in moves {
+            if !before.stubs.contains(*source) {
+                continue;
+            }
+            // A guard keeps its value unless an edge move overwrites it, and travels with every copy.
+            let mut renamed = Vec::new();
+            for guard in before.explicit(source.0).iter().copied().chain(members(&before.falses)) {
+                if !moves.iter().any(|(dst, _)| dst.0 == guard) {
+                    renamed.push(guard);
+                }
+                renamed.extend(moves.iter().filter(|(_, source)| source.0 == guard).map(|(dst, _)| dst.0));
+            }
+            self.stubs.insert(*dst);
+            self.set_guards(dst.0, renamed);
+        }
+    }
+
+    /// The `then` edge of `br guard`: every stub the guard proves bound is bound.
+    fn holds(&mut self, guard: Register) {
+        if self.falses.contains(guard) {
+            // The edge is never taken.
+            self.stubs = Set::empty(self.stubs.0.len() * 64);
+            self.guards.clear();
+            return;
+        }
+        let bound: Vec<u32> = self.guards.iter().filter(|(_, guards)| guards.contains(&guard.0)).map(|(register, _)| *register).collect();
+        for register in bound {
+            self.stubs.remove(Register(register));
+            self.guards.remove(&register);
+        }
+    }
+
+    /// The `else` edge of `br guard`: the guard is false there.
+    fn fails(&mut self, guard: Register) {
+        self.falses.insert(guard);
+        for guards in self.guards.values_mut() {
+            guards.retain(|other| *other != guard.0);
+        }
+        self.guards.retain(|_, guards| !guards.is_empty());
+    }
+
+    /// Meet with another path; `true`, if this state changed. A stub's guards on the meet are those
+    /// it has on both paths, a path where it is bound granting every guard; the result never has more
+    /// guards than this state had, so the analysis terminates.
+    fn meet(&mut self, other: &State) -> bool {
+        let mut falses = self.falses.clone();
+        falses.intersect(&other.falses);
+        let mut stubs = self.stubs.clone();
+        for (word, other) in stubs.0.iter_mut().zip(&other.stubs.0) {
+            *word |= other;
+        }
+        // False on one path only: still a guard of a stub that is there on that path alone.
+        let only = |set: &Set| {
+            let mut only = set.clone();
+            for (word, common) in only.0.iter_mut().zip(&falses.0) {
+                *word &= !common;
+            }
+            only
+        };
+        let (mine_only, theirs_only) = (only(&self.falses), only(&other.falses));
+        let mut guards = std::collections::BTreeMap::new();
+        for register in members(&stubs) {
+            let (mine, theirs) = (self.stubs.contains(Register(register)), other.stubs.contains(Register(register)));
+            let (left, right) = (self.explicit(register), other.explicit(register));
+            let next: Vec<u32> = match (mine, theirs) {
+                (true, true) => left
+                    .iter()
+                    .copied()
+                    .filter(|guard| right.contains(guard) || theirs_only.contains(Register(*guard)))
+                    .chain(right.iter().copied().filter(|guard| mine_only.contains(Register(*guard))))
+                    .collect(),
+                (true, false) => union_head(left.iter().copied(), members(&mine_only)),
+                (false, true) => union_head(right.iter().copied(), members(&theirs_only)),
+                (false, false) => unreachable!(),
+            };
+            let mut next: Vec<u32> = next.into_iter().filter(|guard| !falses.contains(Register(*guard))).collect();
+            next.sort_unstable();
+            next.dedup();
+            next.truncate(MAX_GUARDS);
+            if !next.is_empty() {
+                guards.insert(register, next);
+            }
+        }
+        let mut written = self.written.clone();
+        written.intersect(&other.written);
+        let next = State {
+            written,
+            falses,
+            stubs,
+            guards,
+        };
+        let changed = next != *self;
+        *self = next;
+        changed
+    }
+}
+
+/// Reads that carry a stub without using it: `move`, and the fields `obj.new` and `obj.init` store.
+fn carries(instruction: &Instruction, register: Register) -> bool {
+    match instruction {
+        Instruction::Move { .. } => true,
+        Instruction::ObjNew { fields, .. } => fields.contains(&register),
+        Instruction::ObjInit { object, value, .. } => *value == register && *object != register,
+        _ => false,
     }
 }
 
@@ -342,8 +587,9 @@ pub(crate) fn edges(pc: usize, instruction: &Instruction) -> Vec<Edge<'_>> {
     }
 }
 
-/// Memory the initialization analysis of one function may use: a register
-/// set per block leader, checked before it is allocated.
+/// Memory the initialization analysis of one function may use: three register
+/// sets per block leader, checked before they are allocated, and the guards of
+/// stubs (see [`State`]) within what is left.
 pub const MAX_ANALYSIS_BYTES: usize = 64 * 1024 * 1024;
 
 /// Does `pc` only fall through to the next instruction?
@@ -351,10 +597,12 @@ fn falls_through(pc: usize, edges: &[Edge<'_>]) -> bool {
     matches!(edges, [(target, moves, None)] if *target as usize == pc + 1 && moves.is_empty())
 }
 
-/// Every read sees a written register on every path. States are kept only at
-/// block leaders (the entry and the targets of jumps, branches, catches,
-/// lookups and handlers); a block's instructions are walked in order, so the
-/// memory is leaders × registers, not instructions × registers.
+/// Every read sees a written register on every path, and a stub of `undef`
+/// is used only where a binding check proves it bound (see [`State`]). States
+/// are kept only at block leaders (the entry and the targets of jumps,
+/// branches, catches, lookups and handlers); a block's instructions are
+/// walked in order, so the memory is leaders × registers, not instructions ×
+/// registers.
 fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
     let function = context.function;
     let size = function.registers.len();
@@ -384,7 +632,10 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
     for (block, &pc) in leaders.iter().enumerate() {
         block_of[pc] = block as u32;
     }
-    let bytes = leaders.len().checked_mul(size.div_ceil(64)).and_then(|words| words.checked_mul(8));
+    let bytes = leaders
+        .len()
+        .checked_mul(size.div_ceil(64))
+        .and_then(|words| words.checked_mul(3 * 8));
     if bytes.is_none_or(|bytes| bytes > MAX_ANALYSIS_BYTES) {
         return Err(context.error(
             None,
@@ -394,27 +645,36 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
             ),
         ));
     }
-    let mut state: Vec<Option<Set>> = vec![None; leaders.len()];
-    let mut entry = Set::empty(size);
+    let mut state: Vec<Option<State>> = vec![None; leaders.len()];
+    let mut entry = State::new(size);
     for param in &function.params {
-        entry.insert(*param);
+        entry.written.insert(*param);
     }
     state[0] = Some(entry);
     let mut work = vec![0usize];
     let mut queued = vec![false; leaders.len()];
     queued[0] = true;
-    let merge = |state: &mut Vec<Option<Set>>, work: &mut Vec<usize>, queued: &mut Vec<bool>, block: usize, incoming: Set| {
+    // Guard entries of all stored states, bounded with the sets (8 bytes each).
+    let budget = (MAX_ANALYSIS_BYTES - bytes.unwrap_or(0)) / 8;
+    let mut entries = 0usize;
+    let mut merge = |state: &mut Vec<Option<State>>, work: &mut Vec<usize>, queued: &mut Vec<bool>, block: usize, incoming: State| {
+        let before = state[block].as_ref().map_or(0, State::entries);
         let changed = match &mut state[block] {
             None => {
                 state[block] = Some(incoming);
                 true
             }
-            Some(existing) => existing.intersect(&incoming),
+            Some(existing) => existing.meet(&incoming),
         };
+        entries = entries - before + state[block].as_ref().map_or(0, State::entries);
         if changed && !queued[block] {
             queued[block] = true;
             work.push(block);
         }
+        entries <= budget
+    };
+    let too_large = || {
+        context.error(None, format!("function is too large to verify: the guards of `undef` stubs exceed {MAX_ANALYSIS_BYTES} bytes"))
     };
     while let Some(block) = work.pop() {
         queued[block] = false;
@@ -425,11 +685,15 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
             // Чтения инструкции и источники её переходов — до записи.
             let mut defs = Vec::new();
             let mut unread = None;
+            let mut stub = None;
             instruction.visit(&mut |access| match access {
-                Access::Use(register) if !current.contains(register) && unread.is_none() => unread = Some(register),
+                Access::Use(register) if !current.written.contains(register) && unread.is_none() => unread = Some(register),
+                Access::Use(register) if current.stubs.contains(register) && !carries(instruction, register) && stub.is_none() => {
+                    stub = Some(register)
+                }
                 Access::Target(target) => {
                     for (_, source) in &target.moves {
-                        if !current.contains(*source) && unread.is_none() {
+                        if !current.written.contains(*source) && unread.is_none() {
                             unread = Some(*source);
                         }
                     }
@@ -440,19 +704,25 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
             if let Some(register) = unread {
                 return Err(context.error(Some(pc), format!("register r{} may be read before it is written", register.0)));
             }
+            if let Some(register) = stub {
+                return Err(context.error(
+                    Some(pc),
+                    format!("register r{} may hold the stub of `undef`: no binding check proves it bound", register.0),
+                ));
+            }
             if let Some(handler) = function.handler_at(pc as u32) {
                 for (_, source) in &handler.target.moves {
-                    if !current.contains(*source) {
+                    if !current.written.contains(*source) {
                         return Err(context.error(Some(pc), format!("handler reads r{} before it is written", source.0)));
                     }
                 }
                 let mut incoming = current.clone();
-                for (dst, _) in &handler.target.moves {
-                    incoming.insert(*dst);
-                }
-                incoming.insert(handler.failure);
+                incoming.transfer(&handler.target.moves);
+                incoming.clobber(handler.failure);
                 let target = block_of[handler.target.pc as usize] as usize;
-                merge(&mut state, &mut work, &mut queued, target, incoming);
+                if !merge(&mut state, &mut work, &mut queued, target, incoming) {
+                    return Err(too_large());
+                }
             }
             let payload = match instruction {
                 Instruction::Catch { value, .. } | Instruction::ArrayLookup { value, .. } | Instruction::MapLookup { value, .. } => Some(value.0),
@@ -460,7 +730,7 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
             };
             for register in defs {
                 if Some(register) != payload {
-                    current.insert(register);
+                    current.define(register, instruction);
                 }
             }
             let edges = edges(pc, instruction);
@@ -471,15 +741,22 @@ fn check_initialization(context: &Context<'_>) -> Result<(), VerifyError> {
                 pc += 1;
                 continue;
             }
-            for (target, moves, value) in edges {
+            for (index, (target, moves, value)) in edges.into_iter().enumerate() {
                 let mut incoming = current.clone();
-                for (dst, _) in moves {
-                    incoming.insert(*dst);
+                if let Instruction::Branch { condition, .. } = instruction {
+                    if index == 0 {
+                        incoming.holds(*condition);
+                    } else {
+                        incoming.fails(*condition);
+                    }
                 }
                 if let Some(value) = value {
-                    incoming.insert(value);
+                    incoming.clobber(value);
                 }
-                merge(&mut state, &mut work, &mut queued, block_of[target as usize] as usize, incoming);
+                incoming.transfer(moves);
+                if !merge(&mut state, &mut work, &mut queued, block_of[target as usize] as usize, incoming) {
+                    return Err(too_large());
+                }
             }
             break;
         }

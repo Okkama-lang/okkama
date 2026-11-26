@@ -15,6 +15,12 @@
   sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to
   release/065 except `L03.anonymous.lexical-scope`, whose closure capture order differs run to run on both
   binaries (codegen nondeterminism, ticket to file).
+- [x] #1069 (feature/1069): the SPB verifier tracks `undef` stubs (`State` in okkama-sparrow/src/verify.rs):
+  carried by moves, edge moves and `obj.new`/`obj.init` fields, read only on the `true` side of a `br` on a
+  guard that is false where the stub may remain. Compile sweep over std, t/, examples, conformance, Bible
+  examples, bench/micro (3170 files): SPB identical to release/065 but the nondeterministic
+  `L03.anonymous.lexical-scope` (closure capture order varies run to run). Open: a stub stored in a field and read by
+  `obj.get` (heap) is not tracked (ticket to file).
 - [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
   `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
   program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with

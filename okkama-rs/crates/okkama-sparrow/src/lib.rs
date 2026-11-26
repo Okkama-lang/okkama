@@ -243,7 +243,8 @@ instructions! {
     Const = 1, "const" { dst: Dst, value: Constant }
     /// Копия значения: `succ.take`, `retag`, `map.retag`, `cap.make`.
     Move = 2, "move" { dst: Dst, source: Register }
-    /// Заглушка значения типа назначения: читать её можно только под проверкой связывания.
+    /// Заглушка значения типа назначения: её переносят (`move`, рёбра, поля `obj.new`/`obj.init`),
+    /// а читают только под проверкой связывания — это проверяет верификатор (#1069).
     Undef = 3, "undef" { dst: Dst }
 
     IntAdd = 10, "int.add" { dst: Dst, left: Register, right: Register }

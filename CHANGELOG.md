@@ -40,6 +40,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `Count < a >> 2` is `Count < (a >> 2)`, as for `count`; `Maybe<Maybe<int>>.none` stays a type. A trial that
   backtracks now also puts the split tokens back together. Conformance
   `L01.gram.precedence.shift-after-capitalised-binding`; Bible appendix A.
+- **Sparrow: a verified program could read the stub of `undef` and crash (#1069).** The verifier counted
+  `undef rN` as a write and nothing checked the reads after it, so `undef r0; int.add r2, r0, r1` or
+  `str.len` of a stub passed `sparrow --assemble`, `check` and decoding, and machine code used the stub's word 0
+  as a pointer (SIGSEGV). The initialization analysis now tracks stubs: one may be carried (`move`, edge moves,
+  the fields of `obj.new`/`obj.init`) and read only under a binding check, a `bool` register that is `false`
+  wherever the stub may still be there, on the `true` side of `br` (the shape the compiler emits for a field
+  bound on some arms and for a `for` in value position). Anything else is "register rN may hold the stub of
+  `undef`: no binding check proves it bound". Every program of std, t/, examples, conformance, the Bible and
+  bench/micro compiles as before. A stub stored in a field and read back with `obj.get` is not tracked
+  through the heap yet (`docs/security-model.md` §2).
 ### Security
 - **Native crypto (#1026).** Argon2 (`argon2`, `argon2-phc`, `argon2-verify`) runs in memory blocks the provider
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at

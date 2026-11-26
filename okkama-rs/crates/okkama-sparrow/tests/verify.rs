@@ -325,3 +325,157 @@ fn handles_of_one_short_name_from_two_modules_are_rejected() {
     program.handles = vec!["runtime.buffer::State".into(), "runtime.other::Cursor".into()];
     assert_eq!(program.verify(), Ok(()));
 }
+
+/// A function `last(n)` in the shape the compiler gives a `for` in value position: `ran` (r1)
+/// is `false` while `last` (r2) holds the stub of `undef`, and `br ran` is the binding check.
+const BINDING_CHECK: &str = r#"sparrow 18
+module "stub" "v1.0.0"
+type t0 int
+type t1 bool
+type t2 str
+type t3 object obj0
+object obj0 "Box" {
+    field "name" t2
+}
+function f0 "last" {
+    registers [t0, t1, t0, t0, t1, t1, t0, t0]
+    params [r0]
+    result t0
+    0: const r1, bool false
+    1: undef r2
+    2: const r3, int 0
+    3: const r5, bool true
+    4: const r6, int 1
+    5: int.cmp lt, r4, r3, r0
+    6: br r4, @7, @9
+    7: int.add r7, r3, r6
+    8: jmp @5(r3 <- r7, r1 <- r5, r2 <- r3)
+    9: br r1, @10, @11
+    10: ret r2
+    11: trap empty, "A void result cannot be used as a value"
+}
+"#;
+
+fn verdict(text: &str) -> Result<(), String> {
+    okkama_sparrow::assemble(text).map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn stub_read(text: &str, register: u32) -> bool {
+    verdict(text).is_err_and(|message| {
+        message.contains(&format!("register r{register} may hold the stub of `undef`: no binding check proves it bound"))
+    })
+}
+
+#[test]
+fn a_stub_of_undef_is_read_only_under_a_binding_check() {
+    // #1069: `undef r0` and a use of r0 crashed Sparrow (the stub is the word 0).
+    let main = |registers: &str, code: &str| {
+        format!(
+            "sparrow 18\nmodule \"undef\" \"v1.0.0\"\ntype t0 int\ntype t1 str\ntype t2 object obj0\n\
+             object obj0 \"Box\" {{\n    field \"name\" t1\n}}\n\
+             function f0 \"main\" {{\n    registers [{registers}]\n    params []\n    result t0\n{code}}}\nentry f0\n"
+        )
+    };
+    let add = main("t0, t0, t0", "    0: undef r0\n    1: const r1, int 1\n    2: int.add r2, r0, r1\n    3: ret r2\n");
+    assert!(stub_read(&add, 0), "{:?}", verdict(&add));
+    let length = main("t1, t0", "    0: undef r0\n    1: str.len r1, r0\n    2: ret r1\n");
+    assert!(stub_read(&length, 0), "{:?}", verdict(&length));
+    let returned = main("t0", "    0: undef r0\n    1: ret r0\n");
+    assert!(stub_read(&returned, 0), "{:?}", verdict(&returned));
+    // A copy holds the same stub.
+    let copied = main("t1, t1, t0", "    0: undef r0\n    1: move r1, r0\n    2: str.len r2, r1\n    3: ret r2\n");
+    assert!(stub_read(&copied, 1), "{:?}", verdict(&copied));
+    // Carrying it is no use: a `move` and a field of `obj.new` (a constructor's unbound field).
+    let carried = main(
+        "t1, t1, t2, t0",
+        "    0: undef r0\n    1: move r1, r0\n    2: obj.new r2, obj0, [r1]\n    3: const r3, int 0\n    4: ret r3\n",
+    );
+    assert_eq!(verdict(&carried), Ok(()));
+    // A file is verified when it is decoded: `sparrow check` and `run` refuse it.
+    let file = program(vec![function(
+        "main",
+        3,
+        vec![],
+        true,
+        vec![
+            I::Undef { dst: d(0) },
+            I::Const { dst: d(1), value: int("1") },
+            I::IntAdd { dst: d(2), left: r(1), right: r(1) },
+            I::Return { value: Some(r(2)) },
+        ],
+    )]);
+    // Encoding verifies too, so the file is the encoding of `r1 + r1` with the left operand made r0.
+    let mut bytes = okkama_sparrow::encode(&file).expect("encodes");
+    let add = [10, 2, 1, 1];
+    let at: Vec<usize> = (0..bytes.len() - 3).filter(|&at| bytes[at..at + 4] == add).collect();
+    assert_eq!(at.len(), 1, "one `int.add r2, r1, r1` in {bytes:?}");
+    bytes[at[0] + 2] = 0;
+    let refused = okkama_sparrow::decode(&bytes).expect_err("decoding verifies").to_string();
+    assert!(refused.contains("register r0 may hold the stub of `undef`"), "{refused}");
+    // A write replaces the stub.
+    let written = main("t0, t0", "    0: undef r0\n    1: const r0, int 2\n    2: const r1, int 1\n    3: int.add r1, r0, r1\n    4: ret r1\n");
+    assert_eq!(verdict(&written), Ok(()));
+}
+
+#[test]
+fn the_binding_check_the_compiler_emits_proves_the_stub_bound() {
+    assert_eq!(verdict(BINDING_CHECK), Ok(()));
+    // Read on the path where the guard is false.
+    let unguarded = BINDING_CHECK.replace("    11: trap empty, \"A void result cannot be used as a value\"\n", "    11: ret r2\n");
+    assert!(stub_read(&unguarded, 2), "{:?}", verdict(&unguarded));
+    // No check at all.
+    let unchecked = BINDING_CHECK.replace("9: br r1, @10, @11", "9: jmp @10");
+    assert!(stub_read(&unchecked, 2), "{:?}", verdict(&unchecked));
+    // A guard not `false` where the stub is written proves nothing.
+    let true_guard = BINDING_CHECK.replace("0: const r1, bool false", "0: const r1, bool true");
+    assert!(stub_read(&true_guard, 2), "{:?}", verdict(&true_guard));
+    // The back edge sets the guard without binding the value.
+    let unbound_back_edge = BINDING_CHECK.replace("(r3 <- r7, r1 <- r5, r2 <- r3)", "(r3 <- r7, r1 <- r5)");
+    assert!(stub_read(&unbound_back_edge, 2), "{:?}", verdict(&unbound_back_edge));
+    // The guard is overwritten between the stub and the check.
+    let overwritten = BINDING_CHECK.replace("9: br r1, @10, @11", "9: br r5, @10, @11");
+    assert!(stub_read(&overwritten, 2), "{:?}", verdict(&overwritten));
+}
+
+#[test]
+fn a_guard_moved_with_its_stub_keeps_guarding_it() {
+    // An exit block that takes `ran` and `last` as its own registers (r4, r7).
+    let renamed = BINDING_CHECK
+        .replace("6: br r4, @7, @9", "6: br r4, @7, @9(r4 <- r1, r7 <- r2)")
+        .replace("9: br r1, @10, @11", "9: br r4, @10, @11")
+        .replace("10: ret r2", "10: ret r7");
+    assert_eq!(verdict(&renamed), Ok(()));
+    // The new name of the check takes another register: it guards nothing.
+    let other = renamed.replace("(r4 <- r1, r7 <- r2)", "(r4 <- r5, r7 <- r2)");
+    assert!(stub_read(&other, 7), "{:?}", verdict(&other));
+    // `else` of the check: the guard is false there, so the stub may still be there.
+    let inverted = BINDING_CHECK.replace("9: br r1, @10, @11", "9: br r1, @11, @10");
+    assert!(stub_read(&inverted, 2), "{:?}", verdict(&inverted));
+}
+
+#[test]
+fn a_condition_is_false_on_its_else_edge_and_guards_a_stub_there() {
+    let text = r#"sparrow 18
+module "stub" "v1.0.0"
+type t0 int
+type t1 bool
+function f0 "pick" {
+    registers [t1, t0, t0]
+    params [r0]
+    result t0
+    0: br r0, @1, @3
+    1: const r1, int 5
+    2: jmp @5
+    3: undef r1
+    4: jmp @5
+    5: br r0, @6, @7
+    6: ret r1
+    7: const r2, int 0
+    8: ret r2
+}
+"#;
+    assert_eq!(verdict(text), Ok(()));
+    // The stub on the `then` edge: r0 is true there, and proves nothing.
+    let swapped = text.replace("0: br r0, @1, @3", "0: br r0, @3, @1");
+    assert!(stub_read(&swapped, 1), "{:?}", verdict(&swapped));
+}
