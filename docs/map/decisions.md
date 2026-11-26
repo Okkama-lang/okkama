@@ -19,6 +19,17 @@ the session's memory; older rulings live in the commits and tickets named.
   in the order of first use; the enclosing action captures a name for a nested
   one at the nested action's position. Nothing iterates a hash map to decide
   captures; a closure written in a default value sees no caller locals (#149).
+- **2026-11-26. Every resource has an owner before the function leaves (#1073,
+  lead decision; the owner gave none).** The ownership linearity check
+  requires each resource a function makes (an object with its own `destroy`,
+  from `obj.new`, a call or `await.take`) to be tracked, adopted or transferred
+  by a region, or pinned, on every path to an exit, unless it is the value the
+  function returns or throws; `region.leave/settle … keep` frees it again. A
+  resource outside any region is an error, and lowering must satisfy the rule
+  (a `return` through nested scopes re-tracks the kept value in each next
+  region). `await` leaves the outcome with its Future; containers, roles and
+  Futures are left to their regions. A `region.enter` of a region that may be
+  open is reported at that enter, naming it.
 
 - **2026-11-26. #1029 entry-result report (implementation choice under the
   owner's six-ticket task).** Preserve the bare runtime message used for

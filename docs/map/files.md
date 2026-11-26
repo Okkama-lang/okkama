@@ -41,7 +41,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11876 lines
+## lower — 14 files, 11881 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 247 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1588 — Контекст lowering из THIR: специализации, функции, объявления OIR.
@@ -56,14 +56,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/collections.rs` 1636 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
 - `okkama-compiler/src/lowering/body/matching.rs` 803 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
 - `okkama-compiler/src/lowering/body/mod.rs` 3112 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
-- `okkama-compiler/src/lowering/body/scopes.rs` 382 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
+- `okkama-compiler/src/lowering/body/scopes.rs` 387 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7470 lines
+## ir — 12 files, 7552 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 524 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
-- `okkama-compiler/src/ir/linearity.rs` 255 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
+- `okkama-compiler/src/ir/linearity.rs` 337 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
 - `okkama-compiler/src/ir/mod.rs` 1461 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
 - `okkama-compiler/src/ir/ownership.rs` 943 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 304 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).

@@ -44,6 +44,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   or never). `worker.bind` requires its entry to take the receiver's fields and then the action's parameters,
   with the action's result; `worker.spawn` refuses an entry that returns a Future. Lowering never produced such
   modules; they matter for hand-written passes and IR producers.
+- **A resource returned through nested scopes could be lost by a failing outer cleanup (#1073).** A `return`
+  from inside nested blocks closed each block's region keeping the result, which frees it, and tracked it in no
+  outer region, so a defer or a destroy of an outer scope that failed on the way out left the returned resource
+  with no owner (never destroyed). Each next region the return closes now tracks it. The ownership linearity
+  check (debug builds and `OKKAMA_VERIFY_OWNERSHIP=1`, which it found this with) now refuses a resource that may
+  be in no region when a function leaves, other than the value it returns or throws, and reports a
+  `region.enter` of a region that may still be open at that enter instead of at the function's exit.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

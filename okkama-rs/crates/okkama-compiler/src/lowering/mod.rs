@@ -787,7 +787,8 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
             format!("internal compiler error: lowering produced invalid IR: {error}"),
         ));
     }
-    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
+    // #910: the ownership linearity check, in debug builds and, in an optimized build too, with
+    // OKKAMA_VERIFY_OWNERSHIP=1; packaged releases (`--cfg okkama_release`) compile it out (#1073).
     if ownership {
         let _span = okkama_devtrace::span!("lower", "linearity check");
         if let Err(error) = ir::linearity::check(module) {
@@ -800,7 +801,8 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
     Ok(())
 }
 
-/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`.
+/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`
+/// in any build but a packaged release (`--cfg okkama_release`).
 fn verify_ownership() -> bool {
     if cfg!(okkama_release) {
         return false;

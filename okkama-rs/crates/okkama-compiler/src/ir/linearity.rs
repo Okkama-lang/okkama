@@ -1,16 +1,25 @@
 //! The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
 //! static resource is opened once, used only while open, and closed exactly once on every path that leaves the
-//! function, the failure paths included.
+//! function, the failure paths included; and every value that may hold a free resource identity is owned before
+//! the function leaves (#1073).
 //!
-//! It runs in debug builds (tests, CI) and with `OKKAMA_VERIFY_OWNERSHIP=1`, never in a release build and never in
-//! the loader. It checks the shape of the operations only; the runtime's destroy trace (#562) stays the arbiter of
-//! what is destroyed when.
+//! It runs in debug builds (tests, CI) and, in an optimized build too, with `OKKAMA_VERIFY_OWNERSHIP=1`; packaged
+//! releases (`--cfg okkama_release`) compile it out, and the loader never runs it. It checks the shape of the
+//! operations only; the runtime's destroy trace (#562) stays the arbiter of what is destroyed when.
 //!
 //! The analysis is a forward data flow over the blocks. A tracked value (a `region.enter` result or a value given
 //! to `resource.pin`) is in a set of states: not yet opened, open, closed. A failing instruction leaves through the
 //! block's unwind target with the state from before it, so a close that fails is closed again by its handler (the
 //! runtime makes that second close a no-op). The bookkeeping operations themselves (enter, track, adopt, transfer,
-//! pin) cannot fail.
+//! pin) cannot fail. A region entered again while it may still be open is refused at that `region.enter` (#1073).
+//!
+//! Ownership (#1073). A *fresh* resource is a value of an object type with its own `destroy` that an instruction
+//! makes: the result of `obj.new`, of a call (`call`, `call.fn`, `call.role`, `call.cap`) or of `await.take`
+//! (an `await` leaves the outcome with its Future), whose identity nobody owns yet. It is free from its definition until `region.track`,
+//! `region.adopt` or `region.transfer` of it, or `resource.pin`, owns it; `region.leave`/`region.settle` with `keep` of it frees it again, and
+//! `await.take` of a Future consumes it. A fresh value may leave the function free only as the value it returns
+//! or throws (the caller or the handler takes it); free at any other exit, or made again by a loop while the one
+//! before is free, it has no owner that would destroy it, and the check refuses it.
 use std::collections::HashMap;
 
 use super::{Function, InstKind, Module, TermKind, Type, ValueId};
@@ -18,6 +27,9 @@ use super::{Function, InstKind, Module, TermKind, Type, ValueId};
 const UNOPENED: u8 = 1;
 const OPEN: u8 = 2;
 const CLOSED: u8 = 4;
+/// Ownership states of a fresh value (#1073), in their own entries of a state.
+const FREE: u8 = 8;
+const OWNED: u8 = 16;
 
 /// The states of the values a function's check can meet, one byte per value
 /// (0: not met yet), indexed through [`Keys`] (#972: a map per state made the
@@ -60,9 +72,54 @@ impl State {
 /// Check every function; the first violation, named by function.
 pub fn check(module: &Module) -> Result<(), String> {
     for function in &module.functions {
-        check_function(function).map_err(|error| format!("ownership linearity in {}: {error}", function.symbol))?;
+        check_function(module, function)
+            .map_err(|error| format!("ownership linearity in {}: {error}", function.symbol))?;
     }
     Ok(())
+}
+
+/// The resources `function` makes (#1073): values of an object type with its own `destroy` (a resource, the
+/// Bible's ch. 11), made by `obj.new`, returned by a call or taken from a Future by `await.take`. An `await`
+/// leaves the outcome with its Future, whose owner closes it. Containers, roles and Futures that may reach a
+/// resource are left to the regions they are tracked in.
+fn fresh(module: &Module, function: &Function) -> Vec<ValueId> {
+    let mut values = Vec::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        let makes = matches!(
+            inst.kind,
+            InstKind::ObjNew { .. }
+                | InstKind::Call { .. }
+                | InstKind::CallFn { .. }
+                | InstKind::CallRole { .. }
+                | InstKind::CallCap { .. }
+                | InstKind::AwaitTake(_)
+        );
+        if makes
+            && let Some(value) = inst.result
+            && let Type::Object(object) = &function.values[value.0]
+            && module.object(*object).is_some_and(|object| object.destroy.is_some())
+        {
+            values.push(value);
+        }
+    }
+    values.sort_by_key(|value| value.0);
+    values.dedup();
+    values
+}
+
+/// What owns or frees a fresh value: `Some(true)` owns, `Some(false)` frees.
+fn ownership(kind: &InstKind) -> Option<(ValueId, bool)> {
+    match kind {
+        InstKind::RegionAdopt { value, .. }
+        | InstKind::RegionTrack { value, .. }
+        | InstKind::RegionTransfer { value, .. }
+        | InstKind::ResourcePin { value }
+        | InstKind::AwaitTake(value) => Some((*value, true)),
+        InstKind::RegionLeave { keep: Some(value), .. } | InstKind::RegionSettle { keep: Some(value), .. } => {
+            Some((*value, false))
+        }
+        _ => None,
+    }
 }
 
 fn tracked(function: &Function) -> Vec<ValueId> {
@@ -129,12 +186,13 @@ fn visit_limit(blocks: usize, values: usize) -> usize {
     blocks.saturating_mul(3usize.saturating_mul(values).saturating_add(1)).saturating_add(1)
 }
 
-fn check_function(function: &Function) -> Result<(), String> {
+fn check_function(module: &Module, function: &Function) -> Result<(), String> {
     if function.blocks.is_empty() {
         return Ok(());
     }
     let values = tracked(function);
-    if values.is_empty() {
+    let made = fresh(module, function);
+    if values.is_empty() && made.is_empty() {
         return Ok(());
     }
     // A region passed between blocks as a parameter is out of this check's
@@ -159,16 +217,25 @@ fn check_function(function: &Function) -> Result<(), String> {
             kind => closes(kind),
         }
     })));
-    let mut start = State(vec![0; keys.values.len()]);
+    // The ownership entries of the fresh values follow the linearity ones.
+    let owners = Keys::new(made.iter().copied());
+    let base = keys.values.len();
+    let mut start = State(vec![0; base + owners.values.len()]);
     for &value in &values {
         start.insert(&keys, value, UNOPENED);
     }
+    let owner_of = |state: &State, value: &ValueId| owners.index.get(value).map(|&at| state.0[base + at]);
+    let set_owner = |state: &mut State, value: &ValueId, bits: u8| {
+        if let Some(&at) = owners.index.get(value) {
+            state.0[base + at] = bits;
+        }
+    };
     let mut entry: Vec<Option<State>> = vec![None; function.blocks.len()];
     entry[0] = Some(start);
     let mut pending = vec![0usize];
     let mut errors = Vec::new();
     let mut visits = 0usize;
-    let limit = visit_limit(function.blocks.len(), keys.values.len());
+    let limit = visit_limit(function.blocks.len(), keys.values.len() + owners.values.len());
     while let Some(block_index) = pending.pop() {
         visits += 1;
         if visits > limit {
@@ -215,12 +282,34 @@ fn check_function(function: &Function) -> Result<(), String> {
             {
                 state.insert(&keys, defined, UNOPENED);
             }
+            // A fresh value is free when made; the one a loop made before must have an owner by then.
+            if let Some(defined) = inst.result
+                && let Some(bits) = owner_of(&state, &defined)
+            {
+                if bits & FREE != 0 {
+                    errors.push((
+                        (block_index, index),
+                        format!("{defined} is made again at {} while the one made before is in no region", at()),
+                    ));
+                }
+                set_owner(&mut state, &defined, FREE);
+            }
+            if let Some((value, owns)) = ownership(&inst.kind)
+                && owner_of(&state, &value).is_some()
+            {
+                set_owner(&mut state, &value, if owns { OWNED } else { FREE });
+            }
             let result = match &inst.kind {
                 InstKind::RegionEnter => {
+                    let mut checked = Ok(());
                     if let Some(region) = inst.result {
+                        // A loop that enters its region each round must close it first (#1073).
+                        if state.get(&keys, &region).is_some_and(|bits| bits & OPEN != 0) {
+                            checked = Err(format!("{region} is entered again at {} while it may still be open", at()));
+                        }
                         state.insert(&keys, region, OPEN);
                     }
-                    Ok(())
+                    checked
                 }
                 InstKind::RegionAdopt { region, .. } | InstKind::RegionTrack { region, .. } => open(&state, region, "an add"),
                 InstKind::RegionTransfer { from, to, .. } => {
@@ -276,6 +365,20 @@ fn check_function(function: &Function) -> Result<(), String> {
                 for (value, &bits) in keys.values.iter().zip(&state.0) {
                     if bits & OPEN != 0 {
                         errors.push(((block_index, usize::MAX), format!("{value} may still be open when block {block_index} leaves the function")));
+                    }
+                }
+                // The returned or thrown value goes to the caller or the handler; any other free one has no owner.
+                let handed = match &block.term.kind {
+                    TermKind::Ret(value) => *value,
+                    TermKind::Throw(value) => Some(*value),
+                    _ => None,
+                };
+                for (value, &bits) in owners.values.iter().zip(&state.0[base..]) {
+                    if bits & FREE != 0 && Some(*value) != handed {
+                        errors.push((
+                            (block_index, usize::MAX),
+                            format!("{value} may be in no region when block {block_index} leaves the function"),
+                        ));
                     }
                 }
             }

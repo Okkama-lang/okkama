@@ -60,7 +60,10 @@ caller and steps, and structure indexes. `bench/ownership/run.py` compares again
 **Checker (#910).** `ir/linearity.rs` checks after the IR passes that each region and static resource is opened
 once, used only while open and closed exactly once on every path (failure paths included). Debug builds and
 `OKKAMA_VERIFY_OWNERSHIP=1` only. Its first find: an early return's defers tracked fresh values in a nested scope
-the return had already closed (fixed in `exit_scopes`).
+the return had already closed (fixed in `exit_scopes`). Since #1073 it also refuses a resource (an object
+with its own destroy made by `obj.new`, a call or `await.take`) that may be in no region (not tracked, adopted,
+transferred or pinned) when the function leaves, other than the value returned or thrown, and a `region.enter` of
+a region that may still be open. A `return` through nested scopes re-tracks the kept value in each next region.
 
 **Next.** The static pass (#909 2b) takes a resource alone in its region or the oldest member of one (newer
 members close first). Several static resources per region, drop flags for conditional creation and direct JIT

@@ -43,6 +43,15 @@
   names, each field a synchronous `[method Owner]` function of the owner alone returning a value),
   `worker.bind` (entry `fn(field types…, action params…)` with the action's result) and `worker.spawn` (the
   entry does not return a Future). Not reachable from lowering; compile sweep as release/065.
+- [x] #1073 (feature/1073): `ir/linearity.rs` refuses a resource (object with its own destroy made by `obj.new`,
+  a call or `await.take`) that may be in no region (track, adopt, transfer, pin; `keep` frees) when the function
+  leaves, other than the value returned or thrown, or made again by a loop while the one before is free; and a
+  `region.enter` while the region may be open, at that enter. Header: debug builds and `OKKAMA_VERIFY_OWNERSHIP=1`
+  in any build but a packaged release. Its find: `exit_scopes` left nested regions with `keep` and no track in
+  between, so a failing outer defer or close lost a returned resource; each next region now tracks it
+  (`lowering/body/scopes.rs`). Compile sweep (2382 files) with `OKKAMA_VERIFY_OWNERSHIP=1`, passes on and off:
+  exit codes as release/065; SPB differs in 78 files beyond #1077's nondeterminism (std http/db/net/web/mail,
+  conformance L07/L11/L12/L13, examples), all from the added tracks.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

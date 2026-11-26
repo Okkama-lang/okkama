@@ -357,6 +357,13 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     InstKind::RegionLeave { region, keep }
                 };
                 self.b.emit_void(close, span);
+                // The kept value is free now: the next region this exit closes owns it until its own close
+                // keeps it, so a failing defer or close of an outer scope destroys it (#1073).
+                if let Some(value) = keep
+                    && let Some(outer) = (from..index).rev().find_map(|outer| self.cleanups[outer].region)
+                {
+                    self.b.emit_void(InstKind::RegionTrack { region: outer, value }, span);
+                }
             }
         }
         self.tries = saved;

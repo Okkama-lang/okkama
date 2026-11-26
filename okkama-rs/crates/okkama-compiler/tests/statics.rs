@@ -142,6 +142,97 @@ fn the_linearity_check_refuses_a_region_block_parameter() {
     assert!(error.contains("a region passed as a block parameter"), "{error}");
 }
 
+fn lowered(text: &str, passes: &str) -> ir::Module {
+    let source = SourceFile::new("test.ok", text).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    okkama_compiler::lowering::with_passes(passes, || lower_program(&prune::strip_test_items(program))).expect("lowers")
+}
+
+fn symbol(module: &ir::Module, symbol: &str) -> usize {
+    module.functions.iter().position(|function| function.symbol == symbol).expect(symbol)
+}
+
+/// #1073: a fresh resource must be owned by a region (or pinned) before the function leaves; the one it returns
+/// goes to the caller. Without its `region.track` the resource made in `P.run` has no owner that would destroy it.
+#[test]
+fn the_linearity_check_refuses_a_resource_in_no_region() {
+    let module = lowered(&format!("{RES} object P {{ P(); run(a is Res) is int {{ \
+        let r = Res(n: a.read() + 1); r.read(); }} make() is Res {{ Res(n: 2); }} }} main() is int {{ 0; }}"), "none");
+    // The constructor and `P.make` hand their resource out untracked or kept: the caller owns it.
+    ir::linearity::check(&module).expect("the lowering's output owns every resource");
+    let index = symbol(&module, "P.run");
+    let made = module.functions[index].blocks.iter().flat_map(|block| &block.insts)
+        .find_map(|inst| match &inst.kind {
+            ir::InstKind::Call { .. } if module.functions[index].values[inst.result?.0] == ir::Type::Object(ir::ObjectId(0)) => inst.result,
+            _ => None,
+        })
+        .expect("P.run makes a Res");
+    let mut untracked = module.clone();
+    for block in &mut untracked.functions[index].blocks {
+        block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionTrack { value, .. } | ir::InstKind::RegionAdopt { value, .. } if value == made));
+    }
+    ir::verify(&untracked).expect("only ownership is broken");
+    let error = ir::linearity::check(&untracked).expect_err("the resource is in no region");
+    assert!(error.contains(&format!("in P.run: {made} may be in no region when block")), "{error}");
+}
+
+/// #1073: a `return` from nested scopes keeps the resource at each close, so between two closes it is free; the
+/// next region the exit closes owns it again, so a failing defer or close of an outer scope destroys it.
+#[test]
+fn a_resource_returned_from_nested_scopes_is_owned_between_their_closes() {
+    let module = lowered(&format!("{RES} object P {{ P(); pick(flag is bool) is Res {{ \
+        if flag {{ let r = Res(n: 1); return r; }} Res(n: 2); }} }} main() is int {{ P().pick(true).read(); }}"), "none");
+    ir::linearity::check(&module).expect("the returned resource is owned until the last close");
+    let function = &module.functions[symbol(&module, "P.pick")];
+    let insts: Vec<&ir::InstKind> = function.blocks.iter().flat_map(|block| &block.insts).map(|inst| &inst.kind).collect();
+    // Every close that keeps a value, but the last one before `ret`, is followed by a track of it in an outer region.
+    let kept: Vec<(ir::ValueId, ir::ValueId)> = function.blocks.iter()
+        .flat_map(|block| block.insts.iter().map(|inst| &inst.kind))
+        .filter_map(|kind| match kind { ir::InstKind::RegionLeave { region, keep: Some(value) } => Some((*region, *value)), _ => None })
+        .collect();
+    assert!(kept.len() >= 3, "{kept:?}");
+    for (region, value) in &kept {
+        let retracked = insts.iter().any(|kind| matches!(kind, ir::InstKind::RegionTrack { region: r, value: v } if v == value && r != region));
+        assert!(retracked, "{value} kept by {region} is tracked by an outer region");
+    }
+}
+
+/// #1073: a loop that makes a resource each round must own each one before the next is made.
+#[test]
+fn the_linearity_check_refuses_a_loop_resource_in_no_region() {
+    let module = lowered(&format!("{RES} object P {{ P(); run(n is int) is int {{ \
+        for 1..=n -> i {{ Res(n: i).read(); }} 0; }} }} main() is int {{ 0; }}"), "none");
+    ir::linearity::check(&module).expect("the lowering's output owns every resource");
+    let index = symbol(&module, "P.run");
+    let mut untracked = module.clone();
+    for block in &mut untracked.functions[index].blocks {
+        block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionTrack { .. } | ir::InstKind::RegionAdopt { .. }));
+    }
+    let error = ir::linearity::check(&untracked).expect_err("a round's resource is in no region");
+    assert!(error.contains("is made again at block") && error.contains("while the one made before is in no region"), "{error}");
+}
+
+/// #1073: a loop that enters its region every round without closing it is refused at the second `region.enter`,
+/// which names the region, not at the function's exit.
+#[test]
+fn the_linearity_check_refuses_a_region_entered_while_open() {
+    let module = lowered(&format!("{RES} object P {{ P(); run(n is int) is int {{ \
+        for 1..=n -> i {{ Res(n: i).read(); }} 0; }} }} main() is int {{ 0; }}"), "none");
+    let index = symbol(&module, "P.run");
+    let function = &module.functions[index];
+    // The loop body's region: the one entered in a block a back edge reaches again.
+    let (block, region) = function.blocks.iter().enumerate()
+        .flat_map(|(at, block)| block.insts.iter().filter(|inst| matches!(inst.kind, ir::InstKind::RegionEnter)).map(move |inst| (at, inst.result.expect("a region"))))
+        .find(|(at, _)| *at > 1)
+        .expect("a loop body region");
+    let mut open = module.clone();
+    for body in &mut open.functions[index].blocks {
+        body.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionLeave { region: r, .. } if r == region));
+    }
+    let error = ir::linearity::check(&open).expect_err("the loop region is entered while open");
+    assert!(error.contains(&format!("in P.run: {region} is entered again at block {block}")) && error.contains("while it may still be open"), "{error}");
+}
+
 const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \
     async destroy { confirm n > 0; } }";
 
