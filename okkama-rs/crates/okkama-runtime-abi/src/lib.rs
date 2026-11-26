@@ -118,7 +118,8 @@ macro_rules! natives {
                 }
             }
 
-            fn signature_text(self) -> &'static str {
+            /// The signature as the table writes it: `(string, int) -> int`.
+            pub fn signature_text(self) -> &'static str {
                 match self {
                     $(Self::$name => $signature,)*
                 }

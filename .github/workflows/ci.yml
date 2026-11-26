@@ -5,7 +5,7 @@ name: CI
 
 on:
   push:
-    branches: [develop, "release/**"]
+    branches: [main, develop, "release/**"]
   pull_request:
   workflow_dispatch:
 
@@ -38,9 +38,10 @@ jobs:
         with:
           tool: nextest
       # The gate profile: release optimisations without fat LTO. Linking each
-      # of the ~90 test binaries with fat LTO took most of the job (#557); the
-      # fat-LTO binaries are built and exercised by the conformance and std
-      # jobs and by the packages workflow.
+      # test binary with fat LTO took most of the job (#557). The std job and
+      # packages gate exercise fat-LTO release binaries (the gate also runs t/).
+      # Conformance builds its own debug binary in adapters/rust/.target;
+      # the Wave corpora use that debug binary too.
       - name: Build
         working-directory: okkama-rs
         run: cargo build --profile gate --locked -p okkama-cli -p sparrow-cli -p blade-cli
@@ -52,6 +53,28 @@ jobs:
       - name: Doctests
         working-directory: okkama-rs
         run: cargo test --doc --profile gate --locked --workspace
+
+  # The dev profile of the crates whose checks are debug-only (the ownership
+  # linearity check, debug_assertions), off in the gate profile above: before,
+  # only the nightly gate ran them, after the merge (#1100, #1093).
+  debug:
+    name: Tests (debug)
+    runs-on: ubuntu-24.04
+    env:
+      # Line tables are enough for a panic's backtrace; full debug info in some
+      # seventy linked test binaries fills the runner's disk (#1100).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: tests-debug
+      - name: Test
+        working-directory: okkama-rs
+        run: cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli
 
   conformance:
     name: Conformance (${{ matrix.engine }})
@@ -100,6 +123,15 @@ jobs:
           name: conformance-${{ matrix.engine }}
           path: conformance/reports/runs/
           if-no-files-found: ignore
+
+  # Every tracked test_*.py of the tooling (fuzz orchestration, t/ generator,
+  # ownership oracle, micro harness, conformance runner): dry, no toolchain (#1092).
+  tools:
+    name: Tool tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash tools/test-python.sh
 
   # The declared MSRV (workspace rust-version) builds every target (#41).
   msrv:

@@ -1,0 +1,15 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let Count = 1;
+    let Limit = 16;
+    let a = 8;
+    out.writeln((Count < a >> 2).string());
+    out.writeln((Count < a >>> 3).string());
+    out.writeln((Count < Limit >> 4).string());
+    out.writeln((Limit >> 2 > Count).string());
+    0;
+}

@@ -15,8 +15,11 @@ pub const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
 /// in-memory size before vectors are allocated, so a small file cannot
 /// expand into a large `Program` (each encoded element is at least a byte).
 pub const MAX_DECODED_BYTES: usize = 512 * 1024 * 1024;
-/// Версия формата; меняется с каждым несовместимым изменением кодировки или набора инструкций.
-pub const VERSION: u16 = 16;
+/// Версия формата; меняется с каждым несовместимым изменением кодировки или набора инструкций,
+/// в том числе с каждой новой инструкцией или новым кодом операции в `op_enum!`: рантайм,
+/// который файл исполнить не может, отказывает ему по версии (#1061). 17 — SPB Champ
+/// (снят в #911) и пропущена; 18 — `resource.settle`, `resource.settle_unwind` (161, 162).
+pub const VERSION: u16 = 18;
 const MAGIC: &[u8; 4] = b"SPRW";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -644,6 +647,35 @@ pub fn decode(bytes: &[u8]) -> Result<Program, CodecError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The instruction set this `VERSION` stands for: opcodes, mnemonics, operand
+    /// types and the codes of the operation enums, in a stable FNV-1a hash.
+    fn instruction_set_fingerprint() -> u64 {
+        let mut text = String::new();
+        for (code, mnemonic, operands) in Instruction::SIGNATURES {
+            // `stringify!` spacing may change with the compiler: types only.
+            let operands: String = operands.chars().filter(|c| !c.is_whitespace()).collect();
+            text.push_str(&format!("{code} {mnemonic} ({operands})\n"));
+        }
+        macro_rules! codes {
+            ($($kind:ident),*) => {$(
+                for op in crate::$kind::ALL {
+                    text.push_str(&format!("{} {} {}\n", stringify!($kind), op.code(), op.name()));
+                }
+            )*};
+        }
+        codes!(Cmp, StrFn, BitOp, FutOp, CatchKind, TrapCode);
+        text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    /// #1061: a new instruction (or opcode of an operation enum, or operand
+    /// list) comes with a new SPB version, so a runtime that cannot run the
+    /// file refuses it by its version. When this fails, bump `VERSION` and
+    /// record the new pair here.
+    #[test]
+    fn the_instruction_set_is_pinned_to_the_version() {
+        assert_eq!((VERSION, instruction_set_fingerprint()), (18, 4657022355763437310), "the instruction set changed: bump VERSION");
+    }
 
     fn reader(bytes: &[u8]) -> Reader<'_> {
         Reader { bytes, at: 0, decoded: 0 }

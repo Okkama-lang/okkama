@@ -1,5 +1,5 @@
-//! `blade install` / `remove` / `update` against real git repositories and
-//! local package directories in a temporary tree.
+//! `blade add` / `sync` / `remove` / `update` against real git repositories
+//! and local package directories in a temporary tree.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -136,6 +136,21 @@ fn world(name: &str) -> (Tree, PathBuf, PathBuf) {
     (tree, app, web)
 }
 
+/// Declare the local package at `dir` as dependency `name` ≥ `min` of `app`,
+/// as a user writes it in blade.toml, and install it. A refused install
+/// leaves the declaration out again, so the next case starts clean.
+fn add_path(app: &Path, name: &str, dir: &Path, min: &str) -> Result<install::Report, String> {
+    let before = std::fs::read(app.join("blade.toml")).unwrap();
+    let dependency = manifest::Dependency {
+        path: Some(dir.display().to_string()),
+        version: Some(min.to_string()),
+        git: None,
+    };
+    manifest::add_dependency(app, name, &dependency).unwrap();
+    let unlock = Unlock::Packages(BTreeSet::from([name.to_string()]));
+    install::install(app, &unlock).inspect_err(|_| std::fs::write(app.join("blade.toml"), &before).unwrap())
+}
+
 fn locked(app: &Path) -> Vec<(String, String)> {
     Lock::read(app)
         .unwrap()
@@ -155,9 +170,7 @@ fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
 #[test]
 fn git_dependencies_take_the_lowest_version_that_meets_their_minimums_and_stay_locked() {
     let (tree, app, web) = world("git");
-    let (name, report) =
-        install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
-    assert_eq!(name, "web");
+    let report = install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
     assert_eq!(report.lines, ["+ json 1.0.0", "+ web 12.3.0"]);
     assert_eq!(locked(&app), pairs(&[("json", "1.0.0"), ("web", "12.3.0")]));
     let router = std::fs::read_to_string(app.join("pkg/web/src/router.ok")).unwrap();
@@ -357,7 +370,7 @@ fn minimums_meet_at_the_lowest_version_that_satisfies_them_all() {
 #[test]
 fn a_moved_tag_is_refused_until_update() {
     let (tree, app, web) = world("moved");
-    install::add_source(&app, web.to_str().unwrap(), Some("13.0.0"), true).unwrap();
+    install::add(&app, "web", web.to_str().unwrap(), Some("13.0.0")).unwrap();
     // Move the tag json 1.0.0 to a new commit of the same release.
     let json = tree.path("repos/json");
     git(&json, &["checkout", "-q", "v1.0.0"]);
@@ -393,17 +406,15 @@ fn local_directories_install_by_their_version_and_remove_cleanly() {
         "local/util/src/util.ok",
         "module util;\nobject Shout { Shout(); }\n",
     );
-    let dir = util.parent().unwrap().to_str().unwrap().to_string();
-    let error = install::add_source(&app, &dir, Some("3.0.0"), false).unwrap_err();
+    let dir = util.parent().unwrap();
+    let error = add_path(&app, "util", dir, "3.0.0").unwrap_err();
     assert!(
-        error.contains("has no version matching ≥ 3.0.0; available: 2.1.0"),
+        error.contains("no version of \"util\" is ≥ 3.0.0 within major 3")
+            && error.contains("available: 2.1.0"),
         "{error}"
     );
-    let (name, report) = install::add_source(&app, &dir, None, false).unwrap();
-    assert_eq!(
-        (name.as_str(), report.lines),
-        ("util", vec!["+ util 2.1.0".to_string()])
-    );
+    let report = add_path(&app, "util", dir, "2.1.0").unwrap();
+    assert_eq!(report.lines, ["+ util 2.1.0"]);
     assert!(app.join("pkg/util/src/util.ok").is_file());
 
     // Правка локального пакета видна после следующего install.
@@ -424,7 +435,7 @@ fn local_directories_install_by_their_version_and_remove_cleanly() {
 #[test]
 fn bad_packages_and_conflicts_leave_the_project_as_it_was() {
     let (tree, app, web) = world("bad");
-    install::add_source(&app, web.to_str().unwrap(), Some("13.0.0"), true).unwrap();
+    install::add(&app, "web", web.to_str().unwrap(), Some("13.0.0")).unwrap();
     let manifest = std::fs::read_to_string(app.join("blade.toml")).unwrap();
     let lock = std::fs::read_to_string(app.join("blade.lock")).unwrap();
 
@@ -481,7 +492,8 @@ fn bad_packages_and_conflicts_leave_the_project_as_it_was() {
         ),
     ];
     for (dir, expected) in cases {
-        let error = install::add_source(&app, &dir, None, false).unwrap_err();
+        let name = Path::new(&dir).file_name().unwrap().to_str().unwrap();
+        let error = add_path(&app, name, Path::new(&dir), "1.0.0").unwrap_err();
         assert!(error.contains(expected), "{error}\nexpected: {expected}");
         assert_eq!(
             std::fs::read_to_string(app.join("blade.toml")).unwrap(),
@@ -500,7 +512,7 @@ fn bad_packages_and_conflicts_leave_the_project_as_it_was() {
     std::os::unix::fs::symlink("/etc/hosts", Path::new(&link).join("hosts.ok")).unwrap();
     #[cfg(unix)]
     {
-        let error = install::add_source(&app, &link, None, false).unwrap_err();
+        let error = add_path(&app, "lnk", Path::new(&link), "1.0.0").unwrap_err();
         assert!(error.contains("is a symbolic link"), "{error}");
     }
 
@@ -560,12 +572,8 @@ fn a_package_is_a_repository_with_its_modules_in_src() {
         ],
     );
     let app = project("app", "");
-    let (name, report) =
-        install::add_source(&app, repo("json").to_str().unwrap(), None, true).unwrap();
-    assert_eq!(
-        (name.as_str(), report.lines),
-        ("json", vec!["+ json 1.0.0".to_string()])
-    );
+    let report = install::add(&app, "json", repo("json").to_str().unwrap(), None).unwrap();
+    assert_eq!(report.lines, ["+ json 1.0.0"]);
     let generated = "[module]\nname = \"json\"\nversion = \"1.0.0\"\n";
     assert_eq!(
         std::fs::read_to_string(app.join("pkg/json/blade.toml")).unwrap(),
@@ -598,7 +606,7 @@ fn a_package_is_a_repository_with_its_modules_in_src() {
     let installed = Manifest::read(&site.join("pkg/web")).unwrap();
     assert!(installed.name.is_none() && installed.dependencies.contains_key("json"));
 
-    // `blade install SOURCE` takes [module] name over the repository's name.
+    // The name is the package's, whatever its repository is called.
     tag(
         &repo("okkama-yaml"),
         "0.1.0",
@@ -607,9 +615,7 @@ fn a_package_is_a_repository_with_its_modules_in_src() {
             ("src/yaml.ok", "module yaml;\n"),
         ],
     );
-    let (name, _) =
-        install::add_source(&app, repo("okkama-yaml").to_str().unwrap(), None, true).unwrap();
-    assert_eq!(name, "yaml");
+    install::add(&app, "yaml", repo("okkama-yaml").to_str().unwrap(), None).unwrap();
     assert!(app.join("pkg/yaml/src/yaml.ok").is_file());
 
     // Each refusal names the package and its tag and changes nothing.
@@ -756,7 +762,7 @@ fn sync_installs_exactly_what_the_lock_records() {
 #[test]
 fn a_lock_that_disagrees_with_the_manifests_changes_nothing() {
     let (tree, app, web) = world("disagree");
-    install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
+    install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
     let before = (
         std::fs::read_to_string(app.join("blade.toml")).unwrap(),
         std::fs::read(app.join("blade.lock")).unwrap(),
@@ -826,7 +832,7 @@ fn a_lock_that_disagrees_with_the_manifests_changes_nothing() {
 fn an_interrupted_sync_recovers_to_one_consistent_state() {
     for step in ["staged", "lock", "marker", "pkg-moved", "pkg-in", "lock-in"] {
         let (_tree, app, web) = world(&format!("sync-{step}"));
-        install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
+        install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
         let pkg = snapshot(&app.join("pkg"));
         std::fs::remove_dir_all(app.join("pkg")).unwrap();
         install::fail_after(Some(step));
@@ -946,7 +952,7 @@ fn refused_after(
 #[test]
 fn unknown_entries_of_pkg_stop_every_install() {
     let (tree, app, web) = world("unknown");
-    install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
+    install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
     tree.write("app/pkg/notes/todo.txt", "mine\n");
     tree.write("app/pkg/README", "mine\n");
     let before = (
@@ -958,8 +964,7 @@ fn unknown_entries_of_pkg_stop_every_install() {
         install::sync(&app),
         install::install(&app, &Unlock::Nothing),
         install::install(&app, &Unlock::All),
-        install::add_source(&app, web.to_str().unwrap(), Some("13.0.0"), true)
-            .map(|(_, report)| report),
+        install::add(&app, "web", web.to_str().unwrap(), Some("13.0.0")),
         install::remove(&app, "web"),
     ];
     for attempt in attempts {
@@ -982,11 +987,11 @@ fn unknown_entries_of_pkg_stop_every_install() {
 #[test]
 fn packages_that_do_not_change_stay_in_place() {
     let (tree, app, web) = world("inplace");
-    install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
+    install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
     tree.write("local/util/blade.toml", &manifest_text("util", "2.1.0", ""));
     tree.write("local/util/src/util.ok", "module util;\n");
     let util = tree.path("local/util");
-    install::add_source(&app, util.to_str().unwrap(), None, false).unwrap();
+    add_path(&app, "util", &util, "2.1.0").unwrap();
     let stamp = |path: &Path| {
         let meta = std::fs::metadata(path).unwrap();
         #[cfg(unix)]
@@ -1221,8 +1226,7 @@ fn package_names_cannot_leave_the_project() {
         &manifest_text("../../victim", "1.0.0", ""),
     );
     tree.write("evil/proof.txt", "replaced");
-    let dir = evil.parent().unwrap().to_str().unwrap().to_string();
-    let error = install::add_source(&app, &dir, None, false).unwrap_err();
+    let error = add_path(&app, "victim", evil.parent().unwrap(), "1.0.0").unwrap_err();
     assert!(error.contains("package name"), "{error}");
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
     assert!(!app.join("pkg").exists() || !app.join("pkg/../../victim").exists());
@@ -1285,14 +1289,13 @@ fn an_interrupted_install_recovers_to_one_consistent_state() {
         ("lock-in", true),
     ] {
         let (tree, app, web) = world(&format!("interrupt-{step}"));
-        install::add_source(&app, web.to_str().unwrap(), Some("12.3.0"), true).unwrap();
+        install::add(&app, "web", web.to_str().unwrap(), Some("12.3.0")).unwrap();
         let util = tree.write("local/util/blade.toml", &manifest_text("util", "2.1.0", ""));
         tree.write(
             "local/util/src/util.ok",
             "module util;\nobject Shout { Shout(); }\n",
         );
-        let dir = util.parent().unwrap().to_str().unwrap().to_string();
-        install::add_source(&app, &dir, Some("2.1.0"), false).unwrap();
+        add_path(&app, "util", util.parent().unwrap(), "2.1.0").unwrap();
         tree.write("local/util/blade.toml", &manifest_text("util", "2.2.0", ""));
         let kept = |app: &Path| {
             (
@@ -1341,21 +1344,25 @@ fn an_interrupted_install_recovers_to_one_consistent_state() {
 
 #[test]
 fn a_busy_project_is_not_changed() {
-    let (tree, app, _) = world("busy");
-    let util = tree.write("local/util/blade.toml", &manifest_text("util", "2.1.0", ""));
-    tree.write(
-        "local/util/src/util.ok",
-        "module util;\nobject Shout { Shout(); }\n",
-    );
-    let dir = util.parent().unwrap().to_str().unwrap().to_string();
+    let (_tree, app, web) = world("busy");
     std::fs::write(app.join("pkg.blade-busy"), "").unwrap();
-    let error = install::add_source(&app, &dir, None, false).unwrap_err();
+    let error = install::add(&app, "web", web.to_str().unwrap(), None).unwrap_err();
     assert!(
         error.contains("another blade is working on this project"),
         "{error}"
     );
     assert!(Manifest::read(&app).unwrap().dependencies.is_empty());
     assert!(!app.join("pkg").exists() && !app.join("blade.lock").exists());
+    // `blade build` and `run` read pkg/ and the lock: a blade at work there is
+    // not taken for an interrupted one (#1040).
+    let error = install::settled(&app).unwrap_err();
+    assert!(error.contains("another blade is working on this project"), "{error}");
+    std::fs::write(app.join("pkg.blade-new"), "").unwrap();
+    let error = install::settled(&app).unwrap_err();
+    assert!(error.contains("another blade is working on this project"), "{error}");
+    std::fs::remove_file(app.join("pkg.blade-busy")).unwrap();
+    let error = install::settled(&app).unwrap_err();
+    assert!(error.contains("an earlier blade was interrupted"), "{error}");
 }
 
 /// A git source is never an option or a transport helper (#346): a
@@ -1379,7 +1386,7 @@ fn git_sources_cannot_inject_options_or_transports() {
         std::fs::write(app.join("blade.toml"), &text).unwrap();
         let error = install::install(&app, &Unlock::Nothing).unwrap_err();
         assert!(error.contains("invalid git source"), "{url:?}: {error}");
-        let error = install::add_source(&app, &url, None, true).unwrap_err();
+        let error = install::add(&app, "evil", &url, None).unwrap_err();
         assert!(error.contains("invalid git source"), "{url:?}: {error}");
         assert!(!marker.exists(), "{url:?} ran a command");
         assert!(
@@ -1387,4 +1394,94 @@ fn git_sources_cannot_inject_options_or_transports() {
             "{url:?}"
         );
     }
+}
+
+/// `app` in `proj/`, with the local packages `../util` (which needs `../b`)
+/// and `vendor/json` inside the project.
+fn local_world(name: &str) -> (Tree, PathBuf) {
+    let tree = Tree::new(name);
+    let b_dep = "b = { path = \"../b\", version = \"1.0.0\" }\n";
+    tree.write("proj/util/blade.toml", &manifest_text("util", "2.1.0", b_dep));
+    tree.write("proj/util/src/util.ok", "module util;\n");
+    tree.write("proj/b/blade.toml", &manifest_text("b", "1.0.0", ""));
+    tree.write("proj/b/src/b.ok", "module b;\n");
+    tree.write("proj/app/vendor/json/blade.toml", &manifest_text("json", "1.0.0", ""));
+    tree.write("proj/app/vendor/json/src/json.ok", "module json;\n");
+    let deps = "util = { path = \"../util\", version = \"2.1.0\" }\n\
+                json = { path = \"vendor/json\", version = \"1.0.0\" }\n";
+    tree.write("proj/app/blade.toml", &manifest_text("app", "1.0.0", deps));
+    let app = tree.path("proj/app");
+    (tree, app)
+}
+
+fn sources(app: &Path) -> Vec<(String, String)> {
+    Lock::read(app)
+        .unwrap()
+        .packages
+        .into_iter()
+        .map(|(name, package)| (name, package.source))
+        .collect()
+}
+
+/// #1040: `blade.lock` records a local package by its path from the project,
+/// so the project moved (or checked out elsewhere) with its packages syncs
+/// as it is; a lock of an older blade (absolute paths) is refused until
+/// `blade update`, which says what moved.
+#[test]
+fn local_packages_are_locked_relative_to_the_project() {
+    let (tree, app) = local_world("relative");
+    let report = install::sync(&app).unwrap();
+    assert_eq!(report.lines, ["+ b 1.0.0", "+ json 1.0.0", "+ util 2.1.0"]);
+    let relative = pairs(&[("b", "path+../b"), ("json", "path+vendor/json"), ("util", "path+../util")]);
+    assert_eq!(sources(&app), relative);
+    let lock = std::fs::read_to_string(app.join("blade.lock")).unwrap();
+    assert!(!lock.contains(&tree.0.display().to_string()), "{lock}");
+
+    std::fs::rename(tree.path("proj"), tree.path("moved")).unwrap();
+    let app = tree.path("moved/app");
+    assert!(install::sync(&app).unwrap().lines.is_empty());
+    assert!(install::install(&app, &Unlock::Nothing).unwrap().lines.is_empty());
+    assert_eq!(std::fs::read_to_string(app.join("blade.lock")).unwrap(), lock);
+
+    // A lock and a pkg/ record with absolute paths, as an older blade wrote them.
+    let util = tree.path("old/util").display().to_string();
+    let absolute = lock.replace("path+../util", &format!("path+{util}"));
+    std::fs::write(app.join("blade.lock"), &absolute).unwrap();
+    std::fs::write(app.join("pkg/.blade-installed"), &absolute).unwrap();
+    let error = install::sync(&app).unwrap_err();
+    assert!(
+        error.contains(&format!("util: blade.toml wants it from path+../util, blade.lock has path+{util}"))
+            && error.contains("run `blade update util`"),
+        "{error}"
+    );
+    let report = install::update(&app, &["util".to_string()]).unwrap();
+    assert_eq!(report.lines, [format!("~ util 2.1.0 (source path+{util} -> path+../util)")]);
+    assert_eq!(std::fs::read_to_string(app.join("blade.lock")).unwrap(), lock);
+}
+
+/// #1040: what `sync` and `update` say about a local package that changed: a
+/// file changed is reported by both; a new version is one line of `sync`
+/// (the packages below it are not "no longer required"), then `update` takes it.
+#[test]
+fn a_changed_local_package_is_reported_once_and_as_it_is() {
+    let (tree, app) = local_world("changed");
+    install::sync(&app).unwrap();
+
+    tree.write("proj/util/src/extra.ok", "module util/extra;\n");
+    assert_eq!(install::update(&app, &[]).unwrap().lines, ["~ util 2.1.0 (files changed)"]);
+    assert!(app.join("pkg/util/src/extra.ok").is_file());
+    assert!(install::update(&app, &[]).unwrap().lines.is_empty());
+    tree.write("proj/util/src/more.ok", "module util/more;\n");
+    assert_eq!(install::sync(&app).unwrap().lines, ["~ util 2.1.0 (files changed)"]);
+
+    let b_dep = "b = { path = \"../b\", version = \"1.0.0\" }\n";
+    tree.write("proj/util/blade.toml", &manifest_text("util", "2.2.0", b_dep));
+    let error = install::sync(&app).unwrap_err();
+    assert_eq!(
+        error,
+        "blade.lock does not match blade.toml:\n  \
+         util: path+../util is version 2.2.0, blade.lock has 2.1.0 — run `blade update util`"
+    );
+    assert_eq!(install::update(&app, &["util".to_string()]).unwrap().lines, ["~ util 2.1.0 -> 2.2.0"]);
+    assert!(install::sync(&app).unwrap().lines.is_empty());
 }

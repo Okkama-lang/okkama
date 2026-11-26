@@ -1,4 +1,4 @@
-//! Верификатор OIR-1 (§17 спецификации).
+//! Верификатор OIR-2 (основа — §17 спецификации OIR-1).
 //!
 //! Проверяет структуру модуля и объявлений объектов, однократное
 //! определение значений, доминирование использований, типы инструкций и
@@ -181,6 +181,9 @@ pub fn verify(module: &Module) -> Result<()> {
             }
         }
     }
+    for cap in &module.caps {
+        check_cap(module, cap).map_err(|message| module_error(format!("cap {}: {message}", cap.name)))?;
+    }
     // Раскладка каждого случая — свой объект, не встроенный, без `destroy`
     // и конструктора: значения создаёт только `variant.new` (#290).
     let mut cases = HashSet::new();
@@ -313,7 +316,38 @@ fn check_witness(
                 "@{} does not implement {}.{}",
                 function.symbol,
                 declared.name,
-                declared.slot_name(slot)
+                declared.slot_name(slot).unwrap_or_else(|| format!("#{slot}"))
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A cap declaration (§8.5): its owner exists, its field names are distinct,
+/// and each field is a synchronous `[method Owner]` function of the owner
+/// alone that returns a value, which `call.cap` recomputes (#1071).
+fn check_cap(module: &Module, cap: &super::Cap) -> std::result::Result<(), String> {
+    let owner = module
+        .object(cap.owner)
+        .ok_or_else(|| format!("owner refers to missing object #{}", cap.owner.0))?;
+    let mut names = HashSet::new();
+    for (name, func) in &cap.fields {
+        if !names.insert(name.as_str()) {
+            return Err(format!("declares field {name} twice"));
+        }
+        let function = module
+            .function(*func)
+            .ok_or_else(|| format!("field {name} refers to missing function #{}", func.0))?;
+        let receiver_only = function.params.len() == 1
+            && function.value_type(function.params[0]) == Some(&Type::Object(cap.owner));
+        if !function.attrs.contains(&Attr::Method(cap.owner))
+            || !receiver_only
+            || function.is_async()
+            || function.result == ResultType::Void
+        {
+            return Err(format!(
+                "field {name}: @{} must be a synchronous `[method {}]` function ({}) -> value",
+                function.symbol, owner.name, owner.name
             ));
         }
     }
@@ -779,7 +813,7 @@ impl<'a> FunctionVerifier<'a> {
                 TermKind::Catch {
                     ty, handler, next, ..
                 } => {
-                    self.check_target_with(handler, Some(ty.ty()))?;
+                    self.check_target_with(handler, Some(ty.ty()), false)?;
                     self.check_target(next)?;
                 }
                 // Ветвь found получает элемент последним параметром.
@@ -790,7 +824,7 @@ impl<'a> FunctionVerifier<'a> {
                     ..
                 } => {
                     let element = self.element_of(*array)?.clone();
-                    self.check_target_with(found, Some(element))?;
+                    self.check_target_with(found, Some(element), false)?;
                     self.check_target(missing)?;
                 }
                 TermKind::MapLookup {
@@ -800,7 +834,7 @@ impl<'a> FunctionVerifier<'a> {
                     ..
                 } => {
                     let (_, value) = self.entry_of(*map)?;
-                    self.check_target_with(found, Some(value.clone()))?;
+                    self.check_target_with(found, Some(value.clone()), false)?;
                     self.check_target(missing)?;
                 }
                 kind => {
@@ -810,22 +844,24 @@ impl<'a> FunctionVerifier<'a> {
                 }
             }
             if let Some(unwind) = &block.unwind {
-                self.check_target_with(unwind, Some(Type::Failure))?;
+                self.check_target_with(unwind, Some(Type::Failure), true)?;
             }
         }
         Ok(())
     }
 
     fn check_target(&self, target: &Target) -> std::result::Result<(), String> {
-        self.check_target_with(target, None)
+        self.check_target_with(target, None, false)
     }
 
     /// Аргументы перехода и, если задано, тип последнего параметра,
-    /// который заполняет сам переход (пойманная ошибка, `failure`).
+    /// который заполняет сам переход (пойманная ошибка, элемент, `failure`);
+    /// `unwind` — переход по отказу (`block.unwind`).
     fn check_target_with(
         &self,
         target: &Target,
         implicit: Option<Type>,
+        unwind: bool,
     ) -> std::result::Result<(), String> {
         let Some(block) = self.function.blocks.get(target.block.0) else {
             return Err(format!("branch to missing block ^b{}", target.block.0));
@@ -857,8 +893,10 @@ impl<'a> FunctionVerifier<'a> {
         for (arg, param) in target.args.iter().zip(&block.params) {
             let (arg_type, param_type) = (self.ty(*arg)?, self.ty(*param)?);
             // Путь отказа несёт значения только для cleanup: обязательство
-            // `^C` на нём не действует, `^C` и `C` совместимы.
-            let unwind_compatible = implicit.is_some()
+            // `^C` на нём не действует, `^C` и `C` совместимы. Ветви handler
+            // у `catch` и found у поиска — обычные пути: там `^C` остаётся
+            // `^C`, иначе обязательство теряется (#1063).
+            let unwind_compatible = unwind
                 && matches!(
                     (arg_type, param_type),
                     (Type::Successor(a), Type::Object(b)) | (Type::Object(a), Type::Successor(b)) if a == b
@@ -1240,7 +1278,7 @@ impl<'a> FunctionVerifier<'a> {
                     return Err(format!(
                         "call.role {}.{} passes {} arguments for {} parameters",
                         declared.name,
-                        declared.slot_name(*slot),
+                        declared.slot_name(*slot).unwrap_or_else(|| format!("#{slot}")),
                         args.len(),
                         method.params.len()
                     ));
@@ -1305,7 +1343,7 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_int(*index)?;
                 match self.ty(*array)? {
                     Type::Array(_) => self.ty(*array)?.clone(),
-                    other => return Err(format!("array.remove of {other:?}")),
+                    other => return Err(format!("array.remove of {other}")),
                 }
             }
             InstKind::ArrayJoin { array, separator } => {
@@ -1647,15 +1685,42 @@ impl<'a> FunctionVerifier<'a> {
                 for (arg, ty) in args.iter().zip(&sig.params) {
                     self.expect_type(*arg, ty)?;
                 }
+                // The worker runs a synchronous action: a Future cannot
+                // cross the process boundary as the result (#1071).
+                if let ResultType::Value(Type::Future(_)) = &sig.result {
+                    return Err(format!(
+                        "worker.spawn of {entry}: the entry must be synchronous, it returns {}",
+                        Type::Fn(sig.clone())
+                    ));
+                }
                 Type::Future(Box::new(sig.result.clone()))
             }
-            InstKind::WorkerBind { action, entry, .. } => {
+            InstKind::WorkerBind { action, entry, fields } => {
                 let action_ty = self.ty(*action)?.clone();
-                if !matches!(action_ty, Type::Fn(_)) {
+                let Type::Fn(action_sig) = &action_ty else {
                     return Err(format!("worker.bind of {action}: not a fn value"));
-                }
-                if !matches!(self.ty(*entry)?, Type::Fn(_)) {
+                };
+                let Type::Fn(entry_sig) = self.ty(*entry)?.clone() else {
                     return Err(format!("worker.bind entry {entry}: not a fn value"));
+                };
+                // The entry rebuilds the receiver from `fields`, then runs the
+                // action on its arguments: fn(field types…, action params…) with
+                // the action's result (#1071).
+                let mut expected = Vec::with_capacity(fields.len() + action_sig.params.len());
+                for field in fields {
+                    expected.push(self.ty(*field)?.clone());
+                }
+                expected.extend(action_sig.params.iter().cloned());
+                if entry_sig.params != expected || entry_sig.result != action_sig.result {
+                    return Err(format!(
+                        "worker.bind entry {entry} has type {}, expected {} for {} fields and the action {action_ty}",
+                        Type::Fn(entry_sig.clone()),
+                        Type::Fn(Box::new(super::FnSig {
+                            params: expected,
+                            result: action_sig.result.clone(),
+                        })),
+                        fields.len()
+                    ));
                 }
                 action_ty
             }
@@ -1843,7 +1908,8 @@ impl<'a> FunctionVerifier<'a> {
                 match (op.rotates(), count) {
                     (true, Some(count)) => self.expect_int(*count)?,
                     (false, None) => {}
-                    _ => return Err(format!("{kind}: only rotations take a count")),
+                    (true, None) => return Err(format!("{kind}: a rotation needs a count")),
+                    (false, Some(_)) => return Err(format!("{kind}: only rotations take a count")),
                 }
                 if op.counts() { Type::Int } else { word }
             }
@@ -1888,7 +1954,7 @@ impl<'a> FunctionVerifier<'a> {
                     };
                     Type::Array(part.clone())
                 }
-                other => return Err(format!("{kind} of {map}: {other}")),
+                other => return Err(format!("{kind} of non-map type {other}")),
             },
             InstKind::MapRetag(map) => {
                 let Some(result) = result else {

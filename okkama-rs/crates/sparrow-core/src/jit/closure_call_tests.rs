@@ -18,7 +18,7 @@ fn program(captures: usize) -> String {
     let caps: Vec<String> = (0..captures).map(|i| format!("r{i}")).collect();
     let consts: String = (0..captures).map(|i| format!(" {i}: const r{i}, int {}\n", 10 * (i + 1))).collect();
     format!(
-        "sparrow 16\nmodule \"closures\" \"1.0.0\"\ntype t0 int\ntype t1 fn [t0] -> t0\n\
+        "sparrow 18\nmodule \"closures\" \"1.0.0\"\ntype t0 int\ntype t1 fn [t0] -> t0\n\
          function f0 \"body\" {{\n registers [{}]\n params [{}]\n result t0\n{body} {}: ret r{acc}\n}}\n\
          function f1 \"run\" {{\n registers [{}, t1, t0]\n params [r{captures}]\n result t0\n{consts} {c}: fn.closure r{f}, f0, [{}]\n {d}: call.fn r{g}, r{f}, [r{captures}]\n {e}: ret r{g}\n}}\n",
         body_regs.join(", "), params.join(", "), captures,

@@ -1,5 +1,8 @@
 //! `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
 //! size limit, execution, tests, verification, assembler and disassembler.
+// The one switch policy of every crate (#1095); `crate::env_switch` names it.
+use okkama_devtrace::env_switch;
+
 use std::io::{Read, Write};
 use std::{fs::File, path::Path, process::ExitCode};
 
@@ -53,7 +56,7 @@ check        Verify bytecode (types, calls, intrinsic contracts) without
 /// The help text; the bytecode version comes from the codec, so it cannot go stale (#973).
 fn help() -> String {
     format!(
-        "{HELP_BODY}\nSPB {} is supported. Source files and the Okkama compiler are not\n\
+        "{HELP_BODY}SPB {} is supported. Source files and the Okkama compiler are not\n\
          required. Format/runtime errors exit 1, usage errors 2, I/O errors 3.\n",
         okkama_sparrow::VERSION
     )
@@ -118,12 +121,15 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
         Box::new(move || watchdog(flag)) as Box<dyn FnOnce() + Send>
     });
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = std::env::var("OKKAMA_TRACE").as_deref() != Ok("off");
+    let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     let options = sparrow_core::ExecutionOptions { stats, trace, on_verified, ..Default::default() };
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
     let _ = sparrow_core::stdout::flush();
     match result {
-        Ok(sparrow_core::Execution::Main(Ok(code))) => u8::try_from(code).map_err(|_| (1, format!("main() must return an int in 0..255, got {code}"))),
+        Ok(sparrow_core::Execution::Main(Ok(code))) => match u8::try_from(code) {
+            Ok(code) => Ok(code),
+            Err(_) => report(sparrow_core::Error(format!("main() must return an int in 0..255, got {code}"))),
+        },
         Ok(sparrow_core::Execution::Main(Err((error, trace)))) => {
             let code = report(error);
             eprint!("{trace}");
@@ -169,7 +175,7 @@ fn run() -> Result<u8, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || (2, help());
     let worker = args.first().is_some_and(|a| a == "--worker");
-    if std::env::var_os("SPARROW_INTERNAL_WORKER").is_some() && !worker {
+    if crate::env_switch::enabled("SPARROW_INTERNAL_WORKER") && !worker {
         return Err((2, "worker launch rejected: --worker must precede FILE.spb; refusing to run main".into()));
     }
     let Some((first, rest)) = args.split_first() else {

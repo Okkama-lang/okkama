@@ -1,0 +1,22 @@
+module runtime/time_zone v1.0.0;
+
+// The naatabase.
+native timezone_version() is string;
+
+// Whether the databases rat) is bool;
+
+// The zone's abbreviation then.
+native timezone_abbreviation(name is string, instant is rat) is string;
+
+// The instants a local time may mean in the zone: none in a gap, two in an
+// overlap.
+native timezone_local_candidates(
+    name is string,
+    year is int,
+    month is int,
+    day is int,
+   minute is int,
+    second is int,
+    nanosecond is int,
+    later is bool,
+) is rat;

@@ -1,4 +1,4 @@
-//! Строки: исходник → анализ → OIR → исполнение внутри Rust.
+//! Строки: исходник → анализ → OIR → SPB → исполнение на Sparrow в процессе теста.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, lowering, syntax};

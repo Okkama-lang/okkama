@@ -60,7 +60,20 @@ caller and steps, and structure indexes. `bench/ownership/run.py` compares again
 **Checker (#910).** `ir/linearity.rs` checks after the IR passes that each region and static resource is opened
 once, used only while open and closed exactly once on every path (failure paths included). Debug builds and
 `OKKAMA_VERIFY_OWNERSHIP=1` only. Its first find: an early return's defers tracked fresh values in a nested scope
-the return had already closed (fixed in `exit_scopes`).
+the return had already closed (fixed in `exit_scopes`). Since #1073 it also refuses a resource (an object
+with its own destroy made by `obj.new`, a call or `await.take`) that may be in no region (not tracked, adopted,
+transferred or pinned) when the function leaves, other than the value returned or thrown, and a `region.enter` of
+a region that may still be open. A `return` through nested scopes re-tracks the kept value in each next region.
+Since #1093 a call's result is a resource only where the ownership census (`ir/ownership.rs`, its creation sites)
+calls it a new identity: a cap field returning its owner's field or a closure returning its argument makes none
+(call resolution shared through `ownership::resolved_call`). A call whose callee adopts the parameter owns the
+fresh argument (#555; a worker entry's rebuilt receiver), on the call's failure path too, and a branch moves a
+resource's state into the block parameter it is passed to. The `statics` pass removes the regions it empties,
+so it leaves none open when it runs without `regions`.
+Since #1099 lowering tracks a closure's or a cap field's result in its scope like any call's (`BodyLowerer::emit`;
+since #1102 a bound async action's Future too, which `futures::own_awaited_temporaries` treats as #932 does a direct
+call's, a closure not defined in the function counting as a driver), and `lowering::untrack_borrowed_results` drops that track again where the census reports no
+creation, so a discarded new resource is destroyed at its scope's end and a borrowed result stays untracked.
 
 **Next.** The static pass (#909 2b) takes a resource alone in its region or the oldest member of one (newer
 members close first). Several static resources per region, drop flags for conditional creation and direct JIT

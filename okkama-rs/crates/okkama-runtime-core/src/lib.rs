@@ -11,6 +11,10 @@ pub mod host;
 pub mod native;
 pub mod ops;
 pub mod range;
+// The one switch policy of every crate (#1095); only tests read a switch here.
+#[cfg(test)]
+use okkama_devtrace::env_switch;
+
 pub use okkama_runtime_abi as abi;
 pub mod integer;
 pub mod scalar;

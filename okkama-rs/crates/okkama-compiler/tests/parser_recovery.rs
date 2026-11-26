@@ -152,8 +152,7 @@ fn a_broken_module_declaration_still_reports_the_rest() {
 }
 
 /// Damaged copies of a file with every syntax form: the recovering parse
-/// always terminates, within the cap, and keeps only clean declarations —
-/// each kept one also parses alone.
+/// terminates with at most MAX_RECOVERED_ERRORS + 8 diagnostics.
 #[test]
 fn damaged_input_always_terminates() {
     let sample = include_str!("fixtures/all-syntax.ok");

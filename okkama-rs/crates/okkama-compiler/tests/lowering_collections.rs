@@ -10,7 +10,7 @@ fn lower(body: &str) -> Result<ir::Module, LoweringError> {
     let text = format!("module app v1.0.0; main() is int {{ {body} }}");
     let source = SourceFile::new("test.ok", &text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    lower_program(&prune::strip_test_items(program))
+    okkama_compiler::lowering::with_passes("all", || lower_program(&prune::strip_test_items(program)))
 }
 
 fn main_listing(body: &str) -> String {

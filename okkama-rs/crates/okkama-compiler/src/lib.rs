@@ -11,8 +11,13 @@
 //! * [`jit`] — an empty boundary: machine code is Sparrow's business.
 //!
 //! The library never reads command-line arguments and never terminates the process; it prints only
-//! development diagnostics a variable asks for (`OKKAMA_PROFILE_REGISTERS`, `OKKAMA_DEV`). Callers receive values and diagnostics and decide
+//! development diagnostics requested by `OKKAMA_PROFILE_REGISTERS` and `OKKAMA_DEV`,
+//! and a one-time warning for unknown passes in `OKKAMA_IR_PASSES` or a selected pass list. Callers receive values and diagnostics and decide
 //! how to present them (see the `okkama-cli` crate).
+
+// The one switch policy of every crate (#1095), under its old path.
+#[doc(hidden)]
+pub use okkama_devtrace::env_switch;
 
 pub mod analysis;
 pub mod codegen;
@@ -27,3 +32,10 @@ pub mod syntax;
 
 pub use diagnostics::{Diagnostic, DiagnosticKind};
 pub use source::{LineColumn, SourceFile, Span};
+
+
+#[cfg(test)]
+extern crate self as okkama_compiler;
+#[cfg(test)]
+#[path = "../../../fuzz/fuzz_targets/support/lowering.rs"]
+mod fuzz_lowering_policy;

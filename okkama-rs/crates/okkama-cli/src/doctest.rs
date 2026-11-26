@@ -185,8 +185,8 @@ fn compile(sources: &[SourceFile], source: &SourceFile, example: &Example) -> Re
     let (module, _) = lowered.map_err(|error| match error {
         LinkError::Lowering { source: file, error } => {
             let file = file.as_ref().unwrap_or(&prepared.source);
-            if file.name() == prepared.source.name() { failure(source, map(error.span()), &format!("compilation failed: {}", error.message())) }
-            else { failure(file, error.span(), &format!("compilation failed for doctest at {}:{}: {}", source.name(), source.location(example.span.start).line, error.message())) }
+            if file.name() == prepared.source.name() { failure(source, map(error.span()), &format!("compilation failed: {error}")) }
+            else { failure(file, error.span(), &format!("compilation failed for doctest at {}:{}: {}", source.name(), source.location(example.span.start).line, error)) }
         }
         LinkError::Load(message) => failure(source, example.span, &message),
     })?;

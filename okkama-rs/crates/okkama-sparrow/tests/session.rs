@@ -3,7 +3,7 @@
 use okkama_sparrow::session::extend;
 use okkama_sparrow::{assemble, FuncRef, Instruction, ObjectRef, Program};
 
-const PUBLISHED: &str = "sparrow 16\nmodule \"repl\" \"1.0.0\"\n\
+const PUBLISHED: &str = "sparrow 18\nmodule \"repl\" \"1.0.0\"\n\
 type t0 int\ntype t1 object obj0\n\
 object obj0 \"A\" {\n field \"n\" t0\n}\n\
 function f0 \"a\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
@@ -11,7 +11,7 @@ function f1 \"make a\" {\n registers [t0, t1]\n params []\n result t1\n 0: call 
 
 /// The same session recompiled with one more cell, numbered differently: the new object and function come
 /// first, the types in another order.
-const FRESH: &str = "sparrow 16\nmodule \"repl\" \"1.0.0\"\n\
+const FRESH: &str = "sparrow 18\nmodule \"repl\" \"1.0.0\"\n\
 type t0 object obj0\ntype t1 object obj1\ntype t2 int\n\
 object obj0 \"B\" {\n field \"a\" t1\n}\n\
 object obj1 \"A\" {\n field \"n\" t2\n}\n\
@@ -59,6 +59,23 @@ fn a_changed_published_item_is_an_error() {
     let field = FRESH.replace("object obj1 \"A\" {\n field \"n\" t2", "object obj1 \"A\" {\n field \"m\" t2");
     let error = extend(&published, &program(&field)).unwrap_err();
     assert!(error.0.contains("changes the published object A"), "{}", error.0);
+}
+
+/// #1057: a changed published constant is named by its init's symbol, as the merge keys it.
+#[test]
+fn a_changed_published_constant_is_named_by_its_symbol() {
+    let constant = |value: u32| {
+        program(&format!(
+            "sparrow {}\nmodule \"repl\" \"1.0.0\"\ntype t0 int\nglobal g0 t0 f1 data int {value}\n\
+             function f0 \"main\" {{\n registers [t0]\n params []\n result t0\n 0: global.get r0, 0\n 1: ret r0\n}}\n\
+             function f1 \"const.LIMIT\" {{\n registers [t0]\n params []\n result t0\n 0: global.get r0, 0\n 1: ret r0\n}}\n",
+            okkama_sparrow::VERSION
+        ))
+    };
+    let published = constant(40);
+    assert_eq!(extend(&published, &constant(40)).unwrap(), published);
+    let error = extend(&published, &constant(41)).unwrap_err();
+    assert_eq!(error.0, "the session changes the published constant const.LIMIT");
 }
 
 /// Two equal new names in one recompiled session are refused by the merge that brings them, with the table, the

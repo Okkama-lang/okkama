@@ -103,6 +103,26 @@ fn a_capitalised_binding_compares_with_less_than() {
     }
 }
 
+/// #1032: a `>` that is the first half of a shift does not close type
+/// arguments: `>>` binds tighter than `<`, and the type would leave the other
+/// `>` to compare it.
+#[test]
+fn a_shift_after_a_capitalised_binding_is_not_a_closing_angle() {
+    for (source, expected) in [
+        ("Count < a >> 2", "(< Count (>> a 2))"),
+        ("Count < a >>> 2", "(< Count (>>> a 2))"),
+        ("Count < Limit >> 1", "(< Count (>> Limit 1))"),
+        ("Count < a.b >> 1", "(< Count (>> (. a b) 1))"),
+        ("box.Count < a >> 2", "(< (. box Count) (>> a 2))"),
+        ("Count < a >> 2 && Count < b >> 1", "(&& (< Count (>> a 2)) (< Count (>> b 1)))"),
+    ] {
+        assert_eq!(expr_sexpr(source), expected, "{source}");
+    }
+    // A `>>` both halves of which close type arguments is still a type.
+    let tree = expr_sexpr("Maybe<Maybe<int>>.none");
+    assert!(!tree.starts_with("(<"), "{tree}");
+}
+
 #[test]
 fn ranges_sit_between_equality_and_comparison() {
     assert_eq!(expr_sexpr("1..10"), "(.. 1 10)");
@@ -154,27 +174,28 @@ fn stream_write_with_endl_and_unpacked_array_cast() {
 
 #[test]
 fn malformed_operator_extensions_are_rejected() {
-    for source in [
-        "&thing",
-        "1 xor 2",
-        "sink <<< value",
-        "1 <<=",
-        "sink <-= value",
-        "sink ~ value",
-        "a &= 1",
-        "a |= 1",
-        "a ^= 1",
-        "a >>= 1",
-        "a >>>= 1",
-        "a ^",
-        "^a",
-        "out <-",
-        "<- \"hello\"",
-        "2 ** 3",
+    const COMPOUND_ASSIGNMENT: &str =
+        "Okkama has no compound assignment: a name is bound once; bind a new name, or use `reduce` or a successor.";
+    for (source, expected) in [
+        ("&thing", "Constructor projections have been removed; use Type(args).method()."),
+        ("1 xor 2", "Expect \";\" after expression."),
+        ("sink <<< value", "Expect expression."),
+        ("1 <<=", COMPOUND_ASSIGNMENT),
+        ("sink <-= value", "Expect expression."),
+        ("sink ~ value", "Expect \";\" after expression."),
+        ("a &= 1", COMPOUND_ASSIGNMENT),
+        ("a |= 1", COMPOUND_ASSIGNMENT),
+        ("a ^= 1", COMPOUND_ASSIGNMENT),
+        ("a >>= 1", COMPOUND_ASSIGNMENT),
+        ("a >>>= 1", COMPOUND_ASSIGNMENT),
+        ("a ^", "Expect expression."),
+        ("^a", "Expect \"=\" after successor field name."),
+        ("out <-", "Expect expression."),
+        ("<- \"hello\"", "Expect expression."),
+        ("2 ** 3", "Exponent operator is not part of Okkama v1.0 syntax."),
     ] {
         let text = format!("module app v1.0.0; main() is int {{ {source}; }}");
-        let message = common::parse_err(&text);
-        assert!(!message.is_empty(), "{source}");
+        assert_eq!(common::parse_err(&text), expected, "{source}");
     }
 }
 
@@ -666,7 +687,10 @@ fn test_case_is_an_if_around_a_try_that_closes_the_sub_case() {
     assert!(tree.contains("catches=[(CatchClause name=test.case#error type=Error body={(call (. test fail) (call (. test.case#error text)))"), "{tree}");
     assert_rejects("module app v1.0.0; main() is int { test.case(\"x\"); 0; }", "Expect a block after test.case(name)");
     // `case` after anything but `test` is not this form.
-    assert_rejects("module app v1.0.0; main() is int { other.case(\"x\") { }; 0; }", "");
+    assert_eq!(
+        common::parse_err("module app v1.0.0; main() is int { other.case(\"x\") { }; 0; }"),
+        "Expect \";\" after expression."
+    );
 }
 
 #[test]

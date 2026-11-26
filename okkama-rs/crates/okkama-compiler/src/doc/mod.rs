@@ -279,12 +279,11 @@ impl ModuleDoc {
 }
 
 /// The comment above the declaration that starts at `offset`, by the rule of
-/// this module; the language server's hover and completion read it too.
+/// this module.
 pub fn comment_above(source: &SourceFile, offset: u32) -> String {
     let lines = CommentLines::new(source);
     lines.above(lines.line_of(offset)).map(|text| text.text).unwrap_or_default()
 }
-
 
 /// The first sentence of `text`: up to the first ". " or the end of its first
 /// paragraph, on one line.

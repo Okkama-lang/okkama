@@ -1,4 +1,5 @@
-//! Native ABI calls use the same provider through serialized SPB.
+//! Native ABI calls reach their providers through serialized SPB, checked
+//! against the ABI table before they run.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, codegen, ir, lowering, syntax};
@@ -25,7 +26,8 @@ fn lower(body: &str) -> ir::Module {
         .unwrap()
 }
 
-fn both(body: &str, expected: &str) {
+/// `main` with `body` returns `expected` on Sparrow.
+fn expect(body: &str, expected: &str) {
     let module = lower(body);
 
     support::assert_value(&module, expected);
@@ -49,12 +51,25 @@ fn native_identity_and_signature_are_checked_before_execution() {
     // неизвестный provider — ошибка запуска, а не генерации.
     assert!(!matches!(support::sparrow(&module), support::Ending::Value(_)));
 
+    // A declaration unlike the table's native of its symbol is refused by lowering, at the declaration (#1098).
     let source = SourceFile::new("bad-native.ok", "module runtime/utf v1.0.0; native utf8_encode(text is int) is int; main() is int { utf8_encode(1); }").unwrap();
-    let module =
-        lowering::lower_program(&syntax::parse(&source, &syntax::ParseOptions::default()).unwrap())
-            .unwrap();
+    let refused =
+        lowering::lower_program(&syntax::parse(&source, &syntax::ParseOptions::default()).unwrap());
+    assert!(
+        matches!(&refused, Err(error) if error.to_string().contains("does not match runtime/utf@1::utf8_encode/1 of the runtime")),
+        "{refused:?}"
+    );
 
-    // SPB сверяет native с таблицей ABI при проверке программы (#16).
+    // SPB still checks a native against the ABI table when it verifies the program (#16): OIR whose extern
+    // names another native of the table, with another signature, does not generate.
+    let mut module = lower(r#"utf8_encode("x").size();"#);
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|f| f.extern_symbol() == Some("runtime/utf@1::utf8_encode/1"))
+        .unwrap();
+    let attr = function.attrs.iter_mut().find(|a| matches!(a, ir::Attr::Extern(_))).unwrap();
+    *attr = ir::Attr::Extern("runtime/utf@1::utf8_valid_prefix/1".into());
     assert!(
         matches!(codegen::sparrow::generate(&module), Err(error) if error.message.contains("does not match the signature"))
     );
@@ -65,7 +80,7 @@ fn native_identity_and_signature_are_checked_before_execution() {
 
 #[test]
 fn utf_native_calls_preserve_scalars_and_byte_order() {
-    both(r#"utf8_encode("Aé🙂").size();"#, "7");
+    expect(r#"utf8_encode("Aé🙂").size();"#, "7");
     for encoding in ["utf8", "utf16", "utf32"] {
         for order in ["big", "little"] {
             let order = if encoding == "utf8" {
@@ -73,7 +88,7 @@ fn utf_native_calls_preserve_scalars_and_byte_order() {
             } else {
                 format!(", \"{order}\"")
             };
-            both(
+            expect(
                 &format!(
                     "let text = \"Aé🙂\"; let bytes = {encoding}_encode(text{order}); if {encoding}_decode(bytes{order}) == text {{ {encoding}_valid_prefix(bytes{order}) - bytes.size() + 42; }} else {{ 0; }}"
                 ),
@@ -81,17 +96,17 @@ fn utf_native_calls_preserve_scalars_and_byte_order() {
             );
         }
     }
-    both(
+    expect(
         r#"let bs = utf16_encode("A", "big"); bs[0].int() + bs[1].int();"#,
         "65",
     );
-    both(
+    expect(
         r#"let bs = utf32_encode("A", "little"); bs[0].int();"#,
         "65",
     );
-    both(r#"utf8_valid_prefix(@byte(65, 192, 128));"#, "1");
-    both(r#"utf16_valid_prefix(@byte(0, 65, 216, 0), "big");"#, "2");
-    both(
+    expect(r#"utf8_valid_prefix(@byte(65, 192, 128));"#, "1");
+    expect(r#"utf16_valid_prefix(@byte(0, 65, 216, 0), "big");"#, "2");
+    expect(
         r#"utf32_valid_prefix(@byte(0, 0, 0, 65, 0, 17, 0, 0), "big");"#,
         "4",
     );
@@ -122,7 +137,7 @@ fn malformed_native_data_keeps_structured_failure_fields() {
             && report.contains(&format!("runtime/utf@1::{operation}"))
             && report.contains(&format!("Bytes are not valid {encoding}")), "{report}");
     }
-    both(
+    expect(
         r#"if false { utf8_decode(@byte(255)).length(); } else { 42; }"#,
         "42",
     );
@@ -138,7 +153,7 @@ fn native_failure_is_caught_as_concrete_type_or_error_role() {
         r#"try { try { utf8_decode(@byte(255)); 0; } catch e is NativeFailure { throw; 1; } } catch e is Error { 42; }"#,
     ] {
 
-        both(body, "42");
+        expect(body, "42");
     }
 }
 

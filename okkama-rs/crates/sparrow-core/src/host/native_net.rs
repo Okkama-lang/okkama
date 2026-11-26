@@ -72,7 +72,7 @@ impl Heap {
         }
     }
 }
-/// `inet_ntop` BSD: самый длинный ряд ≥ 2 нулевых групп — `::`.
+/// BSD-style `inet_ntop`: compress the longest run of at least two zero groups to `::`.
 pub(crate) fn format(raw: &[u8]) -> String {
     if raw.len() == 4 {
         return format!("{}.{}.{}.{}", raw[0], raw[1], raw[2], raw[3]);

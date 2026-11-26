@@ -98,12 +98,20 @@ fn skip_rethrowing_unwinds(function: &mut Function) -> bool {
 }
 
 fn elide(function: &mut Function) -> usize {
+    elide_among(function, None)
+}
+
+/// Убрать пустые регионы из `among` (все, если `None`); число убранных. Проход
+/// `statics` убирает так регионы, которые он опустошил (#1093): без этого
+/// `resource.leave` перед `region.leave R` при отказе уходил мимо закрытия R.
+pub(super) fn elide_among(function: &mut Function, among: Option<&HashSet<ValueId>>) -> usize {
     let regions: HashSet<ValueId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.insts)
         .filter(|inst| matches!(inst.kind, InstKind::RegionEnter))
         .filter_map(|inst| inst.result)
+        .filter(|region| among.is_none_or(|among| among.contains(region)))
         .collect();
     if regions.is_empty() {
         return 0;

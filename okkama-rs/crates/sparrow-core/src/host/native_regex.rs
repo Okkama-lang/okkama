@@ -24,7 +24,7 @@ const MAX_GROUPS: usize = 1024;
 
 enum CompileFailure {
     Syntax(i64),
-    /// Вид предела (0 — шаблон, 1 — вложенность, 2 — группы, 3 — состояния) и предел.
+    /// Limit kind (0: pattern, 1: nesting, 2: groups, 3: states) and its bound.
     Limit(i64, i64),
 }
 
@@ -169,7 +169,7 @@ impl Parser {
         })
     }
 
-    /// Экранирование: matcher и признак сокращения класса.
+    /// An escape: its matcher and whether it is a shorthand character class.
     fn escaped(&mut self, allow_shorthand: bool) -> Compiled<(Matcher, bool)> {
         if !self.eat('\\') {
             return Err(self.invalid());
@@ -457,7 +457,7 @@ impl Parser {
     }
 }
 
-/// Фрагмент NFA: начало и незаполненные выходы (индекс * 2 + поле).
+/// NFA fragment: start and unpatched outputs (index * 2 + field).
 struct Fragment {
     start: usize,
     outs: Vec<usize>,
@@ -598,7 +598,7 @@ struct Program {
     dot_all: bool,
 }
 
-/// Состояние с тегами: инструкция, захваты, начало совпадения.
+/// Tagged state: instruction, captures and match start.
 struct Tagged {
     index: usize,
     captures: Vec<i64>,
@@ -825,7 +825,7 @@ impl Program {
         out.into_iter().flatten()
     }
 
-    /// Замыкание по ε-переходам в порядке приоритета (обход в глубину).
+    /// Epsilon closure in priority order (depth-first traversal).
     #[allow(clippy::too_many_arguments)] // Explicit NFA traversal state; no VM frame or callback.
     fn add_tagged(
         &self,
@@ -933,7 +933,7 @@ impl Program {
         })
     }
 
-    /// [начало, конец, захваты…] или None.
+    /// `[start, end, captures…]`, or `None`.
     fn best_from(&self, points: &[u32], minimum_start: usize) -> Option<Vec<i64>> {
         let length = points.len();
         if minimum_start > length {
@@ -990,7 +990,7 @@ impl Program {
         best
     }
 
-    /// Совпадение в [start, end) в режиме first/prefix/entire: спаны или пусто.
+    /// Match in `[start, end)` in first/prefix/entire mode: spans or an empty vector.
     #[cfg(test)]
     fn selected_spans(
         &self,

@@ -29,7 +29,8 @@ struct Contract {
 enum Related {
     /// `object_new` with these field kinds; the result is that object.
     New(&'static str),
-    /// A thrown error from these payload kinds (`intrinsics::raised`).
+    /// A thrown error: an object whose fields are exactly these payload kinds,
+    /// the values the runtime raises it with (`intrinsics::thrown`).
     Thrown(&'static str),
     /// The Atomic or Event cell it creates.
     Cell,
@@ -216,24 +217,21 @@ impl Check<'_> {
         if ok { Ok(result) } else { Err("timeout helpers do not match their calls".into()) }
     }
 
-    /// A thrown related object: an error enum (`$tag`, then payload arrays,
-    /// the first case's named `$0_…`) or an object of exactly these fields.
-    fn thrown(&self, object: usize, payload: &str) -> bool {
-        let fields = &self.program.objects[object].fields;
-        match fields.first() {
-            Some((name, tag)) if name == "$tag" => {
-                let mut first = fields[1..].iter().filter(|(name, _)| name.starts_with("$0_"));
-                let arrays = fields[1..].iter().all(|(_, ty)| matches!(self.program.ty(*ty), Some(Type::Array(_))));
-                let cases = payload.chars().all(|kind| {
-                    first.next().is_some_and(|(_, ty)| match self.program.ty(*ty) {
-                        Some(Type::Array(element)) => self.kind(*element) == kind,
-                        _ => false,
-                    })
-                });
-                self.kind(*tag) == 'I' && arrays && cases
-            }
-            _ => self.fields(object) == payload,
+    /// A thrown related object (an error enum's case lowers to an object of
+    /// its payload, #290) has exactly the fields the runtime raises it with,
+    /// in count and kinds (#1090): the runtime stores its values in them.
+    fn thrown(&self, object: usize, payload: &str) -> Result<(), String> {
+        if self.fields(object) == payload {
+            return Ok(());
         }
+        let declared = &self.program.objects[object];
+        let fields: Vec<String> = declared.fields.iter().map(|(name, ty)| format!("{name} {}", self.kind(*ty))).collect();
+        Err(format!(
+            "throws {} with payload [{}], but it declares [{}]",
+            declared.name,
+            payload.chars().map(String::from).collect::<Vec<_>>().join(", "),
+            fields.join(", ")
+        ))
     }
 
     fn function(&self, function: &Function) -> Result<(), String> {
@@ -382,7 +380,10 @@ impl Check<'_> {
                     // ScopeResult's group is internal; the others return the object.
                     fields && (intrinsic == Intrinsic::ScopeResult || made())
                 }
-                Related::Thrown(payload) => self.thrown(object, payload),
+                Related::Thrown(payload) => {
+                    self.thrown(object, payload).map_err(|why| format!("related object {index} {why}"))?;
+                    true
+                }
                 Related::Cell => {
                     let cell = match intrinsic {
                         Intrinsic::AtomicNew => {
@@ -564,7 +565,13 @@ pub fn check(loaded: &Loaded) -> Result<(), Error> {
         check
             .function(function)
             .and_then(|()| check.cells(function))
-            .map_err(|message| Error(format!("Sparrow @{}: intrinsic contract: {message}", function.symbol)))?;
+            .map_err(|message| match &function.intrinsic {
+                Some(intrinsic) => Error(format!(
+                    "Sparrow @{} ({}): intrinsic contract: {message}",
+                    function.symbol, intrinsic.name
+                )),
+                None => Error(format!("Sparrow @{}: intrinsic contract: {message}", function.symbol)),
+            })?;
     }
     Ok(())
 }

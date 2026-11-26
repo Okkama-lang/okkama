@@ -1,5 +1,395 @@
 # State (update at the end of every task)
 
+## Release 0.6.5 (release/065)
+
+- [x] Release commit 0.6.5 (2026-11-27): version 0.6.5, CHANGELOG [0.6.5] with summary and compare links, Bible
+  rebuilt (md/HTML/PDF, EN/RU), micro report `okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`
+  (rc1 fa572a909 vs v0.6.4, −1.0% over 75, both built by toolchain.sh at seeds 1 and 2; the final A/B on
+  026f0ea13 was cancelled by the owner so the performance audit could use the machine). First release through
+  the trunk-based flow: release/065 → develop (nightly gate) → pull request into main → tag on the merge commit.
+  Performance audit (Fable) in `okkama-docs/runtime/perf-audit-2026-11-27/` — ten tickets proposed for after 0.6.5.
+- [x] #1102 (feature/1099 rebased on release/065 6e13e1d1e, not committed): a discarded Future of an ordinary async
+  call runs nothing (lazy, Bible §20.1) and its scope releases the fresh arguments it owns (#587). A bound async
+  action's (`call.fn`) Future was never tracked, so its argument leaked (`destroy 12`/`13` never ran). `emit`
+  now tracks it, and `futures::awaited_temporary` takes `call.fn` (driver unless its `fn.closure` is in the function
+  and names a non-driver). Corpus SPB vs #1099: 34 of 2279 differ (std net/mail/http/web/fs, their examples, 9 web
+  micro programs). Docker std -t of the 12 changed modules: same pass/fail on both (web/routing and fs/root have
+  1 failure each on both). Micro A/B (n=10⁴, 5 runs, quiet round A3 B3 B4 A4): web cells within −2.7…+2.6%
+  (session-lifecycle +2.6% the largest); the first round's A2 was under host load (Spotlight). Toolchains:
+  okkama-work/micro-tc/1102-cand against 1099-cand (= release/065 code).
+- [x] #1100/#1101 (feature/1100, not committed): `wave.yml` part `debug` and `ci.yml` job `debug` ("Tests
+  (debug)"): `CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test --locked --no-fail-fast -p okkama-compiler -p
+  okkama-cli`, caches `wave-debug`/`tests-debug`; not yet run on GitHub (first run: time, disk, the linearity
+  check's refusals). `okkama-cli/tests/tree/mod.rs` (`okkama()`, `OKKAMA`, `std_dir()`, `root()`) is the one way
+  tests start okkama; `cli.rs` `tests_run_okkama_with_the_std_of_this_tree` guards it. Bible §19 lock section
+  (EN/RU) has the `in blade.lock` line.
+
+- [x] #1099 (feature/1099, not committed): `BodyLowerer::emit` tracks `call.fn`/`call.cap` results (not Futures);
+  `lowering::untrack_borrowed_results` drops the track where the census reports no creation; the census is
+  computed once and passed to `statics::make_static(module, census)`; skipped for `okkama check`. Release
+  compile of std/http/server.ok -t: 460 ms on both (a second census cost +80 ms before sharing). Corpus SPB vs
+  release/065 (2279 programs that build): 14 differ, all HTTP/web, 34 new tracks, every one after
+  `ClientResponse::Exchange.history` (an `@ExchangeHop` field wrapped in a new `Sequencing` adapter per read).
+  bench/micro check.py on 99 closure/cap programs: same as release/065 (10 cage-only fs/process failures).
+  Micro A/B (okkama-dev, toolchain.sh builds of 57da2e6c2 and the candidate, n=10⁴, 5 runs, A1 B1 B2 A2), the
+  two programs whose SPB changed: http-cache-response 37018/37369 → 36883/36732 ns, http-connection-policies
+  98698/98955 → 98735/99769 ns: within noise. Toolchains in okkama-work/micro-tc/1099-{base,cand}. Tests: tweed_ownership (4, sync+async), statics
+  `closure_and_cap_results_are_tracked_only_when_they_are_new`; #1093's census test now also drops the new track.
+- [x] #1098 (feature/1098, not committed): `lowering/natives.rs::check_abi`, called from `lower_native`, refuses
+  a native whose canonical symbol is in the ABI table but whose parameters, result or asynchrony differ
+  (semantic error at the declaration); unknown symbols stay the runtime's. `okkama-runtime-abi`
+  `Native::signature_text` is public for the message. Sweeps: 16656 std/runtime native mutants (14751 codegen
+  failures without the check, 0 with it); fuzz run 45896662080's exec + analyze corpora (5581) linked against
+  std: 0 codegen failures.
+- [x] #1094/#1095/#1096/#1097 (feature/book, not committed): `okkama-devtrace/src/env_switch.rs` is the one
+  switch implementation (pub; re-exported as `okkama_compiler::env_switch`, `sparrow_core::env_switch`; a `use` in
+  both CLIs; a dev-dependency of okkama-runtime-core); the five copies are gone. devtrace `requested`: a blank
+  `OKKAMA_DEV` category list is off. Default-on pins: `okkama-cli/tests/env_switches.rs` (`OKKAMA_TRACE` under
+  run/exec), `sparrow-cli/tests/cli.rs`, `sparrow-core/src/program.rs` `switch_tests` (POINTER_FREE, INT_RANGE).
+  Blade `report(root, installed, locked, new)` adds `… in blade.lock` lines for lock changes `pkg/` already has.
+  SPB verifier: "a rotation needs a count"; `analysis_bytes` prints the computed bytes. `run_executable` returns a
+  failed `configured_runtime` as `ExecutionError::Load`, `core_described` prefixes run_described's load error
+  with `okkama:`.
+
+- [x] #1093 (feature/dbg, not committed): `ir/linearity.rs` takes a call result as a resource only where the
+  census reports a creation site (`Calls::of` runs `ownership::analyze` once per module, only when some function
+  has a resource-typed candidate; resolution shared through `ownership::resolved_call`); a call whose callee
+  adopts the parameter owns the fresh argument, also on its unwind edge (`Calls::adopted`); a branch moves an
+  argument's ownership state into a resource-typed block parameter (`flow`); the dead `await.take` owner branch
+  is gone. `ir/statics.rs` removes the regions it empties (`regions::elide_among`): with `OKKAMA_IR_PASSES=statics`
+  37 corpus programs were refused "may still be open" before (a `resource.leave` before `region.leave R` failed
+  to the outer handler; empty region, no leak; since #1058 ran the pass alone). `LoweringError::Internal`
+  messages are bare, Display adds the prefix (CLI, `okkama check`, doctests print the kind once). #1073's two
+  refusal tests now also make `Res.read` borrow its receiver (an adopting callee owns the argument). Corpus with
+  `OKKAMA_VERIFY_OWNERSHIP=1`, release build, passes `all`/`none`/`statics`: std -t 499, t/ 49 + t/gen 93,
+  examples 264 (69 intentional rejects), conformance 601 compiling cases (474 expected rejects): 0 refusals, 0
+  ICE; SPB under `all` byte-identical to release/065 on 1382 files. Found: #1099 (a discarded `call.fn`/`call.cap`
+  result that is a new resource is never destroyed; the check refuses it). Not run: the debug workspace suite.
+- [x] #1090 + #1091 + #1092 (feature/fuzz2, not committed): `contracts.rs::thrown` checks that an error case's
+  fields are exactly the raised payload (the legacy `$tag` layout, unemitted since #290, used to load; a
+  crafted one read `x` as the tag, 0); an intrinsic's contract errors name the intrinsic; `intrinsics::raised`
+  and runtime-core `raised_fields` removed. Fuzz `exec` links against the repository's std
+  (`support/linking.rs`, `StdTree`, one parse per module and process, plain names only) and shares `run`
+  with `tests/fuzz_lowering.rs`. `tools/test-python.sh` (9 test_*.py, ~17 s) in CI job "Tool tests" and the
+  Wave's maps job. Tests: okkama-cli `--test intrinsic_contracts`, okkama-compiler `--test fuzz_lowering`.
+  Not yet seen on Linux: the Python tests and the exec target with std (Fuzz dispatch).
+- [x] #1088 + #1089 + #1050 (feature/fuzz, not committed; fuzz run 45890980218 on 08a63b30b):
+  `lowering/intrinsics.rs` `Site::refuse` makes every shape the runtime needs a semantic error at the intrinsic
+  (error enum and its first case, result object with the receiver's type-parameter count, helper field, cap field
+  and action); `core::ArraySequence` missing stays internal. Swept 653 mutants of the eleven intrinsic modules
+  (production and test mode): no internal error. Fuzz `exec` lowers through `support/linking.rs`
+  (`lower_linked`, a loader with no modules) instead of unlinked `lower_program`. `tools/fuzz/coverage.sh`
+  replays coverage with `detect_odr_violation=0` (cargo-fuzz run's default; SQLite FTS3/FTS5 `aiOff` false
+  positive). Crash inputs in `okkama-rs/fuzz/regressions/<target>/`, copied into the corpus by `run.sh`,
+  replayed by `tests/fuzz_lowering.rs`. Not verified on CI yet: a Fuzz dispatch on the pushed branch must
+  show `coverage/spb.txt` and `coverage/exec.txt` with TOTAL.
+- [x] #1086: `bench/micro/toolchain.sh WORKTREE OUT [LAYOUT_SEED]` (release cfg, rust-lld `--shuffle-sections=*=SEED`
+  via rustc's gcc-ld wrapper; refuses seed 0 = random and a devtrace binary); `report.py` `binary_spread` per cell
+  (per-binary geometric medians by `toolchain.binary_sha256`), band = 2 × max(series spreads, binary spreads),
+  devtrace campaigns incompatible. Seeds 1 and 2 of 6d84de2fd: different binaries and symbol order, same checksums.
+- [x] #1085: `bench/micro/support/harness.ok` — `Measurement.elapsed_since` holds the closing clock read; `start()`
+  runs it once before the start instant. Constant in the interval (slope over N=25k/100k, 3 interleaved rounds,
+  rc 6d84de2fd): baseline no-inline 1.25 → 0.38 ms, default 0.025 → 0.002; async-await default 1.40 → 0.51,
+  no-inline 1.36 → 0.46. A quiet warm call of `finish` itself measured worse (0.76/0.87 ms) and was dropped.
+  The async rest (~0.5 ms with inlining) is outside the harness.
+- [x] #933 (feature/933, not committed): `code_memory` places every function on a page of its own at
+  `shift` bytes (`CodeMemory::new(shift)`, `Region::written`, skipped pages untouched); `Jit::new` reads
+  `SPARROW_CORE_CODE_SHIFT` through `env_switch::bytes` (refuses a malformed value), `Jit::with_code_shift`;
+  devtrace event `jit` "code placed". `bench/micro/run.py --placements` (every placement in every round,
+  `layout`/`layout_spread` per cell, placements part of compatibility), report.py shows the layout spread.
+  Numbers (okkama-dev, n=10⁶, 5 runs): release/065 — moving JIT code (base +4/8/12/16/20/36 KiB, shift
+  64/128/1024/2048, 64 KiB granule) keeps array-plus 58–59, float 8.8, map-replace 376–385 ns; v0.6.1 —
+  array-plus 75.7–79.1 ns on every JIT placement vs 60 with `NO_INLINE=main`, unchanged by heap page
+  alignment, malloc padding and stack shifts, gone after an unrelated Rust edit (62.9/63.8): the AOT binary's
+  layout. `NO_INLINE=main` adds ~1.4 ms of lazy compile (`Measurement.finish`) to the timed interval. No PMU
+  in the Docker VM. Proposed tickets: harness pre-compile of the finish path; link-order perturbation
+  (lld `--shuffle-sections`) for the AOT layout lottery.
+- [x] #1072 (feature/1072): `Emitter::instruction` (sparrow-core/src/jit.rs) compiles `unreachable` as a trap
+  (`jit::UNREACHABLE`, "Unreachable code reached", a program error a handler catches); SparrowBook table text.
+  No corpus SPB holds opcode 145 (1245 programs of std -t, examples, bench/micro; 552 of t/ and conformance).
+- [x] #1074 (feature/1074): `Jit::spread` (sparrow-core/src/jit.rs), one Cranelift adapter per arity over 8,
+  called by `jit::invoke`; `rt_call_closure` takes a vector past 8 words; `Invocation::capture_count` has no
+  width limit; `closure_call` calls wide closures directly. No corpus program has a closure over more than 8
+  parameters or a `call.fn` with 7+ arguments, so no emitted code changes; the closure helper's path for
+  async and 3+ captures runs as before: std `run -t` 395 modules, examples 75, bench/micro check 773, t/ 142
+  files (50972 checks) identical to release/065 (0269ef0e7) in the cage.
+- [x] #1076 (feature/1076): `Program::stub_fields` (okkama-sparrow/src/verify.rs), `Loaded::may_hold_stub`
+  (sparrow-core/src/program.rs), `Emitter::bound_field` for `obj.get`/`variant.get` (a #541 accessor of such a
+  field stays a call); a `bool` stub reads `true` (`$pending`, #271), any other stub fails the program; map keys
+  and the debug natives refuse or read the stub as unbound; a session runtime checks every field. Checked
+  reads: 55 of 180696 field reads in bench/micro (2 of 774 programs), 407/58854 in examples, 203/97604 in std
+  tests; load cost 10 ms over 1245 programs (0.7% of their verification). Blast radius vs release/065
+  (0269ef0e7): conformance full-release 1075/1075 on both; std `run -t` 395 modules, examples 75 identical
+  (cage and Docker); Bible examples, bench/micro check, t/ identical.
+- [x] #1077 (feature/1077): closure captures in first-use order. `Checker::outer_view` gives a nested
+  anonymous action the enclosing body's locals plus the names it has not captured yet (`Outer::inherited`);
+  a use records a pending capture, which `Checker::resolve_captures` turns into a capture of the enclosing
+  body after the nested one is checked. Before, `visible()` captured every outer name in HashMap order, so
+  nested closures over-captured and their SPB varied run to run. Compile sweep (2382 files, std -t, t/ with
+  t/gen, examples, conformance, Bible examples): exit codes as release/065; SPB differs in 22 files, all with
+  nested closures (16 were already nondeterministic on release/065), their runs print the same; three branch
+  sweeps byte-identical.
+- [x] #1025 (no code): the 0.6.4 async slowdown is not a regression. The rc2 micro toolchain
+  (`okkama-work/micro-tc/v0.6.4`, okkama b80691b5…, measured in r064c/d) was built without
+  `--cfg okkama_release`, so devtrace is compiled in (`OKKAMA_DEV=runtime` writes `counters.json`; a
+  release build writes nothing): its gates in `Runtime::future_new`/`run_body` (span + count),
+  `rt_future_new`/`rt_await_take`/`rt_complete` and `Heap::allocate`/`allocate_class` run on every
+  iteration. Same source 29c3dc84a, okkama-dev, marginal ns/iteration (slope between N=25 000 and 10⁵,
+  5 interleaved rounds, two seeds): release cfg vs devtrace in — async-await 42.07/42.23 vs 44.09/44.31
+  (+4.8%), spawn +2.5/+1.4%, event-wake +2.7/+2.0%, cancel +2.8/+2.2%; the rc2 binary itself +3.0…+4.1%
+  on async-await, also when it runs SPB built by 7fb98e01f. 7fb98e01f → 29c3dc84a, both release cfg:
+  async-await −0.6…+1.0%, spawn −1.3…+3.2% over six runs; #1009/#1011/#1013 points (44a4b151b, d1d2b17c5,
+  486af1b02, 94eba7fb9) within −0.4…+1.6% on async-await. The hot loop takes no `rt_exec` (stats: helpers
+  future_new, await_take, complete only), so #1009's `catch_unwind` is not on it. JIT placement spread on
+  release/065 (`SPARROW_CORE_CODE_SHIFT` 0/64/1024): 1.1% async-await, 1.0% spawn. At N ≤ 10⁵ the timed
+  interval carries a fixed 1.2–1.5 ms (#1085), which follows the SPB, so medians at one N are biased; compare
+  slopes. Shipped 0.6.4 (packages.yml, ~/.local) has devtrace out.
+- [x] #1071 (feature/1071): `ir::verify` checks cap declarations (`check_cap`: owner exists, distinct field
+  names, each field a synchronous `[method Owner]` function of the owner alone returning a value),
+  `worker.bind` (entry `fn(field types…, action params…)` with the action's result) and `worker.spawn` (the
+  entry does not return a Future). Not reachable from lowering; compile sweep as release/065.
+- [x] #1073 (feature/1073): `ir/linearity.rs` refuses a resource (object with its own destroy made by `obj.new`,
+  a call or `await.take`) that may be in no region (track, adopt, transfer, pin; `keep` frees) when the function
+  leaves, other than the value returned or thrown, or made again by a loop while the one before is free; and a
+  `region.enter` while the region may be open, at that enter. Header: debug builds and `OKKAMA_VERIFY_OWNERSHIP=1`
+  in any build but a packaged release. Its find: `exit_scopes` left nested regions with `keep` and no track in
+  between, so a failing outer defer or close lost a returned resource; each next region now tracks it
+  (`lowering/body/scopes.rs`). Compile sweep (2382 files) with `OKKAMA_VERIFY_OWNERSHIP=1`, passes on and off:
+  exit codes as release/065; SPB differs in 78 files beyond #1077's nondeterminism (std http/db/net/web/mail,
+  conformance L07/L11/L12/L13, examples), all from the added tracks.
+- [x] #1075 + #1070 (feature/1075-1070): the hoist driver comment names the nearest outside dominator (#239);
+  IR docs: `char` compare takes every operator, `float`/`rat` `%` keeps the dividend's sign, `rat.part` is
+  `int`, `Move` lists `future.handoff`; verifier: a rotation without a count gets its own message; the
+  linearity check names plain OPEN "open"; dead `IntBinaryOp::traps()` and IR `TrapCode::Unreachable`
+  removed (SPB's `TrapCode::Unreachable` stays). The `map.keys` operand already prints once ("of non-map
+  type", since #1043/#1044).
+- [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
+  the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
+- [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets
+  (catch handler and lookup `found` edges are normal paths). Compile sweep (3170 files, passes on; 2122 with
+  OKKAMA_IR_PASSES=none): SPB identical to release/065 but the nondeterministic `L03.anonymous.lexical-scope`.
+- [x] #1039 (feature/1039): `blade new` (blade/src/lib.rs `new_project`) refuses an existing NAME, a missing or
+  extra argument and an invalid package name; creates with `create_dir`/`File::create_new`; output from
+  `project::default_output` (shared with `Project::parse`); no `bin/`.
+- [x] #1060 (feature/1060): okkama-cli tests describe one engine: docs of sparrow_scalars/variants/strings/
+  objects/native/providers, traces, budgets, signals, strings, terminal_pty, jit_accessors; one-element engine
+  loops and `{ let engine = "sparrow"; … }` blocks collapsed (signals `engines()`, budgets `run(engine, …)`,
+  terminal_pty, cli.rs); `both()` → `expect()`; the pty driver takes no engine; cli.rs no longer sets
+  `OCS_RUST_ENGINE` (engine_selection.rs keeps the test that stale engine variables are ignored).
+- [x] #1040 (feature/1040): `blade run` rebuilds by `OUTPUT.blade-stamp` (blade/src/project.rs `inputs`,
+  `fingerprint`, `stamp`, `up_to_date`; SHA-256 through `install::checksum_of`), never by mtime; lock spells
+  `path` sources from the project (`Source::Path { dir, spelled }`, `install::relative`); one `report` for
+  sync/update/add/remove against `pkg/.blade-installed` (files changed, source moved); sync reports
+  "no longer required" only after a complete walk; `settled` names a busy blade; `blade install`,
+  `add_source`, `Cli::execute` and the commented-out code gone. Not covered by the stamp: the okkama binary and
+  its std (a new okkama with the same SPB version reuses the output) — covered since #1080.
+- [x] #1080 (feature/1080, not committed): the stamp records the toolchain (`blade-stamp 2` header, then the
+  `okkama env` version line, `binary sha256:…`, `std sha256:…`, inputs, output; blade/src/toolchain.rs
+  `Probe::start`/`finish`, `Digests`, `Key`, `list`; project.rs `stamp`, `up_to_date`, `STAMP_FORMAT`, `CACHE`).
+  Per-file digest cache `OUTPUT.blade-cache` (size, mtime, dev, inode, ctime; entries younger than 2 s not
+  remembered). No-op `blade run` 8.4 → 12.3 ms (gate build, ~/.local okkama 0.6.4, 22.6 MB binary + 499 std
+  files), ~3.7 ms of it `okkama env` start; uncached 41 ms. Not covered: `OKKAMA_IMPORT_DIRS` trees and
+  compile-affecting environment (`OKKAMA_IR_PASSES` …) — covered since #1087.
+- [x] #1087 (feature/1087, not committed): `okkama env` names `import    DIR` (okkama-cli `import_dirs`, shared
+  with `FileLoader::from_env`) and `build     NAME="VALUE"` for set `lowering::BUILD_ENVIRONMENT`
+  (`OKKAMA_IR_PASSES`, `OKKAMA_OWNERSHIP_PROTOTYPE`); guard `build_environment_tests` classifies every
+  `"OKKAMA_…"` literal of okkama-compiler (build vs `NOT_BUILD`). Blade toolchain.rs: `Toolchain.imports/build`
+  (stamp lines `import sha256:…`, `build …` after `std`), `Located`, `parse_env`, `Probe::start(okkama, root,
+  cache)` (env runs in the root; relative paths joined to it), cache `blade-cache 2` with `tree` lines (every
+  tree listed speculatively). No-op `blade run` without imports unchanged (14.4 vs 14.4 ms under load 10); with a
+  499-file import tree +1.6 ms. Not covered (runtime-only, by decision): `OKKAMA_ARRAYS`, `OKKAMA_MAPS`,
+  `OKKAMA_ICU_LIBDIR`, `OKKAMA_TRACE`, devtrace.
+- [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
+  (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
+  sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to
+  release/065 except `L03.anonymous.lexical-scope`, whose closure capture order differs run to run on both
+  binaries (codegen nondeterminism, ticket to file).
+- [x] #1069 (feature/1069): the SPB verifier tracks `undef` stubs (`State` in okkama-sparrow/src/verify.rs):
+  carried by moves, edge moves and `obj.new`/`obj.init` fields, read only on the `true` side of a `br` on a
+  guard that is false where the stub may remain. Compile sweep over std, t/, examples, conformance, Bible
+  examples, bench/micro (3170 files): SPB identical to release/065 but the nondeterministic
+  `L03.anonymous.lexical-scope` (closure capture order varies run to run). Open: a stub stored in a field and read by
+  `obj.get` (heap) is not tracked (ticket to file).
+- [x] #1043 (feature/065-ir): `codegen::sparrow::check` refuses a result or an edge value in an operand's
+  register (`early_write`); `TermKind` targets/operands from the macros `terminator_targets`/
+  `terminator_operands`; IR text `oir 2 high`, OIR-2 naming; tests for #1007 (`FutureGroup` not plain in
+  `param_adopts`, the linearity check's refusal of region block parameters, a catch value's register).
+- [x] #1044 (feature/065-ir): `FnBuilder::adopt_tracked_await` (lowering/builder.rs, called from
+  `BodyLowerer::adopt`) and `take_unique` (futures.rs): one adopt for an awaited result; `okkama ir --passes`
+  refuses unknown names (`lowering::unknown_passes`); the warning names its origin; the conversion gap message
+  is "`char` to `float` conversion". Compile sweep of 2382 files (std -t, t/ with t/gen, examples,
+  conformance, Bible examples) against release/065: exit codes identical; SPB differs in 90 files with the passes
+  on (1106 `region.track` fewer, no other opcode) and 102 with them off (1230); the rest are run-to-run closure
+  order (`L03.anonymous.lexical-scope`, t/lang/closures, t/gen nesting), same opcodes. Not done: #1043's
+  `codegen::Backend::from_name` without a caller; call results bound by `let` keep track then adopt.
+- [x] #1033 (feature/1033): `heap::passes_length_limit` is the one pre-check of a header length;
+  `builder_finish` and `int_text` return `Outcome`, so `rt_builder_finish`/`rt_int_text` fail the
+  program (Fails effect; JIT checks the status after `int_text` too). Direct helpers with
+  bounded sizes (`rt_array`, `rt_closure`: operand counts) need none; natives and `rt_exec`
+  catch panics.
+
+## Formatter, IDE, CLI and IDNA audit (2026-11-26, feature/065-ide)
+
+- [x] #1036 point 1: only a bare lsp/repl starts the interactive command.
+  `--help` alone uses the existing help page and exits 0; every other argument
+  (including additional help flags) is named in a usage error, exit 2.
+  Points 2–4 were already fixed in the documentation lane.
+- [x] #1037: bodiless signatures retain their post-semicolon comment when
+  header comments are pending; brackets inside comments do not delimit lists;
+  object/enum/const name comments and destroy header comments keep their place.
+  Trailing comments cannot be stolen across another construct on the same line.
+  The #1006 block-comment/header and line-comment/body rules remain covered.
+- [x] #1041: action result types in IDE completion/signatures use the same
+  root-module-qualified names as member-table keys, including role actions.
+  Tests cover both same-named objects, role receivers and repeated calls.
+- [x] #1042: self is completed once in object scope and never in main;
+  constant-use spans cover only the identifier; misplaced/stale doc comments
+  are corrected. Explicit and implicit synopsis extraction skips runnable
+  doctests (comma or whitespace metadata) and output fences, preserves examples,
+  and removes an indented block's indentation. Std overlays read and parse once
+  for their deep-index overview and declaration inventory.
+- [x] #1029: both CLIs print the runtime's existing bare entry-range message
+  for every integer outside 0..255, exit 1. The i64 runtime API is unchanged.
+  Exact stdout/stderr/status tests cover run/exec and standalone Sparrow,
+  0/42/255, 256/300/-1, both i64 boundaries and positive/negative 2^70.
+- [x] #1031: regenerated idna.dat with gen-idna.pl, Perl 5.42.2 and
+  Net::IDN::UTS46 2.591, entirely offline. The decompressed diff removes only
+  `B L 110000 10FFFF` and `J U 110000 10FFFF`; all B/J ranges are ordered and
+  end at or below 0x10FFFF. No manual data edit.
+
+Validation: 88 distinct selected tests pass: compiler ide::tests (43),
+syntax::format::tests (25; idempotence and token/comment preservation),
+ide::std_paths::tests (4), eight documentation rendering/publishing tests,
+runtime-core native::idna::tests (5), and three CLI regressions in the two
+cli.rs integration files. New regression tests fail against the original
+implementations; a separate renderer mutation confirms the synopsis failures,
+and the restored renderer passes. `cargo check --offline -j 4` passes.
+Generated maps refreshed with `python3 tools/map/gen.py`; `git diff --check`
+passes. No remaining work in this six-ticket scope. No commits, CHANGELOG,
+std source, parser, IR verifier/printer or Sparrow verification/typing changes;
+no full test suites, Docker, cargo fmt or clippy.
+
+- [x] #1034 (feature/1034): `Failure::record`/`Failure::sites` (runtime.rs): the head of
+  `TRACE_LIMIT − TRACE_TAIL` innermost activations, then a ring of the `TRACE_TAIL` = 4096
+  outermost; `Uncaught::cause_traces` carries each cause's omitted count; the count line
+  says "in the middle" under the root and under causes.
+- [x] #1026 (feature/1026): okkama-native `argon2_into` (zeroed `Vec<Block>` through
+  `hash_password_into_with_memory`), `argon2_hash` mirrors `hash_password_with_salt`,
+  `argon2-verify` mirrors `verify_password` over it; direct dependency `ed25519` with
+  `zeroize` (Cargo.lock and fuzz/Cargo.lock).
+- [x] #1062 (feature/1062): `typing::non_finite` walks `GlobalDecl.data` after `fits`;
+  the global check refuses the first non-finite float; unit test `typing::data_tests`.
+- [x] #1066 (feature/1066): `jit::compile_limit_text` (MiB / KiB / bytes) in the compile-cost
+  refusal; unit test `compile_limit_tests`, integration `compile_cost.rs` at 256 KiB.
+- [x] #1056 (feature/1056): `asm::Parser::error_after` (line of the consumed token) at the 14
+  consume-then-fail sites of asm.rs, operand.rs and `instructions!`; `unknown_escape` prints an
+  invisible escape by code point; unit tests `asm::line_tests`.
+- [x] #1057 (feature/1057): `session::place` names a changed item by (fresh position, item);
+  constants by their init's symbol (`fresh_globals`); test `tests/session.rs`.
+
+- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 18` in every `.spa` and test
+  source (51 files); `codec::tests::the_instruction_set_is_pinned_to_the_version` hashes
+  `Instruction::SIGNATURES` (test-only) and the `op_enum!` codes. SparrowBook rebuilt
+  (build.py gained the six missing mnemonics 157–162). Branches still writing `sparrow 16`
+  in new tests need the same rename when they land.
+
+## Test/tool audit (2026-11-26, feature/065-tools)
+
+Scope: #1048, #1058, #1059, #1053, #1051, #1052, #1067, #1050, #1055.
+No commits or CHANGELOG edits; no Docker, fuzz campaign, full Rust suite,
+clippy or cargo fmt. Only bounded, selected tests and dry tooling checks.
+
+- [x] #1048: all seven listed compiler test files pin their observed pipeline
+  with `with_passes("all", ...)`; all 107 tests pass with `OKKAMA_IR_PASSES=none`.
+- [x] #1058: CLI differential tests enumerate `lowering::PASSES` plus all/none.
+  Pin the std path and require the arithmetic oracle, so missing imports cannot
+  count as equivalent execution. Arithmetic across every selection and the
+  deliberate wrong-pass test pass. The existing failures fixture still checks
+  cleanup, errors and 100000 tail calls; it was not executed locally because
+  the task prohibits long recursion on the host.
+- [x] #1059: the scope fixture contains FutureScope.outcome; absence fails, and
+  both original SPB acceptance and crafted rejection are checked. Both tests pass.
+- [x] #1053: setup-free group 0 splits every 40 checks; shared setup stays intact.
+  Three Python regressions pass. Generated six affected families (31375 checks);
+  the five setup-free families have no action exceeding 40 checks.
+- [x] #1051: in-repo HTML template, geometric aggregation of every engine round,
+  every cell required VALID, missing/invalid/incompatible rounds excluded,
+  duplicate files and mixed version labels rejected. Seven tiny-fixture tests pass,
+  including standalone HTML generation. Archived c/d rounds reproduce 55 reliable
+  non-control pairs and +0.5631095% gross time, rather than keeping round d alone.
+- [x] #1052: record actual --version, compare to the local revision's workspace
+  package version, refuse mismatches before workloads; an explicit override stays
+  visibly flagged and cannot be compared as release evidence. Missing local
+  revisions are UNVERIFIED with a warning. Runner tests: 18 pass; --plan passes.
+- [x] #1067: one boolean helper per consuming Rust crate, used by runtime,
+  compiler, CLI and test switches; NO_COLOR remains nonempty presence. Document
+  unset-OFF defaults, including POINTER_FREE, INT_RANGE and TRACE. Trace tests
+  explicitly request tracing. Boolean matrices, stats subprocesses, prototype
+  selection, and std terminal inline tests pass; std formatted with built okkama.
+- [x] #1055: typed LoweringError::Internal for invariant failures, including OIR
+  verification and linearity; analyze/exec share a rejection policy which panics
+  on that kind, and exec expects successful codegen/encoding. Two compiler
+  mutation tests (undefined return operand in sum.ok and missing resource close)
+  reach the shared fuzz policy and panic; two rejection-policy tests pass.
+- [x] #1050 diagnostics: coverage build/replay/report logs retained per target;
+  stale reports removed, TOTAL required, failure tail printed, final run exits 3
+  after checking all targets. Three dry regression tests pass, including the full
+  driver with fake tools and failure of every coverage target. Explicit coverage
+  build path and bounded build jobs;
+  preserve the frame pointers required by Sparrow when cargo-fuzz sets RUSTFLAGS.
+- [ ] #1050 historical spb/exec failure cause and real coverage replay: the cited
+  job's stderr was discarded, so its cause cannot be recovered from the job log.
+  Instrumented offline `cargo check` of all six targets passes, but does not link
+  or replay them. The permitted dry checks cover failure handling; a real nightly
+  coverage run is required to establish whether another build/replay fix is needed.
+
+Historical #1052 evidence: all four `v0.6.3-...-r064{a,b,c,d}.json` files in
+`okkama-docs/benchmarks/micro/results` declare `7d2b3403e` (Cargo.toml: 0.6.3),
+but record `okkama 0.6.2` and SHA-256
+`8b5484fec30729c3a9f22a1867b9083dbd261f01c1e90922faaed7d86ce7a440`.
+No other archived micro campaign has that hash. The retained micro-tc directory
+contains only v0.6.4; the baseline binary is unavailable. Thus the historical
+0.6.3 → 0.6.4 identity is unverified, even though its numerical aggregation is
+reproducible. No archive was rewritten and no replacement campaign was run.
+
+Final validation: `cargo check --offline -j 4`, all selected Rust tests and 31
+Python tests pass. `okkama fmt --check std/terminal/capability.ok` passes.
+Generated maps are refreshed with `python3 tools/map/gen.py`; `git diff --check`
+is clean. No full suites, campaigns or host long-recursion checks were run.
+
+Mutation checks reject the old unpinned lowering, inactive scope fixture,
+swallowed Internal errors, presence-only stats, oversized group 0, last-round
+aggregation and unchecked binary version. Mutated sources are restored.
+
+
+## Documentation review (2026-11-26, feature/065-docs)
+
+- [x] #1027, #1028, #1030: source line docs, OIR-2 help and the IR-pass warning.
+- [x] #1035: remaining Russian host comments translated after checking their code.
+- [x] #1036 points 2–4: REPL declarations, Sparrow help spacing, OIR-2 bytecode docs.
+- [ ] #1036 point 1: `main()` still dispatches lsp/repl before parsing trailing
+  arguments. Fixing `--help` and rejecting extra arguments changes program behavior,
+  which this documentation-only task explicitly forbids. Use `okkama help lsp`
+  or `okkama help repl` for now; a behavioral patch is outside this task's authorization.
+- [x] #1038, #1045: pruning/format-width descriptions and reserved-name docs.
+- [x] #1065: string comparison, capability field syntax, complete map-key types,
+  accurately named map test, OIR type spelling in array.remove errors; also remove
+  the repeated map operand in map.keys/map.values errors as explicitly permitted.
+- [x] #1068: remove obsolete JIT/PostgreSQL settings, correct the Rust OCS endpoint
+  description, document worker output limits and developer switches with readers/defaults.
+  The Python conformance adapter still reads OCS_RUST_ENGINE; its invocation stays valid.
+- [x] #1054: generated index documents non-rule exclusions without changing extraction;
+  current release branch, benchmark references/engine, rc2 numbers, gate steps/triggers,
+  and debug conformance versus fat-LTO std/t binaries. Remove stale test-binary counts.
+- [x] #1049: stale JSON/corpus/recovery comments corrected; corpus inventory verified
+  as 499 + 13 files; parser rejection assertions compare complete intended messages.
+  The unused corpus metadata fallback stays unchanged under the no-behavior-change rule.
+- [x] Targeted integration files: parser_expressions 39/39, ir_verify 16/16.
+- [x] `cargo check --offline -j 4`, `python3 tools/map/gen.py --check` and
+  `git diff --check` pass; maps regenerated with `python3 tools/map/gen.py`.
+
+No commits or CHANGELOG edits. No full suites, application binaries, Docker, fmt or clippy run.
+
 ## Release 0.6.4 (2026-11-23, release/064)
 
 - [x] Hotfixes from reading 0.6.3 end to end (milestone "Hotfixes TBD", board project 1): #973–#1004
@@ -8,8 +398,9 @@
 - [x] Deferred: #1000 (macOS TLS flake, not reproducible), #1005 (owner decision: overload names,
   object named Maybe), #1006 (refactors, Unicode version contract, formatter width and std fmt-clean).
 - [x] wave/rel064 green (it caught t/gen against #984 and a clippy lint, fixed in b09f9dfa8); release CI
-  green; micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
-  (okkama-docs reports/2026-11-23-v0.6.4/micro.html); version 0.6.4.
+  green; initial rc1 micro A/B 0.6.3 → 0.6.4 interleaved: −0.4% over 51 reliable pairs, all within noise
+  (candidate 7fb98e01f); superseded by rc2 29c3dc84a, +0.6% over 55 reliable pairs
+  in the final release report (okkama-docs reports/2026-11-23-v0.6.4/micro.html).
 - [ ] Tag v0.6.4 (owner pushes), Packages and GitHub Release, install-pgo, man site, cleanup.
 - [x] #1016 (feature/1016-twins): runtime-core native twins removed (network, tls, sqlite, db, postgres,
   host_crypto, process, input, system, stdio, buffer, encoding, numbers, bytes, jre; regex, fs, json, idna,

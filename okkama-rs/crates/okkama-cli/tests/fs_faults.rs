@@ -3,9 +3,9 @@
 //! behind; a failed directory fsync after the rename leaves the new content
 //! and reports not_durable. Faults come from SPARROW_CORE_FS_FAULTS.
 #![cfg(unix)]
+mod tree;
 
 use std::path::Path;
-use std::process::Command;
 
 fn replace_with(fault: &str) -> String {
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -13,11 +13,10 @@ fn replace_with(fault: &str) -> String {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
     std::fs::write(scratch.join("notes.txt"), "old").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .arg("run")
         .arg(here.join("tests/fs_faults/replace.ok"))
         .arg(&scratch)
-        .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
         .env("SPARROW_CORE_FS_FAULTS", fault)
         .output()
         .expect("run okkama");

@@ -1,4 +1,6 @@
-//! Операции хостовой криптографии над байтами (без unsafe). Каждая операция —
+//! Операции хостовой криптографии над байтами (без unsafe; исключение — один
+//! тест #1026 в конце файла, `drop_in_place` для проверки обнуления сида
+//! Ed25519, #1097). Каждая операция —
 //! имя и список байтовых аргументов; целые передаются десятичным ASCII.
 //! Случайность: аргумент-зерно (энтропию выбирает вызывающий), явная операция
 //! `random`, а у RSA — `SystemRandom` aws-lc; аргументы энтропии RSA
@@ -495,7 +497,7 @@ fn pbkdf2(hash: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn argon2_params(args: &[&[u8]], length: Option<usize>) -> Result<argon2::Argon2<'static>> {
+fn argon2_params(args: &[&[u8]], length: Option<usize>) -> Result<argon2::Params> {
     let memory = number(args[0], "memory")?;
     let time = number(args[1], "iterations")?;
     let lanes = number(args[2], "parallelism")?;
@@ -506,33 +508,80 @@ fn argon2_params(args: &[&[u8]], length: Option<usize>) -> Result<argon2::Argon2
         length,
     )
     .map_err(|error| invalid(format!("invalid Argon2 parameters: {error}")))?;
-    Ok(argon2::Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    ))
+    Ok(params)
+}
+
+/// Argon2id, version 0x13 unless a stored hash names another.
+fn argon2id(version: argon2::Version, params: argon2::Params) -> argon2::Argon2<'static> {
+    argon2::Argon2::new(argon2::Algorithm::Argon2id, version, params)
+}
+
+/// Argon2 of `password` and `salt` into `out`, its memory blocks (derived from
+/// the password) in a buffer zeroed before it is freed (#1026). The crate's own
+/// `hash_password_into` frees them unzeroed, `zeroize` feature or not.
+fn argon2_into(hasher: &argon2::Argon2<'_>, password: &[u8], salt: &[u8], out: &mut [u8]) -> argon2::Result<()> {
+    argon2_into_with(hasher, password, salt, out, |_| {})
+}
+
+/// [`argon2_into`], with `inspect` shown the blocks after they are zeroed (tests).
+fn argon2_into_with(
+    hasher: &argon2::Argon2<'_>,
+    password: &[u8],
+    salt: &[u8],
+    out: &mut [u8],
+    inspect: impl FnOnce(&[argon2::Block]),
+) -> argon2::Result<()> {
+    let count = hasher.params().block_count();
+    let mut blocks: Vec<argon2::Block> = Vec::new();
+    blocks.try_reserve_exact(count).map_err(|_| argon2::Error::OutOfMemory)?;
+    blocks.resize(count, argon2::Block::default());
+    let result = hasher.hash_password_into_with_memory(password, salt, out, &mut blocks[..]);
+    blocks.iter_mut().for_each(Zeroize::zeroize);
+    inspect(&blocks);
+    result
+}
+
+/// A PHC hash of `password` with `salt`, as `PasswordHasher::hash_password_with_salt`
+/// makes it, through [`argon2_into`].
+fn argon2_hash(
+    version: argon2::Version,
+    params: argon2::Params,
+    password: &[u8],
+    salt: &[u8],
+) -> argon2::password_hash::Result<argon2::PasswordHash> {
+    use argon2::password_hash::phc::{Output, ParamsString, Salt};
+    let salt = Salt::new(salt)?;
+    let hasher = argon2id(version, params);
+    let params = hasher.params();
+    let mut buffer = [0u8; Output::MAX_LENGTH];
+    let out = buffer
+        .get_mut(..params.output_len().unwrap_or(argon2::Params::DEFAULT_OUTPUT_LEN))
+        .ok_or(argon2::password_hash::Error::OutputSize)?;
+    argon2_into(&hasher, password, &salt, out)?;
+    Ok(argon2::PasswordHash {
+        algorithm: argon2::Algorithm::Argon2id.ident(),
+        version: Some(version.into()),
+        params: ParamsString::try_from(params)?,
+        salt: Some(salt),
+        hash: Some(Output::new(out)?),
+    })
 }
 
 /// `argon2(password, salt, memory_kib, iterations, parallelism, length)` — сырой вывод Argon2id.
 fn argon2_raw(args: &[&[u8]]) -> Result<Vec<u8>> {
     arity(args, 6, "argon2")?;
     let length = number(args[5], "length")? as usize;
-    let hasher = argon2_params(&args[2..5], Some(length))?;
+    let hasher = argon2id(argon2::Version::V0x13, argon2_params(&args[2..5], Some(length))?);
     let mut out = vec![0; length];
-    hasher
-        .hash_password_into(args[0], args[1], &mut out)
-        .map_err(|error| invalid(format!("Argon2: {error}")))?;
+    argon2_into(&hasher, args[0], args[1], &mut out).map_err(|error| invalid(format!("Argon2: {error}")))?;
     Ok(out)
 }
 
 /// `argon2-phc(password, salt, memory_kib, iterations, parallelism)` — строка PHC.
 fn argon2_phc(args: &[&[u8]]) -> Result<Vec<u8>> {
-    use argon2::PasswordHasher;
     arity(args, 5, "argon2-phc")?;
-    let hasher = argon2_params(&args[2..5], None)?;
-    let hash = hasher
-        .hash_password_with_salt(args[0], args[1])
-        .map_err(|error| invalid(format!("Argon2: {error}")))?;
+    let params = argon2_params(&args[2..5], None)?;
+    let hash = argon2_hash(argon2::Version::V0x13, params, args[0], args[1]).map_err(|error| invalid(format!("Argon2: {error}")))?;
     Ok(hash.to_string().into_bytes())
 }
 
@@ -544,7 +593,6 @@ const ARGON2_MAX_PARALLELISM: u32 = 255;
 
 /// `argon2-verify(phc, password)` — `[1]`/`[0]`.
 fn argon2_verify(args: &[&[u8]]) -> Result<Vec<u8>> {
-    use argon2::PasswordVerifier;
     arity(args, 2, "argon2-verify")?;
     let text = std::str::from_utf8(args[0]).map_err(|_| invalid("PHC string is not UTF-8"))?;
     let hash = argon2::password_hash::phc::PasswordHash::new(text)
@@ -564,11 +612,17 @@ fn argon2_verify(args: &[&[u8]]) -> Result<Vec<u8>> {
     {
         return Err(invalid("Argon2 cost in the PHC string is beyond the policy limits"));
     }
-    Ok(truth(
-        argon2::Argon2::default()
-            .verify_password(args[1], &hash)
-            .is_ok(),
-    ))
+    // As `PasswordVerifier::verify_password` does, through `argon2_hash` (#1026):
+    // the hash of the password with the stored salt and parameters, compared
+    // in constant time (`Output`'s equality).
+    let (Some(salt), Some(expected)) = (&hash.salt, &hash.hash) else {
+        return Ok(truth(false));
+    };
+    let Ok(version) = hash.version.map(argon2::Version::try_from).transpose() else {
+        return Ok(truth(false));
+    };
+    let computed = argon2_hash(version.unwrap_or_default(), params, args[1], salt);
+    Ok(truth(computed.is_ok_and(|computed| computed.hash.as_ref() == Some(expected))))
 }
 
 fn aead(algorithm: &str, args: &[&[u8]], seal: bool) -> Result<Vec<u8>> {
@@ -910,3 +964,53 @@ fn algorithm_text(algorithm: &spki::AlgorithmIdentifierRef<'_>) -> String {
     text
 }
 
+#[cfg(test)]
+mod zeroing_tests {
+    use super::*;
+
+    /// #1026: the Argon2 memory blocks, derived from the password, are zeroed
+    /// before they are freed, and the output is the crate's own.
+    #[test]
+    fn argon2_memory_blocks_are_zeroed_after_use() {
+        let hasher = argon2id(argon2::Version::V0x13, argon2::Params::new(64, 2, 2, Some(32)).unwrap());
+        let mut out = [0u8; 32];
+        let mut seen = 0;
+        argon2_into_with(&hasher, b"hunter2", b"saltsaltsaltsalt", &mut out, |blocks| {
+            seen = blocks.len();
+            assert!(blocks.iter().all(|block| block.as_ref().iter().all(|&word| word == 0)), "a block was left unzeroed");
+        })
+        .unwrap();
+        assert_eq!(seen, 64);
+        let mut reference = [0u8; 32];
+        hasher.hash_password_into(b"hunter2", b"saltsaltsaltsalt", &mut reference).unwrap();
+        assert_eq!(out, reference);
+    }
+
+    /// #1026: PHC strings made and checked through the zeroed memory agree with
+    /// the crate's `PasswordHasher` and `PasswordVerifier`, version 0x10 included.
+    #[test]
+    fn argon2_phc_matches_the_crate() {
+        use argon2::{PasswordHasher, PasswordVerifier};
+        let params = argon2::Params::new(64, 1, 1, None).unwrap();
+        for version in [argon2::Version::V0x13, argon2::Version::V0x10] {
+            let ours = argon2_hash(version, params.clone(), b"hunter2", b"saltsaltsaltsalt").unwrap();
+            let theirs = argon2id(version, params.clone()).hash_password_with_salt(b"hunter2", b"saltsaltsaltsalt").unwrap();
+            assert_eq!(ours.to_string(), theirs.to_string());
+            let text = ours.to_string();
+            assert_eq!(argon2_verify(&[text.as_bytes(), b"hunter2"]).unwrap(), [1], "{text}");
+            assert_eq!(argon2_verify(&[text.as_bytes(), b"hunter3"]).unwrap(), [0], "{text}");
+            assert!(argon2::Argon2::default().verify_password(b"hunter2", &theirs).is_ok());
+        }
+    }
+
+    /// #1026: `KeypairBytes`, which carries the Ed25519 seed into and out of
+    /// PKCS#8, zeroes it when dropped (the `ed25519/zeroize` feature).
+    #[test]
+    #[allow(unsafe_code)]
+    fn ed25519_keypair_bytes_zero_their_seed_on_drop() {
+        let mut pair = std::mem::ManuallyDrop::new(ed25519_dalek::pkcs8::KeypairBytes { secret_key: [7; 32], public_key: None });
+        // SAFETY: the value is dropped once; its storage stays ours, and a byte array has no invalid state.
+        unsafe { std::ptr::drop_in_place(&mut *pair) };
+        assert_eq!(pair.secret_key, [0; 32]);
+    }
+}

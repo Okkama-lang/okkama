@@ -24,6 +24,21 @@ fn an_empty_spec_turns_nothing_on() {
 }
 
 #[test]
+fn a_blank_or_off_switch_turns_devtrace_off() {
+    use std::ffi::OsStr;
+    fn requested(value: Option<&str>) -> Option<&str> {
+        super::requested(value.map(OsStr::new))
+    }
+    // Off by the switch rule, and off when no category is left after trimming (#1094).
+    for off in [None, Some(""), Some("0"), Some("OFF"), Some("no"), Some(" "), Some("\t \n"), Some(" , "), Some(",")] {
+        assert_eq!(requested(off), None, "{off:?}");
+    }
+    assert_eq!(requested(Some("lower")), Some("lower"));
+    assert_eq!(requested(Some(" , gc ")), Some(" , gc "));
+    assert_eq!(requested(Some("help")), Some("help"));
+}
+
+#[test]
 fn json_strings_escape_quotes_controls_and_newlines() {
     assert_eq!(json_string("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
 }

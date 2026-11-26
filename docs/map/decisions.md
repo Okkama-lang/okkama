@@ -6,6 +6,106 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-27. Trunk-based branches (owner).** «main — источник релиза, туда льем только через пулл-реквесты,
+  прямые слияния веток отвергаем; develop — общая песочница для всех изменений, на релиз не влияет». Release
+  branches are cut from `main`, features leave and rejoin the release branch, a merge into `develop` is a nightly
+  build (`okkama-nightly-YYYY-MM-DD`), the release ends with a pull request into `main` and the tag on its merge
+  commit. A ruleset on `main` enforces it; LLM-GUIDE §10 has the steps.
+- **2026-11-27. #1100 debug tests before the merge (lead decision).** The Wave and CI run `cargo test` of
+  okkama-compiler and okkama-cli in the dev profile (debug assertions, the ownership linearity check) besides the
+  gate profile; the nightly's workspace debug run stays. Debug info is line tables only on the runners (disk).
+- **2026-11-27. #1101 okkama-cli tests start okkama through `tests/tree` (lead decision).** `tree::okkama()`
+  sets the tree's std; no test relies on the binary's own std lookup, and `cli.rs` refuses a file that names
+  `CARGO_BIN_EXE_okkama` itself. A test of another std sets `OKKAMA_STDLIB_DIR` again on that command.
+- **2026-11-27. #1095 one switch implementation in okkama-devtrace (lead decision).** The environment-switch rule
+  lives once, in `okkama_devtrace::env_switch`: the lowest crate the six readers share, with no dependencies, and
+  not compiled out in a release (only its gates are). No new crate; okkama-runtime-core, whose only switch is a
+  test's, takes it as a dev-dependency. Old paths stay as re-exports, so no call site changes.
+- **2026-11-27. #1097 a runtime that cannot be built is a load error (lead decision).** Everything before `main`
+  runs (decode, verify, intrinsic contracts, JIT setup such as `SPARROW_CORE_CODE_SHIFT`) is reported with the
+  launcher's prefix (`okkama:`/`sparrow:`), exit 1 as before; only a failure of the run itself keeps the runtime
+  report's formatting. Before, setup failures printed without a prefix under `run` and `exec`.
+- **2026-11-27. #1096 the update report covers the lock (lead decision).** A lock change that `pkg/` already has
+  is the pkg line's text plus ` in blade.lock`; a package already reported for `pkg/` gets no second line.
+- **2026-11-27. #1086 release A/B on two builds per version (lead decision).** Each version is built with
+  `toolchain.sh` at LAYOUT_SEED 1 and 2 and runs one campaign per binary, A1 B1 B2 A2 (order balance and binary
+  layout in the same four campaigns). The binaries' spread widens the band instead of being reported apart: a
+  change smaller than twice it is the runtime's layout, not the code.
+- **2026-11-27. #1085 micro harness warms the closing clock path, not `finish` (lead decision).** The span ends at
+  the clock read in `Measurement.elapsed_since`; `start()` calls it once before reading the start instant. A quiet
+  warm call of `finish` was measured worse (0.76/0.87 ms left against 0.38/0.51), so `finish` keeps one meaning,
+  report. The rest (`finish`'s own lazy compile without inlining, ~0.4 ms; the async path after the loop, ~0.5 ms)
+  is below 0.13 ns/iteration at the release N; small-N cells are judged by slope.
+- **2026-11-27. #1025 micro toolchains are release builds (lead finding).** A micro A/B toolchain is built as
+  the packages are (`--cfg okkama_release -C force-frame-pointers=yes`, `-p okkama-cli -p sparrow-cli -p
+  blade-cli`). With devtrace compiled in, async programs run 2–5% slower (gates in the Future, await and
+  allocation helpers); that, not a commit, was 0.6.4's async "slowdown". Judge a small-N cell by its slope
+  over two N (the timed interval holds a fixed ~1.3 ms, #1085), never by one median.
+
+- **2026-11-26. #933 JIT code placement (lead task, implementer measurement).** Keep one page per
+  function (entries page-aligned, in-page offsets independent of compile order, now a tested rule in
+  `code_memory`); no 16/64 KiB granule, cache-line padding or index-derived pages: on Apple silicon (macOS
+  and the okkama-dev container) none of them moved array-plus, float or map-replace beyond run noise, on
+  release/065 and on v0.6.1. `SPARROW_CORE_CODE_SHIFT` (bytes, 0–65536, refused when malformed) is the
+  layout perturbation; the micro A/B uses it through `run.py --placements`, every placement in every round.
+  The v0.6.1 array-plus gap is not JIT placement (it follows the AOT runtime binary's layout); no
+  instruction-count mode, because the Docker VM has no PMU.
+- **2026-11-26. Closure captures (#1077, lead decision).** An anonymous action
+  captures exactly the names its body uses, a nested action's uses included,
+  in the order of first use; the enclosing action captures a name for a nested
+  one at the nested action's position. Nothing iterates a hash map to decide
+  captures; a closure written in a default value sees no caller locals (#149).
+- **2026-11-27. A bound async action's Future is tracked like a direct call's (#1102, coordinator's task, lead
+  design).** `call.fn` of an async action value returns a lazy Future that owns the call's fresh arguments
+  (#587), so lowering tracks it in the scope. An immediately taken one follows #932 (`awaited_temporary` accepts
+  `call.fn`). The bound action's closure, when it is defined in the function, decides driver or not. An unresolved
+  one (a parameter) counts as a driver, so the track follows the take: the conservative form, which costs a
+  skipped add of a spent Future.
+- **2026-11-27. Closure and cap-field results are tracked like call results (#1099, coordinator's task, lead
+  design).** `BodyLowerer::emit` tracks the result of `call.fn` and `call.cap` in its scope as it does for
+  `call`/`call.role`/`await.take` (a Future result excepted: its rules are #932/#587).
+  `lowering::untrack_borrowed_results`, run once the module is whole, drops that track where the ownership census
+  reports no creation (the census, not the type, decides: the same notion as the check, #1093), so borrowed
+  results stay untracked as before. The census is computed once and handed to the statics pass, which it does
+  not invalidate (the census reads no region operation); `okkama check` skips the step.
+- **2026-11-27. The linearity check takes freshness and argument ownership from the model (#1093, lead
+  decision applying #553/#555).** A call result is a resource the function must own only where the ownership
+  census reports a creation site (`ownership::analyze`; call resolution shared via `ownership::resolved_call`),
+  never by type alone. A call whose callee adopts the parameter (its body has `region.adopt` of it, as kept after
+  the param-adopt elision) owns the fresh argument from the call on, including the call's unwind edge. A branch
+  moves a resource's ownership state into the block parameter it is passed to (coordinator, from the book
+  review). The `statics` pass removes the regions it emptied itself instead of relying on `regions` after it.
+  A `LoweringError::Internal` message is bare text; the kind is named once by whoever prints it (Display adds
+  "internal compiler error: "). A discarded `call.fn`/`call.cap` result that is a new resource is a real leak
+  in lowering, refused by the check (#1099), not a false positive.
+- **2026-11-26. Every resource has an owner before the function leaves (#1073,
+  lead decision; the owner gave none).** The ownership linearity check
+  requires each resource a function makes (an object with its own `destroy`,
+  from `obj.new`, a call or `await.take`) to be tracked, adopted or transferred
+  by a region, or pinned, on every path to an exit, unless it is the value the
+  function returns or throws; `region.leave/settle … keep` frees it again. A
+  resource outside any region is an error, and lowering must satisfy the rule
+  (a `return` through nested scopes re-tracks the kept value in each next
+  region). `await` leaves the outcome with its Future; containers, roles and
+  Futures are left to their regions. A `region.enter` of a region that may be
+  open is reported at that enter, naming it.
+
+- **2026-11-26. #1029 entry-result report (implementation choice under the
+  owner's six-ticket task).** Preserve the bare runtime message used for
+  results beyond i64: `main() must return an int in 0..255, got VALUE`, newline,
+  exit 1, in both CLIs for every out-of-range integer. Remove the small-value
+  CLI prefixes; keep Runtime::run_entry's i64 API and ordinary failures intact.
+
+- **2026-11-26. Test/tool audit (owner, #1067/#1051/#1052/#1055).** Boolean
+  switches are OFF when unset, empty, or ASCII-case-insensitive 0/false/off/no,
+  otherwise ON. Correction (9d7749f4e): the default-ON switches keep their default — OKKAMA_TRACE,
+  SPARROW_CORE_POINTER_FREE and SPARROW_CORE_INT_RANGE are ON when unset (`enabled_or(name, true)`),
+  and 0/false/off/no (or empty) turns them off. NO_COLOR
+  uses nonempty presence. Micro rounds aggregate geometrically, requiring every
+  cell VALID; binary versions are checked against declared local revisions before
+  measurement. Fuzzing rejects ordinary compile errors but crashes on typed
+  compiler invariant failures, codegen failure and encoding failure.
+
 - **2026-11-23. #1006 formatter: header comments, width, std fmt-clean (owner).**
   A block comment between a declaration's parameter list (or result) and its `{`/`;` stays on the header
   line; a `//` comment there opens the body (a bodiless header prints it after its `;`); a list ends at its
@@ -478,3 +578,185 @@ every declaration is open (#1005, owner decision).
 - A separate, switchable pass (`dce` in OKKAMA_IR_PASSES), not a widened `undef`:
   it drops only unread `const` (and `undef`), renumbering values as `undef` does.
   Listing tests that check lowering use the values they inspect.
+
+## Length limit: pre-check, not catch_unwind (#1033, 2026-11-26)
+
+- A direct helper of machine code that can build a value past the header length
+  (2^32 − 1 bytes or elements) checks `heap::passes_length_limit` first and fails
+  the program, as `+` and `join` do; `heap::length` stays the panic of last resort,
+  caught only by `rt_exec` and `rt_native`. No `catch_unwind` per direct helper.
+  Tests lower the limit per thread (`heap::MAX_LENGTH`, test builds only).
+## A cut trace keeps its tail (#1034, 2026-11-26)
+
+- A failure trace past `TRACE_LIMIT` keeps the innermost `TRACE_LIMIT − TRACE_TAIL`
+  activations and a ring of the 4096 outermost; the omitted ones are between the
+  two. The renderers keep their `Fn(&[Site])` shape: the joined trace is rendered
+  and one line after it counts the middle, for the root and for every cause.
+## Argon2 memory is the provider's (#1026, 2026-11-26)
+
+- okkama-native never calls argon2's allocating entry points (`hash_password_into`,
+  `PasswordHasher`, `PasswordVerifier`): they free the password-derived blocks
+  unzeroed even with `zeroize`. `argon2_into` owns and zeroes them; PHC making and
+  checking mirror the crate's code over it (tests compare with the crate).
+- A crate whose `zeroize` feature a wrapper does not forward gets a direct
+  dependency only to enable it (`ed25519` for `KeypairBytes`).
+## Every new opcode bumps SPB (#1061, 2026-11-26)
+
+- `codec::VERSION` changes with every new instruction, operation-enum code or
+  operand list, not only with encoding changes: a runtime that cannot run a file
+  refuses it by version. A test pins (VERSION, instruction-set fingerprint); when
+  it fails, bump the version and record the new pair.
+- SPB 17 was Champ's format (retired, #911) and is skipped: SPB 16 → 18.
+  The assembly text version stays equal to the SPB version.
+
+## Model lookups the printer uses are fallible (#1064, 2026-11-26)
+
+- `Role::slot_name` returns `Option`, like the other lookups by index (`Module::role`, fields, enum cases): the
+  printer must print a damaged module (#1003), so it never indexes; only code after `ir::verify` may unwrap.
+## `^C` passes for `C` only on unwind edges (#1063, 2026-11-26)
+
+- The cleanup relaxation of OIR edge types (`^C` and `C` compatible) is for `block.unwind` targets only. The
+  handler of `catch` and the `found` target of lookups also fill an implicit last parameter but are normal
+  paths: a successor keeps its type there and its obligation is followed into the parameter.
+## `blade new` writes only what it creates (#1039, 2026-11-26)
+
+- An existing `NAME` (any file or directory) is refused, like `cargo new`; an existing empty directory too.
+  The name must pass `manifest::check_package_name`; the default output has one definition,
+  `project::default_output`.
+## A shift does not close type arguments (#1032, 2026-11-26)
+
+- `Name<…>` (#1004) is a type only when its closing `>` is a whole `>` token or the second half of a
+  `>>`/`>>>` that a nested type closes too; a type closed by the first half of a shift would leave the
+  other `>` comparing a type value, so the comparison reading wins (`Count < a >> 2` = `Count < (a >> 2)`).
+  `>=` is not treated so: neither reading of `Count < a >= 2` is valid.
+## undef stubs are checked by the SPB verifier (#1069, 2026-11-26)
+
+- A read of an `undef` stub is refused by the verifier, not checked by Sparrow: the JIT trusts the verifier's
+  initialization proof ("Registers start unbound; the verifier proves defined use", jit.rs), and a check at
+  every dereference would tax every program. The rule covers the compiler's two shapes, a constructor field
+  bound on some arms and a `for` in value position: a `bool` guard false wherever the stub may remain, read by
+  `br`. `obj.new`/`obj.init` may store stubs (a constructor whose `self` escapes early, #271, needs it: std/http
+  breaks otherwise), so the heap is outside the rule.
+## The register check refuses early writes (#1043, 2026-11-26)
+
+- An instruction's result and a terminator's edge value (the found value of `arr.lookup`/`map.lookup`, the
+  value `catch` gives its handler: the target's parameters beyond the edge's arguments) may be written before
+  the operands are read, so `codegen::sparrow::check` refuses either in the register of an operand of the same
+  instruction or terminator. This is the allocator's conservative rule (#1007), now checked independently of
+  it; the JIT happens to write the found value after the edge moves, and the rule does not rely on that.
+- `TermKind::targets`/`targets_mut` and `operands`/`operands_mut` come from one macro each, as `InstKind`'s
+  operands (#1006).
+- The current IR is OIR-2 in names and in its text (`oir 2 high`); "OIR-1 §N" stays where it cites a section
+  of the OIR-1 specification (`okkama-docs/docs/compiler/OIR-1.md`), whose numbering the code still follows.
+## One adopt for an awaited result; strict `--passes` (#1044, 2026-11-26)
+
+- The result of `await.take`, tracked as it is taken, then adopted by its binding: the adopt replaces the track
+  (`FnBuilder::adopt_tracked_await`), and the take-extraction pass emits neither track nor adopt when the
+  binding adopts right after (temporary or bound Future, #999). Track then adopt of one value in one region
+  equals the adopt (`region_add` with `own` takes every identity the track would follow). Call results bound
+  by `let` (`call`, `region.track`, `region.adopt`) are left as they are: not in #1044's scope.
+- `okkama ir --passes` refuses a name that selects nothing (usage error, as `--after`), through
+  `lowering::unknown_passes`, the one list check; lowering warns once for `OKKAMA_IR_PASSES` or a list
+  selected through the library and names which.
+## Blade rebuilds by content, locks local paths from the project (#1040, 2026-11-26)
+
+- `blade run` decides by a stamp beside the output (`OUTPUT.blade-stamp`): SHA-256 of the input set (`.ok`
+  files outside the output's directory and hidden directories, `blade.toml`, `blade.lock`; each by path and
+  bytes) and of the output the build wrote. No modification times: a deleted file or an older copy must
+  rebuild, and hashing a project's sources each run is cheap next to a build.
+- A `path` dependency is `path+<dir relative to the project root>` in `blade.lock` (canonical directories, `/`
+  separators); an absolute lock is not translated (pre-beta, no shims): `blade update NAME` rewrites it.
+- `blade install` is removed (pre-beta); local directories are declared by hand in `[dependencies]`.
+
+## Blade's stamp covers the toolchain (#1080, 2026-11-27, no owner comment: own design)
+
+- The toolchain is what the `okkama` Blade runs says in `okkama env` (version line, `binary`, `std`); Blade
+  does not resolve std itself (`OKKAMA_STDLIB_DIR`, install root, repository ancestors stay in one place,
+  okkama-cli `stdlib_dir`). The stamp records the version line and SHA-256 of the binary and of the std tree
+  (every non-hidden file by tree path and digest), by content only: the same std or binary at another path
+  reuses the output (an SPB holds no std paths).
+- Stamp format `blade-stamp 2` as the first line; up to date only on an exact match, so a stamp of another
+  format (#1040's `inputs`/`output` alone) rebuilds once. No compatibility reading of old stamps (pre-beta).
+- Digests cached per file in `OUTPUT.blade-cache`, keyed by (path, size, mtime) plus on Unix (dev, inode,
+  ctime): ctime cannot be set back, so a `cp -p` or a restored mtime still rereads. The key decides only
+  whether to reread, never whether to build; a file younger than 2 s is not remembered (racy-clean, as git).
+  Measured: uncached hashing ~29 ms per no-op run (22.6 MB binary, 7 MB std), cached ~1 ms, so the cache is
+  needed; per output beside the stamp (no global cache dir).
+- `okkama env` (~3.7 ms to start) runs while Blade fingerprints the project, and the std the cache last saw
+  is listed on a thread meanwhile, used only if `okkama env` names the same directory. The remaining +~4 ms
+  per no-op run is the price of asking `okkama` itself; caching its answer would duplicate std resolution.
+
+## Blade's stamp covers import directories and build variables (#1087, 2026-11-27, own design)
+
+- `okkama env` stays the one place: it names each `OKKAMA_IMPORT_DIRS` directory (`import`, search order, the
+  same split as the loader through `import_dirs`) and each set variable of `lowering::BUILD_ENVIRONMENT`
+  (`build NAME="VALUE"`, the raw value Debug-quoted so it is one line). Blade does not know the variable names.
+- Build variables are those that change the SPB: `OKKAMA_IR_PASSES`, `OKKAMA_OWNERSHIP_PROTOTYPE`. Checks,
+  reports, profiles and dumps (`OKKAMA_VERIFY_OWNERSHIP`, `OKKAMA_CHECK_REGISTERS`, `OKKAMA_PROFILE_REGISTERS`,
+  `OKKAMA_OWNERSHIP_REPORT`, `OKKAMA_DUMP_INVALID_IR`) and runtime or diagnostic switches outside the compiler
+  (`OKKAMA_TRACE`, `OKKAMA_DEV*`, `OKKAMA_ARRAYS`, `OKKAMA_MAPS`, `OKKAMA_ICU_LIBDIR`) are not: a check may fail a
+  build but never changes what a passing one writes. `build_environment_tests` fails on an unclassified literal.
+- An import directory counts by content and position (`import` lines in order, `missing` for an absent one);
+  with no import directory and no build variable the stamp text is #1080's, so outputs stamped by #1080 stay
+  valid. `okkama env` runs in the project root, where `okkama build` runs, and Blade joins relative paths to it.
+- Cache format `blade-cache 2`: `tree` lines for every tree listed (std, then imports), all listed on one thread
+  while `okkama env` starts.
+
+## `unreachable` compiles as a trap (#1072, 2026-11-27)
+
+- `unreachable` stays in SPB (opcode 145, verifier and codegen unchanged): Sparrow compiles it as
+  `trap unreachable` would, a program error "Unreachable code reached" that a handler catches, so a verified
+  function holding it runs. Dropping it from the instruction set would be an SPB version bump for nothing.
+
+## Closures of any width (#1074, 2026-11-27)
+
+- Supported rather than refused: a verifier limit would have been the only width limit of SPB (static calls
+  take any number of parameters), and an Okkama lambda of 9 parameters would have failed in the verifier at
+  compile time. Rust's calls of compiled code (`jit::invoke`, used by the closure helper, `run_function_with`
+  and intrinsic calls) take up to 8 words through named signatures; a wider one goes through `Jit::spread`, a
+  Cranelift adapter per arity that loads the words and calls the code. It holds no value across the call and
+  is not in `ranges`, so the collector passes over its frame as over a Rust one. Machine code calls a wide
+  closure directly, as a narrow one (the `args + captures > 8` cut is gone).
+
+## A stub in an object field is checked where it is read (#1076, 2026-11-27)
+
+- The verifier keeps letting `obj.new`/`obj.init` store an `undef` stub (early `self`, #271); Sparrow checks
+  the reads instead. `Program::stub_fields` (okkama-sparrow/src/verify.rs) lists per object type the fields
+  some `obj.new`/`obj.init` may store a stub in: flow-insensitive over `undef`, `move`, edge and handler moves,
+  so a superset of what the initialization analysis lets through; per type, since `obj.next` copies fields
+  within one type and `variant.of` keeps the descriptor. `Loaded::new` computes it once (functions without
+  `undef` are skipped: 10 ms over 1245 corpus programs, 0.7% of their verification).
+- Only reads of those fields pay: `obj.get`, `variant.get`, and a #541 accessor of such a field stays a call.
+  A session runtime checks every field (`Loaded::check_every_field`), since an extension may store a stub in
+  a published field whose readers are compiled already.
+- The stub of a `bool` field reads as `true`; any other stub fails the program ("Field `x` of `T` is read
+  before it is bound", catchable). The compiler's construction check (`ObjPending`, #271) reads an unbound
+  `$pending` as "still under construction" and relies on that; it is the one compiled read of a stub.
+- Rust helpers that walk fields take a stub (`word::unbound(repr)`) as unbound: equality refuses it (as
+  before), test output prints `null` (as before), the collector and ownership walks skip non-pointers (as
+  before); map keys refuse it, `data_items` refuses to box it, `data_kind`/`data_dump` read it as undefined.
+
+## Fuzz harness contracts (#1088, #1089, #1050, lead, 2026-11-27)
+
+- The module of a runtime intrinsic is user input: any source may say `module async/barrier`. Lowering checks
+  the shape the runtime needs where it lowers the intrinsic (`lowering/intrinsics.rs`, `Site::refuse`) and
+  reports a semantic error at its declaration. The runtime keeps checking layouts at load (`sparrow-core`
+  `contracts.rs`). Nothing in analysis duplicates the check.
+- Unlinked OIR is valid OIR: `lower_program` keeps imports unresolved (§2.1), the verifier accepts them, and
+  codegen refuses them. A harness that runs code links first (`fuzz/fuzz_targets/support/linking.rs`). Only
+  `lower_linked*` output is a program.
+- The fuzz coverage replay runs with the same ASan options as `cargo fuzz run` (`detect_odr_violation=0`).
+  The SQLite `aiOff` report is a false positive: two identical internal-linkage tables at one address. It is
+  not a duplicate link.
+- The exec target links against the repository's std tree (#1091, 2026-11-27): one parse per module and
+  process, plain std names only, budgets unchanged, no host natives (`Limits.natives = Some([])`).
+- An intrinsic's thrown error is the object of its case's own payload (#290), and its fields are exactly
+  what the runtime raises, in count and kinds (#1090, 2026-11-27). The `[$tag, payload arrays]` layout is
+  not a thrown error any more.
+- Every tracked `test_*.py` runs in CI through `tools/test-python.sh` (#1092, 2026-11-27). A tool test
+  needs no toolchain, Docker or network.
+- A native whose canonical symbol (`module@major::name/arity`) is in the ABI table must have the table's
+  signature, or lowering refuses it at the declaration (#1098, 2026-11-27). A symbol outside the table
+  compiles, and the runtime refuses it, as the SPB verifier does.
+- A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
+  and a test replays the target's logic on it.

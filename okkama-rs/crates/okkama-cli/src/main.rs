@@ -24,6 +24,9 @@ use sparrow_core::test_report;
 #[global_allocator]
 static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
 
+// The one switch policy of every crate (#1095); `crate::env_switch` names it.
+use okkama_devtrace::env_switch;
+
 mod core;
 mod doctest;
 mod import_paths;
@@ -224,9 +227,9 @@ OPTIONS:
 
 Input is a complete Okkama program: one or several source files of one module
 (spec §5.1). Imports are loaded (import directories, the importing file's
-directory, std) and linked into one OIR-1 module: declarations, functions with
+directory, std) and linked into one OIR-2 module: declarations, functions with
 blocks ending in `ret`, `br`, `cond`, … Analysis warnings go to stderr.
-Constructs the IR does not support yet produce a lowering error; no source
+Source constructs not yet supported by the IR produce a lowering error; no source
 declarations or statements are silently discarded.
 
 Use `-` as FILE to read standard input. This command prints IR without
@@ -310,7 +313,7 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
         return Outcome::failure(format!("okkama: cannot read `{path}`: {error}\n"), EXIT_IO);
     }
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    let trace = std::env::var("OKKAMA_TRACE").as_deref() != Ok("off");
+    let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     match sparrow_core::run_executable(
         bytes, arguments, core::worker_command(Path::new(path)), limits,
         sparrow_core::ExecutionOptions {
@@ -381,7 +384,9 @@ fn core_described(
     match result {
         Ok(Ok(value)) => (core_outcome(Ok(value)), None),
         Ok(Err((error, uncaught))) => (core_outcome(Err(error)), uncaught),
-        Err(error) => (core_outcome(Err(error)), None),
+        // A program that does not load (#1097: a runtime that cannot be built, such as a malformed
+        // `SPARROW_CORE_CODE_SHIFT`), with the prefix `okkama exec` gives it.
+        Err(error) => (Outcome::failure(format!("okkama: {}", core::report(error)), EXIT_DIAGNOSTICS), None),
     }
 }
 
@@ -407,7 +412,7 @@ fn core_outcome(result: Result<i64, sparrow_core::Error>) -> Outcome {
     match result {
         Ok(value) => match u8::try_from(value) {
             Ok(code) => Outcome { stdout: String::new(), stderr: String::new(), code },
-            Err(_) => Outcome::failure(format!("RuntimeError: main() must return an int in 0..255, got {value}\n"), 1),
+            Err(_) => Outcome::failure(format!("main() must return an int in 0..255, got {value}\n"), 1),
         },
         Err(error) => Outcome::failure(core::report(error), 1),
     }
@@ -422,7 +427,7 @@ fn with_trace(
     uncaught: Option<sparrow_core::Uncaught>,
     render: impl Fn(&[sparrow_core::Site]) -> String,
 ) -> Outcome {
-    if outcome.code == 1 && std::env::var("OKKAMA_TRACE").as_deref() != Ok("off")
+    if outcome.code == 1 && crate::env_switch::enabled_or("OKKAMA_TRACE", true)
         && let Some(uncaught) = uncaught {
         outcome.stderr = uncaught.render_report(&outcome.stderr, render);
     }
@@ -468,11 +473,11 @@ fn main() -> ExitCode {
     sparrow_core::budget::set_memory_probe(sparrow_core::budget::mimalloc_committed);
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Сервер языка владеет stdin/stdout сам.
-    if args.first().map(String::as_str) == Some("lsp") {
+    if args.len() == 1 && args[0] == "lsp" {
         return lsp::run();
     }
     // The REPL reads stdin and writes as it goes.
-    if args.first().map(String::as_str) == Some("repl") {
+    if args.len() == 1 && args[0] == "repl" {
         return repl::run();
     }
     let outcome = run(&args);
@@ -512,6 +517,16 @@ fn run(args: &[String]) -> Outcome {
             Some("lsp") => Outcome::success(LSP_HELP.to_string()),
             Some("repl") => Outcome::success(repl::help()),
             Some(other) => Outcome::usage(&format!("unknown command `{other}`")),
+        },
+        "lsp" | "repl" => match rest {
+            [flag] if flag == "--help" => {
+                Outcome::success(if command == "lsp" { LSP_HELP.to_string() } else { repl::help() })
+            }
+            _ => {
+                let argument = rest.iter().find(|argument| argument.as_str() != "--help")
+                    .or_else(|| rest.get(1)).unwrap_or(command);
+                Outcome::usage(&format!("unexpected argument `{argument}` for `{command}`"))
+            }
         },
         "-V" | "--version" => Outcome::success(format!("okkama {}\n", env!("CARGO_PKG_VERSION"))),
         // Endpoint conformance-адаптера (`conformance/adapters/PROTOCOL.md`).
@@ -819,6 +834,12 @@ fn ir_command(args: &[String]) -> Outcome {
                     return Outcome::usage(&format!("{arg} needs a value"));
                 };
                 let spec = if arg == "--passes" {
+                    // A name that selects nothing is refused, as for `--after` (#1044).
+                    let unknown = lowering::unknown_passes(value);
+                    if !unknown.is_empty() {
+                        return Outcome::usage(&format!("unknown pass `{}` (passes: all, none, {})",
+                            unknown.join("`, `"), lowering::PASSES.join(", ")));
+                    }
                     value.clone()
                 } else {
                     let Some(at) = lowering::PASSES.iter().position(|pass| pass == value) else {
@@ -1238,6 +1259,7 @@ fn lower_source(sources: &[SourceFile], tests: bool) -> Result<(ir::Module, Stri
                 let kind = match error {
                     LoweringError::Unsupported { .. } => "lowering error",
                     LoweringError::Invalid { .. } => "semantic error",
+                    LoweringError::Internal { .. } => "internal compiler error",
                 };
                 ir_error_outcome(
                     imported.as_ref().unwrap_or(source),
@@ -1275,16 +1297,8 @@ impl FileLoader {
     }
 
     fn from_env() -> Self {
-        let import_dirs = std::env::var("OKKAMA_IMPORT_DIRS")
-            .map(|dirs| {
-                dirs.split(':')
-                    .filter(|dir| !dir.is_empty())
-                    .map(PathBuf::from)
-                    .collect()
-            })
-            .unwrap_or_default();
         Self {
-            import_dirs,
+            import_dirs: import_dirs(),
             stdlib: stdlib_dir(),
             test_mode: false,
             overlay: std::collections::HashMap::new(),
@@ -1830,6 +1844,19 @@ fn run_command(args: &[String]) -> Outcome {
     with_trace(outcome, trace, |sites| trace::render_trace(&module, sites))
 }
 
+/// The system import directories, in search order: `OKKAMA_IMPORT_DIRS`
+/// split at `:`, empty parts skipped (`okkama env` names them, #1087).
+fn import_dirs() -> Vec<PathBuf> {
+    std::env::var("OKKAMA_IMPORT_DIRS")
+        .map(|dirs| {
+            dirs.split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// `<prefix>/lib/okkama` установки, в которой лежит этот `okkama`
 /// (`<prefix>/bin/okkama`); ссылки на исполняемый файл разрешаются.
 fn install_root() -> Option<PathBuf> {
@@ -1873,6 +1900,12 @@ Prints the version, the executable, the std directory and the pinned ICU
 used by locale/collation. Host cryptography is built into Sparrow.
 OKKAMA_STDLIB_DIR and
 OKKAMA_ICU_LIBDIR override the installed locations.
+
+Then what else a build depends on: an `import` line per directory of
+OKKAMA_IMPORT_DIRS, in search order, and a `build NAME=\"VALUE\"` line per
+variable that is set and changes what `okkama build` produces
+(OKKAMA_IR_PASSES, OKKAMA_OWNERSHIP_PROTOTYPE). Blade fingerprints all of
+it, so a change builds again.
 ";
 
 fn env_command(args: &[String]) -> Outcome {
@@ -1895,13 +1928,21 @@ fn env_command(args: &[String]) -> Outcome {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|exe| std::fs::canonicalize(exe).ok());
-    let text = format!(
+    let mut text = format!(
         "okkama {}\nplatform  {platform}\nbinary    {}\nstd       {}\nicu       {}\n",
         env!("CARGO_PKG_VERSION"),
         found(exe),
         found(Some(stdlib)),
         found(icu),
     );
+    for dir in import_dirs() {
+        text.push_str(&format!("import    {}\n", found(Some(dir))));
+    }
+    for name in okkama_compiler::lowering::BUILD_ENVIRONMENT {
+        if let Some(value) = std::env::var_os(name) {
+            text.push_str(&format!("build     {name}={value:?}\n"));
+        }
+    }
     Outcome::success(text)
 }
 

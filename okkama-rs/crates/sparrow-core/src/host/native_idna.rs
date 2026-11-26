@@ -6,7 +6,7 @@ use okkama_runtime_abi::{Native, NativeFailure};
 use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
-/// Ошибка UTS #46 (croak модуля): провайдер превращает её в отказ.
+/// UTS #46 validation error; the provider turns it into a failure.
 struct Invalid;
 
 type Checked<T> = Result<T, Invalid>;
@@ -262,7 +262,7 @@ fn validate_label(label: &[u32], assume_nfc: bool) -> Checked<()> {
     Ok(())
 }
 
-/// Конец метки: [ends…][NSM или unassigned]*.
+/// Label ending: a bidi class from `ends`, followed by NSM or unassigned scalars.
 fn ends_with(label: &[u32], ends: &[&str]) -> bool {
     let mut index = label.len() as i64 - 1;
     while index >= 0 && (bidi(label[index as usize]) == "NSM" || unassigned(label[index as usize]))
@@ -312,7 +312,7 @@ fn virama(point: u32) -> bool {
     data::combining_class(point) == 9
 }
 
-/// Совпадение `(L|D) T* ZWNJ T* (R|D)` с начала `start`.
+/// Match `(L|D) T* ZWNJ T* (R|D)` starting at `start`.
 fn joined_zwnj(label: &[u32], start: usize) -> bool {
     if !matches!(joining(label[start]), "L" | "D") {
         return false;
@@ -431,7 +431,7 @@ fn dns_label(label: &str) -> bool {
         && bytes.iter().all(|b| edge(b) || *b == b'-')
 }
 
-/// `_ascii` Perl-provider: UTS #46 и проверки DNS и A-меток.
+/// ASCII hostname conversion: UTS #46 processing, DNS and A-label validation.
 pub(crate) fn hostname_ascii(source: &str) -> Result<String, ()> {
     let size = source.chars().count();
     if size == 0 || size > 1024 {
@@ -496,7 +496,7 @@ fn rules() -> &'static Rules {
     })
 }
 
-/// Метки домена и ширина публичного суффикса.
+/// Domain labels and the number of labels in the public suffix.
 pub(crate) fn suffix_parts(source: &str) -> Result<(Vec<String>, usize), ()> {
     let rules = rules();
     let ascii = hostname_ascii(source)?;

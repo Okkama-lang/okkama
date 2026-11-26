@@ -594,7 +594,7 @@ mod wire_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"wire\" \"1.0.0\"\n\
+            "sparrow 18\nmodule \"wire\" \"1.0.0\"\n\
              type t0 int\ntype t1 str\ntype t2 map t1 t0\ntype t3 array t2\ntype t4 array t3\ntype t5 bool\n\
              function f0 \"main\" {\nregisters [t5]\nparams [r0]\nresult t5\n0: ret r0\n}\n",
         )
@@ -649,7 +649,7 @@ mod wire_tests {
     }
     #[test]
     fn pool_binding_is_run_local_and_preserves_the_original_executor_and_action() {
-        let program = okkama_sparrow::assemble(r#"sparrow 16
+        let program = okkama_sparrow::assemble(r#"sparrow 18
 module "pool-binding" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0
@@ -700,7 +700,7 @@ function f0 "entry" {
             ("t1", "t3", "t1", false),
             ("t1", "t0", "t3", false),
         ] {
-            let source = format!(r#"sparrow 16
+            let source = format!(r#"sparrow 18
 module "pool-contract" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0

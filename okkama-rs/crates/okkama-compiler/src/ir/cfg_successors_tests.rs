@@ -200,7 +200,7 @@ fn every_terminator_duplicate_edges_and_unwind_order() {
         TermKind::ArrayLookup { array: value, index: value, found: target(4), missing: target(5) },
         TermKind::MapLookup { map: value, key: value, found: target(5), missing: target(6) },
         TermKind::Ret(None), TermKind::Ret(Some(value)), TermKind::Panic(value),
-        TermKind::Trap { code: TrapCode::Unreachable, message: String::new() },
+        TermKind::Trap { code: TrapCode::Confirm, message: String::new() },
         TermKind::Unreachable, TermKind::Throw(value), TermKind::Raise(value),
     ];
     let mut unwinds: Vec<_> = (0..terms.len()).map(|i| Some((i + 1) % terms.len())).collect();

@@ -29,7 +29,7 @@ use crate::source::{SourceFile, Span};
 use crate::syntax::ast::*;
 use crate::syntax::{ParseMode, ParseOptions, lexer, parse, token::TokenKind};
 
-/// Ширина строки, после которой списки переносятся.
+/// Target line width for breaking lists, operator and call chains, roles and case patterns.
 pub const WIDTH: usize = 100;
 const INDENT: &str = "    ";
 
@@ -387,7 +387,9 @@ impl<'s> Printer<'s> {
         let Some(comment) = self.comments.get(self.next_comment).cloned() else {
             return;
         };
-        if comment.span.start >= end && !self.broken(end, comment.span.start) {
+        if comment.span.start >= end && !self.broken(end, comment.span.start)
+            && matches!(self.text[end as usize..comment.span.start as usize].trim(), "" | ",")
+        {
             self.next_comment += 1;
             self.word(" ");
             let text = self.slice(comment.span).trim_end();
@@ -425,10 +427,14 @@ impl<'s> Printer<'s> {
         if comment.span.start >= end {
             return;
         }
-        if let Some(after) = self.comments.get(self.next_comment + 1)
-            && after.span.start >= end
+        if let Some(after) = self.comments[self.next_comment..].iter().find(|comment| comment.span.start >= end).cloned()
             && !self.broken(end, after.span.start)
+            && self.text[end as usize..after.span.start as usize].trim().is_empty()
         {
+            self.word(" ");
+            self.word(self.slice(after.span).trim_end());
+            self.leading_comments(end, false);
+            self.next_comment += 1;
             return;
         }
         self.next_comment += 1;
@@ -684,6 +690,7 @@ impl<'s> Printer<'s> {
                 }
                 self.word("enum ");
                 self.word(&decl.name.text);
+                self.header_comments(self.next_token(decl.name.span.end));
                 self.generics(&decl.generics);
                 if let Some(role) = &decl.role {
                     self.word(" is ");
@@ -735,6 +742,7 @@ impl<'s> Printer<'s> {
                 }
                 self.word("const ");
                 self.word(&decl.name.text);
+                self.header_comments(self.next_token(decl.name.span.end));
                 if let Some(ty) = &decl.ty {
                     self.word(" is ");
                     self.ty(ty);
@@ -774,6 +782,7 @@ impl<'s> Printer<'s> {
         }
         self.word("object ");
         self.word(&decl.name.text);
+        self.header_comments(self.next_token(decl.name.span.end));
         self.generics(&decl.generics);
         if !decl.roles.is_empty() {
             self.word(" does ");
@@ -866,7 +875,9 @@ impl<'s> Printer<'s> {
                 if destroy.is_async {
                     self.word("async ");
                 }
-                self.word("destroy ");
+                self.word("destroy");
+                self.header_comments(destroy.body.span.start);
+                self.word(" ");
                 self.header_block(&destroy.body);
             }
             ObjectMember::Test(test) => self.test(test),
@@ -1102,9 +1113,11 @@ impl<'s> Printer<'s> {
         // The list ends at its real closing bracket, never at the block or `;` after it: a
         // comment between them belongs to the header, not to the last item (#1006).
         let end = self.list_close(last.end, close, end);
+        // A bracket inside a comment cannot open the list (#1037).
         let start = self.text[..first.start as usize]
-            .rfind(open)
-            .map_or(first.start, |at| at as u32);
+            .rmatch_indices(open)
+            .find(|(at, _)| !self.comments.iter().any(|comment| comment.span.start <= *at as u32 && (*at as u32) < comment.span.end))
+            .map_or(first.start, |(at, _)| at as u32);
         let trailing = self.comma_between(last.end, end);
         let key = (start, end, BreakKind::List);
         let mut broken = trailing || self.has_comment_in(Span::new(start, end)) || self.is_forced(key);

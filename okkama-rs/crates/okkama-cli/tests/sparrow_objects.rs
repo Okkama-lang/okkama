@@ -1,4 +1,5 @@
-//! Объекты проходят весь путь от исходника до исполнения методов в Rust.
+//! Объекты проходят весь путь от исходника до исполнения методов на Sparrow
+//! в процессе теста.
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};

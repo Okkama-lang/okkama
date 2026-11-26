@@ -1,9 +1,9 @@
-//! Типы операндов и результатов инструкций (OIR-1, как верификатор IR
-//! `okkama-compiler/src/ir/verify.rs`): тип регистра назначения совместим с
-//! результатом инструкции, операнды — с её ожиданием, арность и типы
-//! аргументов вызовов — с сигнатурой, перемещения на переходах — с типами
-//! параметров. Ядро Sparrow выбирает машинное представление регистра по его
-//! типу, поэтому программа с ложными типами отвергается до исполнения.
+//! Instruction operand and result types for bytecode lowered from OIR-2
+//! (see also `okkama-compiler/src/ir/verify.rs`): destination registers agree
+//! with instruction results, operands with their expected types, call arity
+//! and argument types with signatures, and branch moves with parameter types.
+//! Sparrow chooses each register's machine representation from its type, so
+//! programs with inconsistent types are rejected before execution.
 use crate::{
     CatchKind, Cmp, Constant, Data, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
 };
@@ -32,6 +32,17 @@ fn fits(typing: &Typing<'_>, data: &Data, ty: &Type) -> bool {
             entries.iter().all(|(k, v)| fits(typing, k, key) && fits(typing, v, value))
         }
         _ => false,
+    }
+}
+
+/// The first float in `data` that is not finite, by its bits: floats are finite
+/// binary64 in constant data as in the constant table (#974, #1062).
+fn non_finite(data: &Data) -> Option<u64> {
+    match data {
+        Data::Scalar(Constant::Float(bits)) => (!f64::from_bits(*bits).is_finite()).then_some(*bits),
+        Data::Scalar(_) => None,
+        Data::Array(items) => items.iter().find_map(non_finite),
+        Data::Map(entries) => entries.iter().find_map(|(key, value)| non_finite(key).or_else(|| non_finite(value))),
     }
 }
 
@@ -1195,6 +1206,9 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
         if global.data.as_ref().is_some_and(|data| !fits(&typing, data, &ty)) {
             return Err(format!("the data of global g{index} does not have its type"));
         }
+        if let Some(bits) = global.data.as_ref().and_then(non_finite) {
+            return Err(format!("float 0x{bits:016x} in the data of global g{index} is not finite"));
+        }
     }
     for function in &program.functions {
         let Some(native) = function.native.as_deref().and_then(crate::abi::Native::resolve) else {
@@ -1224,4 +1238,48 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod data_tests {
+    /// A program whose global `g0` of type `ty` holds `data` and whose main reads it.
+    fn program(types: &str, ty: &str, data: &str) -> String {
+        format!(
+            "sparrow {}\nmodule \"data\" \"v1.0.0\"\ntype t0 int\n{types}\nglobal g0 {ty} f1 data {data}\n\
+             function f0 \"main\" {{\n    registers [t0]\n    params []\n    result t0\n    0: const r0, int 0\n    1: ret r0\n}}\n\
+             function f1 \"const.DATA\" {{\n    registers [{ty}]\n    params []\n    result {ty}\n    0: global.get r0, 0\n    1: ret r0\n}}\n\
+             entry f0\n",
+            crate::VERSION
+        )
+    }
+
+    fn verified(text: &str) -> Result<(), String> {
+        let program = crate::assemble(text).map_err(|error| error.to_string())?;
+        program.verify().map_err(|error| error.to_string())
+    }
+
+    /// #1062: a float in a global's data is finite, as in `const` (#974): a NaN or
+    /// an infinity is refused as a scalar, an array element, a map key or a value.
+    #[test]
+    fn non_finite_floats_in_constant_data_are_refused() {
+        let floats = "type t1 float\ntype t2 array t1\ntype t3 map t1 t1";
+        for (ty, data) in [
+            ("t1", "float 0x3ff8000000000000"),
+            ("t2", "array 2 float 0x0000000000000000 float 0xffefffffffffffff"),
+            ("t3", "map 1 float 0x8000000000000000 float 0x7fefffffffffffff"),
+        ] {
+            assert_eq!(verified(&program(floats, ty, data)), Ok(()), "{data}");
+        }
+        for bits in ["7ff8000000000000", "7ff0000000000000", "fff0000000000000", "fff8000000000001"] {
+            for (ty, data) in [
+                ("t1", format!("float 0x{bits}")),
+                ("t2", format!("array 2 float 0x0000000000000000 float 0x{bits}")),
+                ("t3", format!("map 1 float 0x{bits} float 0x0000000000000000")),
+                ("t3", format!("map 1 float 0x0000000000000000 float 0x{bits}")),
+            ] {
+                let error = verified(&program(floats, ty, &data)).expect_err(&data);
+                assert!(error.contains(&format!("float 0x{bits} in the data of global g0 is not finite")), "{data}: {error}");
+            }
+        }
+    }
 }

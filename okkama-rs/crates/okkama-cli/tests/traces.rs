@@ -1,20 +1,19 @@
-//! Call stacks of uncaught failures on the Sparrow core (#10): `okkama run`
-//! maps them to source, `okkama exec` and
-//! `sparrow` print them in Sparrow terms, `OKKAMA_TRACE=off` leaves them out.
+//! Call stacks of uncaught failures on Sparrow (#10): `okkama run` maps them
+//! to source, `okkama exec` of a built `.spb` prints them in Sparrow terms,
+//! and `OKKAMA_TRACE=off` leaves them out.
+mod tree;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn program(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/traces/{name}.ok"))
 }
 
 fn okkama(args: &[&str], path: &Path, trace: bool) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+    let mut command = tree::okkama();
     command.args(args).arg(path);
-    if !trace {
-        command.env("OKKAMA_TRACE", "off");
-    }
+    command.env("OKKAMA_TRACE", if trace { "1" } else { "off" });
     command.output().unwrap()
 }
 
@@ -28,7 +27,8 @@ fn place_and_stack(text: &str) -> &str {
     &text[text[..start].rfind('\n').map_or(0, |i| i + 1)..]
 }
 
-/// Programs whose uncaught failure every engine reports the same way (#270).
+/// Programs whose uncaught failure is reported with its place and stack, causes
+/// and cleanup failures included (#270).
 const REPORTED: [&str; 9] = ["recursion", "closure", "rethrow", "task", "cause", "chain", "cleanup", "deep", "collect"];
 
 #[test]
@@ -37,18 +37,18 @@ fn sparrow_reports_failures_causes_and_cleanup() {
     // failures keep their text-only entries.
     for name in REPORTED {
         let path = program(name);
-        let core = okkama(&["run"], &path, true);
-        assert_eq!(core.status.code(), Some(1), "{name}: {}", stderr(&core));
-        let core = stderr(&core);
-        assert!(core.contains("Stack trace (most recent call first):\n"), "{name}:\n{core}");
-        assert!(place_and_stack(&core).len() < core.len(), "{name}");
+        let report = okkama(&["run"], &path, true);
+        assert_eq!(report.status.code(), Some(1), "{name}: {}", stderr(&report));
+        let report = stderr(&report);
+        assert!(report.contains("Stack trace (most recent call first):\n"), "{name}:\n{report}");
+        assert!(place_and_stack(&report).len() < report.len(), "{name}");
         if name == "cleanup" || name == "collect" {
             let stacks = if name == "cleanup" { 2 } else { 1 };
-            assert_eq!(core.matches("Stack trace (most recent call first):").count(), stacks, "{core}");
-            for secondary in core.split("Secondary cleanup failure:\n").skip(1) {
-                assert!(secondary.starts_with("  CloseError:") || secondary.starts_with("  Broken:"), "{core}");
+            assert_eq!(report.matches("Stack trace (most recent call first):").count(), stacks, "{report}");
+            for secondary in report.split("Secondary cleanup failure:\n").skip(1) {
+                assert!(secondary.starts_with("  CloseError:") || secondary.starts_with("  Broken:"), "{report}");
                 let entry = secondary.split("Caused by:").next().unwrap();
-                assert!(!entry.contains("  Stack trace (most recent call first):"), "{core}");
+                assert!(!entry.contains("  Stack trace (most recent call first):"), "{report}");
             }
         }
     }
@@ -74,17 +74,17 @@ fn sparrow_reports_failures_causes_and_cleanup() {
         ),
         "{collect}"
     );
-    let core = stderr(&okkama(&["run"], &program("recursion"), true));
-    let stack = &core[core.find("Stack trace").unwrap()..];
+    let report = stderr(&okkama(&["run"], &program("recursion"), true));
+    let stack = &report[report.find("Stack trace").unwrap()..];
     let frames: Vec<&str> = stack.lines().skip(1).map(|line| line.split(" (").next().unwrap()).collect();
-    assert_eq!(frames, ["  at Worker.fail", "  at Worker.fail", "  at main"], "{core}");
-    assert!(stack.contains("  (\u{00d7}2)\n"), "{core}");
+    assert_eq!(frames, ["  at Worker.fail", "  at Worker.fail", "  at main"], "{report}");
+    assert!(stack.contains("  (\u{00d7}2)\n"), "{report}");
 }
 
 #[test]
 fn bytecode_runs_print_the_stack_in_sparrow_terms() {
     let output = std::env::temp_dir().join(format!("okkama-traces-{}.spb", std::process::id()));
-    let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let status = tree::okkama()
         .args(["build", "-o"])
         .arg(&output)
         .arg(program("recursion"))
@@ -157,7 +157,7 @@ fn bytecode_cause_stacks_preserve_each_origin() {
         ("cause_callee", 2, &["Store.failed", "Disk.write"][..]),
     ] {
         let output = std::env::temp_dir().join(format!("okkama-cause-traces-{}-{name}.spb", std::process::id()));
-        let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
+        let built = tree::okkama()
             .args(["build", "-o"])
             .arg(&output)
             .arg(program(name))

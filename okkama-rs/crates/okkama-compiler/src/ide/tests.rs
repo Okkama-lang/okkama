@@ -903,3 +903,100 @@ fn a_constant_use_hovers_and_leads_to_its_declaration() {
     assert!(names.hover.contains("const NAMES is @string"), "{}", names.hover);
     assert_eq!(names.definition.as_ref().expect("a definition").range.start.line, 4);
 }
+
+
+/// #1041: a call's result uses the same qualified key as its member table.
+#[test]
+fn same_named_call_results_keep_their_members() {
+    let one = "module one; object Item { Item(); alpha() is int { 1; } twin() is Item { Item(); } }";
+    let two = "module two; role Copying { twin() is Item; } object Item does Copying { Item(); beta() is int { 2; } twin() is Item { Item(); } }";
+    let text = "module app;\nimport \"one\";\nimport \"two\";\nmain() is int {\n    let a = one.Item();\n    let b = two.Item();\n    let r is two.Copying = b;\n    b.beta();\n}\n";
+    let source = SourceFile::new("/app/main.ok", text).unwrap();
+    let mut loader = Memory(HashMap::from([("one".into(), one.into()), ("two".into(), two.into())]));
+    let inspection = lowering::inspect(&source, &mut loader, false);
+    assert!(!inspection.diagnostics.iter().any(|d| d.severity == Severity::Error), "{:?}", inspection.diagnostics);
+    for (receiver, expected, absent) in [("a", "alpha", "beta"), ("b", "beta", "alpha"), ("r", "beta", "alpha")] {
+        for chain in [format!("{receiver}.twin()."), format!("{receiver}.twin().twin().")] {
+            let edited = text.replace("b.beta();", &chain);
+            let offset = edited.find(&chain).unwrap() + chain.len();
+            let labels: Vec<_> = inspection.complete(text, &edited, offset as u32).into_iter().map(|c| c.label).collect();
+            assert!(labels.iter().any(|label| label == expected), "{chain}: {labels:?}");
+            assert!(!labels.iter().any(|label| label == absent), "{chain}: {labels:?}");
+        }
+    }
+}
+
+#[test]
+fn self_completion_is_unique_and_only_in_object_scope() {
+    let inspection = inspect(MAIN);
+    for (needle, expected) in [("        sum;", 1), ("    return wallet", 0)] {
+        let offset = MAIN.find(needle).unwrap() + needle.len() - needle.trim_start().len();
+        let found = inspection.complete(MAIN, MAIN, offset as u32);
+        assert_eq!(found.iter().filter(|item| item.label == "self").count(), expected);
+    }
+    assert!(!renamable_to("self"));
+}
+
+#[test]
+fn qualified_constant_hover_and_definition_only_cover_the_constant_name() {
+    let text = "module app;\nimport \"limits\" as lim;\nmain() is int { lim.MOST; }\n";
+    let library = "module limits;\n// Maximum count.\nconst MOST = 3;\n";
+    let source = SourceFile::new("/app/main.ok", text).unwrap();
+    let mut loader = Memory(HashMap::from([("limits".into(), library.into())]));
+    let inspection = lowering::inspect(&source, &mut loader, false);
+    let symbol = at(&inspection, text, "lim.MOST", 0, 5);
+    assert_eq!(&text[symbol.span.range()], "MOST");
+    assert!(symbol.hover.contains("Maximum count."));
+    assert_eq!(symbol.definition.as_ref().unwrap().range.start.line, 2);
+    let alias = text.find("lim.MOST").unwrap() as u32;
+    for offset in alias..alias + 4 {
+        assert!(!inspection.symbols.iter().any(|symbol| symbol.span.start <= offset && offset < symbol.span.end && symbol.hover.contains("const MOST")));
+    }
+}
+
+#[test]
+fn synopsis_skips_doctests_in_explicit_and_implicit_sections() {
+    for heading in ["", "# Synopsis\n\n"] {
+        for fence in ["okkama,run", "okkama run"] {
+            let overview = format!("Overview.\n\n{heading}```{fence}\nexample();\n```\n\n```output\nresult\n```\n\n    intended();\n\nDescription.\n");
+            let comments: String = overview.lines().map(|line| format!("// {line}\n")).collect();
+            let doc = crate::doc::ModuleDoc::parse("app.ok".into(), format!("module app;\n\n{comments}\nobject A {{}}\n")).unwrap();
+            let rendered = crate::doc::render::module_markdown(&doc);
+            let synopsis = rendered.split("## Synopsis").nth(1).expect(&rendered).split("## Description").next().unwrap();
+            assert!(synopsis.contains("intended();"), "{rendered}");
+            assert!(!synopsis.contains("example();"), "{rendered}");
+            assert!(rendered.contains("example();"), "{rendered}");
+            assert!(!rendered.lines().any(|line| !line.is_empty() && line.trim().is_empty()), "{rendered}");
+        }
+    }
+}
+
+#[test]
+fn synopsis_with_only_doctests_keeps_them_as_examples() {
+    let doc = crate::doc::ModuleDoc::parse("app.ok".into(), "module app;\n\n// # Synopsis\n//\n// ```okkama run\n// example();\n// ```\n\nobject A {}\n".into()).unwrap();
+    let rendered = crate::doc::render::module_markdown(&doc);
+    assert!(!rendered.contains("## Synopsis"), "{rendered}");
+    assert!(rendered.contains("example();"), "{rendered}");
+}
+
+
+#[test]
+fn std_overlay_updates_both_overview_and_declarations() {
+    let directory = std::env::temp_dir().join(format!("okkama-1042-overlay-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("sample.ok");
+    std::fs::write(&file, "module sample;\n\n// Disk overview.\n\nobject Old {}\n").unwrap();
+    let text = "std.Ne";
+    let overlay = HashMap::from([(file.canonicalize().unwrap(), std::rc::Rc::from("module sample;\n\n// Buffer overview.\n\n// Buffer type.\nobject New {}\n"))]);
+    let found = super::std_paths::std_completions_with_overlay(text, text.len() as u32, &directory, &overlay).unwrap();
+    let module = found.iter().find(|item| item.label == "sample").unwrap();
+    assert_eq!(module.documentation, "Buffer overview.");
+    let declaration = found.iter().find(|item| item.label == "sample.New").unwrap();
+    assert!(declaration.documentation.contains("Buffer type."));
+    assert!(!found.iter().any(|item| item.label.contains("Old")));
+    let disk = super::std_paths::std_completions("std.Ol", 6, &directory).unwrap();
+    assert!(disk.iter().any(|item| item.label == "sample.Old"));
+    assert!(!disk.iter().any(|item| item.label.contains("New")));
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_dir(directory).unwrap();
+}

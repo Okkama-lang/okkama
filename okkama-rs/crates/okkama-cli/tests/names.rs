@@ -1,12 +1,12 @@
 //! Name conflicts name both sources, and `check` does not depend on the
 //! order of its inputs (H-16, #33).
+mod tree;
 
 use std::path::Path;
-use std::process::Command;
 
 fn check(files: &[&str]) -> String {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/names");
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama")).arg("check").args(files).current_dir(&directory).output().unwrap();
+    let output = tree::okkama().arg("check").args(files).current_dir(&directory).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{files:?}");
     String::from_utf8_lossy(&output.stderr).into_owned()
 }

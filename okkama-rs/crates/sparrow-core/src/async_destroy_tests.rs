@@ -3,7 +3,7 @@ use super::*;
 use crate::tasks::{self, *};
 
 fn runtime(body: &str) -> Box<Runtime> {
-    let source = format!(r#"sparrow 16
+    let source = format!(r#"sparrow 18
 module "single-async-close" "1"
 type t0 int
 type t1 object obj0

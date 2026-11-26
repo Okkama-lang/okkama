@@ -276,3 +276,26 @@ fn a_lookup_value_does_not_share_a_register_with_its_operands() {
     }
     assert_eq!(seen, 2);
 }
+
+/// #1007, #1043: the value `catch` gives its handler does not share a register
+/// with the failure it reads, as a lookup's found value does not.
+#[test]
+fn a_catch_value_does_not_share_a_register_with_the_failure() {
+    let module = okkama_compiler::lowering::with_passes("all", || module(
+        "module app;\nenum Boom is Error = (boom(code is int));\nobject Work {\n    Work();\n    \
+         fail(n is int) is int { if n > 2 { throw Boom.boom(n); } n; }\n    \
+         guarded(y is int) is int { try { self.fail(y); } catch Boom.boom(code) { code; }; }\n}\n\
+         main() is int { Work().guarded(5); }\n",
+    ));
+    let program = codegen::sparrow::generate(&module).unwrap();
+    let mut seen = 0;
+    for function in &program.functions {
+        for instruction in &function.code {
+            if let okkama_sparrow::Instruction::Catch { failure, value, .. } = instruction {
+                assert!(value.0 != *failure, "{}: {instruction:?}", function.symbol);
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen >= 1);
+}

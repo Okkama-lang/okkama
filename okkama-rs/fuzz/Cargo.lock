@@ -673,6 +673,7 @@ checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
  "pkcs8",
  "signature",
+ "zeroize",
 ]
 
 [[package]]
@@ -1107,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-compiler"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "okkama-devtrace",
  "okkama-runtime-core",
@@ -1118,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-devtrace"
-version = "0.6.4"
+version = "0.6.5"
 
 [[package]]
 name = "okkama-fuzz"
@@ -1132,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-native"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1141,6 +1142,7 @@ dependencies = [
  "blake2",
  "chacha20poly1305",
  "ecdsa",
+ "ed25519",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hkdf",
@@ -1161,15 +1163,15 @@ dependencies = [
 
 [[package]]
 name = "okkama-persistent"
-version = "0.6.4"
+version = "0.6.5"
 
 [[package]]
 name = "okkama-runtime-abi"
-version = "0.6.4"
+version = "0.6.5"
 
 [[package]]
 name = "okkama-runtime-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "brotli",
  "libc",
@@ -1189,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "okkama-sparrow"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "okkama-runtime-abi",
 ]
@@ -1707,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "sparrow-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aliasable",
  "cranelift-codegen",

@@ -14,10 +14,16 @@ code and use separate instrumentation before attributing a change to one operati
 
 All programs import `support/harness.ok`. Arguments are `N WARMUP`, with positive
 N and nonnegative WARMUP. A single Bench instance runs the warmup and the measured
-batch. Input parsing, fixture construction, printing and JVM process startup are
+batch. Input parsing, fixture construction, printing and process startup are
 outside the reported clock interval. The interval still includes the call into
 Bench, GC, scheduler work and any compilation/tier transitions occurring inside it.
 The warmup checksum is printed too, so warmup is observable.
+The interval ends at the clock read in `Measurement.elapsed_since`, which `start()` runs once before it reads
+the start instant, so the first call into the clock path and its compile fall before the interval (#1085).
+Measured on 0.6.5 at N=25k/100k, the constant left in the interval went 1.25 → 0.38 ms on baseline with
+`SPARROW_CORE_NO_INLINE=main` (the lazy compile of `finish` itself) and 1.40 → 0.51 ms on async-await, where the rest
+is the async path after the loop, not the harness. At the release N (4·10⁶) that is below 0.13 ns/iteration; at
+N ≤ 10⁵ judge a cell by its slope over two N.
 
 Output is exactly:
 
@@ -25,8 +31,8 @@ Output is exactly:
 micro-v2 N WARMUP ELAPSED_NS CHECKSUM WARMUP_CHECKSUM
 ```
 
-This is a **warmed batch**, not proof of stationary steady state. HotSpot can still
-compile during measurement. Establish warmup sensitivity with W/2W/4W and inspect
+This is a **warmed batch**, not proof of stationary steady state. JIT compilation
+may still occur during measurement. Establish warmup sensitivity with W/2W/4W and inspect
 compilation/GC counters in separate diagnostic runs. Do not mix instrumented and
 uninstrumented samples or subtract JIT timing from wall time to invent steady state.
 
@@ -52,7 +58,7 @@ comparing because it can change input distribution, GC frequency and JIT behavio
 The runner requires Docker and a **Linux** Okkama installation. It never falls
 back to host execution and does not lower priority with `taskpolicy`.
 The image must already exist locally and contain the runtime dependencies, Python
-for debugging if desired, `sha256sum`, and JDK 22+ for JVM measurements.
+for debugging if desired, and `sha256sum`.
 
 ```sh
 python3 run.py --image okkama-dev \
@@ -63,6 +69,17 @@ python3 run.py --image okkama-dev \
   --label candidate-unique-id --build-profile "release fat-LTO" --revision COMMIT
 ```
 
+Build the toolchain as the packages are, with `toolchain.sh WORKTREE OUT [LAYOUT_SEED]`: fat LTO release,
+`--cfg okkama_release -C force-frame-pointers=yes`, `-p okkama-cli -p sparrow-cli -p blade-cli`, in the `okkama-dev`
+image, with the std of that worktree. A positive `LAYOUT_SEED` links with rust-lld and `--shuffle-sections=*=SEED`:
+the same code with its functions in another order (#1086). A release A/B builds each version twice (seeds 1 and 2)
+and runs one campaign per binary in the order A1 B1 B2 A2; `report.py` gives each cell the spread of its per-binary
+medians («бинарник ±x%») and widens the noise band to twice it, so a change that only follows the runtime's own
+layout (the v0.6.1 array-plus gap, #933) reads as noise. Without `okkama_release`
+devtrace stays compiled in and its gates cost the Future, await and allocation helpers 2–5% (#1025: the 0.6.4
+report's "async 4–6% slower" was this). The runner records `toolchain.devtrace` (the binary carries the name of
+`OKKAMA_DEV_OUT` only then), warns, and compares such a campaign with no other.
+
 Alternatively, use a compiler already installed in an immutable image and pass
 its absolute container path without `--toolchain`. An external toolchain requires
 an explicit std directory; it must be a complete matching installation, not a
@@ -72,8 +89,7 @@ Crypto-dependent programs also require the matching native library in that insta
 `--engines tomato` remains an alias for Sparrow. Since 0.6.0 Sparrow is the only engine and `okkama run` has no
 `--engine`; the runner passes it only to an older toolchain that knows it (whose default before #584 was IR). `--only NAME,NAME` validates all
 names; `--plan` prints the selection without executing it. `--n` is now one positive
-integer, not the old per-engine assignment string. JVM artifacts are built once
-per campaign inside the same limited environment. IR/Sparrow source setup occurs
+integer, not the old per-engine assignment string. Sparrow source setup occurs
 outside the internal measured interval; it can still affect process history.
 
 Every invocation has a wall deadline, CPU-time ulimit, CPU quota, memory+swap cap,
@@ -118,11 +134,47 @@ A change must exceed 10% and twice the larger full-range spread. This is a
 **conservative heuristic, not a confidence interval or statistical significance**.
 `INCOMPATIBLE`, `INCONCLUSIVE` and `WITHIN_NOISE` must not be presented as a win.
 
+### Code layout (#933)
+
+Sparrow places every compiled function on a page of its own, at the same offset
+(`SPARROW_CORE_CODE_SHIFT`, 0 by default), so the alignment of every instruction
+within its page and cache line belongs to the function's own code and does not
+depend on what was compiled before it. Only the page number follows the compile order.
+
+`--placements 0,64,1024` runs each cell under those machine-code shifts in bytes:
+`--runs` is split evenly between them (a multiple of their count, at least two
+runs each), and every round runs every cell under every placement, shuffled
+together, so a burst of host load falls on all placements alike. A cell then
+records `layout` (the median per placement) and `layout_spread` (their
+max/min − 1), and the runner prints it. The full-range spread, and so the
+comparison band, covers every placement. Campaigns with different placements are
+incompatible; report.py shows both sides' layout spread next to the run spread.
+A toolchain older than 0.6.5 ignores the switch, so its layout spread is run noise.
+
+What the placements do not cover: in v0.6.1, `array-plus` ran 77–83 ns with
+inlining into `main` and 60–66 ns with `SPARROW_CORE_NO_INLINE=main` on every
+JIT placement tried (other pages, shifts 64/1024 bytes, 16 KiB granule), with
+heap pages 4/64 KiB-aligned, after allocator padding and stack shifts; an
+unrelated edit to the Rust runtime removed the gap (62.9 / 63.8 ns). That
+lottery lives in the layout of the ahead-of-time runtime binary, which a runtime
+switch cannot perturb. And `SPARROW_CORE_NO_INLINE=main` is not a pure layout
+toggle: without inlining, `Measurement.finish` and its callees are compiled
+lazily after the loop and before the closing clock read, about 1.2–1.5 ms inside
+the timed interval (float: +5.9 ns/iteration at N=250 000, +1.15 at 10⁶,
++0.34 at 4·10⁶).
+
+There is no instruction-count mode: Docker Desktop's Linux VM exposes no
+hardware PMU (`/sys/bus/event_source/devices` lists only software, tracepoint,
+kprobe, uprobe and breakpoint; `perf_event_open` of
+`PERF_COUNT_HW_INSTRUCTIONS` fails with ENOENT even in a privileged
+container). Instruction counts need a host with a PMU, such as an x86 runner
+(#265).
+
 ## Immutable results and release workflow
 
 Results use schema 2 and include source hashes, image ID, architecture, Docker host
 identity/kernel, binary hash/version, declared source revision/build profile, installation hashes when mounted, explicit
-stdlib hashes, Java version, configuration, sample order and raw samples.
+stdlib hashes, configuration, sample order and raw samples.
 
 - Labels are safe filename stems. Existing result names are never overwritten.
 - Reserve unique candidate names, e.g. `v0.5.5-rc1-commit-host-run01`.
@@ -140,11 +192,11 @@ The whole micro directory is versioned in the repository (`bench/micro`, #894):
 results without exact programs, oracles and runner do not establish reproducibility.
 Result files are not committed (`bench/micro/results/` is ignored); the archive lives
 in `okkama-docs/benchmarks/micro/results`, which `--results` names. Do not commit
-generated JAR/SPB artifacts or machine caches.
+generated SPB artifacts or machine caches.
 
 `check.py` runs the programs as correctness tests without timing or Docker: N=17
 and N=31 against the oracles on Sparrow. The Wave CI
-runs it on both engines; locally use `--cage`.
+runs it on Sparrow; locally use `--cage`.
 
 ## Verification and coverage
 
@@ -156,8 +208,9 @@ python3 run.py --image IMAGE --okkama /path/in/image/okkama --plan
 
 `test_runner.py` tests protocol/oracles, partial/noisy data, comparison compatibility,
 late-failure retention, bounded output, timeouts and failed subprocesses.
-See `REVIEW-2026-11-13.md` for findings, the full workload inventory and actual
-validation results. This suite does not replace conformance or release gates.
+The historical review lives outside this repository at
+`okkama-docs/benchmarks/micro/REVIEW-2026-11-13.md`. The current workload inventory
+is `manifest.json`. This suite does not replace conformance or release gates.
 
 ## Public action inventory and scaffolds (#244)
 
@@ -236,11 +289,9 @@ python3 -m unittest discover -s bench/micro -p 'test_*.py'
 to check parsing, visibility, constructors, overloads, typed signatures,
 determinism, stale checks, manifest errors and scaffold/oracle shape.
 
-The #244 http/web/mail addition is documented in [review-244-http/REPORT.txt](review-244-http/REPORT.txt): 121 new workloads, independent checksums, direct timings and explicit resource-dependent exclusions.
-
-The #244 work-action expansion adds 129 programs and covers the remaining reachable
-http/web/mail work targets. See [review-244-work/REPORT.txt](review-244-work/REPORT.txt)
-for independent-oracle validation, exclusions, the HTTP/2 EOF repro and N=2000
-host observations. File fixtures create private temporary directories in the writable current working
+The #244 http/web/mail and work-action additions are included in `manifest.json`;
+`STD-ACTIONS.md` records their measured targets and `oracles.py` their checksums.
+The historical review reports are not included in this repository.
+File fixtures create private temporary directories in the writable current working
 directory: the program directory under `check.py`, or `/work` under `run.py`.
 They remove the directories on destruction.

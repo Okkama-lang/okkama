@@ -37,7 +37,9 @@ jobs:
         # Tweed (owner, 2026-11-20): Champ, OIR-2 and its verifier differential are retired (#911).
         # Every crate and every test target, as the release CI's workspace run: a
         # --lib-only wave let integration-test failures through (#466 follow-up).
-        part: [compiler, sparrow, cli, rest, clippy]
+        # debug: the dev profile of the crates whose checks are debug-only (the ownership linearity check,
+        # debug_assertions), off in the gate profile; before, only the nightly gate ran them (#1100, #1093).
+        part: [compiler, sparrow, cli, rest, clippy, debug]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -69,6 +71,12 @@ jobs:
                 --exclude sparrow-core --exclude okkama-cli ;;
             clippy)
               cargo clippy $gate --workspace --all-targets -- -D warnings ;;
+            # Line tables are enough for a panic's backtrace, and full debug info in some seventy linked
+            # test binaries fills the runner's disk; debug assertions and overflow checks are the dev
+            # profile's (#1100).
+            debug)
+              CARGO_PROFILE_DEV_DEBUG=line-tables-only \
+                cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli ;;
           esac
 
   conformance:
@@ -165,3 +173,5 @@ jobs:
       - run: python3 okkama-rs/tools/engines/gen-abi.py --check
       # Every native of std/runtime has a caller in std or the runtime crates (#1022).
       - run: python3 okkama-rs/tools/engines/native-callers.py
+      # Every tracked test_*.py of the tooling, dry (#1092).
+      - run: bash tools/test-python.sh

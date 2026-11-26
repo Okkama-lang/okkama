@@ -1,5 +1,6 @@
 //! Behaviour of the `okkama` binary: commands, options, streams and exit
 //! codes.
+mod tree;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -7,9 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 const HELLO: &str = "module app v1.0.0;\n\nmain() is int {\n    0;\n}\n";
 
-fn okkama() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_okkama"))
-}
+use tree::okkama;
 
 fn run(args: &[&str]) -> Output {
     okkama().args(args).output().expect("run okkama")
@@ -122,7 +121,7 @@ fn standard_stdout_uses_real_native_providers_on_sparrow() {
 }
 
 #[test]
-fn ocs_native_engines_report_execution_and_limitations_without_java() {
+fn ocs_runs_report_execution_and_limitations_without_java() {
     let source = TempFile::new("ocs-native.ok", HELLO.as_bytes());
     let request = TempFile::new("ocs-request.json", b"");
     let response = TempFile::new("ocs-response.json", b"");
@@ -134,52 +133,48 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
         ),
     )
     .unwrap();
-    {
-        let engine = "sparrow";
-        for (body, outcome, code) in [
-            ("6 * 7;", "completed", 42),
-            ("256;", "failed", 1),
-            ("7 % 0;", "failed", 1),
-            ("panic \"stop\";", "failed", 1),
-            ("if -7 % 3 == -1 { 42; } else { 0; }", "completed", 42),
-            (
-                "let x = 1.5; if x * 2.0 == 3.0 { 42; } else { 0; }",
-                "completed",
-                42,
-            ),
-            ("let b is int = \"world\"; 0;", "rejected", 1),
-        ] {
-            std::fs::write(
-                &source.0,
-                format!("module app v1.0.0; main() is int {{ {body} }}"),
-            )
+    for (body, outcome, code) in [
+        ("6 * 7;", "completed", 42),
+        ("256;", "failed", 1),
+        ("7 % 0;", "failed", 1),
+        ("panic \"stop\";", "failed", 1),
+        ("if -7 % 3 == -1 { 42; } else { 0; }", "completed", 42),
+        (
+            "let x = 1.5; if x * 2.0 == 3.0 { 42; } else { 0; }",
+            "completed",
+            42,
+        ),
+        ("let b is int = \"world\"; 0;", "rejected", 1),
+    ] {
+        std::fs::write(
+            &source.0,
+            format!("module app v1.0.0; main() is int {{ {body} }}"),
+        )
+        .unwrap();
+        let output = okkama()
+            .args([
+                "--ocs-request",
+                request.path(),
+                "--ocs-response",
+                response.path(),
+            ])
+            .env("PATH", "")
+            .output()
             .unwrap();
-            let output = okkama()
-                .args([
-                    "--ocs-request",
-                    request.path(),
-                    "--ocs-response",
-                    response.path(),
-                ])
-                .env("OCS_RUST_ENGINE", engine)
-                .env("PATH", "")
-                .output()
-                .unwrap();
-            let reply = std::fs::read_to_string(&response.0).unwrap();
-            assert_eq!(output.status.code(), Some(code), "{engine}: {reply}");
-            assert!(
-                reply.contains(&format!("\"outcome\": \"{outcome}\"")),
-                "{reply}"
-            );
-            assert!(output.stdout.is_empty());
-            if body.starts_with("panic ") {
-                assert!(reply.contains("\"category\": \"panic\""), "{reply}");
-                assert!(reply.contains("Panic: stop"), "{reply}");
-            }
-            if outcome == "completed" {
-                assert!(reply.contains("\"exit_status\": 42"));
-                assert!(output.stderr.is_empty());
-            }
+        let reply = std::fs::read_to_string(&response.0).unwrap();
+        assert_eq!(output.status.code(), Some(code), "{reply}");
+        assert!(
+            reply.contains(&format!("\"outcome\": \"{outcome}\"")),
+            "{reply}"
+        );
+        assert!(output.stdout.is_empty());
+        if body.starts_with("panic ") {
+            assert!(reply.contains("\"category\": \"panic\""), "{reply}");
+            assert!(reply.contains("Panic: stop"), "{reply}");
+        }
+        if outcome == "completed" {
+            assert!(reply.contains("\"exit_status\": 42"));
+            assert!(output.stderr.is_empty());
         }
     }
 }
@@ -204,7 +199,7 @@ fn ocs_request_with_an_unpaired_high_surrogate_is_read() {
 #[test]
 fn ocs_capabilities_report_sparrow_with_every_mode() {
     // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
-    let output = okkama().arg("--ocs-capabilities").env_remove("OCS_RUST_ENGINE").output().unwrap();
+    let output = okkama().arg("--ocs-capabilities").output().unwrap();
     assert!(output.status.success());
     assert!(stdout(&output).contains("\"engine\": \"sparrow\""));
     for mode in ["\"parse\"", "\"check\"", "\"run\"", "\"test\""] {
@@ -257,30 +252,20 @@ fn every_run_form_executes_on_sparrow_whatever_the_environment() {
 }
 
 #[test]
-fn native_run_engines_execute_source_without_java() {
+fn run_executes_source_in_process_without_java() {
     let source = TempFile::new(
-        "native-engines.ok",
+        "in-process.ok",
         b"module app v1.0.0; main() is int { 6 * 7; }",
     );
-    // По умолчанию `run` — Sparrow в процессе: java не нужна.
+    // `run` — Sparrow в процессе: java не нужна, на PATH ничего нет.
     let output = okkama()
         .args(["run", source.path()])
         .env("PATH", "")
-        .env_remove("OKKAMA_ENGINE")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
-    {
-        let output = okkama()
-            .args(["run", source.path()])
-            .env("PATH", "")
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
-        assert!(output.stdout.is_empty());
-        assert!(output.stderr.is_empty());
-    }
     let output = run_stdin(
         &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [[1, 2], [40]]; xs[0][1] + xs[1][0]; }",
@@ -295,7 +280,7 @@ fn native_run_engines_execute_source_without_java() {
 }
 
 #[test]
-fn skipped_and_filtered_tests_report_alike_on_every_engine() {
+fn skipped_and_filtered_tests_report_their_outcomes() {
     // #277: a test among hidden actions is an object test; `test.skip` ends its
     // test past any `catch` and does not fail the run unless an assertion
     // failed first; `--filter` keeps the tests whose names contain a text.
@@ -312,35 +297,30 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
           test \"through catch\" { try { test.skip(\"uncaught\"); } catch e is Error { test.fail(\"caught\"); } }\n\
           test \"failed first\" { test.is(1, 2); test.skip(\"too late\"); }\n",
     );
-    {
-        let engine = "sparrow";
-        let output = run(&["run", "-t", source.path()]);
-        assert_eq!(output.status.code(), Some(1), "{engine}: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            "=== RUN   Account :: public\n--- PASS: Account :: public\n\
-             === RUN   Account :: among private\n--- PASS: Account :: among private\n\
-             === RUN   skipped\n--- SKIP: skipped\n    not today\n\
-             === RUN   through catch\n--- SKIP: through catch\n    uncaught\n\
-             === RUN   failed first\n--- FAIL: failed first\n    expected 2, got 1\nFAIL\n",
-            "{engine}"
-        );
-        let output = run(&[
-            "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
-        ]);
-        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            "=== RUN   Account :: among private\n--- PASS: Account :: among private\n\
-             === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
-            "{engine}"
-        );
-        // A filter that selects nothing keeps its existing error behaviour
-        // (owner's #339 review): exit 1, not the runner's 4.
-        let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
-        assert_eq!(output.status.code(), Some(1));
-        assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
-    }
+    let output = run(&["run", "-t", source.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   Account :: public\n--- PASS: Account :: public\n\
+         === RUN   Account :: among private\n--- PASS: Account :: among private\n\
+         === RUN   skipped\n--- SKIP: skipped\n    not today\n\
+         === RUN   through catch\n--- SKIP: through catch\n    uncaught\n\
+         === RUN   failed first\n--- FAIL: failed first\n    expected 2, got 1\nFAIL\n"
+    );
+    let output = run(&[
+        "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   Account :: among private\n--- PASS: Account :: among private\n\
+         === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n"
+    );
+    // A filter that selects nothing keeps its existing error behaviour
+    // (owner's #339 review): exit 1, not the runner's 4.
+    let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
     let output = run(&["run", "--filter", "skip", source.path()]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("--filter selects tests: use it with -t"));
@@ -355,8 +335,7 @@ const REPORTED: &str = "module app v1.0.0;\n\
     test \"fourth\" { test.is(PcgRandom(7).bytes(3), [byte(215), byte(136), byte(231)]); }\n";
 
 fn run_with_std(args: &[&str]) -> Output {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    okkama().env("OKKAMA_STDLIB_DIR", std).args(args).output().expect("run okkama")
+    okkama().args(args).output().expect("run okkama")
 }
 
 /// #339: one report of a run, shown as people read it (the default), as one
@@ -566,10 +545,8 @@ const SHOWN_VALUES_REPORT: &str = "=== RUN   values\n\
 #[test]
 fn failed_checks_show_objects_and_variants_by_value() {
     let source = TempFile::new("shown.ok", SHOWN_VALUES.as_bytes());
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let output = okkama()
         .args(["run", "-t", source.path()])
-        .env("OKKAMA_STDLIB_DIR", &std)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -588,12 +565,9 @@ fn channel_examples_print_their_expected_output() {
             continue;
         }
         let expected = std::fs::read_to_string(path.with_extension("expected")).unwrap();
-        {
-            let engine = "sparrow";
-            let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
-            assert_eq!(output.status.code(), Some(0), "{} {engine}: {}", path.display(), stderr(&output));
-            assert_eq!(stdout(&output), expected, "{} {engine}", path.display());
-        }
+        let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(0), "{}: {}", path.display(), stderr(&output));
+        assert_eq!(stdout(&output), expected, "{}", path.display());
         checked += 1;
     }
     assert_eq!(checked, 5);
@@ -602,26 +576,23 @@ fn channel_examples_print_their_expected_output() {
 #[test]
 fn uncaught_failure_prints_place_and_call_stack() {
     let source = b"module app v1.0.0;\nobject Box {\n    Box();\n    at(i is int) is int { [1, 2][i]; }\n}\nmain() is int {\n    Box().at(5);\n}\n";
-    // Every engine reports the place and the call stack (the core since #10).
-    {
-        let engine = "sparrow";
-        let output = run_stdin(&["run", "-"], source);
-        assert_eq!(output.status.code(), Some(1));
-        let text = stderr(&output);
-        assert!(
-            text.starts_with("RuntimeError: Array index out of bounds\n"),
-            "{engine}: {text}"
-        );
-        assert!(
-            text.contains(":4:27\n  |\n4 |     at(i is int) is int { [1, 2][i]; }\n"),
-            "{engine}: {text}"
-        );
-        assert!(
-            text.contains("Stack trace (most recent call first):\n  at Box.at ("),
-            "{engine}: {text}"
-        );
-        assert!(text.contains(":7:5)\n"), "{engine}: {text}");
-    }
+    // `run` reports the place and the call stack (#10).
+    let output = run_stdin(&["run", "-"], source);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.starts_with("RuntimeError: Array index out of bounds\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains(":4:27\n  |\n4 |     at(i is int) is int { [1, 2][i]; }\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Stack trace (most recent call first):\n  at Box.at ("),
+        "{text}"
+    );
+    assert!(text.contains(":7:5)\n"), "{text}");
     let mut command = okkama();
     command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
     command
@@ -641,10 +612,8 @@ fn a_drivers_program_failure_passes_a_catch_of_error() {
     let source = b"module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimport \"runtime/time\" take sleep_nanoseconds;\n\
         async main() is int {\n    let r = try { await sleep_nanoseconds(\"01\"); \"none\"; } catch e is Error { e.text(); };\n\
         Stdout().writeln(\"caught \" + r);\n    0;\n}\n";
-    let std = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let mut child = okkama()
         .args(["run", "-"])
-        .env("OKKAMA_STDLIB_DIR", std)
         .env("OKKAMA_TRACE", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -938,7 +907,7 @@ fn ir_file_and_stdin_include_module_function_and_return() {
     let source = b"module app v1.0.0; main() is int { 1 + 1; }";
     let file = TempFile::new("ir-addition.ok", source);
     let expected = concat!(
-        "oir 1 high\n",
+        "oir 2 high\n",
         "module app v1.0.0\n",
         "requires core\n",
         "entry @main\n",
@@ -970,7 +939,7 @@ fn ir_keeps_all_statements_and_nested_additions() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "oir 1 high\n",
+            "oir 2 high\n",
             "module app v1.0.0\n",
             "requires core\n",
             "entry @main\n",
@@ -1009,7 +978,7 @@ fn ir_explicit_return_is_canonical_and_missing_imports_are_errors() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "oir 1 high\n",
+            "oir 2 high\n",
             "module app/math v1.2.3\n",
             "requires core\n",
             "entry @main\n",
@@ -1038,6 +1007,30 @@ fn ir_control_flow_uses_blocks_and_parameters() {
     );
     assert!(text.contains("cond %2, ^b1, ^b2\n"), "{text}");
     assert!(text.contains("^b3(%5: int):\n    ret %5\n"), "{text}");
+}
+
+/// #1044: a name in `--passes` that selects nothing is a usage error, as in `--after`, not a warning that blames
+/// `OKKAMA_IR_PASSES`.
+#[test]
+fn ir_refuses_an_unknown_pass_in_either_option() {
+    let program = b"module app v1.0.0; main() is int { 0; }";
+    for (args, named) in [
+        (&["ir", "-", "--passes", "fold,hoistt"][..], "`hoistt`"),
+        (&["ir", "-", "--passes", "hoistt, dce2"][..], "`hoistt`, `dce2`"),
+        (&["ir", "-", "--after", "hoistt"][..], "`hoistt`"),
+    ] {
+        let output = run_stdin(args, program);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", stderr(&output));
+        assert!(stdout(&output).is_empty(), "{args:?}");
+        let error = stderr(&output);
+        assert!(error.contains(&format!("unknown pass {named} (passes: ")), "{args:?}: {error}");
+        assert!(!error.contains("OKKAMA_IR_PASSES"), "{args:?}: {error}");
+    }
+    for spec in ["all", "none", "fold,hoist"] {
+        let output = run_stdin(&["ir", "-", "--passes", spec], program);
+        assert_eq!(output.status.code(), Some(0), "{spec}: {}", stderr(&output));
+        assert!(stderr(&output).is_empty(), "{spec}: {}", stderr(&output));
+    }
 }
 
 #[test]
@@ -1556,11 +1549,9 @@ fn blade_project(name: &str) -> TempTree {
 }
 
 fn in_dir(dir: &str, args: &[&str]) -> Output {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     okkama()
         .args(args)
         .current_dir(dir)
-        .env("OKKAMA_STDLIB_DIR", &std)
         .output()
         .unwrap()
 }
@@ -1672,10 +1663,8 @@ fn a_cell_stays_in_synchronous_code() {
         sum(items is @int) is int { let sum = Cell(0); for items -> item { sum.replace(sum.value() + item); } sum.value(); }\n\
         async fine(items is @int) is int { self.sum(items); }\n}\n\
         async main() is int { await Work().fine([1]); }\n";
-    let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let mut child = okkama()
         .args(["check", "-"])
-        .env("OKKAMA_STDLIB_DIR", std)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1695,17 +1684,14 @@ fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
     // #306: a string payload is an Okkama literal, so a newline in it does
     // not split the report.
     let source = b"module app v1.0.0;\nenum Ferr is Error = (text(s is string));\nmain() is int { throw Ferr.text(\"line1\\nline2 \\\"q\\\"\"); }\n";
-    {
-        let engine = "sparrow";
-        let mut command = okkama();
-        command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        child.stdin.take().unwrap().write_all(source).unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{engine}");
-        assert_eq!(stderr(&output), "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")\n", "{engine}");
-    }
+    let mut command = okkama();
+    command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stderr(&output), "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")\n");
 }
 
 /// A cancelled process worker (#359): its Future settles Cancelled once the
@@ -1734,14 +1720,11 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
             Stdout().writeln(\"end\");\n\
             0;\n}\n";
     let file = TempFile::new("cancelled-worker.ok", source.as_bytes());
-    {
-        let engine = "sparrow";
-        let started = std::time::Instant::now();
-        let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
-        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
-        assert_eq!(stdout(&output), "-1 -1 true true\nend\n", "{engine}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{engine}");
-    }
+    let started = std::time::Instant::now();
+    let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "-1 -1 true true\nend\n");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
 
 /// #483, #484: a cursor loop owns each cursor for one step. The step's region
@@ -1750,7 +1733,6 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
 /// record of a past cursor stays behind, whatever the number of steps.
 #[test]
 fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let source = TempFile::new(
         "steps.ok",
         b"module app v1.0.0;\n\
@@ -1761,7 +1743,7 @@ fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
               available() is bool { at < 3; } item() is int { at; } successor() is Cursor<int> { Step(res, at + 1); } }\n\
           main() is int { for View(Res()) -> n { n; } 0; }\n",
     );
-    let output = okkama().args(["ir", source.path()]).env("OKKAMA_STDLIB_DIR", &std).output().unwrap();
+    let output = okkama().args(["ir", source.path()]).output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     let main = &text[text.find("func @main").expect("main")..];
@@ -2102,7 +2084,6 @@ fn man(args: &[&str]) -> Output {
     okkama()
         .arg("man")
         .args(args)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("OKKAMA_IMPORT_DIRS")
         .env_remove("PAGER")
         .output()
@@ -2174,7 +2155,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let local = okkama()
         .args(["man", "./json.ok"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2185,7 +2165,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let ambiguous = okkama()
         .args(["man", "json"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2194,7 +2173,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let std_json = okkama()
         .args(["man", "std/json"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2222,7 +2200,6 @@ fn man_writes_markdown_and_an_index() {
 fn man_survives_a_reader_that_leaves_early() {
     let mut child = okkama()
         .args(["man", "json"])
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2431,7 +2408,6 @@ fn a_big_async_body_keeps_its_values_in_its_frame() {
     for stress in ["0", "1"] {
         let mut child = okkama()
             .args(["run", "-"])
-            .env("OKKAMA_STDLIB_DIR", std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std"))
             .env("SPARROW_CORE_GC_STRESS", stress)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2447,8 +2423,7 @@ fn a_big_async_body_keeps_its_values_in_its_frame() {
 
 fn doctest_run(name: &str, source: &str) -> Output {
     let file = TempFile::new(name, source.as_bytes());
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    okkama().args(["run", "-t", file.path()]).env("OKKAMA_STDLIB_DIR", std).output().unwrap()
+    okkama().args(["run", "-t", file.path()]).output().unwrap()
 }
 
 #[test]
@@ -2707,8 +2682,7 @@ fn man_publishing_formats_select_public_declarations_without_running_examples() 
 fn man_publishing_builds_all_std_html_man_and_versioned_json() {
     let root = std::env::temp_dir().join(format!("okkama-publish-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std_dir()).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
+    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()]).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
     let html_dir = root.join("html");
     let output = export("html", &html_dir);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -2748,14 +2722,14 @@ fn man_publishing_installs_only_generated_section_three_pages() {
     std::fs::create_dir_all(library.join("io")).unwrap();
     std::fs::write(library.join("io/stdout.ok"), "module io/stdout;\n// Output reference.\n\n// Public sink.\nobject Sink {}\n").unwrap();
     let script = std_dir().parent().unwrap().join("tools/install-man.sh");
-    let output = Command::new("bash").arg(&script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    let output = Command::new("bash").arg(&script).arg(tree::OKKAMA).arg(&library).arg(&prefix).output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
     assert_eq!(std::fs::read_to_string(prefix.join("lib/okkama/man-pages.txt")).unwrap(), "io-stdout.3ok\n");
     // A failed generation must not replace an installed page or its manifest.
     let original = std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap();
     std::fs::write(library.join("io/stdout.ok"), "module broken; object {").unwrap();
-    let failed = Command::new("bash").arg(script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    let failed = Command::new("bash").arg(script).arg(tree::OKKAMA).arg(&library).arg(&prefix).output().unwrap();
     assert!(!failed.status.success());
     assert_eq!(std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap(), original);
     std::fs::remove_dir_all(root).unwrap();
@@ -2768,7 +2742,7 @@ fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
     let target = root.join("target");
     std::fs::create_dir_all(target.join("release")).unwrap();
     for tool in ["okkama", "sparrow", "blade"] {
-        std::fs::copy(env!("CARGO_BIN_EXE_okkama"), target.join("release").join(tool)).unwrap();
+        std::fs::copy(tree::OKKAMA, target.join("release").join(tool)).unwrap();
     }
     let repo = std_dir().parent().unwrap().to_path_buf();
     let out = root.join("dist");
@@ -2865,4 +2839,130 @@ fn fmt_unreadable_standard_input_is_an_io_error() {
     assert!(stderr(&output).contains("cannot read standard input"), "{}", stderr(&output));
     let file = TempFile::new("fmt-unreadable.ok", b"module app v1.0.0;\n\xff\n");
     assert_eq!(run(&["fmt", file.path()]).status.code(), Some(3));
+}
+
+
+#[test]
+fn interactive_commands_validate_arguments_before_starting() {
+    for command in ["lsp", "repl"] {
+        let expected = run(&["help", command]);
+        assert_eq!(expected.status.code(), Some(0));
+        let output = run(&[command, "--help"]);
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(output.stdout, expected.stdout);
+        assert!(output.stderr.is_empty());
+        for (arguments, bad) in [
+            (vec!["extra"], "extra"), (vec!["--unknown"], "--unknown"), (vec!["-h"], "-h"),
+            (vec!["--help", "extra"], "extra"), (vec!["extra", "--help"], "extra"),
+            (vec!["--help", "--help"], "--help"),
+        ] {
+            let mut args = vec![command];
+            args.extend(arguments);
+            let output = run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {}", stderr(&output));
+            assert!(output.stdout.is_empty());
+            assert!(stderr(&output).contains(bad), "{}", stderr(&output));
+        }
+    }
+}
+
+#[test]
+fn entry_result_report_is_independent_of_integer_magnitude() {
+    let artifact = TempFile::new("entry-result-report.spb", b"");
+    for value in ["0", "42", "255", "256", "300", "-1", "9223372036854775807", "-9223372036854775808", "1180591620717411303424", "-1180591620717411303424"] {
+        let source = format!("module app; main() is int {{ {value}; }}");
+        let built = run_stdin(&["build", "-", "-o", artifact.path()], source.as_bytes());
+        assert_eq!(built.status.code(), Some(0), "{}", stderr(&built));
+        for output in [run_stdin(&["run", "-"], source.as_bytes()), run(&["exec", artifact.path()])] {
+            let (code, report) = match value.parse::<u8>() {
+                Ok(code) => (code, String::new()),
+                Err(_) => (1, format!("main() must return an int in 0..255, got {value}\n")),
+            };
+            assert_eq!(output.status.code(), Some(code.into()), "{value}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(stderr(&output), report);
+        }
+    }
+}
+
+/// #1087: `okkama env` names what else a build depends on, so Blade can
+/// fingerprint it: each `OKKAMA_IMPORT_DIRS` directory in search order (empty
+/// parts skipped, a missing one marked), and each set variable that changes
+/// what `okkama build` produces, its value quoted; a check, a trace or an
+/// unrelated variable is not named.
+#[test]
+fn env_names_the_import_dirs_and_the_build_environment() {
+    let dir = std::env::temp_dir().join(format!("okkama-env-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = dir.join("missing");
+    let output = okkama()
+        .arg("env")
+        .env("OKKAMA_IMPORT_DIRS", format!("{}::{}", missing.display(), dir.display()))
+        .env("OKKAMA_IR_PASSES", "fold,\"x\"\nnone")
+        .env("OKKAMA_OWNERSHIP_PROTOTYPE", "1")
+        .env("OKKAMA_VERIFY_OWNERSHIP", "1")
+        .env("OKKAMA_TRACE", "0")
+        .env("OKKAMA_UNRELATED", "1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let extra: Vec<&str> = text.lines().filter(|line| line.starts_with("import ") || line.starts_with("build ")).collect();
+    assert_eq!(
+        extra,
+        [
+            format!("import    {} (missing)", missing.display()),
+            format!("import    {}", dir.display()),
+            "build     OKKAMA_IR_PASSES=\"fold,\\\"x\\\"\\nnone\"".to_string(),
+            "build     OKKAMA_OWNERSHIP_PROTOTYPE=\"1\"".to_string(),
+        ],
+        "{text}"
+    );
+
+    let plain = okkama()
+        .arg("env")
+        .env_remove("OKKAMA_IMPORT_DIRS")
+        .env_remove("OKKAMA_IR_PASSES")
+        .env_remove("OKKAMA_OWNERSHIP_PROTOTYPE")
+        .output()
+        .unwrap();
+    let text = stdout(&plain);
+    assert!(!text.lines().any(|line| line.starts_with("import ") || line.starts_with("build ")), "{text}");
+    assert!(text.starts_with("okkama ") && text.contains("\nstd       "), "{text}");
+}
+
+/// #1101: a test runs the binary with the std of this tree, whatever `CARGO_TARGET_DIR` it was built into: through
+/// `tree::okkama()`, and no test file names the binary any other way (one that starts it from another program
+/// passes `tree::OKKAMA` and `tree::std_dir()`).
+#[test]
+fn tests_run_okkama_with_the_std_of_this_tree() {
+    let output = okkama().arg("env").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let line = format!("std       {}", tree::std_dir().display());
+    assert!(text.lines().any(|found| found == line), "{line:?} in\n{text}");
+
+    let binary = concat!("CARGO_BIN_EXE", "_okkama");
+    let tests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut files = Vec::new();
+    let mut directories = vec![tests.clone()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let stray: Vec<_> = files
+        .iter()
+        .filter(|file| !file.ends_with("tree/mod.rs"))
+        .filter(|file| std::fs::read_to_string(file).unwrap().contains(binary))
+        .map(|file| file.strip_prefix(&tests).unwrap().display().to_string())
+        .collect();
+    assert!(files.len() > 40, "{files:?}");
+    assert!(stray.is_empty(), "run the binary through tree::okkama(): {stray:?}");
 }

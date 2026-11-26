@@ -1,16 +1,16 @@
 //! Memory budgets of the runtime (#269): two Sparrow runtimes in one process,
 //! each with a budget of its own heap. The one that grows past its budget
 //! stops; the other, meanwhile, runs to its end within a smaller one.
+mod tree;
 
 use sparrow_core::budget::{Limits, MemoryScope};
 use std::path::Path;
-use std::process::Command;
 
 /// Bytecode of `tests/budgets/<name>.ok`, built by the okkama binary.
 fn build(name: &str) -> Vec<u8> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/budgets/{name}.ok"));
     let output = std::env::temp_dir().join(format!("okkama-budgets-{}-{name}.spb", std::process::id()));
-    let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let status = tree::okkama()
         .args(["build", "-o"])
         .arg(&output)
         .arg(&source)

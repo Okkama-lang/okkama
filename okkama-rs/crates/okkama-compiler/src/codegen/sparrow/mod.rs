@@ -460,7 +460,6 @@ impl FunctionGen<'_> {
                     ir::TrapCode::Range => TrapCode::Range,
                     ir::TrapCode::Empty => TrapCode::Empty,
                     ir::TrapCode::Unbound => TrapCode::Unbound,
-                    ir::TrapCode::Unreachable => TrapCode::Unreachable,
                     ir::TrapCode::Pending => TrapCode::Pending,
                 },
                 message: message.clone(),
@@ -784,5 +783,5 @@ pub fn generate(module: &ir::Module) -> Result<Program, GenerateError> {
 /// The register check runs in debug builds and with `OKKAMA_CHECK_REGISTERS=1`.
 fn check_registers() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("OKKAMA_CHECK_REGISTERS").is_some_and(|value| value == "1"))
+    *ON.get_or_init(|| cfg!(debug_assertions) || crate::env_switch::enabled("OKKAMA_CHECK_REGISTERS"))
 }

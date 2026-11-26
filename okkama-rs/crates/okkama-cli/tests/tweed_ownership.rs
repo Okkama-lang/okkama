@@ -2,6 +2,7 @@
 //! a resource reached through a role field of an object travels with that object, and objects that reach no
 //! resource cost nothing. The result encodes the order of events (a log of digits), so a resource destroyed early,
 //! late or twice changes it.
+mod tree;
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};
@@ -276,10 +277,8 @@ async main() is int {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("keeps.ok");
     std::fs::write(&file, &program).unwrap();
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", file.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std)
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -467,10 +466,8 @@ fn stdout_of(name: &str, program: &str) -> String {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.ok");
     std::fs::write(&file, program).unwrap();
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", file.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std)
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -960,4 +957,109 @@ async main() is int {
 }
 "#);
     assert_eq!(output, "dgkdgdgcdba\n");
+}
+
+/// #1099: a closure or cap-field call that makes a resource hands it to its scope like any call, so a result
+/// nobody takes is destroyed once when that scope ends; a result that is someone else's (a cap field reading its
+/// owner's field, a closure returning its argument) is not destroyed again. The digits: 3 closure, 4 cap field,
+/// 5 borrowed field, 6 closure argument, 7 role call; `run` returns the log as it is inside its scope, plus 1.
+const DISCARDED: &str = r#"
+    object Bank {
+        has log is Log;
+        Bank(:log);
+        cap Open { vault is Vault { Vault(log: log, id: 4); } }
+    }
+    object Safe {
+        has vault is Vault;
+        Safe(:vault);
+        cap View { vault is Vault { vault; } }
+    }
+    role Maker { make(log is Log) is Vault; }
+    object Factory does Maker {
+        Factory();
+        make(log is Log) is Vault { Vault(log: log, id: 7); }
+    }
+"#;
+
+fn discarded(body: &str, asynchronous: bool) -> ir::Module {
+    let (run, main) = if asynchronous {
+        ("async run(log is Log) is int", "async main() is int { let log = Log(n: Atomic(0)); \
+            let result = await Probe().run(log); result * 100000 + log.value(); }")
+    } else {
+        ("run(log is Log) is int", "main() is int { let log = Log(n: Atomic(0)); \
+            let result = Probe().run(log); result * 100000 + log.value(); }")
+    };
+    lower(&format!("{LEDGERS}{DISCARDED} object Probe {{ Probe(); {run} {{ {body} log.value() + 1; }} }} {main}"))
+}
+
+#[test]
+fn a_discarded_closure_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let f = () is Vault { Vault(log: log, id: 3); }; f();", asynchronous);
+        support::assert_value(&module, "100003");
+    }
+}
+
+#[test]
+fn a_discarded_cap_field_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let open = Bank(log: log)::Open; open::vault;", asynchronous);
+        support::assert_value(&module, "100004");
+    }
+}
+
+#[test]
+fn a_borrowed_cap_field_or_closure_result_is_destroyed_once_by_its_owner() {
+    for asynchronous in [false, true] {
+        let module = discarded("let view = Safe(vault: Vault(log: log, id: 5))::View; view::vault; \
+            let same = (v is Vault) is Vault { v; }; same(Vault(log: log, id: 6));", asynchronous);
+        // Newest first at the scope's end: the closure's argument (6), then the safe's vault (5).
+        support::assert_value(&module, "100065");
+    }
+}
+
+#[test]
+fn a_discarded_role_call_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let maker is Maker = Factory(); maker.make(log);", asynchronous);
+        support::assert_value(&module, "100007");
+    }
+}
+
+/// #1102: the Future of a bound async action's call owns the call's fresh arguments (#587) like a direct call's,
+/// and is lazy: discarded, it runs nothing, and it closes with its scope, which releases what it owns. Awaited,
+/// bound or spawned, its argument is released once as before. Digits: 1 direct call, 2 bound call, 3 bound call in
+/// an inner block (released when that block ends: the log is 3 inside run after it), 4 awaited, 5 bound to a name,
+/// 6 spawned and awaited; `run` returns the log inside its scope.
+fn discarded_futures(asynchronous: bool) -> ir::Module {
+    let awaited = if asynchronous {
+        "let taking is async (Vault) is int = Taker().take; await taking(Vault(log: log, id: 4)); \
+         let kept = taking(Vault(log: log, id: 5)); await spawn taking(Vault(log: log, id: 6));"
+    } else {
+        ""
+    };
+    let (run, main) = if asynchronous {
+        ("async run(log is Log) is int", "async main() is int { let log = Log(n: Atomic(0)); \
+            let result = await Probe().run(log); result * 10000000 + log.value(); }")
+    } else {
+        ("run(log is Log) is int", "main() is int { let log = Log(n: Atomic(0)); \
+            let result = Probe().run(log); result * 10000000 + log.value(); }")
+    };
+    lower(&format!("{LEDGERS} object Taker {{ Taker(); async take(vault is Vault) is int {{ vault.balance(); }} }} \
+        object Probe {{ Probe(); {run} {{ Taker().take(Vault(log: log, id: 1)); \
+        let bound is async (Vault) is int = Taker().take; bound(Vault(log: log, id: 2)); \
+        {{ let inner is async (Vault) is int = Taker().take; inner(Vault(log: log, id: 3)); }} {awaited} \
+        log.value(); }} }} {main}"))
+}
+
+#[test]
+fn a_discarded_future_of_a_bound_async_action_releases_its_argument_with_its_scope() {
+    // Inside run: the inner block's 3 is released; at run's end, newest first, 2 then 1.
+    support::assert_value(&discarded_futures(false), "30000321");
+}
+
+#[test]
+fn a_bound_async_action_releases_its_argument_once_however_its_future_is_used() {
+    // Inside run: 3 (inner block), 4 (awaited), 6 (spawned, awaited); at run's end, newest first, 5, 2, 1.
+    support::assert_value(&discarded_futures(true), "3460346521");
 }

@@ -4,7 +4,7 @@ use crate::primitives::{Channel, Selection};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-const PROGRAM: &str = r#"sparrow 16
+const PROGRAM: &str = r#"sparrow 18
 module "selection-509" "1.0.0"
 type t0 int
 type t1 object obj0

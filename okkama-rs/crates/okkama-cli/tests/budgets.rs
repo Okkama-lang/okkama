@@ -1,26 +1,25 @@
 //! Execution budgets on Sparrow (#71, #237):
 //! the same options, reports and exit status. Every run carries a
 //! timeout, so a budget that failed to stop a program cannot hang the test.
+mod tree;
 
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn run(engine: &str, source: &str, budget: &[&str]) -> Output {
-    // One file per run: tests run in parallel, and two of them may run the
-    // same engine with the same budget.
+fn run(source: &str, budget: &[&str]) -> Output {
+    // One file per run: tests run in parallel, and two of them may run with
+    // the same budget.
     static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "budgets-{}-{run}-{engine}-{}.ok",
+        "budgets-{}-{run}-{}.ok",
         std::process::id(),
         budget.join("_").replace(['-', '/'], "")
     ));
     std::fs::write(&path, source).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run"])
         .args(budget)
         .arg(&path)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .env("OKKAMA_TRACE", "off")
         .output()
         .unwrap();
@@ -46,15 +45,12 @@ fn every_budget_stops_sparrow() {
         (REPEAT, &["--max-memory", "10M", "--timeout", "30"], "Execution budget exhausted: memory"),
     ];
     for (source, budget, report) in cases {
-        {
-        let engine = "sparrow";
-            let output = run(engine, source, budget);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert_eq!(output.status.code(), Some(1), "{engine} {budget:?}: {stderr}");
-            assert_eq!(stderr.trim_end(), report, "{engine} {budget:?}");
-            if report.ends_with("output") {
-                assert!(output.stdout.len() <= 1024, "{engine}: {} bytes", output.stdout.len());
-            }
+        let output = run(source, budget);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{budget:?}: {stderr}");
+        assert_eq!(stderr.trim_end(), report, "{budget:?}");
+        if report.ends_with("output") {
+            assert!(output.stdout.len() <= 1024, "{} bytes", output.stdout.len());
         }
     }
 }
@@ -62,61 +58,50 @@ fn every_budget_stops_sparrow() {
 const DEEP: &str = "module app v1.0.0;\nobject Calc {\n    Calc();\n    down(n is int) is int { if n == 0 { 0; } else { self.down(n - 1) + 1; } }\n}\nmain() is int { if Calc().down(333) == 333 { 0; } else { 1; } }\n";
 const CAUGHT: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nobject Spin {\n    Spin();\n    run() is int { loop { } 0; }\n}\nmain() is int {\n    let out = Stdout();\n    defer out.writeln(\"defer ran\");\n    let result = try { Spin().run(); } catch e is Error { out.writeln(\"caught\"); 7; };\n    result;\n}\n";
 
-/// Steps are counted alike on every engine: a function entry and a branch
-/// back to the same or an earlier block. DEEP takes exactly 336 steps (main,
+/// A step is a function entry or a branch back to the same or an earlier
+/// block. DEEP takes exactly 336 steps (main,
 /// the constructor, 334 calls of `down`); running out is not an error the
 /// program can catch, and its cleanup does not run.
 #[test]
-fn steps_are_counted_alike_and_running_out_cannot_be_caught() {
-    {
-        let engine = "sparrow";
-        let enough = run(engine, DEEP, &["--max-steps", "336", "--timeout", "60"]);
-        assert_eq!(enough.status.code(), Some(0), "{engine}: {}", String::from_utf8_lossy(&enough.stderr));
-        let short = run(engine, DEEP, &["--max-steps", "335", "--timeout", "60"]);
-        assert_eq!(String::from_utf8_lossy(&short.stderr).trim_end(), "Execution budget exhausted: steps", "{engine}");
-        let caught = run(engine, CAUGHT, &["--max-steps", "5000", "--timeout", "60"]);
-        assert_eq!(caught.status.code(), Some(1), "{engine}");
-        assert_eq!(String::from_utf8_lossy(&caught.stderr).trim_end(), "Execution budget exhausted: steps", "{engine}");
-        assert!(caught.stdout.is_empty(), "{engine}: {}", String::from_utf8_lossy(&caught.stdout));
-    }
+fn steps_are_counted_exactly_and_running_out_cannot_be_caught() {
+    let enough = run(DEEP, &["--max-steps", "336", "--timeout", "60"]);
+    assert_eq!(enough.status.code(), Some(0), "{}", String::from_utf8_lossy(&enough.stderr));
+    let short = run(DEEP, &["--max-steps", "335", "--timeout", "60"]);
+    assert_eq!(String::from_utf8_lossy(&short.stderr).trim_end(), "Execution budget exhausted: steps");
+    let caught = run(CAUGHT, &["--max-steps", "5000", "--timeout", "60"]);
+    assert_eq!(caught.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&caught.stderr).trim_end(), "Execution budget exhausted: steps");
+    assert!(caught.stdout.is_empty(), "{}", String::from_utf8_lossy(&caught.stdout));
 }
 
 const DEEP_FAILURE: &str = "module app v1.0.0;\nobject Down {\n    Down();\n    go(n is int, zero is int) is int { if n == 0 { 1 % zero; } else { self.go(n - 1, zero) + 1; } }\n}\nmain() is int { Down().go(300000, 0); }\n";
 const DEEP_FOREVER: &str = "module app v1.0.0;\nobject Down {\n    Down();\n    go(n is int) is int { if n < 0 { 0; } else { self.go(n + 1) + 1; } }\n}\nmain() is int { Down().go(0); }\n";
 
-/// Deep non-tail recursion (#241): the memory budget stops it with the same
-/// report on every engine (on the core the budget caps the machine stack),
-/// and a failure 300000 frames deep prints its collapsed trace at once
+/// Deep non-tail recursion (#241): the memory budget stops it with its report
+/// (on Sparrow the budget caps the machine stack too), and a failure 300000 frames deep prints its collapsed trace at once
 /// instead of rendering a line per frame.
 #[test]
 fn deep_recursion_is_bounded_and_its_trace_is_cheap() {
-    {
-        let engine = "sparrow";
-        let started = std::time::Instant::now();
-        let output = run(engine, DEEP_FOREVER, &["--max-memory", "64M", "--timeout", "60"]);
-        assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution budget exhausted: memory", "{engine}");
-        assert!(started.elapsed().as_secs() < 30, "{engine}: {:?}", started.elapsed());
-    }
-    {
-        let engine = "sparrow";
-        let path = std::env::temp_dir().join(format!("budgets-trace-{}-{engine}.ok", std::process::id()));
-        std::fs::write(&path, DEEP_FAILURE).unwrap();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let started = std::time::Instant::now();
-        let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-            .args(["run", "--timeout", "60"])
-            .arg(&path)
-            .env("OKKAMA_STDLIB_DIR", root.join("std"))
-            .env_remove("OKKAMA_TRACE")
-            .output()
-            .unwrap();
-        let _ = std::fs::remove_file(path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(1), "{engine}: {stderr}");
-        assert!(stderr.contains("(\u{00d7}300000)"), "{engine}: {stderr}");
-        assert!(stderr.lines().count() < 60, "{engine}: {stderr}");
-        assert!(started.elapsed().as_secs() < 20, "{engine}: {:?}", started.elapsed());
-    }
+    let started = std::time::Instant::now();
+    let output = run(DEEP_FOREVER, &["--max-memory", "64M", "--timeout", "60"]);
+    assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution budget exhausted: memory");
+    assert!(started.elapsed().as_secs() < 30, "{:?}", started.elapsed());
+
+    let path = std::env::temp_dir().join(format!("budgets-trace-{}.ok", std::process::id()));
+    std::fs::write(&path, DEEP_FAILURE).unwrap();
+    let started = std::time::Instant::now();
+    let output = tree::okkama()
+        .args(["run", "--timeout", "60"])
+        .arg(&path)
+        .env("OKKAMA_TRACE", "1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("(\u{00d7}300000)"), "{stderr}");
+    assert!(stderr.lines().count() < 60, "{stderr}");
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
 }
 
 // Ten million integers: integer comparisons go through big values, so the
@@ -130,14 +115,11 @@ const SORT: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimpor
 /// not see the stop.
 #[test]
 fn a_long_sort_stops_for_the_timeout() {
-    {
-        let engine = "sparrow";
-        let started = std::time::Instant::now();
-        let output = run(engine, SORT, &["--timeout", "1"]);
-        assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution interrupted", "{engine}");
-        assert!(output.stdout.is_empty(), "{engine}: {}", String::from_utf8_lossy(&output.stdout));
-        assert!(started.elapsed().as_secs() < 10, "{engine}: {:?}", started.elapsed());
-    }
+    let started = std::time::Instant::now();
+    let output = run(SORT, &["--timeout", "1"]);
+    assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution interrupted");
+    assert!(output.stdout.is_empty(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
 }
 
 // 2^32 - 1 PBKDF2 rounds take minutes; Argon2 over 64 MiB for 1000 passes
@@ -151,21 +133,18 @@ const ARGON2: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimp
 #[test]
 fn long_host_operations_stop_for_the_timeout() {
     for (name, source) in [("pbkdf2", PBKDF2), ("argon2", ARGON2)] {
-        {
-            let engine = "sparrow";
-            let started = std::time::Instant::now();
-            let output = run(engine, source, &["--timeout", "1"]);
-            assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution interrupted", "{name} {engine}");
-            assert!(output.stdout.is_empty(), "{name} {engine}: {}", String::from_utf8_lossy(&output.stdout));
-            assert!(started.elapsed().as_secs() < 10, "{name} {engine}: {:?}", started.elapsed());
-        }
+        let started = std::time::Instant::now();
+        let output = run(source, &["--timeout", "1"]);
+        assert_eq!(String::from_utf8_lossy(&output.stderr).trim_end(), "Execution interrupted", "{name}");
+        assert!(output.stdout.is_empty(), "{name}: {}", String::from_utf8_lossy(&output.stdout));
+        assert!(started.elapsed().as_secs() < 10, "{name}: {:?}", started.elapsed());
     }
 }
 
 /// Finished tasks are not kept (#503): each step starts a task in its own
-/// FutureGroup, awaits it and drops the group. The core kept every spawned
+/// FutureGroup, awaits it and drops the group. Sparrow kept every spawned
 /// task as a root and every group's tasks as roots, so memory grew with the
-/// steps until the budget stopped it; now it stays flat on every engine.
+/// steps until the budget stopped it; now it stays flat.
 const WORKERS: &str = "module app v1.0.0;
 import \"async/scope\" take FutureGroup;
 import \"async/event\" take Event;
@@ -195,7 +174,7 @@ async main() is int {
 
 #[test]
 fn finished_tasks_and_their_groups_are_collected() {
-    let output = run("sparrow", WORKERS, &["--max-memory", "64M", "--timeout", "120"]);
+    let output = run(WORKERS, &["--max-memory", "64M", "--timeout", "120"]);
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "500000", "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(output.status.code(), Some(0));
 }
@@ -214,24 +193,23 @@ fn budgets_bound_tests() {
         (&["-t", "--timeout", "1"][..], "Execution interrupted"),
         (&["-t", "--workers", "2", "--max-steps", "100000", "--test-timeout", "30"][..], "Execution budget exhausted: steps"),
     ] {
-        let output = run("sparrow", TESTS, budget);
+        let output = run(TESTS, budget);
         let text = report(&output);
         assert_eq!(output.status.code(), Some(1), "{budget:?}: {text}{}", String::from_utf8_lossy(&output.stderr));
         assert!(text.contains("--- FAIL: spins") && text.contains(stop), "{budget:?}: {text}");
         assert!(text.contains("--- PASS: quick"), "{budget:?}: {text}");
     }
     // The test timeout only keeps a regression from hanging here.
-    let refused = run("sparrow", TESTS, &["-t", "--workers", "2", "--test-timeout", "5", "--timeout", "1"]);
+    let refused = run(TESTS, &["-t", "--workers", "2", "--test-timeout", "5", "--timeout", "1"]);
     assert_eq!(refused.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&refused.stderr).contains("--test-timeout"));
 
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source = std::env::temp_dir().join(format!("budgets-{}-tests.ok", std::process::id()));
     let spb = source.with_extension("spb");
     std::fs::write(&source, TESTS).unwrap();
     let okkama = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
-        command.env("OKKAMA_STDLIB_DIR", root.join("std")).env("OKKAMA_TRACE", "off");
+        let mut command = tree::okkama();
+        command.env("OKKAMA_TRACE", "off");
         command
     };
     let built = okkama().args(["build", "-t"]).arg(&source).arg("-o").arg(&spb).output().unwrap();

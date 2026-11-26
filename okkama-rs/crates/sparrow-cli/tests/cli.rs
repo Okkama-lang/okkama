@@ -194,7 +194,8 @@ fn uncaught_failures_are_reported_like_okkama() {
         ))
         .unwrap(),
     );
-    let result = file.run("run");
+    let result = Command::new(env!("CARGO_BIN_EXE_sparrow"))
+        .arg("run").arg(&file.0).env("OKKAMA_TRACE", "1").output().unwrap();
     assert_eq!(result.status.code(), Some(1));
     // The core adds the Sparrow stack (since #10); `OKKAMA_TRACE=off` — only
     // the failure.
@@ -205,6 +206,24 @@ fn uncaught_failures_are_reported_like_okkama() {
     );
     let quiet_core = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0).env("OKKAMA_TRACE", "off").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&quiet_core.stderr), "RuntimeError: confirm failed\n");
+    // The stack is on until the switch is set (9d7749f4e, one switch rule since #1095).
+    let unset = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0).env_remove("OKKAMA_TRACE").output().unwrap();
+    assert_eq!(unset.stderr, result.stderr);
+}
+
+/// A malformed `SPARROW_CORE_CODE_SHIFT` is a program that does not load: `sparrow run` refuses it with the
+/// `sparrow:` prefix of other load errors, naming the switch (#1097).
+#[test]
+fn a_malformed_code_shift_is_a_load_error_with_the_prefix() {
+    let file = File::new(&value("0"));
+    let refused = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0)
+        .env("SPARROW_CORE_CODE_SHIFT", "-1").output().unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&refused.stderr),
+               "sparrow: SPARROW_CORE_CODE_SHIFT: expected a byte count from 0 to 65536, got \"-1\"\n");
+    let shifted = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0)
+        .env("SPARROW_CORE_CODE_SHIFT", "1024").output().unwrap();
+    assert_eq!(shifted.status.code(), Some(0), "{}", String::from_utf8_lossy(&shifted.stderr));
 }
 
 /// An Atomic read on an object the program builds itself: the core would
@@ -385,5 +404,23 @@ fn stats_attribute_allocations_to_sites_and_kinds() {
     let stats = String::from_utf8_lossy(&output.stderr);
     for line in ["1 alloc site main:1 obj.new Point, count", "16 alloc site main:1 obj.new Point, bytes", " run, microseconds", " collection, microseconds"] {
         assert!(stats.contains(line), "{line:?} in\n{stats}");
+    }
+}
+
+
+#[test]
+fn entry_result_report_is_independent_of_integer_magnitude() {
+    for text in ["0", "42", "255", "256", "300", "-1", "9223372036854775807", "-9223372036854775808", "1180591620717411303424", "-1180591620717411303424"] {
+        let file = File::new(&value(text));
+        for options in [vec!["run"], vec![]] {
+            let output = file.run_with(&options);
+            let (code, report) = match text.parse::<u8>() {
+                Ok(code) => (code, String::new()),
+                Err(_) => (1, format!("main() must return an int in 0..255, got {text}\n")),
+            };
+            assert_eq!(output.status.code(), Some(code.into()), "{text}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(String::from_utf8_lossy(&output.stderr), report);
+        }
     }
 }

@@ -376,22 +376,22 @@ impl Operand for Constant {
             "int" => {
                 let text = parser.integer_text()?;
                 if !canonical_int(&text) {
-                    return Err(parser.error("non-canonical integer constant"));
+                    return Err(parser.error_after("non-canonical integer constant"));
                 }
                 Constant::Int(text)
             }
             "bool" => Constant::Bool(bool::parse(parser)?),
             "byte" => {
                 let value = parser.u32()?;
-                Constant::Byte(u8::try_from(value).map_err(|_| parser.error("byte constant exceeds 255"))?)
+                Constant::Byte(u8::try_from(value).map_err(|_| parser.error_after("byte constant exceeds 255"))?)
             }
             "float" => Constant::Float(parser.u64()?),
             "char" => {
                 let point = parser.u32()?;
-                Constant::Char(char::from_u32(point).ok_or_else(|| parser.error("invalid char constant"))?)
+                Constant::Char(char::from_u32(point).ok_or_else(|| parser.error_after("invalid char constant"))?)
             }
             "str" => Constant::Str(parser.string()?),
-            other => return Err(parser.error(format!("unknown constant kind `{other}`"))),
+            other => return Err(parser.error_after(format!("unknown constant kind `{other}`"))),
         })
     }
 }
@@ -487,7 +487,7 @@ fn parse_data(parser: &mut Parser<'_>, depth: usize) -> Result<Data, AsmError> {
         return Ok(Data::Scalar(Constant::parse(parser)?));
     }
     if depth >= Data::MAX_DEPTH {
-        return Err(parser.error(format!("data nested deeper than {}", Data::MAX_DEPTH)));
+        return Err(parser.error_after(format!("data nested deeper than {}", Data::MAX_DEPTH)));
     }
     let count = parser.u32()?;
     if array {
@@ -530,7 +530,7 @@ macro_rules! op_operand {
             }
             fn parse(parser: &mut Parser<'_>) -> Result<Self, AsmError> {
                 let name = parser.ident()?;
-                $ty::from_name(&name).ok_or_else(|| parser.error(format!(concat!("unknown ", stringify!($ty), " `{}`"), name)))
+                $ty::from_name(&name).ok_or_else(|| parser.error_after(format!(concat!("unknown ", stringify!($ty), " `{}`"), name)))
             }
         }
     };

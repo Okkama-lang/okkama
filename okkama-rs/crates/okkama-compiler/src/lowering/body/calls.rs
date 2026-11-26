@@ -232,9 +232,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     return Ok(Out::Diverged);
                 };
                 let Type::Object(object) = target.ty.taken() else {
-                    return Err(LoweringError::invalid(
+                    return Err(LoweringError::internal(
                         span,
-                        "internal compiler error: a method receiver is not an object",
+                        "a method receiver is not an object",
                     ));
                 };
                 let target = self.take(target, receiver.span);
@@ -593,9 +593,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             ),
             Builtin::Bits { name, byte } => {
                 let op = BitOp::from_action(name).ok_or_else(|| {
-                    LoweringError::invalid(
+                    LoweringError::internal(
                         span,
-                        format!("internal compiler error: bit action {name}"),
+                        format!("bit action {name}"),
                     )
                 })?;
                 let count = op.rotates().then(|| ids[0]);
@@ -680,9 +680,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
             Builtin::Order(kind) => {
                 let Type::Enum(order) = self.expr_type(expr)? else {
-                    return Err(LoweringError::invalid(
+                    return Err(LoweringError::internal(
                         span,
-                        "internal compiler error: order() result is not compare.Order",
+                        "order() result is not compare.Order",
                     ));
                 };
                 return self.order(*kind, receiver_id, ids[0], order, span);
@@ -770,9 +770,24 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 span,
             ),
             // The analysis admits no other pair; reaching here is a gap of lowering.
-            (target, ty) => return Err(unsupported(span, &format!("conversion of {ty} to {target:?}"))),
+            (target, ty) => {
+                return Err(unsupported(span, &conversion(&super::super::source_type(self.ctx, ty), target)));
+            }
         })
     }
+}
+
+/// A conversion pair, both types in source notation (#1044): "`char` to `float` conversion".
+fn conversion(from: &str, target: CastTarget) -> String {
+    let to = match target {
+        CastTarget::Int => "int",
+        CastTarget::Byte => "byte",
+        CastTarget::Float => "float",
+        CastTarget::Rat => "rat",
+        CastTarget::Str => "string",
+        CastTarget::Char => "char",
+    };
+    format!("`{from}` to `{to}` conversion")
 }
 
 fn str_op(op: StrOp, receiver: ir::ValueId, rest: &[ir::ValueId]) -> InstKind {
@@ -910,5 +925,19 @@ impl BodyLowerer<'_, '_, '_> {
         self.b.switch_to(out);
         self.sync_unwind();
         Typed { value: out_params[0], ty: Type::Rat }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    /// #1044: one "of", and both types as the source writes them.
+    #[test]
+    fn a_conversion_gap_names_both_types_in_source_notation() {
+        assert_eq!(unsupported(Span::default(), &conversion("char", CastTarget::Float)).to_string(),
+            "IR lowering of `char` to `float` conversion is not implemented yet.");
+        assert_eq!(conversion("bool", CastTarget::Str), "`bool` to `string` conversion");
+        assert_eq!(conversion("@int", CastTarget::Rat), "`@int` to `rat` conversion");
     }
 }

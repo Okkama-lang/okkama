@@ -4,6 +4,7 @@
 //! 143; a second signal during a cleanup ends it at once. Runs
 //! `tests/interruption/stop.ok`.
 #![cfg(unix)]
+mod tree;
 
 use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
@@ -23,11 +24,10 @@ struct Program {
 impl Program {
     fn start(mode: &str) -> Program {
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut child = Command::new(env!("CARGO_BIN_EXE_okkama"))
+        let mut child = tree::okkama()
             .arg("run")
             .arg(here.join("tests/interruption/stop.ok"))
             .arg(mode)
-            .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

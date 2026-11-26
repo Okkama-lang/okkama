@@ -6,23 +6,24 @@ release against the candidate, one construct or std action per row.
         -o OUT.html
 
 OLD and NEW are `run.py` schema-2 campaigns; each version may span several
-files (one per engine). A release comparison changes the compiler and std
+files (multiple rounds per engine). A release comparison changes the compiler and std
 together, so the std hashes may differ; every other part of the campaign must
 match (suite hash, protocol, N, warmup, quality policy, image, limits, host),
 or the pair is reported INCOMPATIBLE. The metric is gross ns/iteration, as
-run.py reports it. A pair counts only when both cells are VALID; then a change
+run.py reports it. Round medians are combined geometrically for each version.
+A pair counts only when every round on both sides is present and VALID; then a change
 is real when it exceeds 10% and twice the larger full-range spread (the rule
 of `run.py --compare`: a heuristic, not statistical significance).
 TEXTS.json holds the report's words: eyebrow, title, lead, findings
 ([[title, text], ...]), priorities, method, commands, foot. The page takes its
 head and styles from ../report-template.html, the standard report.
 """
-import argparse, json, re
+import argparse, json, re, statistics
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ENGINE_NAMES = {"sparrow": "Tomato", "ir": "IR", "jvm": "JVM"}
-SAME = ["suite_hash", "protocol", "n", "warmup", "quality_policy"]
+SAME = ["suite_hash", "protocol", "n", "warmup", "quality_policy", "placements"]
 
 
 def campaign_key(result):
@@ -31,16 +32,56 @@ def campaign_key(result):
 
 
 def merge(files):
-    merged, meta = {}, []
+    meta = []
+    if len({Path(path).resolve() for path in files}) != len(files):
+        raise ValueError("duplicate campaign file")
     for path in files:
         result = json.loads(Path(path).read_text())
         if result.get("schema") != 2:
             raise SystemExit(f"{path}: not a schema-2 campaign")
         meta.append(result)
+    versions = {result.get("toolchain", {}).get("version") for result in meta}
+    versions.discard(None)
+    if len(versions) > 1:
+        raise ValueError("one side of a report contains several toolchain versions: " + ", ".join(sorted(versions)))
+    merged = {}
+    for result in meta:
         for name, row in result["benchmarks"].items():
-            for engine, cell in row.items():
-                merged.setdefault(name, {})[engine] = (cell, result)
+            for engine in row:
+                # Every campaign containing this engine is one round, including
+                # rounds missing this particular benchmark.
+                merged.setdefault(name, {})[engine] = [
+                    (round_["benchmarks"].get(name, {}).get(engine, {"status": "MISSING"}), round_)
+                    for round_ in meta if not round_["benchmarks"] or any(engine in r for r in round_["benchmarks"].values())
+                ]
     return merged, meta
+
+
+def aggregate(rounds):
+    cells = [cell for cell, _ in rounds]
+    valid = all(cell["status"] == "VALID" and result.get("status", "COMPLETE") == "COMPLETE"
+                for cell, result in rounds)
+    values = [cell.get("ns_per_iteration") for cell in cells]
+    measured = all(isinstance(value, (int, float)) and value > 0 for value in values)
+    return {"status": "VALID" if valid and measured else "INCONCLUSIVE",
+            "ns_per_iteration": statistics.geometric_mean(values) if measured else None,
+            "spread": max((cell.get("spread", 0) for cell in cells), default=0),
+            # #933: the spread of the per-placement medians, when the campaign ran under --placements.
+            "layout": max((cell["layout_spread"] for cell in cells if "layout_spread" in cell), default=None),
+            "binary": binary_spread(rounds) if measured else None,
+            "rounds": len(rounds)}
+
+
+def binary_spread(rounds):
+    """#1086: the spread of the per-binary medians when one version ran on several builds of the same source
+    (toolchain.sh LAYOUT_SEED: another function order), or None with one binary."""
+    by_binary = {}
+    for cell, result in rounds:
+        by_binary.setdefault(result.get("toolchain", {}).get("binary_sha256"), []).append(cell["ns_per_iteration"])
+    if len(by_binary) < 2 or None in by_binary:
+        return None
+    medians = [statistics.geometric_mean(values) for values in by_binary.values()]
+    return (max(medians) - min(medians)) / statistics.geometric_mean(medians)
 
 
 def cells(old_files, new_files):
@@ -50,21 +91,30 @@ def cells(old_files, new_files):
     for name in sorted(new):
         group = "std" if (HERE / "std" / f"{name}.ok").exists() else "lang"
         entry = {"name": name, "group": group, "engines": {}}
-        for engine, (cell, result) in new[name].items():
+        for engine, rounds in new[name].items():
             if engine not in old.get(name, {}):
                 continue
-            before, base = old[name][engine]
-            out = {"before": before.get("ns_per_iteration"), "after": cell.get("ns_per_iteration"),
-                   "spreadBefore": before.get("spread"), "spreadAfter": cell.get("spread"),
+            bases = old[name][engine]
+            before, cell = aggregate(bases), aggregate(rounds)
+            all_rounds = bases + rounds
+            out = {"before": before["ns_per_iteration"], "after": cell["ns_per_iteration"],
+                   "spreadBefore": before["spread"], "spreadAfter": cell["spread"],
+                   "layoutBefore": before["layout"], "layoutAfter": cell["layout"],
+                   "binaryBefore": before["binary"], "binaryAfter": cell["binary"],
                    "statusBefore": before["status"], "statusAfter": cell["status"],
-                   "n": result["n"]}
-            if campaign_key(base) != campaign_key(result):
+                   "roundsBefore": len(bases), "roundsAfter": len(rounds),
+                   "n": rounds[0][1]["n"]}
+            if any(campaign_key(result) != campaign_key(bases[0][1]) for _, result in all_rounds) or any(
+                    result.get("toolchain", {}).get("version_check", {}).get("status") == "MISMATCH"
+                    for _, result in all_rounds) or any(
+                    result.get("toolchain", {}).get("devtrace") for _, result in all_rounds):
                 out["verdict"] = "incompatible"
             elif before["status"] != "VALID" or cell["status"] != "VALID":
                 out["verdict"] = "inconclusive"
             else:
                 change = cell["ns_per_iteration"] / before["ns_per_iteration"] - 1
-                band = max(0.10, 2 * max(cell["spread"], before["spread"]))
+                # The binaries' own layout (#1086) widens the band like a noisy series.
+                band = max(0.10, 2 * max(cell["spread"], before["spread"], cell["binary"] or 0, before["binary"] or 0))
                 out.update(change=change, band=band,
                            verdict="faster" if change < -band else "slower" if change > band else "noise")
             if out.get("change") is None and out["before"] and out["after"]:
@@ -197,7 +247,12 @@ function chip(c) {
   if (c.verdict === "incompatible") return `<span class="chip even" title="кампании несовместимы">несовместимо</span>`;
   return `<span class="chip even" title="${c.statusBefore} / ${c.statusAfter}: короткая серия или разброс больше 10%">неубедительно ${v}</span>`;
 }
-const spread = c => `±${((c.spreadBefore || 0) * 100).toFixed(0)}% / ±${((c.spreadAfter || 0) * 100).toFixed(0)}%`;
+const spread = c => `±${((c.spreadBefore || 0) * 100).toFixed(0)}% / ±${((c.spreadAfter || 0) * 100).toFixed(0)}%` + layout(c);
+// #933: the part of the spread that follows the placement of machine code (run.py --placements).
+const layout = c => (c.layoutBefore == null && c.layoutAfter == null ? "" :
+  ` <span class="muted" title="разброс медиан по раскладкам машинного кода">раскладка ±${((c.layoutBefore || 0) * 100).toFixed(0)}% / ±${((c.layoutAfter || 0) * 100).toFixed(0)}%</span>`) +
+  (c.binaryBefore == null && c.binaryAfter == null ? "" :
+  ` <span class="muted" title="разброс медиан по сборкам с разным порядком функций (#1086)">бинарник ±${((c.binaryBefore || 0) * 100).toFixed(0)}% / ±${((c.binaryAfter || 0) * 100).toFixed(0)}%</span>`);
 
 function tiles() {
   const items = [];
@@ -217,7 +272,7 @@ function flagged() {
   const list = [];
   for (const r of DATA.rows) for (const e of DATA.engines) { const c = r.engines[e.id]; if (c && (c.verdict === "faster" || c.verdict === "slower")) list.push([r, e, c]); }
   list.sort((a, b) => a[2].change - b[2].change);
-  $("flaggedLead").textContent = `Обе серии VALID, изменение больше 10% и больше удвоенного разброса (максимум/минимум − 1) — правило run.py --compare; эвристика, не статистическая значимость. Время — полное на итерацию, с циклом и контрольной суммой.`;
+  $("flaggedLead").textContent = `Все раунды VALID, изменение больше 10% и больше удвоенного разброса (максимум/минимум − 1) — правило run.py --compare; эвристика, не статистическая значимость. Время — полное на итерацию, с циклом и контрольной суммой.`;
   $("flagged").innerHTML = list.length ? `<thead><tr><th>Программа</th><th>Движок</th><th>${DATA.old}</th><th>${DATA.new}</th><th>Изменение</th><th>Разброс</th></tr></thead><tbody>` +
     list.map(([r, e, c]) => `<tr><td><code>${r.name}</code> <span class="muted">${r.group}</span></td><td>${e.name}</td><td class="num">${ns(c.before)}</td><td class="num">${ns(c.after)}</td><td>${chip(c)}</td><td class="num">${spread(c)}</td></tr>`).join("") + "</tbody>"
     : `<tbody><tr><td>Ничего: все изменения в шуме.</td></tr></tbody>`;
@@ -244,7 +299,7 @@ function chart() {
       `<div class="label">${r.name}${COMPARED(c) ? "" : " ?"}</div><div class="dtrack"><span class="band" style="left:${x(-band).toFixed(1)}%;width:${(x(band) - x(-band)).toFixed(1)}%"></span>` +
       `<span class="mid"></span><i style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%;background:${color}"></i><em style="${label}">${pct(c.change)}</em></div></div>`;
   }).join("");
-  $("axis").textContent = `Изменение ns/iteration ${DATA.new} к ${DATA.old}, шкала ±${Math.round(limit * 100)}%; влево — быстрее. Серая полоса — полоса шума этой программы; бледная полоса и «?» — пара неубедительна (одна из серий не VALID), её изменение не учитывается.`;
+  $("axis").textContent = `Изменение ns/iteration ${DATA.new} к ${DATA.old}, шкала ±${Math.round(limit * 100)}%; влево — быстрее. Серая полоса — полоса шума этой программы; бледная полоса и «?» — пара неубедительна (хотя бы один раунд не VALID), её изменение не учитывается.`;
 }
 
 function all() {
@@ -256,7 +311,7 @@ function all() {
 
 $("findings").innerHTML = (TEXTS.findings || []).map(([t, d]) => `<div class="finding"><div class="tag">${t}</div><div><p>${d}</p></div></div>`).join("");
 $("priorities").innerHTML = (TEXTS.priorities || []).map(([t, d]) => `<li><div><h3>${t}</h3><p class="muted">${d}</p></div></li>`).join("");
-$("method").innerHTML = TEXTS.method;
+$("method").innerHTML = (TEXTS.method || "") + "<br>Несколько раундов одной версии и движка объединены геометрическим средним ns/iteration. Пара учитывается, только если все её раунды присутствуют, совместимы и VALID; разброс — наибольший среди раундов.";
 $("commands").textContent = TEXTS.commands;
 $("foot").textContent = TEXTS.foot || "";
 tiles(); flagged(); chart(); all();

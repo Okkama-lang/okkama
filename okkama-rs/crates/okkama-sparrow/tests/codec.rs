@@ -13,7 +13,7 @@ const TEXT_REGISTERS: [u32; 40] = [
     0, 8, 1, 19, 0,
 ];
 
-/// Определение регистра `index` значением его типа (пролог `Oops.text`).
+/// Определение регистра `index` значением его типа (пролог `Oops.text`); `undef` — заглушка.
 fn define(index: u32, ty: &Type) -> I {
     let dst = d(index);
     match ty {
@@ -73,9 +73,12 @@ fn everything() -> Program {
     program.caps = vec![CapDecl { name: "Oops::View".into(), owner: ObjectRef(0), fields: vec![("why".into(), FuncRef(2))] }];
     let mut text = function("Oops.text", 40, vec![0], true, Vec::new());
     text.registers = TEXT_REGISTERS.iter().map(|&ty| TypeRef(ty)).collect();
-    text.code = (1..40)
+    text.code = (1..39)
         .map(|index| define(index, &program.types[TEXT_REGISTERS[index as usize] as usize]))
         .chain([
+            // The instructions below read the stubs of `undef`, so they run under a binding check on
+            // r37 (`false`), as compiled code reads a stub (#1069); r39 stays unused.
+            I::Branch { condition: r(37), then_target: to(39), else_target: to(58) },
             I::Const { dst: d(20), value: Constant::Str("tab\t\u{1}é🙂".into()) },
             I::Const { dst: d(21), value: Constant::Float(1.5f64.to_bits()) },
             I::Const { dst: d(22), value: Constant::Char('я') },
@@ -143,6 +146,9 @@ fn decoding_rejects_malformed_files() {
     let mut old = bytes.clone();
     old[5] = 8;
     assert!(decode(&old).unwrap_err().to_string().contains("unsupported SPB version 8"));
+    // #1061: a file of the 0.6.0–0.6.4 format is refused by its version, not by an opcode.
+    old[5] = 16;
+    assert!(decode(&old).unwrap_err().to_string().contains("unsupported SPB version 16 (this VM reads SPB 18; rebuild the program)"));
     for cut in [6, bytes.len() / 2, bytes.len() - 1] {
         assert!(decode(&bytes[..cut]).is_err(), "truncated at {cut}");
     }

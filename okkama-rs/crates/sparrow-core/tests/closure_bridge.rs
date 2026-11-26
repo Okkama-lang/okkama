@@ -26,7 +26,7 @@ fn sum(params: usize, captures: usize) -> String {
     main.push(format!("ret r{}", params + 1));
     let numbered = |lines: Vec<String>| lines.iter().enumerate().map(|(pc, line)| format!(" {pc}: {line}\n")).collect::<String>();
     format!(
-        "sparrow 16\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\ntype t1 fn [{}] -> t0\n\
+        "sparrow 18\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\ntype t1 fn [{}] -> t0\n\
          function f0 \"sum\" {{\n registers [{types}]\n params [{}]\n result t0\n{}}}\n\
          function f1 \"main\" {{\n registers [{}]\n params []\n result t0\n{}}}\nentry f1\n",
         vec!["t0"; params - captures].join(", "), registers.join(", "), numbered(body),
@@ -45,11 +45,13 @@ fn closure_bridge_zero_one_two_and_eight_words_first_and_warm() {
 }
 
 #[test]
-fn closure_bridge_verified_over_limit_is_refused() {
-    // SPB permits this signature; the bridge must fail before copying nine words.
-    for captures in [0, 1, 9] {
-        let error = run(&sum(9, captures)).unwrap_err();
-        assert!(error.0.contains("closure with more than 8 parameters"), "{}", error.0);
+fn closure_bridge_wider_than_eight_words_runs_first_and_warm() {
+    // SPB permits any width; a closure over more than 8 words runs like a narrow one (#1074).
+    for params in [9, 12] {
+        for captures in [0, 1, 3, params] {
+            assert_eq!(run(&sum(params, captures)).unwrap(), (params * (params + 1)) as i64,
+                "params={params}, captures={captures}");
+        }
     }
 }
 
@@ -65,7 +67,7 @@ fn closure_bridge_invalid_counts_are_rejected_by_verification() {
 fn closure_bridge_mixed_roots_survive_allocating_callee() {
     // Both captured and passed bigint/string values are read AFTER allocations.
     // main does not read them after call.fn: call-site roots must keep inputs.
-    let source = r#"sparrow 16
+    let source = r#"sparrow 18
 module "mixed" "1.0.0"
 type t0 int
 type t1 str
@@ -105,7 +107,7 @@ entry f1
 
 #[test]
 fn closure_bridge_native_and_role_entries_share_publication() {
-    let source = r#"sparrow 16
+    let source = r#"sparrow 18
 module "entries" "1.0.0"
 type t0 int
 type t1 str
@@ -149,7 +151,7 @@ entry f2
 
 #[test]
 fn closure_bridge_async_builds_a_cold_future() {
-    let source = r#"sparrow 16
+    let source = r#"sparrow 18
 module "cold" "1.0.0"
 type t0 int
 type t1 future t0
@@ -185,7 +187,7 @@ fn closure_bridge_failure_keeps_the_callee_and_call_site_trace() {
 
 #[test]
 fn closure_bridge_one_function_supports_static_and_different_capture_prefixes() {
-    let source = r#"sparrow 16
+    let source = r#"sparrow 18
 module "prefixes" "1.0.0"
 type t0 int
 type t1 fn [t0, t0] -> t0
@@ -219,7 +221,7 @@ entry f1
 
 #[test]
 fn closure_bridge_recursive_calls_reenter_the_published_entry() {
-    let source = r#"sparrow 16
+    let source = r#"sparrow 18
 module "recursion" "1.0.0"
 type t0 int
 type t1 bool

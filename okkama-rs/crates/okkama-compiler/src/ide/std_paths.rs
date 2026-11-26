@@ -133,8 +133,7 @@ pub fn std_completions_with_overlay(
             let file = stdlib.join(format!("{}.ok", module.path));
             if overlay.contains_key(&file.canonicalize().unwrap_or_else(|_| file.clone())) {
                 let module = &mut Arc::make_mut(&mut index)[position];
-                module.doc = module_doc(&file, overlay);
-                module.declarations = declarations(&file, overlay);
+                (module.doc, module.declarations) = module_contents(&file, overlay);
             }
         }
     }
@@ -280,19 +279,25 @@ fn deep_index(stdlib: &Path) -> Arc<Vec<Module>> {
     let modules = Arc::new(files.into_iter().map(|path| {
         // One read and parse per file for both (#1008).
         let file = stdlib.join(format!("{path}.ok"));
-        let (doc, declarations) = match file_doc(&file, &HashMap::new()) {
-            Some((doc, program)) => {
-                let declarations = declarations_of(&doc, &program);
-                (doc.overview.map(|overview| overview.markdown()).unwrap_or_default(), declarations)
-            }
-            None => (String::new(), Vec::new()),
-        };
+        let (doc, declarations) = module_contents(&file, &HashMap::new());
         Module { doc, declarations, path }
     }).collect::<Vec<_>>());
     if let Ok(mut cache) = cache.lock() {
         cache.insert(stdlib.to_path_buf(), CachedIndex { stamps, modules: Arc::clone(&modules) });
     }
     modules
+}
+
+/// Read and parse once for an overview and the declarations beside it.
+fn module_contents(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> (String, Vec<Declaration>) {
+    match file_doc(file, overlay) {
+        Some((doc, program)) => {
+            let declarations = declarations_of(&doc, &program);
+            let overview = doc.overview.map(|doc| doc.markdown()).unwrap_or_default();
+            (overview, declarations)
+        }
+        None => (String::new(), Vec::new()),
+    }
 }
 
 /// Пути модулей (`io/stdout`) каталога `dir` и вложенных.

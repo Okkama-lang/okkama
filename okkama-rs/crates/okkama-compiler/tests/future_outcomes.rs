@@ -905,7 +905,8 @@ fn future_outcome_modified_corpus_expectations() {
 }
 
 /// A bound `await` adopts its result once (#999): the binding's own adopt is not repeated by the
-/// take-extraction pass. Counted with the IR passes off, where nothing else removes a repeat.
+/// take-extraction pass, and an awaited temporary's result is not tracked right before the binding adopts it
+/// (#1044). Counted with the IR passes off, where nothing else removes a repeat, and on.
 #[test]
 fn a_bound_await_result_is_adopted_once() {
     let text = r#"
@@ -914,11 +915,13 @@ fn a_bound_await_result_is_adopted_once() {
         object Maker {
             Maker();
             async make(n is int) is Res { Res(n: n); }
+            later(n is int) is Future<Res> { self.make(n); }
             async twice() is int {
                 let a = await self.make(1);
                 let f = self.make(2);
                 let b = await f;
-                a.read() + b.read();
+                let c = await self.later(3);
+                a.read() + b.read() + c.read();
             }
         }
         async main() is int { await Maker().twice(); }
@@ -926,15 +929,37 @@ fn a_bound_await_result_is_adopted_once() {
     let source = SourceFile::new("awaits.ok", text).unwrap();
     let program = syntax::parse(&source, &syntax::ParseOptions::default()).unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    let module = lowering::with_passes("none", || lowering::lower_linked(&program, source.name(), &mut Stdlib(root)).unwrap());
-    ir::verify(&module).unwrap();
-    let twice = module.functions.iter().find(|function| function.symbol.contains("twice")).expect("Maker.twice");
-    for block in &twice.blocks {
-        for pair in block.insts.windows(2) {
-            let same = matches!((&pair[0].kind, &pair[1].kind),
-                (ir::InstKind::RegionAdopt { region: r1, value: v1 }, ir::InstKind::RegionAdopt { region: r2, value: v2 })
-                    if r1 == r2 && v1 == v2);
-            assert!(!same, "a repeated region.adopt in {}", twice.symbol);
+    for passes in ["none", "all"] {
+        let module = lowering::with_passes(passes, || lowering::lower_linked(&program, source.name(), &mut Stdlib(root.clone())).unwrap());
+        ir::verify(&module).unwrap();
+        let twice = module.functions.iter().find(|function| function.symbol.contains("twice")).expect("Maker.twice");
+        let text = ir::print::function_text(&module, twice);
+        let taken: Vec<_> = twice.blocks.iter().flat_map(|block| &block.insts)
+            .filter(|inst| matches!(inst.kind, ir::InstKind::AwaitTake(_))).filter_map(|inst| inst.result).collect();
+        for block in &twice.blocks {
+            for pair in block.insts.windows(2) {
+                let same = matches!((&pair[0].kind, &pair[1].kind),
+                    (ir::InstKind::RegionAdopt { region: r1, value: v1 }, ir::InstKind::RegionAdopt { region: r2, value: v2 })
+                        if r1 == r2 && v1 == v2);
+                assert!(!same, "{passes}: a repeated region.adopt in {text}");
+                let retracked = matches!((&pair[0].kind, &pair[1].kind),
+                    (ir::InstKind::RegionTrack { region: r1, value: v1 }, ir::InstKind::RegionAdopt { region: r2, value: v2 })
+                        if r1 == r2 && v1 == v2 && taken.contains(v1));
+                assert!(!retracked, "{passes}: an awaited result tracked, then adopted in {text}");
+            }
+        }
+        if passes == "none" {
+            // Every result is adopted once and never tracked: an async call's (`a`), a bound Future's (`b`) and a
+            // fresh Future's from a plain factory (`c`), which the take-extraction pass turns into `await.take`.
+            assert_eq!(taken.len(), 3, "{text}");
+            for value in taken {
+                let ops: Vec<_> = twice.blocks.iter().flat_map(|block| &block.insts).filter_map(|inst| match inst.kind {
+                    ir::InstKind::RegionAdopt { value: v, .. } if v == value => Some("adopt"),
+                    ir::InstKind::RegionTrack { value: v, .. } if v == value => Some("track"),
+                    _ => None,
+                }).collect();
+                assert_eq!(ops, ["adopt"], "{value}: {text}");
+            }
         }
     }
 }

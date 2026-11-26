@@ -19,7 +19,7 @@ mod operand;
 mod typing;
 mod verify;
 
-pub use asm::{AsmError, assemble, disassemble};
+pub use asm::{AsmError, assemble, assemble_unverified, disassemble};
 pub use codec::{CodecError, MAX_FILE_BYTES, VERSION, decode, encode};
 pub use liveness::{LiveSets, MAX_LIVENESS_BYTES, live_counts, live_sets, live_weight, written};
 pub use okkama_runtime_abi as abi;
@@ -176,6 +176,12 @@ macro_rules! instructions {
             /// Все мнемоники в порядке объявления (не в порядке кодов операций).
             pub const MNEMONICS: &'static [&'static str] = &[$($mnemonic),*];
 
+            /// Код, мнемоника и типы операндов каждой инструкции: то, что
+            /// закреплено за версией SPB (#1061, `codec::tests`).
+            #[cfg(test)]
+            pub(crate) const SIGNATURES: &'static [(u8, &'static str, &'static str)] =
+                &[$(($code, $mnemonic, stringify!($($ty),*))),*];
+
             pub(crate) fn encode_operands(&self, writer: &mut codec::Writer) {
                 match self {
                     $( #[allow(unused_variables)] Instruction::$name { $($field),* } => { $( Operand::encode($field, writer); )* } )*
@@ -213,7 +219,7 @@ macro_rules! instructions {
                         )*
                         Ok(Instruction::$name { $($field),* })
                     } )*
-                    other => Err(parser.error(format!("unknown instruction `{other}`"))),
+                    other => Err(parser.error_after(format!("unknown instruction `{other}`"))),
                 }
             }
 
@@ -227,12 +233,18 @@ macro_rules! instructions {
     };
 }
 
+// Новая инструкция, новый код в `op_enum!` или другой состав операндов — это
+// несовместимое изменение формата: `codec::VERSION` растёт вместе с ним, чтобы
+// старый рантайм отказал файлу по версии, а не на неизвестном коде (#1061).
+// Тест `codec::tests::the_instruction_set_is_pinned_to_the_version` сверяет набор
+// с версией.
 instructions! {
     /// Константа.
     Const = 1, "const" { dst: Dst, value: Constant }
-    /// Копия значения: `succ.take`, `retag`, `map.retag`, `cap.make`.
+    /// Копия значения: `succ.take`, `future.handoff`, `retag`, `map.retag`, `cap.make`.
     Move = 2, "move" { dst: Dst, source: Register }
-    /// Заглушка значения типа назначения: читать её можно только под проверкой связывания.
+    /// Заглушка значения типа назначения: её переносят (`move`, рёбра, поля `obj.new`/`obj.init`),
+    /// а читают только под проверкой связывания — это проверяет верификатор (#1069).
     Undef = 3, "undef" { dst: Dst }
 
     IntAdd = 10, "int.add" { dst: Dst, left: Register, right: Register }
@@ -457,7 +469,7 @@ impl Instruction {
     }
 }
 
-/// Тип таблицы типов (OIR-1 §3); вложенные типы — ссылки на более ранние записи.
+/// A type-table entry for bytecode lowered from OIR-2; nested types refer to earlier entries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
@@ -666,6 +678,14 @@ impl Program {
     /// инициализацию регистров на всех путях до чтения и типы операндов.
     pub fn verify(&self) -> Result<(), VerifyError> {
         verify::verify(self)
+    }
+
+    /// Per object, the fields into which some `obj.new` or `obj.init` may store a stub of `undef`
+    /// (#1076): `fields[object][field]`, an empty list for an object without such a field. An
+    /// over-approximation of what [`Program::verify`] lets through; a runtime checks reads of these
+    /// fields, and only of these, for the stub.
+    pub fn stub_fields(&self) -> Vec<Vec<bool>> {
+        verify::stub_fields(self)
     }
 
     /// Структурное равенство типов (одинаковые типы могут стоять в таблице дважды).

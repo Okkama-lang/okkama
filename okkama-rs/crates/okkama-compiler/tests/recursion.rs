@@ -8,7 +8,7 @@ use okkama_compiler::{
 fn lower(objects: &str, main: &str) -> Result<ir::Module, LoweringError> {
     let text = format!("module app v1.0.0; {objects} main() is int {{ {main} }}");
     let source = SourceFile::new("test.ok", text).expect("small source");
-    lower_program(&syntax::parse(&source, &ParseOptions::default()).expect("valid syntax"))
+    okkama_compiler::lowering::with_passes("all", || lower_program(&syntax::parse(&source, &ParseOptions::default()).expect("valid syntax")))
 }
 
 fn self_calls(module: &ir::Module, symbol: &str) -> usize {

@@ -127,12 +127,12 @@ helpers! {
     resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
-    builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects];
+    builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects, Fails];
     rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
     scalar_safepoint = crate::ops::rt_scalar_safepoint as (ctx, conversion: u64); [Collects];
     trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
-    int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects];
+    int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects, Fails];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     await_take = crate::tasks::rt_await_take as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
@@ -196,6 +196,8 @@ pub struct Jit {
     /// #345): a line per function on stderr, and Cranelift's own passes,
     /// summed, when the JIT is dropped.
     profile: Option<cranelift_codegen::timing::PassTimes>,
+    /// #1074: the adapter that calls compiled code of each arity over 8 from Rust (see [`Jit::spread`]).
+    spreads: BTreeMap<usize, u64>,
 }
 
 impl Drop for Jit {
@@ -276,7 +278,7 @@ fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::
     // and so the gate's debug tests, keep it; `SPARROW_CORE_VERIFY=1` turns
     // it on in a release build.
     let verify = cfg!(debug_assertions)
-        || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+        || crate::env_switch::enabled("SPARROW_CORE_VERIFY");
     set(&mut flags, "enable_verifier", if verify { "true" } else { "false" })?;
     cranelift_native::builder()
         .map_err(|e| Error(format!("JIT target: {e}")))?
@@ -299,6 +301,16 @@ const BYTES_PER_LIVE_BLOCK: u64 = 64;
 /// No instruction emits more blocks than this (inline allocation, checks).
 const MAX_BLOCKS_PER_INSTRUCTION: u64 = 16;
 
+/// The compile-cost limit for its refusal (#1066): whole MiB from 1 MiB, KiB
+/// below (a budget under 1 MiB printed "more than 0 MiB"), bytes below 1 KiB.
+fn compile_limit_text(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} bytes"),
+        1024..0x10_0000 => format!("{} KiB", bytes >> 10),
+        _ => format!("{} MiB", bytes >> 20),
+    }
+}
+
 impl std::fmt::Debug for Jit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Jit")
@@ -310,11 +322,18 @@ impl std::fmt::Debug for Jit {
 
 impl Jit {
     pub fn new() -> Result<Self, Error> {
+        // The layout perturbation of the micro A/B (#933, `code_memory`).
+        let shift = crate::env_switch::bytes("SPARROW_CORE_CODE_SHIFT", crate::code_memory::MAX_SHIFT).map_err(Error)?;
+        Self::with_code_shift(shift.unwrap_or(0))
+    }
+
+    /// A JIT whose functions start `shift` bytes past their pages (#933).
+    pub(crate) fn with_code_shift(shift: usize) -> Result<Self, Error> {
         let isa = target("speed")?;
         let unoptimized = Chosen::from_env("SPARROW_CORE_UNOPTIMIZED");
         let unoptimized_isa = if unoptimized.any() { Some(target("none")?) } else { None };
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
-        builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new()));
+        builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new(shift)));
         declare_helpers(&mut builder);
         let mut module = JITModule::new(builder);
         let helpers = import_helpers(&mut module)?;
@@ -339,13 +358,62 @@ impl Jit {
             emitted: BTreeMap::new(),
             frontend_maps: Chosen::from_env("SPARROW_CORE_FRONTEND_MAPS"),
             alloc_sites: Vec::new(),
-            profile: std::env::var("SPARROW_CORE_PROFILE_COMPILE")
-                .is_ok_and(|value| !value.is_empty() && value != "0")
+            profile: crate::env_switch::enabled("SPARROW_CORE_PROFILE_COMPILE")
                 .then(|| {
                     eprintln!("{COMPILE_HEADER}");
                     cranelift_codegen::timing::PassTimes::default()
                 }),
+            spreads: BTreeMap::new(),
         })
+    }
+
+    /// #1074: code `extern "C" fn(ctx, words: *const Word, code) -> Word` that calls `code`, a function
+    /// compiled here taking `arity` words after the context, with the `arity` words at `words`. Rust calls
+    /// compiled code through a signature it names, which [`invoke`] does for up to 8 words; a wider call
+    /// (a closure over a function of many parameters) goes through this adapter, one per arity, compiled on
+    /// its first use. It holds no value across its call, and the collector passes over its frame as over a
+    /// Rust one: it is not in `ranges`.
+    pub(crate) fn spread(&mut self, arity: usize) -> Result<u64, Error> {
+        if let Some(&code) = self.spreads.get(&arity) {
+            return Ok(code);
+        }
+        let mut signature = self.module.make_signature();
+        for _ in 0..3 {
+            signature.params.push(AbiParam::new(types::I64));
+        }
+        signature.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function(&format!("spread{arity}"), Linkage::Local, &signature)
+            .map_err(|e| Error(format!("JIT declare: {e}")))?;
+        let mut context = self.module.make_context();
+        context.func.signature = signature;
+        let mut frontend = FunctionBuilderContext::new();
+        {
+            let config = self.module.target_config();
+            let mut builder = FunctionBuilder::new(&mut context.func, &mut frontend);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let (ctx, words, code) = (builder.block_params(entry)[0], builder.block_params(entry)[1], builder.block_params(entry)[2]);
+            let mut values = Vec::with_capacity(1 + arity);
+            values.push(ctx);
+            for index in 0..arity {
+                let offset = i32::try_from(index * 8).map_err(|_| Error(format!("a call of {arity} words is too wide")))?;
+                values.push(builder.ins().load(types::I64, MEMORY, words, offset));
+            }
+            let callee = builder.import_signature(self.signature(arity));
+            let call = builder.ins().call_indirect(callee, code, &values);
+            let result = builder.inst_results(call)[0];
+            builder.ins().return_(&[result]);
+            builder.seal_all_blocks();
+            builder.finalize(config);
+        }
+        self.module.define_function(id, &mut context).map_err(|e| Error(format!("spread{arity}: {e:?}")))?;
+        self.module.finalize_definitions().map_err(|e| Error(format!("JIT finalize: {e}")))?;
+        let code = self.module.get_finalized_function(id) as u64;
+        self.spreads.insert(arity, code);
+        Ok(code)
     }
 
     /// `--stats` lines of the helpers machine code called, and the largest
@@ -432,7 +500,8 @@ impl Jit {
     }
 }
 
-/// Call compiled code with the context and `words` as parameters.
+/// Call compiled code with the context and `words` as parameters: up to 8
+/// words directly, more through [`Jit::spread`] (#1074).
 ///
 /// SAFETY: `code` is a function compiled here taking exactly `words.len()`
 /// parameters after the context.
@@ -451,9 +520,13 @@ pub(crate) unsafe fn invoke(code: u64, ctx: *mut Ctx, words: &[Word]) -> Word {
             6 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5]),
             7 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5], w[6]),
             8 => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, W, W, W, W, W, W, W, W) -> W>(code)(c, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]),
-            _ => {
+            // #1074: wider calls through the adapter of their arity.
+            arity => {
                 let runtime = &mut *(*c).runtime;
-                crate::runtime::fatal(&mut *c, runtime, "closure with more than 8 parameters".into())
+                match runtime.jit.spread(arity) {
+                    Ok(spread) => std::mem::transmute::<u64, extern "C" fn(*mut Ctx, *const W, u64) -> W>(spread)(c, w.as_ptr(), code),
+                    Err(error) => crate::runtime::fatal(&mut *c, runtime, error.0),
+                }
             }
         }
     }
@@ -709,6 +782,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         eprintln!("; roots\t{symbol}\ttraced registers {traced}\tomitted registers {omitted}\tstack-map words {root_words}");
     }
     let address = jit.module.get_finalized_function(id) as u64;
+    okkama_devtrace::event!("jit", "code placed", fn = symbol, address = format!("{address:#x}"), bytes = size);
     for (ret, slots) in maps {
         jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
     }
@@ -1303,6 +1377,48 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// #1076: `value`, just read from field `field` of an object of `descriptor`, when a stub of `undef` may
+    /// reach that field (`Loaded::may_hold_stub`): the stub of a `bool` field reads as `true`, the contract of
+    /// the compiler's construction check, which reads its unbound `$pending` as "still pending" (#271); any
+    /// other stub fails the program. A field no stub reaches stays a bare load. Returns the value read.
+    fn bound_field(&mut self, pc: usize, descriptor: usize, field: u32, value: Value) -> Value {
+        if !self.loaded.may_hold_stub(descriptor, field as usize) {
+            return value;
+        }
+        okkama_devtrace::count!("jit", "stub-checked field reads");
+        let program = &self.loaded.program;
+        let declared = &program.objects[descriptor];
+        let (name, ty) = &declared.fields[field as usize];
+        let stub = crate::word::unbound(Kind::of(program, *ty).repr());
+        let unbound = self.builder.ins().icmp_imm_s(IntCC::Equal, value, stub as i64);
+        if matches!(program.ty(*ty), Some(Type::Bool)) {
+            let yes = self.iconst(1);
+            return self.builder.ins().select(unbound, yes, value);
+        }
+        let message = format!(
+            "Field `{name}` of `{}` is read before it is bound",
+            okkama_runtime_core::testing::display_name(&declared.name)
+        );
+        let bound = self.builder.create_block();
+        let stubbed = self.builder.create_block();
+        self.builder.set_cold_block(stubbed);
+        self.builder.ins().brif(unbound, stubbed, &[], bound, &[]);
+        self.builder.switch_to_block(stubbed);
+        let ctx = self.ctx();
+        let message = self.constant_text(&message);
+        self.helper(|h| h.trap, &[ctx, message]);
+        self.check(pc);
+        self.builder.ins().jump(bound, &[]);
+        self.builder.switch_to_block(bound);
+        value
+    }
+
+    /// Is the field an accessor `callee` returns, of its parameter `param`, one a stub may reach (#1076)?
+    fn stub_field(&self, callee: &okkama_sparrow::Function, param: usize, field: u32) -> bool {
+        let ty = callee.registers[callee.params[param].0 as usize];
+        matches!(self.loaded.program.ty(ty), Some(Type::Object(declared)) if self.loaded.may_hold_stub(declared.0 as usize, field as usize))
+    }
+
     fn constant_text(&mut self, text: &str) -> Value {
         let word = self.heap.allocate_text(text);
         self.constants.push((word, Repr::Ref));
@@ -1399,9 +1515,6 @@ impl Emitter<'_, '_> {
         let merge = self.builder.create_block();
         self.builder.append_block_param(merge, types::I64);
         for captured in 0..=CLOSURE_DIRECT_CAPTURES {
-            if args.len() + captured > 8 {
-                break;
-            }
             let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
             let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
             let direct = self.builder.ins().band(arity, sync);
@@ -1614,10 +1727,10 @@ impl Emitter<'_, '_> {
                 self.cost = self.cost.saturating_add(u64::from(live[pc]) * blocks as u64);
                 if self.cost > self.cost_limit {
                     return Err(Error(format!(
-                        "{}: compiling it would take more than {} MiB (registers live across its blocks, at instruction {pc}); \
+                        "{}: compiling it would take more than {} (registers live across its blocks, at instruction {pc}); \
                          keep fewer values alive at once or split the function",
                         source.symbol,
-                        (self.cost_limit * BYTES_PER_LIVE_BLOCK) >> 20
+                        compile_limit_text(self.cost_limit * BYTES_PER_LIVE_BLOCK)
                     )));
                 }
             }
@@ -1962,7 +2075,11 @@ impl Emitter<'_, '_> {
             }
             I::ObjGet { dst, object, field } => {
                 let pointer = self.get(object);
-                let value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                let mut value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                if let Some(Type::Object(declared)) = self.register_type(object) {
+                    let declared = declared.0 as usize;
+                    value = self.bound_field(pc, declared, *field, value);
+                }
                 self.set_word(&dst.0, value);
             }
             I::ObjInit { object, field, value } => {
@@ -2046,6 +2163,7 @@ impl Emitter<'_, '_> {
                 self.builder.ins().jump(load, &[]);
                 self.builder.switch_to_block(load);
                 let value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                let value = self.bound_field(pc, object as usize, *field, value);
                 self.set_word(&dst.0, value);
             }
             I::VariantOf { dst, source, .. } => {
@@ -2117,10 +2235,12 @@ impl Emitter<'_, '_> {
                     .expect("result");
                     self.check(pc);
                     result
-                } else if let Some((param, field)) = accessor(callee).filter(|_| !self.plain) {
+                } else if let Some((param, field)) = accessor(callee).filter(|&(param, field)| !self.plain && !self.stub_field(callee, param, field)) {
                     // #541: a field accessor is its load. Its entry stays a
                     // step, and it cannot fail, allocate or reach a safepoint,
-                    // so no failure, trace or root differs from the call.
+                    // so no failure, trace or root differs from the call. A
+                    // field a stub may reach is checked, so it can fail: that
+                    // accessor stays a call (#1076).
                     if self.polled {
                         self.poll();
                     }
@@ -2169,6 +2289,15 @@ impl Emitter<'_, '_> {
             }
             I::Trap { message, .. } => {
                 let message = self.constant_text(message);
+                self.helper(|h| h.trap, &[ctx, message]);
+                self.check(pc);
+                self.exit_fail();
+                return Ok(true);
+            }
+            // #1072: the producer claims control never gets here; if it does, the program fails as at
+            // `trap unreachable`, so a verified function with it compiles and runs.
+            I::Unreachable {} => {
+                let message = self.constant_text(UNREACHABLE);
                 self.helper(|h| h.trap, &[ctx, message]);
                 self.check(pc);
                 self.exit_fail();
@@ -2750,6 +2879,7 @@ impl Emitter<'_, '_> {
             {
                 let value = self.get(source);
                 let text = self.helper(|h| h.int_text, &[ctx, value]).expect("result");
+                self.check(pc);
                 self.set(&dst.0, text);
             }
             // A code point or a byte is always a small int: tag it inline
@@ -3136,6 +3266,9 @@ fn frame_resident(is_async: bool, suspensions: usize, registers: usize, plain: b
     is_async && !plain && suspensions.saturating_mul(registers) > RESIDENT_LIMIT
 }
 
+/// The program error of a reached `unreachable` (#1072).
+pub(crate) const UNREACHABLE: &str = "Unreachable code reached";
+
 #[cfg(test)]
 mod frame_resident_tests {
     /// The fixture of #552 (300 awaits, about 600 registers) goes to the frame; a usual async action does not,
@@ -3307,6 +3440,24 @@ fn int_condition(op: Cmp) -> IntCC {
 }
 
 #[cfg(test)]
+mod compile_limit_tests {
+    use super::compile_limit_text;
+
+    /// #1066: the limit is never printed as 0 of its unit.
+    #[test]
+    fn the_compile_cost_limit_prints_in_a_unit_it_fills() {
+        assert_eq!(compile_limit_text(256 << 20), "256 MiB");
+        assert_eq!(compile_limit_text(4 << 20), "4 MiB");
+        assert_eq!(compile_limit_text(1 << 20), "1 MiB");
+        assert_eq!(compile_limit_text((1 << 20) - 64), "1023 KiB");
+        assert_eq!(compile_limit_text(256 << 10), "256 KiB");
+        assert_eq!(compile_limit_text(1024), "1 KiB");
+        assert_eq!(compile_limit_text(960), "960 bytes");
+        assert_eq!(compile_limit_text(0), "0 bytes");
+    }
+}
+
+#[cfg(test)]
 #[path = "jit_pointer_free_tests.rs"]
 mod pointer_free_tests;
 
@@ -3333,7 +3484,7 @@ mod profile_tests {
         ]);
         crate::on_vm_thread(|| {
             let program = okkama_sparrow::assemble(
-                "sparrow 16\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
+                "sparrow 18\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
                  function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
                  0: const r0, int 7\n 1: ret r0\n}\nentry f0\n"
             ).unwrap();
@@ -3378,4 +3529,12 @@ mod frame_roots_tests;
 mod inline_tests;
 #[cfg(test)]
 mod closure_call_tests;
+#[cfg(test)]
+mod unreachable_tests;
+#[cfg(test)]
+mod wide_closure_tests;
+#[cfg(test)]
+mod stub_field_tests;
 
+#[cfg(test)]
+mod placement_tests;

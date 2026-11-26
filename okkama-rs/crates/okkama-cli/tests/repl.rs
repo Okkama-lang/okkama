@@ -1,17 +1,13 @@
 //! #588: `okkama repl` on Sparrow, driven by stdin scripts (no terminal: no prompt, no line editor), and one
 //! pseudo-terminal test for the line editor's history.
+mod tree;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-fn std_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std")
-}
-
 /// Run `okkama repl` on `lines`; (stdout, stderr).
 fn repl(lines: &[&str]) -> (String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let mut child = tree::okkama()
         .arg("repl")
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -149,8 +145,8 @@ print("ok" if b"21 (int)" in first and b"21 (int)" in second else "fail", repr(f
     let home = std::env::temp_dir().join(format!("okkama-repl-home-{}", std::process::id()));
     std::fs::create_dir_all(&home).unwrap();
     let output = Command::new("python3")
-        .args(["-c", script, env!("CARGO_BIN_EXE_okkama"), home.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .args(["-c", script, tree::OKKAMA, home.to_str().unwrap()])
+        .env("OKKAMA_STDLIB_DIR", tree::std_dir())
         .output()
         .unwrap();
     let report = String::from_utf8_lossy(&output.stdout);

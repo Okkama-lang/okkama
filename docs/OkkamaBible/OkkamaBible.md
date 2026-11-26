@@ -16468,7 +16468,8 @@ the book's examples run in a cage without processes.
 A directory that holds a `blade.toml` is a *package root*. A file belongs to
 the package of the nearest such directory above it, and a *project* is a
 package that is not installed inside another project. `blade new demo`
-creates one:
+creates one in a new directory `demo` (it refuses a name that exists already
+or that is not a package name, such as `my-app`):
 
 ```toml
 [module]
@@ -16488,10 +16489,10 @@ env = {}
 
 ```okkama
 module demo;
+
 import "io/stdout" take Stdout;
 
 main() is int {
-
     Stdout().writeln("hello from okkama");
     0;
 }
@@ -16501,9 +16502,22 @@ The module declares no version. In a package the version lives in one place,
 and a module file that declares one is an error at the version. The
 package's files import one another as in 19.3: beside the importing file,
 then from the package root. `blade build` compiles the project as `[build]`
-says; `blade run` builds when a source, `blade.toml` or `blade.lock` is newer
-than the output, then runs it as `[run]` says, and the program's exit status
-is blade's.
+says; `blade run` builds unless the output was built from the sources as they
+are now, then runs it as `[run]` says, and the program's exit status is
+blade's. "The sources as they are" means which `.ok` files there are (the
+dependencies' in `pkg/` included), the bytes of each, `blade.toml` and
+`blade.lock`, and the compiler that builds them: the `okkama` version, the
+bytes of the `okkama` binary and of the std it compiles against
+(`OKKAMA_STDLIB_DIR` or the one it was installed with), the files of each
+directory in `OKKAMA_IMPORT_DIRS`, in search order, and the variables that
+change what it builds (`OKKAMA_IR_PASSES`), all as `okkama env` names them.
+All of it is recorded beside the output in `target/demo.spb.blade-stamp`.
+Times play no part: a deleted module, or one replaced by an older copy
+(`cp -p`, an unpacked archive), builds again exactly as an edit does, and so
+does a new `okkama`, an edited std or import directory or another
+`OKKAMA_IR_PASSES`, while a variable that changes nothing in the build does
+not, so
+`blade run` never runs a program that `blade build` would no longer make.
 
 ### A package is a repository
 
@@ -16551,8 +16565,14 @@ json = { git = "https://example.org/okkama/json", version = "1.4.0" }
 
 Without `MIN` the minimum is the repository's newest tag, so a new
 dependency starts current and the manifest says which version that was.
-A local directory is declared by hand, `tools = { path = "../tools" }`, and
-its version is the one in its `blade.toml`, since a directory has no tags.
+A local directory is declared by hand,
+`tools = { path = "../tools", version = "1.0.0" }`, and its version is the
+one in its `blade.toml`, since a directory has no tags. Its files are live:
+`blade sync` and `blade update` copy them again when they change and say
+`~ tools 1.0.0 (files changed)`, while a new version in its `blade.toml`
+stops `blade sync` until `blade update tools` takes it. The lock records the directory by its path
+from the project, `path+../tools`, so a project moved or cloned together
+with its local packages syncs as it is.
 
 Dependencies land in `pkg/<name>/` of the project root, and the project
 imports them by that path, `src/` included:
@@ -16633,7 +16653,17 @@ that is not installed points to `blade sync`. The only commands that fetch
 new versions are the ones that say so, `add` and `update`, and even they stop
 when a tag now points at a different commit than the lock remembers, until
 `blade update NAME` accepts the new state. A moved tag is how a supply
-chain is attacked, and blade will not follow one silently.
+chain is attacked, and blade will not follow one silently. The update names
+the commits, and a change only the lock sees, because `pkg/` already holds
+the new commit (a `blade.lock` checked out from before, say), ends with
+`in blade.lock`:
+
+```
+~ json 1.0.0 (tag moved: b91931b56b -> 479dd466b6)
+~ json 1.0.0 (tag moved: b91931b56b -> 479dd466b6) in blade.lock
+```
+
+`dependencies are up to date` means that neither `pkg/` nor the lock changed.
 
 ### Work done by hand is never lost
 
@@ -25411,7 +25441,8 @@ BINDING    = WORD that is not a keyword ;                  (* let, for, catch, c
 - `<` after a type name opens type arguments only when the name contains a
   lower-case letter (`List<int>`) and what follows parses as type arguments
   closed by `>`. Otherwise `<` compares: `LIMIT < x`, and also
-  `let Count = 2; Count < 3`.
+  `let Count = 2; Count < 3`. The first `>` of a shift does not close them:
+  `Count < a >> 2` is `Count < (a >> 2)`.
 
 **Keywords.** These words cannot be used as names (except in the member and
 action positions above):

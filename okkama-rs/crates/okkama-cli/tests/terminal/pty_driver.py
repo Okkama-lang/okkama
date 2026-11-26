@@ -1,6 +1,6 @@
 """Run an Okkama program under a pseudo-terminal and script it (#12).
 
-    python3 pty_driver.py <okkama> <engine> <program.ok>
+    python3 pty_driver.py <okkama> <program.ok>
 
 The program (terminal/cancel.ok) reads the controlling terminal. Its first
 two reads are interrupted (a timeout, a cancelled task) before any input
@@ -18,7 +18,7 @@ import sys
 import termios
 import time
 
-okkama, engine, program = sys.argv[1:4]
+okkama, program = sys.argv[1:3]
 EXPECTED = ["timed out", "cancelled", "line: abc", "initial: 80x24", "size: 100x40"]
 
 
@@ -78,5 +78,5 @@ code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
 missing = [line for line in EXPECTED if line not in text]
 sys.stdout.write(text)
 if code != 0 or missing:
-    sys.stderr.write("engine %s: exit %s, missing %s\n" % (engine, code, missing))
+    sys.stderr.write("exit %s, missing %s\n" % (code, missing))
     sys.exit(1)

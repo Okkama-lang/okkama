@@ -30,7 +30,7 @@ pub struct Lock {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Locked {
     pub version: Version,
-    /// `git+<url>` or `path+<directory>`.
+    /// `git+<url>` or `path+<directory>`, the directory relative to the project.
     pub source: String,
     /// The commit of a git package.
     pub commit: Option<String>,
@@ -150,7 +150,7 @@ mod tests {
             "json".to_string(),
             Locked {
                 version: Version::parse("1.0.0").unwrap(),
-                source: "path+/home/user/json".to_string(),
+                source: "path+../json".to_string(),
                 commit: None,
                 checksum: "sha256:11".to_string(),
                 dependencies: Vec::new(),

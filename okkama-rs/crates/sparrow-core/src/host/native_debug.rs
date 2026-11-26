@@ -151,7 +151,8 @@ impl Heap {
                 let mut values = Vec::with_capacity(fields.len());
                 for (index, (_, field)) in fields.iter().enumerate() {
                     let value = self.core().field(word, index);
-                    values.push(if value == UNBOUND && Kind::of(program, *field) == Kind::Ref {
+                    // A field not bound yet (#1076), whatever its representation.
+                    values.push(if value == crate::word::unbound(Kind::of(program, *field).repr()) {
                         Value::Undef
                     } else {
                         self.value_to_origin(value, *field, depth + 1, dumping)?
@@ -175,12 +176,19 @@ impl Heap {
                 let map = self.core().payload::<MapValue>(word).ok_or_else(|| Error("expected map".into()))?;
                 map.entries.values().map(|&(k, v)| if keys { (k, key) } else { (v, item) }).collect()
             }
-            Node::Object(word, descriptor) if !keys => program.objects[descriptor as usize]
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(index, (_, field))| (self.core().field(word, index), *field))
-                .collect(),
+            Node::Object(word, descriptor) if !keys => {
+                let declared = &program.objects[descriptor as usize];
+                let mut parts = Vec::with_capacity(declared.fields.len());
+                for (index, (name, field)) in declared.fields.iter().enumerate() {
+                    let value = self.core().field(word, index);
+                    // An `any` cannot hold a field not bound yet (#1076): its reader would take the stub for a value.
+                    if value == crate::word::unbound(Kind::of(program, *field).repr()) {
+                        return Err(Error(format!("field `{name}` of `{}` is not bound yet", declared.name)));
+                    }
+                    parts.push((value, *field));
+                }
+                parts
+            }
             _ => Vec::new(),
         };
         let mut boxed = Vec::with_capacity(parts.len());
@@ -207,7 +215,7 @@ mod data_dump_tests {
     use okkama_sparrow::TypeRef;
 
     fn runtime() -> Box<Runtime> {
-        let program = okkama_sparrow::assemble(r#"sparrow 16
+        let program = okkama_sparrow::assemble(r#"sparrow 18
 module "data-dump-965" "1.0.0"
 type t0 int
 type t1 str
@@ -293,6 +301,22 @@ function f1 "dump" {
         let argument = boxed(&mut runtime, array, 5);
         let result = runtime.run_function_with(1, &[argument], crate::STACK_BYTES).unwrap();
         assert_eq!(runtime.heap.text(result), "[1, 2]");
+    }
+
+    #[test]
+    fn a_field_not_bound_yet_is_no_value_of_the_data_natives() {
+        // #1076: a constructor's field not bound yet holds the stub of `undef` (0 for an `int`).
+        let mut runtime = runtime();
+        let object = runtime.heap.object_new(0, &[crate::word::UNBOUND]);
+        let argument = boxed(&mut runtime, object, 3);
+        // The parts of an `any` would carry the stub on as a value: refused.
+        let crate::host::Result2::Refused(message) = crate::host::call(&mut runtime, okkama_runtime_abi::Native::DebugDataItems, &[argument])
+        else { panic!("data_items of an unbound field") };
+        assert!(message.contains("field `n` of `O` is not bound yet"), "{message}");
+        // Read as a whole, the field is undefined, not an integer at address 0.
+        let crate::host::Result2::Value(kind, _) = crate::host::call(&mut runtime, okkama_runtime_abi::Native::DebugDataKind, &[argument])
+        else { panic!("data_kind of an object with an unbound field") };
+        assert_eq!(runtime.heap.text(kind), "object");
     }
 
     #[test]

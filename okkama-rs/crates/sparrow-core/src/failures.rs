@@ -2083,8 +2083,15 @@ impl Runtime {
                 ("uncaught-error", Some(name), messages.get(&root).cloned().unwrap_or_default())
             }
         };
-        let trace = record.trace.iter().map(|&(function, pc)| crate::Site { function, pc }).collect();
-        Some(crate::Uncaught { category, error_type, message, trace, trace_omitted: record.trace_omitted, trace_offset: 0, cause_traces: Vec::new() })
+        Some(crate::Uncaught {
+            category,
+            error_type,
+            message,
+            trace: record.sites(),
+            trace_omitted: record.trace_omitted,
+            trace_offset: 0,
+            cause_traces: Vec::new(),
+        })
     }
 
     fn error_text_method(&self, object: Word) -> Option<usize> {
@@ -2176,8 +2183,8 @@ impl Runtime {
             // Offsets refer to the plain report. Hosts map these saved stacks
             // to source or SPB terms; secondaries keep their text-only rendering.
             if label == "Caused by:" && let Some(uncaught) = uncaught {
-                let trace = record.trace.iter().map(|&(function, pc)| crate::Site { function, pc }).collect();
-                uncaught.cause_traces.push((output.len(), trace));
+                // A cause cut at the limit says so as the root does (#1034).
+                uncaught.cause_traces.push((output.len(), record.sites(), record.trace_omitted));
             }
             if let Some(cause) = record.cause {
                 pending.push((cause, "Caused by:", failure == root));
@@ -2459,7 +2466,7 @@ mod cause_stack_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 18\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2567,7 +2574,7 @@ mod structure_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 18\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2612,7 +2619,7 @@ mod inline_identity_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+            "sparrow 18\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
              object obj0 \"Vault\" {\n field \"n\" t0\n destroy f1\n}\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\n\

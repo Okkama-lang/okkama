@@ -22,6 +22,13 @@ pub const UNBOUND_RAW: Word = 0x7ff8_dead_beef_0001;
 
 pub use okkama_sparrow::layout::Repr;
 
+/// The stub `undef` leaves in storage of representation `repr`: [`UNBOUND_RAW`] for raw scalars,
+/// [`UNBOUND`] otherwise.
+#[inline]
+pub fn unbound(repr: Repr) -> Word {
+    if repr == Repr::Raw { UNBOUND_RAW } else { UNBOUND }
+}
+
 /// Largest and smallest integers stored inline.
 pub const SMALL_MAX: i64 = (1 << 62) - 1;
 pub const SMALL_MIN: i64 = -(1 << 62);

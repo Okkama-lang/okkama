@@ -190,7 +190,7 @@ fn snapshot_dir() -> PathBuf {
 
 fn check_snapshot(name: &str, actual: &str) {
     let path = snapshot_dir().join(name);
-    if std::env::var_os("OKKAMA_UPDATE_SNAPSHOTS").is_some() {
+    if okkama_compiler::env_switch::enabled("OKKAMA_UPDATE_SNAPSHOTS") {
         std::fs::create_dir_all(snapshot_dir()).unwrap();
         std::fs::write(&path, actual).unwrap();
         return;
@@ -346,7 +346,7 @@ fn spans_are_byte_ranges_with_line_columns() {
     );
 }
 
-/// A minimal JSON validator (the crate has no dependencies).
+/// A minimal JSON validator for the printer output.
 mod json_check {
     pub fn validate(text: &str) -> Result<(), String> {
         let bytes = text.as_bytes();

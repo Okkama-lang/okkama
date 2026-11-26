@@ -38,6 +38,10 @@ unicode-segmentation = "1"
 md-5 = "0.10"
 sha1 = "0.10"
 
+[dev-dependencies]
+# The environment-switch policy (#1095); only tests read a switch in this crate.
+okkama-devtrace = { path = "../okkama-devtrace" }
+
 # unsafe требует локального разрешения и обоснования в native-провайдерах.
 [lints.rust]
 unsafe_code = "deny"

@@ -72,6 +72,12 @@ pub struct Loaded {
     /// Native process launches can leave descendants outside VM ownership.
     /// Keep spawn's per-item process-group teardown for such programs.
     pub(crate) worker_reuse_safe: bool,
+    /// Per descriptor, the fields a stub of `undef` may reach (#1076, `Program::stub_fields`): the JIT
+    /// checks every read of such a field and only those.
+    stub_fields: Vec<Vec<bool>>,
+    /// A session runtime checks every field (#1076): code compiled for one program must stay sound when
+    /// a later extension stores a stub into a published field.
+    every_field_checked: bool,
 }
 
 /// Intrinsic name of the synthetic async functions whose frames are the
@@ -138,9 +144,9 @@ impl Loaded {
         let workers = add_workers(&mut program);
         // One switch for both JIT roots and suspended-frame layouts. Read it
         // once at load time; never change a live runtime's tracing contract.
-        let pointer_free = std::env::var_os("SPARROW_CORE_POINTER_FREE").is_none_or(|value| value != "0");
-        let int_ranges = std::env::var_os("SPARROW_CORE_INT_RANGE").is_none_or(|value| value != "0");
-        let profile = std::env::var("SPARROW_CORE_PROFILE_COMPILE").is_ok_and(|value| !value.is_empty() && value != "0");
+        let pointer_free = crate::env_switch::enabled_or("SPARROW_CORE_POINTER_FREE", true);
+        let int_ranges = crate::env_switch::enabled_or("SPARROW_CORE_INT_RANGE", true);
+        let profile = crate::env_switch::enabled("SPARROW_CORE_PROFILE_COMPILE");
         let resources = program.objects.iter().any(|o| o.destroy.is_some());
         let functions = program
             .functions
@@ -180,7 +186,20 @@ impl Loaded {
             function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve),
             Some(okkama_runtime_abi::Native::ProcessProcessStateStart | okkama_runtime_abi::Native::ProcessPipelineStateCapture)
         ));
-        Self { program, functions, events, workers, worker_reuse_safe }
+        let stub_fields = program.stub_fields();
+        Self { program, functions, events, workers, worker_reuse_safe, stub_fields, every_field_checked: false }
+    }
+
+    /// May field `field` of an object of `descriptor` hold a stub of `undef`, so that a read must check it
+    /// (#1076)?
+    pub fn may_hold_stub(&self, descriptor: usize, field: usize) -> bool {
+        self.every_field_checked || self.stub_fields.get(descriptor).and_then(|fields| fields.get(field)).copied().unwrap_or(false)
+    }
+
+    /// Check every field read (#1076): a session's later extensions may store a stub into a field this
+    /// program never does.
+    pub(crate) fn check_every_field(&mut self) {
+        self.every_field_checked = true;
     }
 
     /// The worker Future function for results of type `result`.
@@ -278,7 +297,7 @@ mod worker_tests {
     #[test]
     fn loading_reuses_the_workers_a_program_already_has() {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
+            "sparrow 18\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
              function f0 \"work\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
              function f1 \"spawner\" async {\n registers [t1, t2]\n params []\n result t2\n 0: fn.closure r0, f0, []\n 1: worker.spawn r1, r0, [], false\n 2: ret r1\n}\n",
         ).unwrap();
@@ -293,7 +312,7 @@ mod worker_tests {
     fn worker_reuse_excludes_programs_that_can_launch_descendants() {
         use okkama_runtime_abi::Native;
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
+            "sparrow 18\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
         ).unwrap();
         assert!(Loaded::new(program.clone()).worker_reuse_safe);
         for (native, safe) in [
@@ -309,4 +328,30 @@ mod worker_tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    /// `SPARROW_CORE_POINTER_FREE` and `SPARROW_CORE_INT_RANGE` are on until set (9d7749f4e, after #1067 had
+    /// turned both off by accident; one switch rule since #1095): a load with neither set keeps the registers the
+    /// range analysis proves small out of the GC roots, more than the analysis without ranges does.
+    #[test]
+    fn the_pointer_free_and_range_analyses_are_on_until_set() {
+        if ["SPARROW_CORE_POINTER_FREE", "SPARROW_CORE_INT_RANGE"].iter().any(|name| std::env::var_os(name).is_some()) {
+            return; // The test states the default; a run that sets either switch has chosen otherwise.
+        }
+        let program = okkama_sparrow::assemble(
+            "sparrow 18\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
+             params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n",
+        ).unwrap();
+        let loaded = Loaded::new(program);
+        let (function, info) = (&loaded.program.functions[0], &loaded.functions[0]);
+        let ranged = crate::pointer_free::analyze(function, &info.kinds, &loaded.program);
+        let unranged = crate::pointer_free::analyze_with_ranges(function, &info.kinds, &loaded.program, false);
+        assert_eq!(info.pointer_free, ranged);
+        assert_ne!(ranged, unranged, "the program must tell the two analyses apart");
+        assert!(info.pointer_free.contains(&true));
+    }
 }

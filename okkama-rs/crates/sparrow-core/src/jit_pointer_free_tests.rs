@@ -2,7 +2,11 @@
 use super::*;
 
 fn runtime(source: &str, enabled: bool, frontend: bool) -> Box<Runtime> {
-    let program = okkama_sparrow::assemble(source).unwrap();
+    runtime_of(okkama_sparrow::assemble(source).unwrap(), enabled, frontend)
+}
+
+/// A runtime over a program as given, verified or not (the low-level embedding).
+fn runtime_of(program: okkama_sparrow::Program, enabled: bool, frontend: bool) -> Box<Runtime> {
     let mut loaded = crate::program::Loaded::new(program);
     for (source, info) in loaded.program.functions.iter().zip(&mut loaded.functions) {
         info.pointer_free = if enabled {

@@ -912,9 +912,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         Ok(Some(vec![ran.value, value.value]))
                     }
                     Out::Diverged => Ok(None),
-                    Out::Unit => Err(crate::lowering::LoweringError::invalid(
+                    Out::Unit => Err(crate::lowering::LoweringError::internal(
                         body.span,
-                        "internal compiler error: a for body in value position produced no value",
+                        "a for body in value position produced no value",
                     )),
                 }
             },
@@ -961,9 +961,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let reg = self.ctx.reg;
         let (Some(writing), Some(byte_source)) = (reg.standard.writing, reg.standard.byte_source)
         else {
-            return Err(crate::lowering::LoweringError::invalid(
+            return Err(crate::lowering::LoweringError::internal(
                 span,
-                "internal compiler error: `<-` without the io/stream roles",
+                "`<-` without the io/stream roles",
             ));
         };
         let slot = reg.roles[writing.0]
@@ -1018,9 +1018,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             _ => None,
         };
         let Type::Array(element) = value.ty.clone() else {
-            return Err(crate::lowering::LoweringError::invalid(
+            return Err(crate::lowering::LoweringError::internal(
                 span,
-                "internal compiler error: `<- xs...` of a non-array",
+                "`<- xs...` of a non-array",
             ));
         };
         let empty = thir::Block {
@@ -1058,9 +1058,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         match out? {
             Out::Value(value) => Ok(Some(value)),
             Out::Diverged => Ok(None),
-            Out::Unit => Err(crate::lowering::LoweringError::invalid(
+            Out::Unit => Err(crate::lowering::LoweringError::internal(
                 body.span,
-                "internal compiler error: a functional block produced no value",
+                "a functional block produced no value",
             )),
         }
     }

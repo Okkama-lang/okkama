@@ -1,5 +1,6 @@
 //! #946: the CLI's configured spawn transport, through the real std map.
 #![cfg(unix)]
+mod tree;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -10,12 +11,8 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_okkama"))
+    tree::okkama()
         .args(args)
-        .env(
-            "OKKAMA_STDLIB_DIR",
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std"),
-        )
         .output()
         .unwrap()
 }

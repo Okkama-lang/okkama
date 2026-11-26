@@ -24,7 +24,7 @@ object C {
 fn lower(text: &str) -> Result<ir::Module, LoweringError> {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    lower_program(&program)
+    okkama_compiler::lowering::with_passes("all", || lower_program(&program))
 }
 
 fn module(main: &str) -> ir::Module {

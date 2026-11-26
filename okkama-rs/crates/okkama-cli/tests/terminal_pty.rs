@@ -1,7 +1,8 @@
 //! A terminal read interrupted by a timeout or a cancelled task gives its
 //! late bytes back to the session, and a resize reports the new geometry
 //! (#12). Runs `tests/terminal/cancel.ok` under a pseudo-terminal driven by
-//! `tests/terminal/pty_driver.py`, on every engine that can read a terminal.
+//! `tests/terminal/pty_driver.py`.
+mod tree;
 
 use std::path::Path;
 use std::process::Command;
@@ -14,31 +15,21 @@ fn terminal_reads_survive_cancellation_and_resizes_report_geometry() {
         return;
     }
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let std = here.join("../../../std");
     let driver = here.join("tests/terminal/pty_driver.py");
     let program = here.join("tests/terminal/cancel.ok");
-    let engines = vec!["sparrow"];
-    let failures: Vec<String> = engines
-        .into_iter()
-        .filter_map(|engine| {
-            let output = Command::new("python3")
-                .arg(&driver)
-                .arg(env!("CARGO_BIN_EXE_okkama"))
-                .arg(engine)
-                .arg(&program)
-                .env("OKKAMA_STDLIB_DIR", &std)
-                .output()
-                .expect("run the pty driver");
-            (!output.status.success()).then(|| {
-                format!(
-                    "{engine}:\n{}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                )
-            })
-        })
-        .collect();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let output = Command::new("python3")
+        .arg(&driver)
+        .arg(tree::OKKAMA)
+        .arg(&program)
+        .env("OKKAMA_STDLIB_DIR", tree::std_dir())
+        .output()
+        .expect("run the pty driver");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// #1017: on a terminal without `COLUMNS`, `okkama man` wraps its page to the
@@ -51,7 +42,6 @@ fn man_wraps_to_the_window_width() {
         eprintln!("skipped: no python3");
         return;
     }
-    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     // The child gets a pseudo-terminal of 50 columns; its output comes back
     // as it was written to the terminal.
     let driver = r#"
@@ -80,8 +70,8 @@ sys.stdout.write(out.decode("utf-8", "replace").replace("\r", ""))
 "#;
     let run = |pager: &str| {
         let output = Command::new("python3")
-            .args(["-c", driver, env!("CARGO_BIN_EXE_okkama"), pager])
-            .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
+            .args(["-c", driver, tree::OKKAMA, pager])
+            .env("OKKAMA_STDLIB_DIR", tree::std_dir())
             .env("NO_COLOR", "1")
             .output()
             .expect("run the pty driver");

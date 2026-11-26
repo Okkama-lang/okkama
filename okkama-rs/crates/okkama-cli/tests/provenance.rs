@@ -1,13 +1,13 @@
 //! Phase contracts (H-19, #36): every public consumer of OIR rejects a
 //! corrupted module, and failures point at the source operation whichever IR
 //! passes ran.
+mod tree;
 
 use okkama_compiler::codegen::{self, Backend, Options};
 use okkama_compiler::ir::{self, ValueId};
 use okkama_compiler::lowering::lower_program;
 use okkama_compiler::syntax::{self, ParseOptions};
 use okkama_compiler::SourceFile;
-use std::process::Command;
 
 fn module(text: &str) -> ir::Module {
     let source = SourceFile::new("test.ok", text).unwrap();
@@ -37,7 +37,7 @@ fn failures_point_at_the_source_operation_after_every_pass() {
         ("region", "region.ok:6:22"),
     ] {
         for passes in ["all", "none"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+            let output = tree::okkama()
                 .arg("run")
                 .arg(format!("{program}.ok"))
                 .current_dir(&directory)

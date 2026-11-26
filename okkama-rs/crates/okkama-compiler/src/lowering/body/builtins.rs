@@ -36,9 +36,9 @@ impl BodyLowerer<'_, '_, '_> {
     fn maybe_type(&mut self, expr: &thir::Expr, span: Span) -> Result<Type> {
         match self.expr_type(expr)? {
             ty @ Type::Variant(_) => Ok(ty),
-            _ => Err(LoweringError::invalid(
+            _ => Err(LoweringError::internal(
                 span,
-                "internal compiler error: a search builtin does not produce Maybe<int>",
+                "a search builtin does not produce Maybe<int>",
             )),
         }
     }

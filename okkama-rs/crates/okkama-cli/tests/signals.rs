@@ -3,8 +3,9 @@
 //! goes on and ends with code 0; a second signal during the drain ends the
 //! process at once; an HTTPS application stops the same way, also while TLS
 //! handshakes are still in flight (#1000, #1021). Runs
-//! `tests/signals/serve.ok` on every engine.
+//! `tests/signals/serve.ok` with `okkama run`.
 #![cfg(unix)]
+mod tree;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,14 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{JoinHandle, sleep, spawn};
 use std::time::{Duration, Instant};
 
-fn engines() -> Vec<&'static str> {
-    let engines = vec!["sparrow"];
-    engines
-}
-
 /// A running `serve.ok`; dropped while running, it is killed.
 struct App {
-    engine: &'static str,
     child: Child,
     port: u16,
     /// The program's stderr as it comes, read by `errors` (#556).
@@ -38,13 +33,13 @@ struct Ended {
 impl App {
     /// Start the program and wait until it accepts connections; `/slow`
     /// answers after `delay` seconds, and `tls` serves HTTPS.
-    fn start(engine: &'static str, delay: u64, tls: bool) -> App {
+    fn start(delay: u64, tls: bool) -> App {
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));
         let port = TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .expect("a free port")
             .port();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+        let mut command = tree::okkama();
         command
             .args(["run"])
             .arg(here.join("tests/signals/serve.ok"))
@@ -54,7 +49,6 @@ impl App {
             command.arg("tls");
         }
         let mut child = command
-            .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -73,14 +67,14 @@ impl App {
                 }
             })
         });
-        let mut app = App { engine, child, port, stderr, errors };
+        let mut app = App { child, port, stderr, errors };
         let deadline = Instant::now() + Duration::from_secs(180);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
             if let Some(status) = app.child.try_wait().expect("poll the program") {
                 let ended = app.outputs(status);
-                panic!("{engine}: the program ended before listening ({status}):\n{}{}", ended.stdout, ended.stderr);
+                panic!("the program ended before listening ({status}):\n{}{}", ended.stdout, ended.stderr);
             }
-            assert!(Instant::now() < deadline, "{engine}: the program never listened");
+            assert!(Instant::now() < deadline, "the program never listened");
             sleep(Duration::from_millis(100));
         }
         app
@@ -92,7 +86,7 @@ impl App {
             .arg(format!("kill -{name} {}", self.child.id()))
             .status()
             .expect("run kill");
-        assert!(status.success(), "{}: kill -{name} failed", self.engine);
+        assert!(status.success(), "kill -{name} failed");
     }
 
     /// GET `path` in a thread: the whole answer, or the error that cut it.
@@ -114,7 +108,7 @@ impl App {
     fn slow_started(&self, limit: Duration) {
         let deadline = Instant::now() + limit;
         while !self.stderr.lock().expect("stderr").contains("slow started") {
-            assert!(Instant::now() < deadline, "{}: /slow never started", self.engine);
+            assert!(Instant::now() < deadline, "/slow never started");
             sleep(Duration::from_millis(50));
         }
     }
@@ -155,7 +149,7 @@ impl App {
             if let Some(status) = self.child.try_wait().expect("poll the program") {
                 return self.outputs(status);
             }
-            assert!(Instant::now() < deadline, "{}: the program did not end within {limit:?}", self.engine);
+            assert!(Instant::now() < deadline, "the program did not end within {limit:?}");
             sleep(Duration::from_millis(50));
         }
     }
@@ -172,47 +166,41 @@ impl Drop for App {
 
 #[test]
 fn sigterm_drains_the_request_in_flight_and_listen_returns() {
-    for engine in engines() {
-        let app = App::start(engine, 3, false);
-        let hello = app.get("/").join().expect("hello thread").expect("hello answer");
-        assert!(hello.starts_with("HTTP/1.1 200") && hello.ends_with("hello"), "{engine}: {hello}");
-        let slow = app.get("/slow");
-        app.slow_started(Duration::from_secs(60));
-        app.signal("TERM");
-        assert!(app.refusing(Duration::from_secs(30)), "{engine}: still accepting after SIGTERM");
-        let answer = slow.join().expect("slow thread").expect("slow answer");
-        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("slow and done"), "{engine}: {answer}");
-        let ended = app.ended(Duration::from_secs(60));
-        assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
-        assert_eq!(ended.stdout, "stopped\n", "{engine}: {}", ended.stderr);
-    }
+    let app = App::start(3, false);
+    let hello = app.get("/").join().expect("hello thread").expect("hello answer");
+    assert!(hello.starts_with("HTTP/1.1 200") && hello.ends_with("hello"), "{hello}");
+    let slow = app.get("/slow");
+    app.slow_started(Duration::from_secs(60));
+    app.signal("TERM");
+    assert!(app.refusing(Duration::from_secs(30)), "still accepting after SIGTERM");
+    let answer = slow.join().expect("slow thread").expect("slow answer");
+    assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("slow and done"), "{answer}");
+    let ended = app.ended(Duration::from_secs(60));
+    assert_eq!(ended.status.code(), Some(0), "{}{}", ended.stdout, ended.stderr);
+    assert_eq!(ended.stdout, "stopped\n", "{}", ended.stderr);
 }
 
 #[test]
 fn a_second_signal_during_the_drain_ends_the_process_at_once() {
-    for engine in engines() {
-        let app = App::start(engine, 60, false);
-        let slow = app.get("/slow");
-        app.slow_started(Duration::from_secs(60));
-        app.signal("INT");
-        assert!(app.refusing(Duration::from_secs(30)), "{engine}: still accepting after SIGINT");
-        app.signal("INT");
-        let ended = app.ended(Duration::from_secs(10));
-        assert_ne!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
-        assert!(!ended.stdout.contains("stopped"), "{engine}: {}", ended.stdout);
-        let _ = slow.join();
-    }
+    let app = App::start(60, false);
+    let slow = app.get("/slow");
+    app.slow_started(Duration::from_secs(60));
+    app.signal("INT");
+    assert!(app.refusing(Duration::from_secs(30)), "still accepting after SIGINT");
+    app.signal("INT");
+    let ended = app.ended(Duration::from_secs(10));
+    assert_ne!(ended.status.code(), Some(0), "{}{}", ended.stdout, ended.stderr);
+    assert!(!ended.stdout.contains("stopped"), "{}", ended.stdout);
+    let _ = slow.join();
 }
 
 #[test]
 fn an_https_application_stops_on_sigterm() {
-    for engine in engines() {
-        let app = App::start(engine, 3, true);
-        app.signal("TERM");
-        let ended = app.ended(Duration::from_secs(60));
-        assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
-        assert_eq!(ended.stdout, "stopped\n", "{engine}: {}", ended.stderr);
-    }
+    let app = App::start(3, true);
+    app.signal("TERM");
+    let ended = app.ended(Duration::from_secs(60));
+    assert_eq!(ended.status.code(), Some(0), "{}{}", ended.stdout, ended.stderr);
+    assert_eq!(ended.stdout, "stopped\n", "{}", ended.stderr);
 }
 
 /// SIGTERM while TLS handshakes are in flight (#1000, #1021): one client sends
@@ -224,33 +212,31 @@ fn an_https_application_stops_on_sigterm_during_tls_handshakes() {
     // A TLS 1.2 record header announcing a 512-byte ClientHello, then its
     // first bytes: the server waits for the rest.
     const PARTIAL: [u8; 9] = [0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc];
-    for engine in engines() {
-        let app = App::start(engine, 3, true);
-        let connect = || TcpStream::connect(("127.0.0.1", app.port)).expect("connect");
-        let silent = connect();
-        let mut partial = connect();
-        partial.write_all(&PARTIAL).expect("send a partial ClientHello");
-        let mut hanging_up = connect();
-        hanging_up.write_all(&PARTIAL).expect("send a partial ClientHello");
-        // The server accepts connections in order: once it has refused this
-        // one's handshake, it has accepted the three before it, which are
-        // still handshaking. Plain HTTP is no TLS record header, so the
-        // refusal comes at once (#1024); before, "GET /" read as the header
-        // of a record of 8239 bytes and waited out the 30-second headers
-        // timeout, when the three handshakes had timed out too.
-        let mut refused = connect();
-        refused.set_read_timeout(Some(Duration::from_secs(60))).expect("read timeout");
-        let started = Instant::now();
-        refused.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("send plain HTTP");
-        let mut alert = Vec::new();
-        let _ = refused.read_to_end(&mut alert);
-        assert!(started.elapsed() < Duration::from_secs(10), "{engine}: the refusal took {:?}", started.elapsed());
-        // A peer that has already closed its side makes macOS answer ENOTCONN.
-        let _ = hanging_up.shutdown(std::net::Shutdown::Both);
-        app.signal("TERM");
-        let ended = app.ended(Duration::from_secs(60));
-        assert_eq!(ended.status.code(), Some(0), "{engine}: {}{}", ended.stdout, ended.stderr);
-        assert_eq!(ended.stdout, "stopped\n", "{engine}: {}", ended.stderr);
-        drop((silent, partial, hanging_up, refused));
-    }
+    let app = App::start(3, true);
+    let connect = || TcpStream::connect(("127.0.0.1", app.port)).expect("connect");
+    let silent = connect();
+    let mut partial = connect();
+    partial.write_all(&PARTIAL).expect("send a partial ClientHello");
+    let mut hanging_up = connect();
+    hanging_up.write_all(&PARTIAL).expect("send a partial ClientHello");
+    // The server accepts connections in order: once it has refused this
+    // one's handshake, it has accepted the three before it, which are
+    // still handshaking. Plain HTTP is no TLS record header, so the
+    // refusal comes at once (#1024); before, "GET /" read as the header
+    // of a record of 8239 bytes and waited out the 30-second headers
+    // timeout, when the three handshakes had timed out too.
+    let mut refused = connect();
+    refused.set_read_timeout(Some(Duration::from_secs(60))).expect("read timeout");
+    let started = Instant::now();
+    refused.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("send plain HTTP");
+    let mut alert = Vec::new();
+    let _ = refused.read_to_end(&mut alert);
+    assert!(started.elapsed() < Duration::from_secs(10), "the refusal took {:?}", started.elapsed());
+    // A peer that has already closed its side makes macOS answer ENOTCONN.
+    let _ = hanging_up.shutdown(std::net::Shutdown::Both);
+    app.signal("TERM");
+    let ended = app.ended(Duration::from_secs(60));
+    assert_eq!(ended.status.code(), Some(0), "{}{}", ended.stdout, ended.stderr);
+    assert_eq!(ended.stdout, "stopped\n", "{}", ended.stderr);
+    drop((silent, partial, hanging_up, refused));
 }

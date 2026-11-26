@@ -6,7 +6,8 @@
 //! пронумерованы индексами; вход функции — блок 0, его значения — параметры
 //! функции.
 //!
-//! [`verify`] проверяет правила §17 спецификации, текстовая форма (§18)
+//! [`verify`] проверяет правила §17 спецификации (её разделы — по OIR-1,
+//! `okkama-docs/docs/compiler/OIR-1.md`), текстовая форма (§18)
 //! выводится через `Display` у [`Module`].
 
 pub mod cfg;
@@ -59,8 +60,9 @@ pub enum Type {
     Never,
     /// Служебный: линейный сборщик массива (§12.2).
     Builder(Box<Type>),
-    /// Неизменяемый словарь (§12.3): ключ `int`, `bool` или `str`;
-    /// `map<never,never>` — нетегированный `[:]`.
+    /// Immutable map (§12.3): keys may be `int`, `bool`, `byte`, `char`,
+    /// `float`, `rat`, `str`, enums or objects (see [`Type::is_map_key`]).
+    /// `map<never,never>` is the untyped empty literal `[:]`.
     Map(Box<Type>, Box<Type>),
     /// Служебный: линейный сборщик словаря.
     MapBuilder(Box<Type>, Box<Type>),
@@ -392,17 +394,18 @@ impl Role {
         self.builtin && self.name == "Error"
     }
 
-    /// Имя слота: `name`, а у перегруженного имени — `name#k` по порядку.
-    pub fn slot_name(&self, slot: usize) -> String {
-        let method = &self.methods[slot];
+    /// Имя слота: `name`, а у перегруженного имени — `name#k` по порядку;
+    /// `None`, если такого слота у роли нет (повреждённый модуль, #1064).
+    pub fn slot_name(&self, slot: usize) -> Option<String> {
+        let method = self.methods.get(slot)?;
         let same: Vec<usize> = (0..self.methods.len())
             .filter(|index| self.methods[*index].name == method.name)
             .collect();
         if same.len() == 1 {
-            method.name.clone()
+            Some(method.name.clone())
         } else {
             let position = same.iter().position(|index| *index == slot).unwrap_or(0);
-            format!("{}#{position}", method.name)
+            Some(format!("{}#{position}", method.name))
         }
     }
 }
@@ -801,7 +804,8 @@ pub enum FloatOp {
     Sub,
     Mul,
     Div,
-    /// Остаток со знаком делителя, как `%` над `int`.
+    /// Остаток со знаком делимого (`fmod`), как `%` над `int`: `-2.5 % 2.0`
+    /// — `-0.5`, `2.5 % -2.0` — `0.5`.
     Mod,
     Pow,
     Neg,
@@ -842,7 +846,7 @@ pub enum RatOp {
     Sub,
     Mul,
     Div,
-    /// Остаток со знаком делителя.
+    /// Остаток со знаком делимого: `a - b * trunc(a / b)`, `(-7/3) % (1/2)` — `-1/3`.
     Mod,
     Neg,
     Abs,
@@ -966,11 +970,6 @@ impl IntBinaryOp {
     pub fn byte_mnemonic(self) -> String {
         self.mnemonic().replacen("int.", "byte.", 1)
     }
-
-    /// Класс отказа: `true`, если инструкция может дать программную ошибку.
-    pub fn traps(self) -> bool {
-        !matches!(self, IntBinaryOp::Add | IntBinaryOp::Sub | IntBinaryOp::Mul)
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1047,7 +1046,7 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
-    /// Только `Eq` и `Ne`.
+    /// String equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`.
     StrCompare {
         op: CompareOp,
         left: ValueId,
@@ -1126,7 +1125,7 @@ pub enum InstKind {
     },
     /// `cap.make %owner` (§8.5): capability владельца; тип — у результата.
     CapMake(ValueId),
-    /// `call.cap %k, field()`: вычислить поле cap заново.
+    /// `call.cap %k, #N()`: recompute the cap field at index N.
     CallCap {
         cap: ValueId,
         field: usize,
@@ -1290,7 +1289,8 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
-    /// Только `Eq` и `Ne`.
+    /// Char equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`
+    /// (`c.order(d)` lowers to `char.lt`), as `StrCompare`.
     CharCompare {
         op: CompareOp,
         left: ValueId,
@@ -1404,7 +1404,7 @@ pub enum InstKind {
     },
     /// Знак `rat`: `int` −1, 0 или 1.
     RatSign(ValueId),
-    /// Числитель (`denominator == false`) или знаменатель `rat` — `str`.
+    /// Числитель (`denominator == false`) или знаменатель `rat` — `int` (#743).
     RatPart {
         value: ValueId,
         denominator: bool,
@@ -1723,8 +1723,6 @@ pub enum TrapCode {
     Empty,
     /// Поле не связано после тела конструктора.
     Unbound,
-    /// Исполнение достигло `unreachable`-точки lowering.
-    Unreachable,
     /// Действие вызвано у объекта, чьё создание не завершено (§11.4, #271).
     Pending,
 }
@@ -1736,7 +1734,6 @@ impl TrapCode {
             TrapCode::Range => "range",
             TrapCode::Empty => "empty",
             TrapCode::Unbound => "unbound",
-            TrapCode::Unreachable => "unreachable",
             TrapCode::Pending => "pending",
         }
     }
@@ -1805,9 +1802,11 @@ impl CatchType {
     }
 }
 
-impl TermKind {
-    pub fn targets(&self) -> Vec<&Target> {
-        match self {
+/// The targets of a terminator, once for both borrows (#1003): the default
+/// binding mode makes each arm `&Target` or `&mut Target`.
+macro_rules! terminator_targets {
+    ($kind:expr) => {
+        match $kind {
             TermKind::Br(target) => vec![target],
             TermKind::Cond {
                 then_target,
@@ -1824,61 +1823,46 @@ impl TermKind {
             | TermKind::Throw(_)
             | TermKind::Raise(_) => Vec::new(),
         }
+    };
+}
+
+/// The operands of a terminator, once for both borrows (#1003), as
+/// `instruction_operands`: `$m` turns a reference into the element.
+macro_rules! terminator_operands {
+    ($kind:expr, $m:ident) => {
+        match $kind {
+            TermKind::Cond { condition, .. } => vec![$m!(condition)],
+            TermKind::Ret(Some(value))
+            | TermKind::Panic(value)
+            | TermKind::Throw(value)
+            | TermKind::Raise(value)
+            | TermKind::Catch { failure: value, .. } => vec![$m!(value)],
+            TermKind::ArrayLookup { array, index, .. } => vec![$m!(array), $m!(index)],
+            TermKind::MapLookup { map, key, .. } => vec![$m!(map), $m!(key)],
+            TermKind::Br(_)
+            | TermKind::Ret(None)
+            | TermKind::Trap { .. }
+            | TermKind::Unreachable => Vec::new(),
+        }
+    };
+}
+
+impl TermKind {
+    pub fn targets(&self) -> Vec<&Target> {
+        terminator_targets!(self)
     }
 
     pub fn targets_mut(&mut self) -> Vec<&mut Target> {
-        match self {
-            TermKind::Br(target) => vec![target],
-            TermKind::Cond {
-                then_target,
-                else_target,
-                ..
-            } => vec![then_target, else_target],
-            TermKind::Catch { handler, next, .. } => vec![handler, next],
-            TermKind::ArrayLookup { found, missing, .. }
-            | TermKind::MapLookup { found, missing, .. } => vec![found, missing],
-            TermKind::Ret(_)
-            | TermKind::Panic(_)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable
-            | TermKind::Throw(_)
-            | TermKind::Raise(_) => Vec::new(),
-        }
+        terminator_targets!(self)
     }
 
     /// Значения, которые читает терминатор, кроме аргументов переходов.
     pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            TermKind::Cond { condition, .. } => vec![*condition],
-            TermKind::Ret(Some(value))
-            | TermKind::Panic(value)
-            | TermKind::Throw(value)
-            | TermKind::Raise(value)
-            | TermKind::Catch { failure: value, .. } => vec![*value],
-            TermKind::ArrayLookup { array, index, .. } => vec![*array, *index],
-            TermKind::MapLookup { map, key, .. } => vec![*map, *key],
-            TermKind::Br(_)
-            | TermKind::Ret(None)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable => Vec::new(),
-        }
+        terminator_operands!(self, copied)
     }
 
     pub fn operands_mut(&mut self) -> Vec<&mut ValueId> {
-        match self {
-            TermKind::Cond { condition, .. } => vec![condition],
-            TermKind::Ret(Some(value))
-            | TermKind::Panic(value)
-            | TermKind::Throw(value)
-            | TermKind::Raise(value)
-            | TermKind::Catch { failure: value, .. } => vec![value],
-            TermKind::ArrayLookup { array, index, .. } => vec![array, index],
-            TermKind::MapLookup { map, key, .. } => vec![map, key],
-            TermKind::Br(_)
-            | TermKind::Ret(None)
-            | TermKind::Trap { .. }
-            | TermKind::Unreachable => Vec::new(),
-        }
+        terminator_operands!(self, borrowed)
     }
 
     /// Терминатор передаёт отказ (в цель unwind блока или из функции).

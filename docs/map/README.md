@@ -10,7 +10,7 @@ load whole. Read them **before** starting, and update them **when finishing**.
 | [decisions.md](decisions.md) | Rulings (owner, Fable) and settled design choices, dated. Do not relitigate | by hand, when a decision is made |
 | [pipeline.md](pipeline.md) | The stages, their entry points and files, what each decides and checks, how a failure message names it | by hand, when a stage changes |
 | [ownership.md](ownership.md) | Glossary of the current ownership model (OIR-2) with pointers into the code | by hand |
-| [rules.md](rules.md) | Every rule tag (D25.3, B9, SPB_SCHEDULE …) and every layer that implements it | **generated**: `tools/map/gen.py` |
+| [rules.md](rules.md) | Lexical tag index and layers mentioning each tag; see its non-rule exclusions | **generated**: `tools/map/gen.py` |
 | [files.md](files.md) | Every source file by layer: lines and its `//!` header | **generated** |
 
 The Wave CI fails when the generated maps are stale (`tools/map/gen.py --check`).
@@ -18,7 +18,7 @@ The Wave CI fails when the generated maps are stale (`tools/map/gen.py --check`)
 ## Before starting a task (5 minutes, every time)
 
 1. **Read** state.md and decisions.md. For the area you will touch, read its pipeline.md row and its rules.md row.
-2. **Is it already done?** Run `git log --oneline -30 origin/release/0.6.0`, `grep -n '#NNN' CHANGELOG.md` and
+2. **Is it already done?** Run `git log --oneline -30 origin/release/065`, `grep -n '#NNN' CHANGELOG.md` and
    `gh issue view NNN`. Check the parked branches in state.md.
 3. **Reproduce on the current tree**, with a binary built from it, at a known commit. The reference for behaviour
    is Tomato built from the same tree, never an installed binary (LLM-GUIDE, parity rule). Throw away dumps and

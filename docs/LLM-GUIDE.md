@@ -23,10 +23,12 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   runtime tooling. **Needs the owner's permission**: the language, the
   compiler's front end and checks, and the public API of `std`. When a
   compiler change would help, explain the risk and ask (or file an issue).
-- **Commits**: Claude commits on feature branches and merges them into the
-  current release branch as part of the release workflow; tags, `develop` and
-  `main` are the owner's. Never `git commit -a`: name the paths. Commit
-  messages end with the attribution line the harness asks for.
+- **Commits and branches** (trunk-based, owner, 2026-11-27; §10): Claude
+  commits on feature branches, merges them into the current release branch,
+  and merges into `develop` for a nightly build. `main` changes only through a
+  pull request (a ruleset refuses direct pushes); tags are pushed by the owner.
+  Never `git commit -a`: name the paths. Commit messages end with the
+  attribution line the harness asks for.
 - **Working on `std/`**: read `docs/std-principles.md` first and follow it
   (objects are mechanisms, not records: no accessors or mutators unless
   unavoidable; flat APIs; the review plan and its inventory tool).
@@ -119,9 +121,12 @@ summary.
 - **Heavy runs on GitHub's runners.** The repository is public, so Actions
   minutes are free. Push a branch named `wave/<name>` at the commit to test.
   The `Wave` workflow (`.github/workflows/wave.yml`) runs every test target
-  of every crate, conformance (a failing case fails the job) and the corpora
-  (t/, micro programs, examples, the Bible's examples) on Tomato's pipeline,
-  and checks the code maps. After a fast-forward, also check the release
+  of every crate in the gate profile, the tests of okkama-compiler and
+  okkama-cli in the dev profile too (part `debug`: the checks that run only
+  with debug assertions, such as the ownership linearity check; CI's job
+  "Tests (debug)" runs the same, #1100), conformance (a failing case fails
+  the job) and the corpora (t/, micro programs, examples, the Bible's
+  examples) on Tomato's pipeline, and checks the code maps. After a fast-forward, also check the release
   branch's own `CI` run: it is the release gate, and a red one is fixed
   before the next ticket. Delete the `wave/*` branch afterwards. Timing runs stay local: the runners are
   bimodal.
@@ -205,6 +210,23 @@ The REPL (`okkama-cli/src/repl.rs`, design `okkama-docs/runtime/repl-588.md`):
 - **Tests:** `okkama-cli/tests/repl.rs` (stdin scripts, a destroy oracle, a pty test of the history),
   `sparrow-core/src/session_tests.rs`, `okkama-sparrow/tests/session.rs`.
 
+Environment switches share one rule across Rust crates and std: a set value
+that is empty, `0`, `false`, `off` or `no` (ASCII case-insensitive) is OFF;
+every other set value is ON. Values are not trimmed. An unset switch keeps its
+default: OFF for most (test helpers, GC, verification and profiling switches),
+ON for `OKKAMA_TRACE` (the call stack of a failure), `SPARROW_CORE_POINTER_FREE`
+and `SPARROW_CORE_INT_RANGE` (JIT optimisations). Explicit CLI flags and
+mandatory debug checks still apply independently. `OKKAMA_DEV` uses this rule
+before parsing its category selection, and is also OFF when no category is left
+after trimming (`" "`, `" , "`, #1094). Paths, numbers, representation choices
+and symbol/pass lists are not boolean switches. The Rust side has one
+implementation, `okkama_devtrace::env_switch` (#1095: `enabled`, `enabled_or`,
+`bytes` for byte counts such as `SPARROW_CORE_CODE_SHIFT`, `no_color`); every
+crate reads its switches through it, never through a copy.
+`NO_COLOR` is the exception specified by no-color.org: automatic colour is off
+when it is present and non-empty (even `0` or `false`), in both `okkama man` and
+std `terminal/capability`; empty or absent does not disable colour.
+
 Environment: `OKKAMA_STDLIB_DIR` (std root),
 `SPARROW_CORE_STATS=1` (= `--stats`: counts of natives, intrinsics, slow paths,
 regions, awaits, heap bytes, compile time and code size per function),
@@ -215,7 +237,10 @@ diagnostics, separate from JIT machine-register allocation or runtime timing;
 keep it out of timed samples.
 Other runtime diagnostics:
 `SPARROW_CORE_DUMP`/`SPARROW_CORE_UNOPTIMIZED`/`SPARROW_CORE_PLAIN=symbol,…|*`
-(§9), `SPARROW_CORE_OLD_DISPATCH=symbol,…|*` (keep reference lazy dispatch
+(§9), `SPARROW_CORE_NO_INLINE=symbol,…|*` (disable inlining into selected
+callers; unset or empty selects none; read by `Chosen::from_env` in
+`sparrow-core/src/jit.rs` when the JIT is created),
+`SPARROW_CORE_OLD_DISPATCH=symbol,…|*` (keep reference lazy dispatch
 for selected callers instead of embedding ready static ordinary entries;
 [ABI/lifetime proof and #542 measurement checklist](../okkama-rs/crates/sparrow-core/docs/ready-callees.md)),
 `SPARROW_CORE_PROFILE_COMPILE=1` (a line per compiled function on
@@ -227,8 +252,9 @@ IR verifier in a release build; debug builds always run it),
 roots in Cranelift's frontend stack maps, as before #354; by default async
 bodies use the core's own root slots and synchronous functions Cranelift's
 maps, #362),
-`SPARROW_CORE_POINTER_FREE=0` (disable #535's whole-register proof in both
-JIT roots and async frame tracing, default enabled; load-time setting).
+`SPARROW_CORE_POINTER_FREE` (#535's whole-register proof in both
+JIT roots and async frame tracing; default ON, `0`/`off` turns it off;
+load-time setting).
 Under `SPARROW_CORE_PROFILE_COMPILE`, `pointer-free analysis` lines separately
 report its load-time cost; `roots` lines under profiling or `SPARROW_CORE_DUMP`
 report traced/omitted registers and the sum of root words across stack maps.
@@ -240,13 +266,31 @@ once), `OKKAMA_ARRAYS=flat|shared|trie`, `OKKAMA_MAPS=btree`,
 one kind only, for A/B on one binary: shared array buffers and tries, maps
 that turn persistent at their first version, text buffers for chains of
 `+`; the default has all of them, #336), `OKKAMA_TRACE=off` (no stack in failures), `OKKAMA_ICU_LIBDIR` (pinned ICU for collation;
-`tools/build-icu-collation.sh`). `OKKAMA_JIT*` switches belong to the previous
-VM only.
+`tools/build-icu-collation.sh`).
+
+Worker output and developer diagnostics (paths below are relative to `okkama-rs/crates/`):
+
+- `SPARROW_WORKER_OUTPUT_LIMIT_BYTES=N`: positive integer byte limit for process-worker
+  output; default 64 MiB. Read by `output_limit()` in `sparrow-core/src/worker_process.rs`.
+  Zero, negative or non-numeric values fail the worker with
+  `SPARROW_WORKER_OUTPUT_LIMIT_BYTES must be a positive integer`.
+- `SPARROW_CORE_GC_AGES=1`: age census on stderr for each collection; otherwise off.
+  Read when constructing the heap in `sparrow-core/src/heap.rs`.
+- `SPARROW_CORE_FS_FAULTS=point:ERRNO,…`: inject filesystem faults; unset injects none.
+  Read once by `injected_fault()` in `sparrow-core/src/host/native_fs.rs`.
+  Points: `write` (write half, then fail), `file_sync`, `rename`, `directory_sync`.
+  Errors: `EIO`, `ENOSPC`, `EXDEV`, `EACCES`, `EDQUOT`; malformed entries are ignored.
+- `OKKAMA_OWNERSHIP_REPORT=FILE`: write ownership census JSON after successful lowering;
+  unset writes no report. Read in `okkama-compiler/src/lowering/mod.rs`.
+- `OKKAMA_OWNERSHIP_PROTOTYPE=1`: opt into the experimental `param_adopts` pass (#555);
+  otherwise disabled, independently of the ordinary pass list. Read by `Passes::from_env()`
+  in `okkama-compiler/src/lowering/mod.rs`.
 
 For differential root checks, `SPARROW_CORE_POINTER_FREE=0` keeps every traced
 register rooted; `SPARROW_CORE_INT_RANGE=0` keeps #535's constant-only proofs
 while disabling #539's operation proofs. Both are read once per loaded program
-and apply to stack maps and suspended-frame layouts (#535, #539).
+and apply to stack maps and suspended-frame layouts (#535, #539). Both default
+to OFF; set them to `1` to enable their proofs.
 
 `SPARROW_TRACE_DESTROY=FILE`
 append `<ObjectTypeName> <creation serial>\n` before each selected sync or async
@@ -278,7 +322,8 @@ zsh does not split `$var`; use `${=var}` or a function when passing commands.
 - PostgreSQL: network `okkama-pg`, container `okkama-pg-db`
   (`postgres:latest`, password `okkama`, IP 172.19.0.2):
   `docker network create okkama-pg; docker run -d --name okkama-pg-db --network okkama-pg -e POSTGRES_PASSWORD=okkama postgres:latest`;
-  clients run with `--network okkama-pg -e OKKAMA_PG_ADDRESS=172.19.0.2 -e OKKAMA_PG_PASSWORD=okkama`.
+  clients run with `--network okkama-pg`; supply the database address and credentials
+  through the client program's connection configuration.
 - Sampling profiles: build with `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`
   into a separate volume (`okkama-core-dbg`), run with `--cap-add SYS_PTRACE`,
   attach `gdb -p PID -batch -ex "thread apply all bt 12"` in a loop and count
@@ -297,8 +342,16 @@ For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/owne
 | Conformance (OCS) | `cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-release -j 6 --adapter-env OCS_RUST_ENGINE=sparrow` | Docker only; the adapter builds its own debug `okkama` in `adapters/rust/.target` |
 | Dependency advisories | `cd okkama-rs && cargo audit --deny warnings` (and `--file fuzz/Cargo.lock`) | RustSec against both lockfiles (#960); CI `audit.yml` on every change and weekly. Exceptions with reason and ticket in `okkama-rs/.cargo/audit.toml` (none since #70) |
 | t/ suite (#245) | `python3 tools/t/run.py --configs sparrow --cage [--okkama BIN] [t/op t/gen/strings …]` | self-checking Okkama programs printing TAP: hand-written `t/base`, `t/op`, `t/lang` and families generated by `tools/t/gen.py` into `t/gen` (not committed; the runner regenerates it) with a Python oracle. Every configuration (sparrow, sparrow-passes-off, sparrow-gc-stress) must give the same stream. Locally use `--cage`. A check blocked by an open issue goes through `skip(issue)` and is listed in the file. A gate step |
+| Tooling (Python) | `tools/test-python.sh` | every tracked `test_*.py` (fuzz orchestration, t/ generator, ownership oracle, micro harness, conformance runner), dry: no toolchain or Docker; CI job "Tool tests" and the Wave's maps job run it (#1092) |
 | Generated programs | `tools/gen/okgen.py run --seeds N` (`show SEED`) | terminating deterministic programs (BigInt, strings, arrays, objects, roles, closures, try/catch, recursion) on Sparrow configurations; a disagreement is minimized (ddmin over `main`) into `conformance/reports/runs/okgen/<seed>`; `tools/gen/mutants.sh` checks it finds a seeded defect in each engine. Containers only |
-| Release gate | `make gate` (= `tools/gate/docker.sh`, ~15 min) | Rust tests (profile `gate`: release optimizations without fat LTO; and debug), clippy with `-D warnings`, conformance sparrow/sparrow-passes-off/sparrow-gc-stress, std tests Sparrow vs `tools/gate/known-failures.txt`, the t/ suite on all three configurations; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `gate.yml` runs it on the tagged commit and `packages.yml` publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO for the release binaries only) |
+| Release gate | `make gate` (= `tools/gate/docker.sh`, ~15 min) | Rust tests (profile `gate`: release optimizations without fat LTO; and debug), clippy with `-D warnings`, conformance sparrow/sparrow-passes-off/sparrow-gc-stress, std inventory, natives (`gen-abi.py --check` and `native-callers.py`), std fmt (`fmt --check`), std tests Sparrow vs `tools/gate/known-failures.txt`, the t/ suite on all three configurations; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `packages.yml` calls `gate.yml` for release tags and every push to develop (nightly), and publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO for the release binaries only) |
+
+okkama-cli's integration tests start the binary only through
+`tests/tree/mod.rs` (#1101): `tree::okkama()` sets `OKKAMA_STDLIB_DIR` to
+the tree's std, so a build into any `CARGO_TARGET_DIR` tests this std, never
+an installed one; a test that starts it from another program passes
+`tree::OKKAMA` and `tree::std_dir()`. `cli.rs` refuses a test file that names
+the binary any other way.
 
 Sparrow is the only Okkama engine (#584, #585): `okkama run` has no
 `--engine`, and `OKKAMA_ENGINE` is ignored.
@@ -310,7 +363,7 @@ the compiler's intermediate representation. The IR-dependent REPL was removed.
 Benchmarks live outside the repository in `../okkama-docs/benchmarks`
 (`OKKAMA_REPO` points the runner at a checkout; default `../okkama-new`).
 
-- Micro-benchmarks (#244, protocol v2; in the repository since #894, `bench/micro`): `python3 bench/micro/run.py --image okkama-dev --toolchain TC --stdlib TC/lib/okkama/std --okkama /toolchain/bin/okkama --engines sparrow --n N --warmup W --runs 5 --build-profile P --revision REV --label L --results ../okkama-docs/benchmarks/micro/results` (the results archive stays in okkama-docs) runs each program in a limited Linux container (TC is a Linux installation built in Docker); gross ns/iteration, independent checksum oracles, VALID/INCONCLUSIVE cells, result files never overwritten. `bench/micro/report.py TEXTS --old A.json… --new B.json… -o micro.html` makes the release page. Required before every release and, when quick, after a ticket (Sparrow N=4M). Correctness without timing: `bench/micro/check.py --okkama BIN --cage`; the Wave CI runs it with t/ (`tools/t/run.py --configs sparrow`), `examples/check.py` and the Bible's examples (`examples/bible/check.py`, a copy of the Bible branch's `docs/OkkamaBible/examples`: copy again when they change)
+- Micro-benchmarks (#244, protocol v2; in the repository since #894, `bench/micro`): `python3 bench/micro/run.py --image okkama-dev --toolchain TC --stdlib TC/lib/okkama/std --okkama /toolchain/bin/okkama --engines sparrow --n N --warmup W --runs 5 --build-profile P --revision REV --label L --results ../okkama-docs/benchmarks/micro/results` (the results archive stays in okkama-docs) runs each program in a limited Linux container (TC is a Linux installation built in Docker); gross ns/iteration, independent checksum oracles, VALID/INCONCLUSIVE cells, result files never overwritten. `bench/micro/report.py TEXTS --old A.json… --new B.json… -o micro.html` makes the release page. `--placements 0,64,1024` (with `--runs` a multiple of 3) runs every cell under three machine-code shifts (`SPARROW_CORE_CODE_SHIFT`, #933) and records its layout spread; the Docker VM has no hardware counters, so there is no instruction-count mode (bench/micro README, "Code layout"). Required before every release and, when quick, after a ticket (Sparrow N=4M). Correctness without timing: `bench/micro/check.py --okkama BIN --cage`; the Wave CI runs it with t/ (`tools/t/run.py --configs sparrow`), `examples/check.py` and the Bible's examples (`examples/bible/check.py`, a copy of the Bible branch's `docs/OkkamaBible/examples`: copy again when they change)
 - Engine ladder: `python3 run.py --runs 10 [--only 03-float] [--engines tomato,go,java,kotlin,python]`
   — the reference languages are Go, Java, Kotlin and Python (#363). Go, Java
   and Kotlin are built before measuring, and their build time is kept apart.
@@ -350,10 +403,17 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.5 against 0.6.4 (report
+  `okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`): Sparrow
+  −1.0% over all 75 programs for rc1 (`fa572a909`), both versions built by
+  `bench/micro/toolchain.sh` at layout seeds 1 and 2, campaigns A1 B1 B2 A2;
+  every reliable pair within the noise band, which now includes the binaries'
+  own layout spread (#1086).
 - Micro, 0.6.4 against 0.6.3 (report
   `okkama-docs/benchmarks/reports/2026-11-23-v0.6.4/micro.html`): Sparrow
-  −0.4% over 51 reliable pairs, interleaved candidate, base, candidate, base on
-  75 programs in one session; every program within the noise band.
+  +0.6% over 55 reliable pairs for rc2 (`29c3dc84a`), interleaved candidate,
+  base, candidate, base in one session; every program within the noise band.
+  Async programs were consistently 4–6% slower, tracked in #1025.
 - Micro, 0.6.3 against 0.6.2 (report
   `okkama-docs/benchmarks/reports/2026-11-22-v0.6.3/micro.html`): Sparrow
   −4.1% over 47 reliable pairs, all within the noise band — whichever version
@@ -502,9 +562,9 @@ not needed (#292).
 
 | Формат | Где записывается | Где читается | Версия |
 |---|---|---|---|
-| SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 16 |
+| SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 18 (every new opcode bumps it, #1061; 17 was Champ's) |
 | Кадры process worker (`OKW2`) | `sparrow-core` workers | `sparrow-core` worker reader | OKW2 |
-| Дамп OIR-1 (`oir 1 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 1; удаляется с OIR-1 (#576) |
+| Дамп OIR-2 (`oir 2 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 2 (#1043) |
 | OCS cases, contracts, profiles, fixtures, adapter protocol/config и run/coverage/gate/diff/mutation reports | `conformance/runner/ocs`, suite files и `tools/write_schemas.py` | OCS runner/validators и consumers | schema/protocol 2 |
 | Ownership census JSON (`schema`) | `tools/ownership/oracle.py` | oracle report consumers | 2 |
 | Blade manifests и lockfiles | `okkama-rs/crates/blade` | Blade | не изменялось: формат относится к package workflow |
@@ -610,13 +670,32 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 
 ## 10. Release process
 
-1. Feature branches merge into `release/0X0` (cut from `develop`).
+Trunk-based (owner, 2026-11-27):
+
+- `main` is the source of releases. It changes only through a pull request
+  (ruleset: no direct push, no force push, no deletion, the CI jobs must pass,
+  merge commits only). It is the default branch.
+- `develop` is the shared sandbox for every change and does not decide a
+  release. A merge into `develop` is a nightly build: `packages.yml` runs the
+  gate, builds the packages (`<version>-nightly.<date>.<sha>`) and publishes the
+  pre-release `okkama-nightly-YYYY-MM-DD` (a second merge the same day replaces
+  that day's; the last 14 are kept).
+- A release branch `release/0XY` is cut from `main`; feature branches
+  `feature/<ticket>` leave the release branch and merge back into it. To ship a
+  nightly, the release branch (or a feature) is merged into `develop`; nothing
+  flows from `develop` back into a release branch.
+
+Steps:
+
+1. `git checkout main && git pull && git checkout -b release/0XY`; feature
+   branches from it, merged back after their tests (waves on `wave/**`, §6).
 2. Bump `version` in `okkama-rs/Cargo.toml` (`cargo update --workspace
    --offline` refreshes Cargo.lock; run `cargo metadata --offline` in
    `okkama-rs/fuzz` too, or its lockfile falls behind and the fuzz job's
    `--locked` fails, #960); move CHANGELOG `[Unreleased]` to
    `## [X.Y.Z] — date` with a summary.
-3. `make gate` (Docker) must pass; write the benchmark report (§6).
+3. `make gate` (Docker) must pass; write the benchmark report (§6, micro A/B
+   with `bench/micro/toolchain.sh`, #1025/#1086).
    Releases are built with the toolchain pinned in
    `tools/release-toolchain.txt` (the gate image, the CI gate and
    `packages.yml` install it;
@@ -624,13 +703,15 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
    `rustc -V`). The declared MSRV is `rust-version` in `okkama-rs/Cargo.toml`
    — the oldest Rust the dependencies allow — and the CI job *MSRV* checks
    every target on it. Raise both together with the dependency that needs it.
-4. Merge the release branch into `develop` (fast-forward history on
-   `develop`), tag `vX.Y.Z` (annotated, must match Cargo.toml), push `develop`,
-   the release branch and the tag: `.github/workflows/packages.yml` builds
-   tar.gz/.pkg/.deb/.rpm and the GitHub Release; pushes to `develop` publish the
-   `nightly` pre-release.
-5. Install locally: `./install.sh` (or `make install-pgo`).
-6. Delete merged branches locally and on GitHub.
+4. Open a pull request `release/0XY` → `main`
+   (`gh pr create --base main --head release/0XY`); merge it (merge commit)
+   when its checks pass.
+5. Tag the merge commit on `main`: `git tag -a vX.Y.Z -m "Okkama X.Y.Z"` (must
+   match Cargo.toml); the owner pushes the tag. `.github/workflows/packages.yml`
+   runs the gate and builds tar.gz/.pkg/.deb/.rpm and the GitHub Release.
+6. Merge `main` into `develop` so the sandbox carries the release.
+7. Install locally: `./install.sh` (or `make install-pgo`).
+8. Delete merged branches locally and on GitHub.
 
 ## Documents outside the repository
 

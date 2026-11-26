@@ -139,6 +139,22 @@ impl FnBuilder {
         });
     }
 
+    /// Turn the `region.track region, value` just emitted after `value = await.take …` into an adopt (#1044):
+    /// the result of an awaited temporary, tracked as it is taken, then adopted by its binding, needs one
+    /// instruction, since an adopt takes what the track would follow. False when the current block does not
+    /// end so.
+    pub(super) fn adopt_tracked_await(&mut self, region: ValueId, value: ValueId) -> bool {
+        let Some(block) = self.current else { return false };
+        let insts = &mut self.blocks[block.0].insts;
+        let [.., taken, track] = insts.as_mut_slice() else { return false };
+        let tracked = matches!(track.kind, InstKind::RegionTrack { region: r, value: v } if r == region && v == value);
+        if !tracked || taken.result != Some(value) || !matches!(taken.kind, InstKind::AwaitTake(_)) {
+            return false;
+        }
+        track.kind = InstKind::RegionAdopt { region, value };
+        true
+    }
+
     /// Завершить текущий блок; после этого позиция закрыта.
     pub(super) fn terminate(&mut self, kind: TermKind, span: Span) {
         let block = self.open_block();

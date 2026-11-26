@@ -124,6 +124,9 @@ pub(crate) struct Parser<'s> {
     /// keeps a value that is re-parsed by an enclosing decision from deciding again, which made
     /// nested anonymous actions exponential.
     if_values: std::collections::HashSet<usize>,
+    /// Positions of the `>` that `split_greater` cut off a compound token, in order: a trial parse
+    /// that backtracks puts the tokens back together (`unsplit_since`).
+    splits: Vec<usize>,
 }
 
 impl<'s> Parser<'s> {
@@ -146,6 +149,7 @@ impl<'s> Parser<'s> {
             errors: Vec::new(),
             damaged: false,
             if_values: std::collections::HashSet::new(),
+            splits: Vec::new(),
         }
     }
 
@@ -476,6 +480,31 @@ impl<'s> Parser<'s> {
             self.pos + 1,
             Token::new(rest_kind, Span::new(middle, token.span.end)),
         );
+        self.splits.push(self.pos);
+    }
+
+    /// Undo the splits made since the journal had `mark` entries, newest first, so a backtracking
+    /// trial leaves `>>`, `>>>` and `>=` as the expression parser lexed them.
+    fn unsplit_since(&mut self, mark: usize) {
+        while self.splits.len() > mark {
+            let at = self.splits.pop().expect("a split past the mark");
+            let rest = self.tokens.remove(at + 1);
+            let kind = match rest.kind {
+                TokenKind::Greater => TokenKind::ShiftRight,
+                TokenKind::ShiftRight => TokenKind::ShiftUnsigned,
+                TokenKind::Equal => TokenKind::GreaterEqual,
+                kind => unreachable!("a split never leaves {kind:?}"),
+            };
+            let start = self.tokens[at].span.start;
+            self.tokens[at] = Token::new(kind, Span::new(start, rest.span.end));
+        }
+    }
+
+    /// Is the current token what is left of a shift operator after its first `>` closed a type
+    /// argument list (`a >> 2` read as `a>` and `> 2`)?
+    fn at_split_shift(&self, mark: usize) -> bool {
+        self.splits[mark..].last().is_some_and(|&at| at + 1 == self.pos)
+            && matches!(self.peek().kind, TokenKind::Greater | TokenKind::ShiftRight)
     }
 
     fn consume_number(&mut self, message: &str) -> PResult<Token> {

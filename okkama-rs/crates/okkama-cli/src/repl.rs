@@ -1,8 +1,9 @@
 //! `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 //!
-//! **Input.** Declarations (`object`, `enum`, `role`, `native`, `cap`) and imports accumulate in a `<repl>`
-//! file. Statements become a cell: an action `ReplCellN.run(<previous variables>)` in a second file of the same
-//! module (spec §5.1), which returns its variables as `ReplKeep<T>` values.
+//! **Input.** Declarations (`object`, `enum`, `role`, `const`, `native`, `cap`, including
+//! `hidden` declarations) and imports accumulate in a `<repl>` file. `test` and `fake`
+//! declarations are refused. Statements become a cell: an action `ReplCellN.run(<previous variables>)`
+//! in a second file of the same module (spec §5.1), which returns its variables as `ReplKeep<T>` values.
 //!
 //! **Each input** compiles the declarations and the new cell with the ordinary compiler. Then:
 //! 1. the result merges into the session's published program (`okkama_sparrow::session::extend`);

@@ -747,6 +747,9 @@ impl Parser<'_> {
             // (`let Count = 2; Count < 3`, #1004). Arguments that parse and
             // close with `>` stay a type, as before: the comparison chain they
             // would also spell, `(A < B) > c`, orders a bool and is never valid.
+            // A `>` that is the first half of a shift does not close them:
+            // `Count < a >> 2` is `Count < (a >> 2)`, since the type would be
+            // followed by the other `>` (#1032).
             _ if (self.check_type_name()
                 && is_generic_type_name(self.lexeme(self.peek()))
                 && self.check_next(TokenKind::Less))
@@ -762,7 +765,9 @@ impl Parser<'_> {
                     first.kind,
                     TokenKind::At | TokenKind::Percent | TokenKind::LeftParen | TokenKind::Async
                 ) || self.is_name_token(first);
+                let mark = self.splits.len();
                 let parsed = if may_start { self.type_expr().ok() } else { None };
+                let parsed = parsed.filter(|_| !self.at_split_shift(mark));
                 match parsed {
                     Some(ty) => Ok(Expr {
                         span: ty.span,
@@ -770,6 +775,7 @@ impl Parser<'_> {
                     }),
                     None => {
                         self.pos = from;
+                        self.unsplit_since(mark);
                         let token = self.advance();
                         Ok(Expr {
                             span: token.span,

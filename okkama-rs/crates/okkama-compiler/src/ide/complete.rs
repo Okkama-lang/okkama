@@ -517,7 +517,7 @@ impl Inspection {
                         out.push(global.clone());
                     }
                 }
-                out.extend(keywords());
+                out.extend(keywords().into_iter().filter(|item| item.label != "self"));
                 out
             }
         }

@@ -5,7 +5,7 @@ Sparrow — байткод Okkama: его пишет `okkama build`, а рант
 Sparrow (`sparrow`, `okkama exec`; его текущая версия — Tomato) проверяет его и исполняет
 как машинный код. Книга учит текстовой форме байткода — ассемблеру Sparrow
 (`.spa`) — настолько, чтобы читать то, что выдаёт компилятор, и писать
-программы вручную. Описана версия SPB 12, формат Okkama 0.4.1.
+программы вручную. Описана версия SPB 18, формат Okkama 0.6.5.
 
 Все примеры лежат в [examples/](examples/); при сборке книги каждый из них
 ассемблируется, проверяется и запускается, а показанный после примера
@@ -55,7 +55,7 @@ okkama exec prog.spb                       # запуск SPB внутри okkam
 
 ```text
 ; Hello from Sparrow assembly: a native writes the UTF-8 bytes of a string.
-sparrow 16
+sparrow 18
 module "hello" "1.0.0"
 type t0 int
 type t1 str
@@ -97,7 +97,7 @@ Hello, Sparrow!
 ## 3. Устройство файла
 
 ```text
-sparrow 16                      ; версия формата
+sparrow 18                      ; версия формата
 module "name" "version"         ; имя и версия модуля (можно "")
 type t0 …                       ; таблица типов по порядку
 enum enum0 "Name" ["a", "b"]    ; enum и его варианты
@@ -182,7 +182,7 @@ BigInt.
 
 ```text
 ; 30! with a loop: exact integers grow into BigInt transparently.
-sparrow 16
+sparrow 18
 module "factorial" "1.0.0"
 type t0 int
 type t1 bool
@@ -242,7 +242,7 @@ $ sparrow run factorial.spb
 
 ```text
 ; Fibonacci with edge moves: the jump back writes both loop registers at once.
-sparrow 16
+sparrow 18
 module "fibonacci" "1.0.0"
 type t0 int
 type t1 bool
@@ -292,7 +292,7 @@ $ sparrow run fibonacci.spb; echo $?
 ```text
 ; Objects, a role with two implementations, dispatch through role slots and
 ; a successor (a changed copy of an immutable object).
-sparrow 16
+sparrow 18
 module "shapes" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -382,7 +382,7 @@ $ sparrow run shapes.spb; echo $?
 ```text
 ; Arrays are built through a linear builder; `arr.lookup` and `map.lookup`
 ; branch on whether the element exists.
-sparrow 16
+sparrow 18
 module "collections" "1.0.0"
 type t0 int
 type t1 array t0
@@ -456,7 +456,7 @@ $ sparrow run collections.spb; echo $?
 ```text
 ; A closure value: `fn.closure` fills the leading parameters of its function
 ; with captures; `call.fn` passes the rest.
-sparrow 16
+sparrow 18
 module "closures" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0
@@ -501,7 +501,7 @@ $ sparrow run closures.spb; echo $?
 ```text
 ; Throwing and catching: an object that does the builtin Error role is
 ; thrown; a handler range sends failures to a `catch`, which matches the type.
-sparrow 16
+sparrow 18
 module "errors" "1.0.0"
 type t0 int
 type t1 str
@@ -589,7 +589,7 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: register r2 may b
 ; Ownership regions: an object with `destroy` is tracked and adopted by the
 ; region of its scope; leaving the region runs `destroy`, on the failure path
 ; too (`region.unwind`).
-sparrow 16
+sparrow 18
 module "resources" "1.0.0"
 type t0 int
 type t1 str
@@ -663,7 +663,7 @@ closing data.txt
 ```text
 ; Async functions: a call makes a cold future, `await` runs it to its value,
 ; `fut.spawn` starts one now so it runs while the caller goes on.
-sparrow 16
+sparrow 18
 module "tasks" "1.0.0"
 type t0 int
 type t1 future t0
@@ -711,7 +711,7 @@ async.
 ```text
 ; A test profile: `tests` lists parameterless functions; `sparrow test` runs
 ; each on a fresh runtime and reports it. A failure fails the test.
-sparrow 16
+sparrow 18
 module "testing" "1.0.0"
 type t0 int
 type t1 bool
@@ -767,6 +767,10 @@ PASS
   индексы таблиц в границах; ни одна инструкция не сваливается с конца кода;
 - каждый регистр записан до чтения на каждом пути, включая источники
   присваиваний рёбер и цели обработчиков;
+- заглушку `undef` только переносят (`move`, присваивания рёбер, поля
+  `obj.new` и `obj.init`) или читают под проверкой связывания: регистром
+  `bool`, равным `false` везде, где заглушка ещё может быть, на ветке `true`
+  инструкции `br`;
 - типы сходятся: операнды и результат каждой инструкции, арность, типы
   аргументов и результата каждого вызова, присваивания рёбер, `ret`, слоты
   ролей, поля cap, `destroy`, точка входа (без параметров, результат `int`),
@@ -908,6 +912,7 @@ Sparrow компилирует каждую функцию в машинный �
 | 122 | `call.fn rD/_, rX, [rX, …]` | вызов замыкания с остальными аргументами |
 | 123 | `call.role rD/_, rX, roleN, N, [rX, …]` | вызов слота N роли на ссылке роли |
 | 124 | `call.cap rD, rX, capN, N` | вычислить поле cap над владельцем |
+| 157 | `await.take rD/_, rX` | забрать исход единственного временного future, доказанного компилятором |
 | 125 | `await rD/_, rX` | выполнить future или дождаться его; его значение |
 | 126 | `fut.spawn rD, rX` | запустить future сейчас; тот же future |
 | 127 | `fut OP, rD/_, rX` | `cancel`, `done` или `cancelled` над future |
@@ -923,12 +928,17 @@ Sparrow компилирует каждую функцию в машинный �
 | 139 | `region.settle_unwind rD, rX, rX` | `region.settle` на пути отказа; результат — отказ с отказами destroy как вторичными |
 | 136 | `fail.secondary rD, rX, rX` | присоединить отказ очистки к основному |
 | 137 | `fail.caused rD, rX, rX` | новый отказ, вызванный обработанным |
+| 158 | `resource.pin rX` | статический ресурс: его идентичность не покидает область, обход региона его не принимает |
+| 159 | `resource.leave rX` | destroy закреплённого ресурса на выходе из области, один раз; отказ destroy — отказ инструкции |
+| 160 | `resource.unwind rD, rX, rX` | `resource.leave` на пути отказа; отказ с отказом destroy как вторичным |
+| 161 | `resource.settle rX` | `resource.leave` ресурса с async destroy: точка приостановки, destroy ожидается под защитой от отмены |
+| 162 | `resource.settle_unwind rD, rX, rX` | `resource.settle` на пути отказа; отказ с отказом destroy как вторичным |
 | 140 | `jmp @T` | переход с присваиваниями ребра |
 | 141 | `br rX, @T, @T` | ветвление по bool |
 | 142 | `ret rX/_` | возврат (`_` из void-функции) |
 | 143 | `panic rX` | отказ с сообщением str |
 | 144 | `trap CODE, "…"` | программная ошибка: `confirm`, `range`, `empty`, `unbound`, `unreachable`, `pending` (действие у недостроенного объекта) с сообщением |
-| 145 | `unreachable` | управление сюда не приходит |
+| 145 | `unreachable` | управление сюда не приходит; если пришло — программная ошибка `Unreachable code reached`, как у `trap` |
 | 146 | `throw rX` | бросить объект, делающий встроенную роль Error |
 | 147 | `raise rX` | передать отказ дальше |
 | 148 | `catch rX, object/role/variant, N, rD, @T, @T` | сопоставить отказ с `object N` или `role N`: значение на ребре к первой цели, иначе вторая |

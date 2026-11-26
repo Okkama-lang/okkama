@@ -17,7 +17,7 @@ fn runtime(source: &str, plain: bool, stress: bool) -> Box<Runtime> {
 
 fn source(types: &str, registers: &str, params: &str, result: &str, code: &[String]) -> String {
     let body: String = code.iter().enumerate().map(|(pc, line)| format!(" {pc}: {line}\n")).collect();
-    format!("sparrow 16\nmodule \"dispatch-537\" \"1.0.0\"\n{types}\nfunction f0 \"main\" {{\n registers [{registers}]\n params [{params}]\n result {result}\n{body}}}\n")
+    format!("sparrow 18\nmodule \"dispatch-537\" \"1.0.0\"\n{types}\nfunction f0 \"main\" {{\n registers [{registers}]\n params [{params}]\n result {result}\n{body}}}\n")
 }
 
 fn event(runtime: &Runtime, name: &str) -> u64 {
@@ -34,7 +34,8 @@ fn dispatch_537_helper_effects() {
         let effects = HELPERS.iter().find(|(key, _)| *key == name).unwrap_or_else(|| panic!("missing {name}")).1;
         assert!(effects.contains(&Effect::Allocates), "{name}");
         assert!(effects.contains(&Effect::Collects), "{name}");
-        assert_eq!(effects.contains(&Effect::Fails), name == "rat_new", "{name}");
+        // #1033: builder.finish fails an array past the length limit instead of panicking.
+        assert_eq!(effects.contains(&Effect::Fails), matches!(name, "rat_new" | "builder_finish"), "{name}");
         assert!(!effects.contains(&Effect::Reenters), "{name}");
     }
     let effects = HELPERS.iter().find(|(key, _)| *key == "scalar_safepoint").expect("scalar safepoint").1;
@@ -314,6 +315,53 @@ fn dispatch_537_builder_budgets_match_generic() {
                 assert_eq!(error.0, if memory { "Execution budget exhausted: memory" } else { "Execution budget exhausted: steps" });
             }
         }
+        Ok(())
+    }).unwrap();
+}
+
+/// #1033: an array or a text past the heap's length limit fails the program in the direct helpers
+/// of machine code (`builder_finish`, `int_text`) as in the generic path, instead of panicking
+/// through Cranelift frames (an abort). The limit is lowered on this thread, so the values stay small.
+#[test]
+fn dispatch_1033_direct_helpers_fail_past_the_length_limit() {
+    crate::on_vm_thread(|| {
+        let limit = |n: usize| heap::MAX_LENGTH.with(|max| max.set(n));
+        for element in ["int", "byte"] {
+            let mut code = vec!["builder.new r0".into()];
+            code.extend(std::iter::repeat_n("builder.push r0, r0, r1".into(), 4));
+            code.extend(["builder.finish r2, r0".into(), "ret r2".into()]);
+            let text = source(&format!("type t0 {element}\ntype t1 builder t0\ntype t2 array t0"), "t1, t0, t2", "r1", "t2", &code);
+            for plain in [false, true] {
+                let mut rt = runtime(&text, plain, false);
+                let seven = rt.heap.int(7);
+                limit(4);
+                let array = rt.run_function_with(0, &[seven], 1 << 24).unwrap();
+                assert_eq!(rt.heap.array_length(array), 4, "{element}, plain={plain}");
+                limit(3);
+                let error = rt.run_function_with(0, &[seven], 1 << 24).unwrap_err();
+                assert!(error.0.contains("array: the result would pass the 4294967295 elements an array can hold"), "{element}, plain={plain}: {}", error.0);
+                assert!(!rt.poisoned, "a program failure, not an internal error: {}", error.0);
+                assert_eq!(helper(&rt, "builder_finish"), if plain { 0 } else { 2 }, "{element}, plain={plain}");
+            }
+        }
+        let text = source("type t0 int\ntype t1 str", "t0, t1", "r0", "t1", &["cvt r1, r0".into(), "ret r1".into()]);
+        // Machine code stops at the conversion: the division by zero after it never runs.
+        let stops = source("type t0 int\ntype t1 str", "t0, t1, t0, t0", "r0", "t1",
+            &["cvt r1, r0".into(), "const r2, int 0".into(), "int.mod r3, r0, r2".into(), "ret r1".into()]);
+        for plain in [false, true] {
+            let mut rt = runtime(&text, plain, false);
+            let number = rt.heap.int(12345);
+            limit(5);
+            let word = rt.run_function_with(0, &[number], 1 << 24).unwrap();
+            assert_eq!(rt.heap.text(word), "12345");
+            limit(4);
+            let mut rt = runtime(&stops, plain, false);
+            let error = rt.run_function_with(0, &[number], 1 << 24).unwrap_err();
+            assert!(error.0.contains("int text: the result would pass the 4 GiB a string can hold"), "plain={plain}: {}", error.0);
+            assert!(!rt.poisoned, "{}", error.0);
+            assert_eq!(helper(&rt, "int_text"), if plain { 0 } else { 1 }, "plain={plain}");
+        }
+        limit(u32::MAX as usize);
         Ok(())
     }).unwrap();
 }

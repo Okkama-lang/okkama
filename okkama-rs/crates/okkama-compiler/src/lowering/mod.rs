@@ -13,6 +13,7 @@ mod ctx;
 mod futures;
 pub(crate) mod intrinsics;
 mod modules;
+mod natives;
 pub mod std_paths;
 
 pub use modules::{LoadedModule, MODULE_COUNT, ModuleLoader};
@@ -29,6 +30,9 @@ pub enum LoweringError {
     Unsupported { span: Span, message: String },
     /// Программа нарушает правило языка: имена, типы, управление потоком.
     Invalid { span: Span, message: String },
+    /// A compiler invariant failed, rather than an error in the input program. The message is the bare text: the
+    /// kind, "internal compiler error", comes from the variant, as the other kinds' names do (#1093).
+    Internal { span: Span, message: String },
 }
 
 impl LoweringError {
@@ -46,22 +50,29 @@ impl LoweringError {
         }
     }
 
+    pub(crate) fn internal(span: Span, message: impl Into<String>) -> Self {
+        Self::Internal { span, message: message.into() }
+    }
+
     pub fn span(&self) -> Span {
         match self {
-            Self::Unsupported { span, .. } | Self::Invalid { span, .. } => *span,
+            Self::Unsupported { span, .. } | Self::Invalid { span, .. } | Self::Internal { span, .. } => *span,
         }
     }
 
     pub fn message(&self) -> &str {
         match self {
-            Self::Unsupported { message, .. } | Self::Invalid { message, .. } => message,
+            Self::Unsupported { message, .. } | Self::Invalid { message, .. } | Self::Internal { message, .. } => message,
         }
     }
 }
 
 impl fmt::Display for LoweringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message())
+        match self {
+            Self::Internal { message, .. } => write!(f, "internal compiler error: {message}"),
+            _ => f.write_str(self.message()),
+        }
     }
 }
 
@@ -410,6 +421,7 @@ fn check_roots(
                 crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
             }
             LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
+            LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.to_string()),
         };
         return Err(Ok(vec![CheckError {
             source: source_of(&graph, roots, module),
@@ -509,6 +521,12 @@ fn lower_analyzed(
         };
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
+    // One census serves the untracking below and the statics pass: neither reads the region operations it changes.
+    // `okkama check` builds no code, and a track of a borrowed result changes nothing, so it skips both.
+    let mut census = None;
+    if optimize {
+        untrack_borrowed_results(&mut module, &mut census);
+    }
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
     dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
@@ -516,7 +534,7 @@ fn lower_analyzed(
     // regions go with the next pass.
     if passes.on("statics") {
         let _span = okkama_devtrace::span!("lower", "pass statics");
-        ir::statics::make_static(&mut module);
+        ir::statics::make_static(&mut module, census.take());
     }
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
@@ -534,7 +552,8 @@ fn lower_analyzed(
     if passes.on("fold") {
         ir::fold::fold_constants(&mut module);
     }
-    // Константы циклов вычисляются один раз, во входном блоке.
+    // Константы циклов вычисляются один раз, в ближайшем внешнем доминаторе
+    // цикла, а не во входном блоке функции (#239).
     if passes.on("hoist") {
         ir::hoist::hoist_loop_constants(&mut module);
     }
@@ -562,30 +581,7 @@ fn lower_analyzed(
         sabotage_int_add(&mut module);
     }
     dev_ir("ir after passes", &module);
-    // Lowering обязан выдавать только корректный IR: нарушение — ошибка компилятора.
-    if let Err(error) = ir::verify(&module) {
-        // Отладка компилятора: печать отвергнутого IR.
-        if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-            let _ = std::fs::write(path, module.to_string());
-        }
-        return Err((
-            root,
-            LoweringError::invalid(
-                program.span,
-                format!("internal compiler error: lowering produced invalid IR: {error}"),
-            ),
-        ));
-    }
-    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
-    if verify_ownership() {
-        let _span = okkama_devtrace::span!("lower", "linearity check");
-        if let Err(error) = ir::linearity::check(&module) {
-            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-                let _ = std::fs::write(path, module.to_string());
-            }
-            return Err((root, LoweringError::invalid(program.span, format!("internal compiler error: {error}"))));
-        }
-    }
+    verify_lowered(&module, program.span, verify_ownership()).map_err(|error| (root, error))?;
     if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
         let mut report = ir::ownership::analyze(&module);
         report.record_param_adopts(&param_adopts_removed);
@@ -792,13 +788,87 @@ pub fn inspect_parsed(
     inspection
 }
 
-/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`.
+/// A closure or cap-field call's result is tracked in its scope like any call's (#1099), but only a new identity
+/// needs it: the ownership census (`ir::ownership`, the same answer the linearity check uses) says which results
+/// are. A track right after a `call.fn` or `call.cap` whose result the census reports as no creation (a cap field
+/// reading its owner, a closure returning its argument or a capture) goes: that identity has its owner already.
+/// The census runs only when such a track exists; it is left in `census` for the statics pass.
+fn untrack_borrowed_results(module: &mut ir::Module, census: &mut Option<ir::ownership::Report>) {
+    let tracked_after = |block: &ir::Block, at: usize| match (&block.insts[at], block.insts.get(at + 1)) {
+        (
+            ir::Inst { result: Some(value), kind: ir::InstKind::CallFn { .. } | ir::InstKind::CallCap { .. }, .. },
+            Some(ir::Inst { kind: ir::InstKind::RegionTrack { value: tracked, .. }, .. }),
+        ) if tracked == value => Some(*value),
+        _ => None,
+    };
+    let any = module.functions.iter().flat_map(|function| &function.blocks)
+        .any(|block| (0..block.insts.len()).any(|at| tracked_after(block, at).is_some()));
+    if !any {
+        return;
+    }
+    let report = census.get_or_insert_with(|| ir::ownership::analyze(module));
+    let made: Vec<std::collections::HashSet<usize>> = report.functions.iter()
+        .map(|found| found.creations.iter().map(|creation| creation.value).collect())
+        .collect();
+    let mut untracked = 0u64;
+    for (function, made) in module.functions.iter_mut().zip(&made) {
+        for block in &mut function.blocks {
+            let mut at = 0;
+            while at < block.insts.len() {
+                if let Some(value) = tracked_after(block, at)
+                    && !made.contains(&value.0)
+                {
+                    block.insts.remove(at + 1);
+                    untracked += 1;
+                }
+                at += 1;
+            }
+        }
+    }
+    okkama_devtrace::count!("lower", "borrowed closure and cap results untracked", untracked);
+}
+
+fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()> {
+    // Invalid output is a compiler failure, never a rejected fuzz input.
+    if let Err(error) = ir::verify(module) {
+        // Preserve rejected IR for diagnostics.
+        if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+            let _ = std::fs::write(path, module.to_string());
+        }
+        return Err(LoweringError::internal(
+            span,
+            format!("lowering produced invalid IR: {error}"),
+        ));
+    }
+    // #910: the ownership linearity check, in debug builds and, in an optimized build too, with
+    // OKKAMA_VERIFY_OWNERSHIP=1; packaged releases (`--cfg okkama_release`) compile it out (#1073).
+    if ownership {
+        let _span = okkama_devtrace::span!("lower", "linearity check");
+        if let Err(error) = ir::linearity::check(module) {
+            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+                let _ = std::fs::write(path, module.to_string());
+            }
+            return Err(LoweringError::internal(span, error));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`
+/// in any build but a packaged release (`--cfg okkama_release`).
 fn verify_ownership() -> bool {
     if cfg!(okkama_release) {
         return false;
     }
-    cfg!(debug_assertions) || std::env::var("OKKAMA_VERIFY_OWNERSHIP").is_ok_and(|value| value == "1")
+    cfg!(debug_assertions) || crate::env_switch::enabled("OKKAMA_VERIFY_OWNERSHIP")
 }
+
+/// The environment that changes what a build produces (#1087): `okkama env` names each one that is set, and
+/// Blade's build stamp records it, so changing one builds again. A variable the compiler reads only to check,
+/// report, profile or dump (`OKKAMA_VERIFY_OWNERSHIP`, `OKKAMA_CHECK_REGISTERS`, `OKKAMA_PROFILE_REGISTERS`,
+/// `OKKAMA_OWNERSHIP_REPORT`, `OKKAMA_DUMP_INVALID_IR`) leaves the output as it is and is not here;
+/// `build_environment_tests` keeps every variable the compiler reads in one of the two lists.
+pub const BUILD_ENVIRONMENT: [&str; 2] = ["OKKAMA_IR_PASSES", "OKKAMA_OWNERSHIP_PROTOTYPE"];
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
 /// default), `none` or a comma list of `statics`, `regions`, `tail-calls`, `fold`, `hoist`,
@@ -838,31 +908,46 @@ pub fn select_passes(spec: &str) {
     *SELECTED.write().expect("pass selection") = Some(spec.to_string());
 }
 
+/// The names of a pass list (`OKKAMA_IR_PASSES`, `okkama ir --passes`) that select nothing: neither a pass nor
+/// `all`, `none` or the test-only `sabotage-int-add`. A misspelt pass would be left out silently and weaken a
+/// passes-on/off comparison (#999), so `okkama ir --passes` refuses them and lowering warns about them.
+pub fn unknown_passes(spec: &str) -> Vec<&str> {
+    spec.split(',').map(str::trim)
+        .filter(|name| !name.is_empty() && !PASSES.contains(name) && !matches!(*name, "all" | "none" | "sabotage-int-add"))
+        .collect()
+}
+
+/// The warning about the unknown names of `spec`, which came from `origin` (#1044): the variable, or the API
+/// call that selected the passes.
+fn unknown_passes_warning(spec: &str, origin: &str) -> Option<String> {
+    let unknown = unknown_passes(spec);
+    (!unknown.is_empty()).then(|| format!("{origin}: unknown pass {} (known: all, none, {})", unknown.join(", "), PASSES.join(", ")))
+}
+
 impl Passes {
     fn from_env() -> Self {
-        let selected = THREAD_PASSES.with(|passes| passes.borrow().clone())
-            .or_else(|| SELECTED.read().expect("pass selection").clone());
-        let spec = selected.unwrap_or_else(|| std::env::var("OKKAMA_IR_PASSES").unwrap_or_default());
+        let (spec, origin) = match THREAD_PASSES.with(|passes| passes.borrow().clone()) {
+            Some(spec) => (spec, "lowering::with_passes"),
+            None => match SELECTED.read().expect("pass selection").clone() {
+                Some(spec) => (spec, "lowering::select_passes"),
+                None => (std::env::var("OKKAMA_IR_PASSES").unwrap_or_default(), "OKKAMA_IR_PASSES"),
+            },
+        };
+        if let Some(warning) = unknown_passes_warning(&spec, origin) {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| eprintln!("{warning}"));
+        }
         Self::from_spec(&spec, std::env::var("OKKAMA_OWNERSHIP_PROTOTYPE").ok().as_deref())
     }
 
     fn from_spec(spec: &str, prototype: Option<&str>) -> Self {
         let mut names: Vec<String> = spec.split(',').map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).collect();
-        // A misspelt pass would be left out silently and weaken a passes-on/off comparison (#999).
-        let unknown: Vec<&str> = names.iter().map(String::as_str)
-            .filter(|name| !PASSES.contains(name) && !matches!(*name, "all" | "none" | "sabotage-int-add"))
-            .collect();
-        if !unknown.is_empty() {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| eprintln!("OKKAMA_IR_PASSES: unknown pass {} (known: all, none, {})",
-                unknown.join(", "), PASSES.join(", ")));
-        }
         let sabotage = names.iter().any(|name| name == "sabotage-int-add");
         names.retain(|name| name != "sabotage-int-add");
         // `none` names no pass, so every pass is off.
         let enabled = (!names.is_empty() && !names.iter().any(|name| name == "all")).then_some(names);
         // Separate from the default pass list; only an explicit opt-in enables it (#555).
-        let param_adopts = prototype == Some("1");
+        let param_adopts = crate::env_switch::value_enabled(prototype.map(std::ffi::OsStr::new));
         Self { enabled, sabotage, param_adopts }
     }
 
@@ -957,7 +1042,7 @@ mod param_adopts_tests {
         let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).expect("parse");
         let module = with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&program)).expect("lower");
         let before = module.to_string();
-        for switch in [None, Some("0"), Some("true"), Some(""), Some(" 1")] {
+        for switch in [None, Some("0"), Some("false"), Some("OFF"), Some("No"), Some("")] {
             for spec in ["", "all", "none", "param-adopts"] {
                 let passes = Passes::from_spec(spec, switch);
                 let mut after = module.clone();
@@ -966,8 +1051,136 @@ mod param_adopts_tests {
             }
         }
         assert!(!PASSES.contains(&"param-adopts"));
-        let mut enabled = module.clone();
-        assert!(Passes::from_spec("all", Some("1")).elide_param_adopts(&mut enabled).iter().sum::<usize>() > 0);
-        ir::verify(&enabled).expect("prototype verifies");
+        for switch in ["1", "true", "ON", "yes", "anything"] {
+            let mut enabled = module.clone();
+            assert!(Passes::from_spec("all", Some(switch)).elide_param_adopts(&mut enabled).iter().sum::<usize>() > 0);
+            ir::verify(&enabled).expect("prototype verifies");
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod pass_list_tests {
+    use super::*;
+
+    /// #1044: the warning names where the list came from, and only names that select nothing.
+    #[test]
+    fn an_unknown_pass_is_named_with_the_origin_of_its_list() {
+        assert_eq!(unknown_passes(" fold , hoistt,,all,none,sabotage-int-add,dce2"), ["hoistt", "dce2"]);
+        assert!(unknown_passes("").is_empty());
+        assert!(unknown_passes(&PASSES.join(",")).is_empty());
+        assert_eq!(unknown_passes_warning("fold,hoistt", "OKKAMA_IR_PASSES").as_deref(),
+            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, fold, hoist, dce, undef, jumps)"));
+        assert!(unknown_passes_warning("fold,hoistt", "lowering::select_passes").unwrap().starts_with("lowering::select_passes: unknown pass hoistt "));
+        assert_eq!(unknown_passes_warning("all", "OKKAMA_IR_PASSES"), None);
+    }
+}
+
+#[cfg(test)]
+mod internal_error_tests {
+    use super::*;
+
+    fn module(text: &str) -> ir::Module {
+        let source = SourceFile::new("test.ok", text).unwrap();
+        let ast = syntax_program(&source);
+        with_passes("all", || lower_program(&ast)).unwrap()
+    }
+
+    fn syntax_program(source: &SourceFile) -> ast::Program {
+        crate::syntax::parse(source, &crate::syntax::ParseOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn invalid_oir_is_an_internal_error() {
+        let mut module = module(include_str!("../../../../fuzz/seeds/sum.ok"));
+        verify_lowered(&module, module.span, true).unwrap();
+        // Mutation: an undefined return operand in otherwise valid lowering.
+        module.functions[0].blocks[0].term.kind = ir::TermKind::Ret(Some(ir::ValueId(usize::MAX)));
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert!(error.message().contains("lowering produced invalid IR"));
+        assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
+    }
+
+    #[test]
+    fn missing_resource_close_is_an_internal_error() {
+        let mut module = module("module app; object R { R(); destroy {} } main() is int { let r = R(); 0; }");
+        let mut removed = 0;
+        for function in &mut module.functions {
+            for block in &mut function.blocks {
+                block.insts.retain(|inst| {
+                    let close = matches!(inst.kind, ir::InstKind::ResourceLeave { .. } | ir::InstKind::RegionLeave { .. });
+                    removed += usize::from(close);
+                    !close
+                });
+            }
+        }
+        assert!(removed > 0);
+        ir::verify(&module).expect("only linearity is broken");
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert!(error.message().contains("may still be open"), "{error}");
+        assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
+    }
+
+    /// #1093: an internal error names its kind once. The message is the bare text, as a caller that prints
+    /// "KIND: message" (the CLI) expects; the error as a whole reads "internal compiler error: …".
+    #[test]
+    fn an_internal_error_names_its_kind_once() {
+        let mut module = module("module app; object R { R(); destroy {} } main() is int { let r = R(); 0; }");
+        module.functions[0].blocks[0].term.kind = ir::TermKind::Ret(Some(ir::ValueId(usize::MAX)));
+        let error = verify_lowered(&module, module.span, true).unwrap_err();
+        assert!(error.message().starts_with("lowering produced invalid IR: "), "{error:?}");
+        let text = error.to_string();
+        assert!(text.starts_with("internal compiler error: lowering produced invalid IR: "), "{text}");
+        assert_eq!(text.matches("internal compiler error").count(), 1, "{text}");
+    }
+}
+
+#[cfg(test)]
+mod build_environment_tests {
+    use super::*;
+
+    /// Variables the compiler reads that never change its output: checks, reports, profiles, dumps.
+    const NOT_BUILD: [&str; 5] = [
+        "OKKAMA_VERIFY_OWNERSHIP",
+        "OKKAMA_CHECK_REGISTERS",
+        "OKKAMA_PROFILE_REGISTERS",
+        "OKKAMA_OWNERSHIP_REPORT",
+        "OKKAMA_DUMP_INVALID_IR",
+    ];
+
+    /// Every `"OKKAMA_…"` literal in the files under `dir`.
+    fn read_variables(dir: &std::path::Path, found: &mut std::collections::BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                read_variables(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices("\"OKKAMA_") {
+                    let name: String = text[at + 1..].chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+                    // The needle above is itself such a literal, with no name after the prefix.
+                    if name.len() > "OKKAMA_".len() && text[at + 1 + name.len()..].starts_with('"') {
+                        found.insert(name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// #1087: a variable the compiler reads is either part of the build (Blade rebuilds when it changes) or
+    /// named here as one that leaves the output as it is; a new one must be put in one list or the other.
+    #[test]
+    fn every_variable_the_compiler_reads_is_classified() {
+        let mut found = std::collections::BTreeSet::new();
+        read_variables(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut found);
+        assert!(found.contains("OKKAMA_IR_PASSES"), "{found:?}");
+        for name in &found {
+            let build = BUILD_ENVIRONMENT.contains(&name.as_str());
+            let not_build = NOT_BUILD.contains(&name.as_str());
+            assert!(build != not_build, "{name}: in {} of BUILD_ENVIRONMENT and NOT_BUILD", if build { "both" } else { "neither" });
+        }
     }
 }
