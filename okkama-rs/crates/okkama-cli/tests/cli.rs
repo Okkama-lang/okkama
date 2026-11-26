@@ -2866,3 +2866,47 @@ fn fmt_unreadable_standard_input_is_an_io_error() {
     let file = TempFile::new("fmt-unreadable.ok", b"module app v1.0.0;\n\xff\n");
     assert_eq!(run(&["fmt", file.path()]).status.code(), Some(3));
 }
+
+
+#[test]
+fn interactive_commands_validate_arguments_before_starting() {
+    for command in ["lsp", "repl"] {
+        let expected = run(&["help", command]);
+        assert_eq!(expected.status.code(), Some(0));
+        let output = run(&[command, "--help"]);
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(output.stdout, expected.stdout);
+        assert!(output.stderr.is_empty());
+        for (arguments, bad) in [
+            (vec!["extra"], "extra"), (vec!["--unknown"], "--unknown"), (vec!["-h"], "-h"),
+            (vec!["--help", "extra"], "extra"), (vec!["extra", "--help"], "extra"),
+            (vec!["--help", "--help"], "--help"),
+        ] {
+            let mut args = vec![command];
+            args.extend(arguments);
+            let output = run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {}", stderr(&output));
+            assert!(output.stdout.is_empty());
+            assert!(stderr(&output).contains(bad), "{}", stderr(&output));
+        }
+    }
+}
+
+#[test]
+fn entry_result_report_is_independent_of_integer_magnitude() {
+    let artifact = TempFile::new("entry-result-report.spb", b"");
+    for value in ["0", "42", "255", "256", "300", "-1", "9223372036854775807", "-9223372036854775808", "1180591620717411303424", "-1180591620717411303424"] {
+        let source = format!("module app; main() is int {{ {value}; }}");
+        let built = run_stdin(&["build", "-", "-o", artifact.path()], source.as_bytes());
+        assert_eq!(built.status.code(), Some(0), "{}", stderr(&built));
+        for output in [run_stdin(&["run", "-"], source.as_bytes()), run(&["exec", artifact.path()])] {
+            let (code, report) = match value.parse::<u8>() {
+                Ok(code) => (code, String::new()),
+                Err(_) => (1, format!("main() must return an int in 0..255, got {value}\n")),
+            };
+            assert_eq!(output.status.code(), Some(code.into()), "{value}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(stderr(&output), report);
+        }
+    }
+}

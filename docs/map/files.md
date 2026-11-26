@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 22339 lines
+## front — 36 files, 22351 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -20,7 +20,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/check/mod.rs` 912 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 722 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
 - `okkama-compiler/src/analysis/check/variants.rs` 580 — Nominal variant construction, pattern bindings, and optional fallback.
-- `okkama-compiler/src/syntax/format.rs` 1720 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
+- `okkama-compiler/src/syntax/format.rs` 1732 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
 - `okkama-compiler/src/syntax/limits.rs` 297 — Бюджет синтаксического дерева (H-03): глубина и число узлов.
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.
 - `okkama-compiler/src/syntax/prune.rs` 238 — Production pruning: removing test-only declarations from a parsed tree.
@@ -80,7 +80,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/codegen/sparrow/mod.rs` 735 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 17 files, 6253 lines
+## compiler — 17 files, 6261 lines
 
 - `okkama-compiler/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
 - `okkama-compiler/src/lib.rs` 19 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
@@ -90,13 +90,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/doc/links.rs` 233 — Symbol links, documentation lookup and search (#513), shared by man and IDE.
 - `okkama-compiler/src/doc/mod.rs` 609 — The documentation model (#512): what a module says about itself in its
 - `okkama-compiler/src/doc/publish.rs` 222 — Publishing from the canonical public doc model (#515): man(7), standalone
-- `okkama-compiler/src/doc/render.rs` 673 — Reference pages from the documentation model (#512): terminal text and
+- `okkama-compiler/src/doc/render.rs` 674 — Reference pages from the documentation model (#512): terminal text and
 - `okkama-compiler/src/ide/complete.rs` 957 — Дополнение и подсказка сигнатуры.
-- `okkama-compiler/src/ide/index.rs` 1167 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
+- `okkama-compiler/src/ide/index.rs` 1171 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
 - `okkama-compiler/src/ide/lint.rs` 882 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
 - `okkama-compiler/src/ide/mod.rs` 249 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
 - `okkama-compiler/src/ide/outline.rs` 288 — Структура файла по синтаксическому дереву (без анализа).
-- `okkama-compiler/src/ide/std_paths.rs` 372 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
+- `okkama-compiler/src/ide/std_paths.rs` 375 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
 - `okkama-compiler/src/source/mod.rs` 199 — Source text, byte spans and human-facing positions.
 
@@ -190,21 +190,21 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
 - `okkama-devtrace/src/lib.rs` 320 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 11 files, 5302 lines
+## cli — 11 files, 5312 lines
 
 - `okkama-cli/src/core.rs` 81 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/env_switch.rs` 28 — Shared boolean environment-switch policy (#1067).
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 935 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1734 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1744 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 414 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 630 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 70 files, 21632 lines
+## other — 70 files, 21635 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -275,4 +275,4 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `sparrow-cli/src/env_switch.rs` 25 — Shared boolean environment-switch policy (#1067).
-- `sparrow-cli/src/main.rs` 257 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
+- `sparrow-cli/src/main.rs` 260 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a

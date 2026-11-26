@@ -409,7 +409,7 @@ fn core_outcome(result: Result<i64, sparrow_core::Error>) -> Outcome {
     match result {
         Ok(value) => match u8::try_from(value) {
             Ok(code) => Outcome { stdout: String::new(), stderr: String::new(), code },
-            Err(_) => Outcome::failure(format!("RuntimeError: main() must return an int in 0..255, got {value}\n"), 1),
+            Err(_) => Outcome::failure(format!("main() must return an int in 0..255, got {value}\n"), 1),
         },
         Err(error) => Outcome::failure(core::report(error), 1),
     }
@@ -470,11 +470,11 @@ fn main() -> ExitCode {
     sparrow_core::budget::set_memory_probe(sparrow_core::budget::mimalloc_committed);
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Сервер языка владеет stdin/stdout сам.
-    if args.first().map(String::as_str) == Some("lsp") {
+    if args.len() == 1 && args[0] == "lsp" {
         return lsp::run();
     }
     // The REPL reads stdin and writes as it goes.
-    if args.first().map(String::as_str) == Some("repl") {
+    if args.len() == 1 && args[0] == "repl" {
         return repl::run();
     }
     let outcome = run(&args);
@@ -514,6 +514,16 @@ fn run(args: &[String]) -> Outcome {
             Some("lsp") => Outcome::success(LSP_HELP.to_string()),
             Some("repl") => Outcome::success(repl::help()),
             Some(other) => Outcome::usage(&format!("unknown command `{other}`")),
+        },
+        "lsp" | "repl" => match rest {
+            [flag] if flag == "--help" => {
+                Outcome::success(if command == "lsp" { LSP_HELP.to_string() } else { repl::help() })
+            }
+            _ => {
+                let argument = rest.iter().find(|argument| argument.as_str() != "--help")
+                    .or_else(|| rest.get(1)).unwrap_or(command);
+                Outcome::usage(&format!("unexpected argument `{argument}` for `{command}`"))
+            }
         },
         "-V" | "--version" => Outcome::success(format!("okkama {}\n", env!("CARGO_PKG_VERSION"))),
         // Endpoint conformance-адаптера (`conformance/adapters/PROTOCOL.md`).

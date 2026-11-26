@@ -125,7 +125,10 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
     let _ = sparrow_core::stdout::flush();
     match result {
-        Ok(sparrow_core::Execution::Main(Ok(code))) => u8::try_from(code).map_err(|_| (1, format!("main() must return an int in 0..255, got {code}"))),
+        Ok(sparrow_core::Execution::Main(Ok(code))) => match u8::try_from(code) {
+            Ok(code) => Ok(code),
+            Err(_) => report(sparrow_core::Error(format!("main() must return an int in 0..255, got {code}"))),
+        },
         Ok(sparrow_core::Execution::Main(Err((error, trace)))) => {
             let code = report(error);
             eprint!("{trace}");

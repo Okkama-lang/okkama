@@ -19,8 +19,8 @@
 //!
 //! Other CommonMark parses but has no special look. A heading in a module
 //! overview named Synopsis, Errors, Engine notes or See also fills that
-//! section of the page. Without a Synopsis heading, the overview's first code
-//! block is the synopsis.
+//! section of the page. The first code block outside runnable doctests and their
+//! output is the synopsis, in that section or otherwise in the overview.
 
 use super::{ItemDoc, ItemKind, MemberDoc, MemberKind, ModuleDoc, summary};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -70,7 +70,21 @@ pub(super) fn overview(doc: &ModuleDoc) -> Overview {
     let flush = |parts: &mut Overview, section: Option<&'static str>, current: &mut String| {
         let text = std::mem::take(current).trim_matches('\n').to_string();
         match section {
-            Some("synopsis") => parts.synopsis = Some(code_of(&text).unwrap_or(text)),
+            Some("synopsis") => {
+                let mut remaining = text;
+                if let Some((code, range)) = first_synopsis_block(&remaining) {
+                    parts.synopsis = Some(code);
+                    remaining.replace_range(range, "");
+                } else if !Parser::new(&remaining).any(|event| matches!(event, Event::Start(Tag::CodeBlock(_)))) {
+                    parts.synopsis = Some(std::mem::take(&mut remaining));
+                }
+                if !remaining.trim().is_empty() {
+                    if !parts.description.is_empty() {
+                        parts.description.push_str("\n\n");
+                    }
+                    parts.description.push_str(remaining.trim_matches('\n'));
+                }
+            },
             Some("errors") => parts.errors = text,
             Some("engines") => parts.engines = text,
             Some("see") => parts.see_also = text,
@@ -115,24 +129,6 @@ fn options() -> Options {
     Options::ENABLE_TABLES
 }
 
-/// The first code block of `text`, its content and where it is.
-fn first_code_block(text: &str) -> Option<(String, std::ops::Range<usize>)> {
-    let mut code = None::<(String, std::ops::Range<usize>)>;
-    for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) if code.is_none() => code = Some((String::new(), range)),
-            Event::Text(content) if code.is_some() => {
-                if let Some((body, _)) = code.as_mut() {
-                    body.push_str(&content);
-                }
-            }
-            Event::End(TagEnd::CodeBlock) if code.is_some() => break,
-            _ => {}
-        }
-    }
-    code.map(|(body, range)| (body.trim_end_matches('\n').to_string(), range))
-}
-
 /// The first code block that can stand as a synopsis: a runnable example
 /// (`okkama,run`) and its `output` fence are examples, not the synopsis (#1008).
 fn first_synopsis_block(text: &str) -> Option<(String, std::ops::Range<usize>)> {
@@ -142,7 +138,7 @@ fn first_synopsis_block(text: &str) -> Option<(String, std::ops::Range<usize>)> 
         match event {
             Event::Start(Tag::CodeBlock(kind)) if code.is_none() => {
                 skipping = matches!(&kind, pulldown_cmark::CodeBlockKind::Fenced(info)
-                    if info.split(',').any(|part| matches!(part.trim(), "run" | "output")));
+                    if info.split(|ch: char| ch == ',' || ch.is_whitespace()).any(|part| matches!(part, "run" | "output")));
                 if !skipping {
                     code = Some((String::new(), range));
                 }
@@ -157,11 +153,14 @@ fn first_synopsis_block(text: &str) -> Option<(String, std::ops::Range<usize>)> 
             _ => {}
         }
     }
-    code.map(|(body, range)| (body.trim_end_matches('\n').to_string(), range))
-}
-
-fn code_of(text: &str) -> Option<String> {
-    first_code_block(text).map(|(code, _)| code)
+    code.map(|(body, mut range)| {
+        // CommonMark's indented block range starts after the leading spaces.
+        let line = text[..range.start].rfind('\n').map_or(0, |at| at + 1);
+        if text[line..range.start].trim().is_empty() {
+            range.start = line;
+        }
+        (body.trim_end_matches('\n').to_string(), range)
+    })
 }
 
 // ---------------------------------------------------------------- text

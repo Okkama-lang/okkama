@@ -1,6 +1,48 @@
 # State (update at the end of every task)
 
 
+## Formatter, IDE, CLI and IDNA audit (2026-11-26, feature/065-ide)
+
+- [x] #1036 point 1: only a bare lsp/repl starts the interactive command.
+  `--help` alone uses the existing help page and exits 0; every other argument
+  (including additional help flags) is named in a usage error, exit 2.
+  Points 2–4 were already fixed in the documentation lane.
+- [x] #1037: bodiless signatures retain their post-semicolon comment when
+  header comments are pending; brackets inside comments do not delimit lists;
+  object/enum/const name comments and destroy header comments keep their place.
+  Trailing comments cannot be stolen across another construct on the same line.
+  The #1006 block-comment/header and line-comment/body rules remain covered.
+- [x] #1041: action result types in IDE completion/signatures use the same
+  root-module-qualified names as member-table keys, including role actions.
+  Tests cover both same-named objects, role receivers and repeated calls.
+- [x] #1042: self is completed once in object scope and never in main;
+  constant-use spans cover only the identifier; misplaced/stale doc comments
+  are corrected. Explicit and implicit synopsis extraction skips runnable
+  doctests (comma or whitespace metadata) and output fences, preserves examples,
+  and removes an indented block's indentation. Std overlays read and parse once
+  for their deep-index overview and declaration inventory.
+- [x] #1029: both CLIs print the runtime's existing bare entry-range message
+  for every integer outside 0..255, exit 1. The i64 runtime API is unchanged.
+  Exact stdout/stderr/status tests cover run/exec and standalone Sparrow,
+  0/42/255, 256/300/-1, both i64 boundaries and positive/negative 2^70.
+- [x] #1031: regenerated idna.dat with gen-idna.pl, Perl 5.42.2 and
+  Net::IDN::UTS46 2.591, entirely offline. The decompressed diff removes only
+  `B L 110000 10FFFF` and `J U 110000 10FFFF`; all B/J ranges are ordered and
+  end at or below 0x10FFFF. No manual data edit.
+
+Validation: 88 distinct selected tests pass: compiler ide::tests (43),
+syntax::format::tests (25; idempotence and token/comment preservation),
+ide::std_paths::tests (4), eight documentation rendering/publishing tests,
+runtime-core native::idna::tests (5), and three CLI regressions in the two
+cli.rs integration files. New regression tests fail against the original
+implementations; a separate renderer mutation confirms the synopsis failures,
+and the restored renderer passes. `cargo check --offline -j 4` passes.
+Generated maps refreshed with `python3 tools/map/gen.py`; `git diff --check`
+passes. No remaining work in this six-ticket scope. No commits, CHANGELOG,
+std source, parser, IR verifier/printer or Sparrow verification/typing changes;
+no full test suites, Docker, cargo fmt or clippy.
+
+
 ## Test/tool audit (2026-11-26, feature/065-tools)
 
 Scope: #1048, #1058, #1059, #1053, #1051, #1052, #1067, #1050, #1055.

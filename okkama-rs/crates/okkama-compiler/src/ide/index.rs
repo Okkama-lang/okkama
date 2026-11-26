@@ -181,6 +181,11 @@ impl<'r, 'a> Builder<'r, 'a> {
         self.registry.type_name_in(self.root, ty)
     }
 
+    /// Result types use the same module-qualified names as member-table keys.
+    fn result_name(&self, result: &Option<Ty>) -> String {
+        result.as_ref().map_or_else(|| "void".to_string(), |ty| self.ty(ty))
+    }
+
     /// Параметры подписи `name is T`; variadic-хвост — как в исходнике, `...T`.
     fn params(&self, params: &[(String, Ty)], variadic: bool) -> Vec<String> {
         params
@@ -235,9 +240,9 @@ impl<'r, 'a> Builder<'r, 'a> {
         let found = &info.methods[method];
         let params = self.params(&found.params, found.variadic);
         let result = if found.successor {
-            format!("^{}", self.registry.plain_result_name(&found.result))
+            format!("^{}", self.result_name(&found.result))
         } else {
-            self.registry.plain_result_name(&found.result)
+            self.result_name(&found.result)
         };
         let doc = found
             .decl
@@ -308,7 +313,7 @@ impl<'r, 'a> Builder<'r, 'a> {
                         "{}({}) is {}",
                         if method.is_async { "async " } else { "" },
                         params.join(", "),
-                        self.registry.plain_result_name(&method.result)
+                        self.result_name(&method.result)
                     ),
                     doc,
                 )
@@ -374,7 +379,6 @@ impl<'r, 'a> Builder<'r, 'a> {
         )
     }
 
-    /// Собственные имена модуля `module` (для `take` и `alias.`); `only` — взятые.
     /// The uses of module constants in the root (#1006): hover with the
     /// constant's type and docs, and the way to its declaration.
     fn const_uses(&mut self) {
@@ -384,7 +388,9 @@ impl<'r, 'a> Builder<'r, 'a> {
             let completion = self.const_completion(id);
             let info = &self.registry.consts[id];
             let definition = self.location(info.module, info.decl.name.span);
-            self.push(span, hover_text(&completion.detail, &completion.documentation), definition);
+            // A qualified use ends at the constant's identifier, not its module alias.
+            let name = Span::new(span.end - info.name.len() as u32, span.end);
+            self.push(name, hover_text(&completion.detail, &completion.documentation), definition);
         }
     }
 
@@ -405,6 +411,7 @@ impl<'r, 'a> Builder<'r, 'a> {
         }
     }
 
+    /// The module's own names for `take` and `alias.`; `only` limits imported names.
     fn module_names(&self, module: usize, only: Option<&Vec<String>>) -> Vec<Completion> {
         let names = &self.registry.modules[module].own;
         let hidden = &self.registry.modules[module].hidden;
@@ -966,9 +973,9 @@ impl<'r, 'a> Builder<'r, 'a> {
         let found = &info.methods[method];
         let params = self.params(&found.params, found.variadic);
         let result = if found.successor {
-            format!("^{}", self.registry.plain_result_name(&found.result))
+            format!("^{}", self.result_name(&found.result))
         } else {
-            self.registry.plain_result_name(&found.result)
+            self.result_name(&found.result)
         };
         let signature = format!(
             "{}{}{}.{}({}) is {result}",
@@ -1013,7 +1020,7 @@ impl<'r, 'a> Builder<'r, 'a> {
             )),
             found.name,
             params.join(", "),
-            self.registry.plain_result_name(&found.result)
+            self.result_name(&found.result)
         );
         let module = info.module;
         let decl = info.decl.and_then(|decl| {

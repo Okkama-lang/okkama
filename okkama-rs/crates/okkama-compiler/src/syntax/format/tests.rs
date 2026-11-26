@@ -574,3 +574,32 @@ fn a_break_that_does_not_shorten_the_line_is_not_made() {
     assert_eq!(long.chars().count(), WIDTH + 1);
     assert_eq!(fmt(&text), text);
 }
+
+
+#[test]
+fn signature_trailing_comments_keep_priority_over_pending_header_comments() {
+    for declaration in ["role R {\n    sig() is int // a\n    ; // b\n}\n", "native sig() is int // a\n; // b\n", "role R {\n    sig() is int // a\n    /* extra */ ; // b\n}\n"] {
+        let output = fmt(&format!("module app;\n{declaration}"));
+        assert!(output.contains("sig() is int; // b\n"), "{output}");
+        assert!(output.find("// b").unwrap() < output.find("// a").unwrap(), "{output}");
+    }
+}
+
+#[test]
+fn brackets_in_comments_do_not_change_list_boundaries() {
+    for (expression, open, close) in [("f(/* ( */ a, b)", "f(", ")"), ("[/* [ */ a, b]", "[", "]"), ("f(/* c */ a, b)", "f(", ")")] {
+        let output = fmt(&format!("module app; main() is int {{ let v = {expression}; 0; }}"));
+        assert!(output.contains(&format!("let v = {open}\n        /*")), "{output}");
+        assert!(output.contains(&format!("        a,\n        b\n    {close};")), "{output}");
+    }
+}
+
+#[test]
+fn declaration_header_comments_stay_before_the_following_clause() {
+    let output = fmt("module app; object A /* object */ does R { async destroy /* destroy */ {} } role R {} enum E /* enum */ = (one, two); const N /* const */ = 1;");
+    for header in ["object A /* object */ does R {", "async destroy /* destroy */ {}", "enum E /* enum */ = (one, two);", "const N /* const */ = 1;"] {
+        assert!(output.contains(header), "{header}: {output}");
+    }
+    let output = fmt("module app; object A { async destroy // destroy\n {} }");
+    assert!(output.contains("async destroy {\n        // destroy\n    }"), "{output}");
+}

@@ -6,6 +6,12 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-26. #1029 entry-result report (implementation choice under the
+  owner's six-ticket task).** Preserve the bare runtime message used for
+  results beyond i64: `main() must return an int in 0..255, got VALUE`, newline,
+  exit 1, in both CLIs for every out-of-range integer. Remove the small-value
+  CLI prefixes; keep Runtime::run_entry's i64 API and ordinary failures intact.
+
 - **2026-11-26. Test/tool audit (owner, #1067/#1051/#1052/#1055).** Boolean
   switches are OFF when unset, empty, or ASCII-case-insensitive 0/false/off/no,
   otherwise ON, including previously default-ON proof/trace switches. NO_COLOR

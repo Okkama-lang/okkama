@@ -388,3 +388,21 @@ fn stats_attribute_allocations_to_sites_and_kinds() {
         assert!(stats.contains(line), "{line:?} in\n{stats}");
     }
 }
+
+
+#[test]
+fn entry_result_report_is_independent_of_integer_magnitude() {
+    for text in ["0", "42", "255", "256", "300", "-1", "9223372036854775807", "-9223372036854775808", "1180591620717411303424", "-1180591620717411303424"] {
+        let file = File::new(&value(text));
+        for options in [vec!["run"], vec![]] {
+            let output = file.run_with(&options);
+            let (code, report) = match text.parse::<u8>() {
+                Ok(code) => (code, String::new()),
+                Err(_) => (1, format!("main() must return an int in 0..255, got {text}\n")),
+            };
+            assert_eq!(output.status.code(), Some(code.into()), "{text}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(String::from_utf8_lossy(&output.stderr), report);
+        }
+    }
+}
