@@ -201,9 +201,12 @@ mod tests {
     use crate::word::{self, Repr};
     use okkama_sparrow::{Constant, Dst, Instruction as I, Register as R, Target};
 
+    /// The analysis must stay sound on unverified code too: fixtures that read
+    /// an `undef` stub (refused by the verifier since #1069) are assembled
+    /// without verification.
     fn fixture(registers: &str, params: &str, handlers: &str, code: &[&str]) -> (Function, Vec<Kind>, Program) {
         let code: String = code.iter().enumerate().map(|(pc, text)| format!(" {pc}: {text}\n")).collect();
-        let program = okkama_sparrow::assemble(&format!(
+        let program = okkama_sparrow::assemble_unverified(&format!(
             "sparrow 18\nmodule \"proof\" \"1.0.0\"\ntype t0 int\ntype t1 bool\ntype t2 str\ntype t3 failure\ntype t4 array t0\ntype t5 byte\ntype t6 char\ntype t7 float\ntype t8 rat\ntype t9 map t0 t0\n\
              function f0 \"proof\" {{\n registers [{registers}]\n params [{params}]\n result t0\n{handlers}{code}}}\n"
         )).unwrap();

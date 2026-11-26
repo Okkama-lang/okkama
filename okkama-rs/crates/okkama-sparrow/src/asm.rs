@@ -834,16 +834,24 @@ impl Parser<'_> {
     }
 }
 
-/// Разобрать текст ассемблера и проверить программу.
+/// Parse assembly text and verify the program.
 pub fn assemble(source: &str) -> Result<Program, AsmError> {
-    let tokens = tokenize(source)?;
-    let mut parser = Parser { tokens: &tokens, at: 0 };
-    let program = parser.program()?;
+    let program = assemble_unverified(source)?;
     program.verify().map_err(|error| AsmError {
         line: 0,
         message: error.to_string(),
     })?;
     Ok(program)
+}
+
+/// Parse assembly text without verifying it: for tests of analyses that must
+/// stay sound on programs the verifier would refuse (for example a read of an
+/// `undef` stub, refused since #1069). Never load such a program.
+#[doc(hidden)]
+pub fn assemble_unverified(source: &str) -> Result<Program, AsmError> {
+    let tokens = tokenize(source)?;
+    let mut parser = Parser { tokens: &tokens, at: 0 };
+    parser.program()
 }
 
 #[cfg(test)]
