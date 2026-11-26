@@ -32,8 +32,14 @@ use crate::version::{Requirement, Version};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     Git(String),
-    /// A canonical local directory.
-    Path(PathBuf),
+    /// A local directory: `dir` canonical, to read it; `spelled` relative to
+    /// the project's root with `/` separators, as `blade.lock` records it, so
+    /// a project moved or checked out elsewhere with its packages keeps its
+    /// lock (#1040).
+    Path {
+        dir: PathBuf,
+        spelled: String,
+    },
 }
 
 impl Source {
@@ -41,25 +47,27 @@ impl Source {
     pub fn id(&self) -> String {
         match self {
             Source::Git(url) => format!("git+{url}"),
-            Source::Path(dir) => format!("path+{}", dir.display()),
+            Source::Path { spelled, .. } => format!("path+{spelled}"),
         }
     }
 
-    /// The source `blade.lock` records as `id`; a git URL only if it is one
-    /// git may be given (#346).
-    fn from_id(id: &str) -> Option<Source> {
-        if let Some(url) = id.strip_prefix("git+") {
-            check_git_url(url).ok()?;
-            Some(Source::Git(url.to_string()))
-        } else {
-            id.strip_prefix("path+")
-                .map(|dir| Source::Path(PathBuf::from(dir)))
-        }
+    /// The git source `blade.lock` records as `id`, if it is one git may be
+    /// given (#346).
+    fn git_of_id(id: &str) -> Option<Source> {
+        let url = id.strip_prefix("git+")?;
+        check_git_url(url).ok()?;
+        Some(Source::Git(url.to_string()))
     }
 
     /// The source of dependency `name` declared in a manifest located in
-    /// `base` (`None` — a git checkout, where local paths mean nothing).
-    fn of(name: &str, dependency: &Dependency, base: Option<&Path>) -> Result<Source, String> {
+    /// `base` (`None` — a git checkout, where local paths mean nothing), for
+    /// the project whose canonical root is `project`.
+    fn of(
+        name: &str,
+        dependency: &Dependency,
+        base: Option<&Path>,
+        project: &Path,
+    ) -> Result<Source, String> {
         match (&dependency.git, &dependency.path) {
             (Some(url), None) => {
                 check_git_url(url).map_err(|error| format!("dependency \"{name}\": {error}"))?;
@@ -72,9 +80,13 @@ impl Source {
                     ));
                 };
                 let dir = base.join(path);
-                std::fs::canonicalize(&dir)
-                    .map(Source::Path)
-                    .map_err(|error| format!("dependency \"{name}\": {}: {error}", dir.display()))
+                let dir = std::fs::canonicalize(&dir).map_err(|error| {
+                    format!("dependency \"{name}\": {}: {error}", dir.display())
+                })?;
+                Ok(Source::Path {
+                    spelled: relative(&dir, project),
+                    dir,
+                })
             }
             (Some(_), Some(_)) => Err(format!(
                 "dependency \"{name}\" has both git and path; use one"
@@ -83,6 +95,28 @@ impl Source {
                 "dependency \"{name}\" has no source: add git = \"…\" or path = \"…\""
             )),
         }
+    }
+}
+
+/// `dir` relative to `root`, both canonical, with `/` separators (`../util`,
+/// `vendor/json`, `.`); a `dir` on another root (a Windows drive) stays absolute.
+fn relative(dir: &Path, root: &Path) -> String {
+    let (dir, root): (Vec<_>, Vec<_>) = (dir.components().collect(), root.components().collect());
+    let common = dir.iter().zip(&root).take_while(|(a, b)| a == b).count();
+    if common == 0 {
+        return dir.iter().collect::<PathBuf>().display().to_string();
+    }
+    let parts: Vec<String> = std::iter::repeat_n("..".to_string(), root.len() - common)
+        .chain(
+            dir[common..]
+                .iter()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned()),
+        )
+        .collect();
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
     }
 }
 
@@ -132,8 +166,11 @@ fn install_busy(root: &Path, unlock: &Unlock) -> Result<Report, String> {
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
-    commit(root, &chosen, &lock, &new_lock, false, &mut work)?;
-    Ok(report(&lock, &new_lock))
+    let report = report(root, &installed_lock(root, &lock)?, &new_lock);
+    if !commit(root, &chosen, &lock, &new_lock, false, &mut work)? {
+        return Ok(Report::default());
+    }
+    Ok(report)
 }
 
 /// `blade sync` (#349): install exactly what `blade.lock` records.
@@ -155,7 +192,8 @@ pub fn sync(root: &Path) -> Result<Report, String> {
     }
     let manifest = Manifest::read(root)?;
     let lock = Lock::read(root)?;
-    let roots = wants_of(&manifest, Some(root), MANIFEST)?;
+    let project = canonical(root)?;
+    let roots = wants_of(&manifest, Some(root), &project, MANIFEST)?;
 
     // What the lock reaches from the project by its own lists: no network.
     let mut lines = Vec::new();
@@ -192,7 +230,7 @@ pub fn sync(root: &Path) -> Result<Report, String> {
             continue;
         }
         let package = match &want.source {
-            Source::Path(_) => {
+            Source::Path { .. } => {
                 // A local package is live: its files may change, its version
                 // may not.
                 let version = work.versions(&want.source)?.into_keys().next();
@@ -224,7 +262,7 @@ pub fn sync(root: &Path) -> Result<Report, String> {
             Source::Git(_) => work.fetch_locked(&name, &want.source, locked)?,
         };
         let by = format!("{name} {}", locked.version);
-        let wants = wants_of(&package.manifest, package.base(), &by)?;
+        let wants = wants_of(&package.manifest, package.base(), &project, &by)?;
         disagreements(&wants, &lock, &mut lines);
         queue.extend(wants);
         if installed_matches(root, &name, &lock, &package.checksum)? == Some(true) {
@@ -233,41 +271,28 @@ pub fn sync(root: &Path) -> Result<Report, String> {
             fetched.insert(name, package);
         }
     }
-    let names: BTreeSet<String> = kept.keys().chain(fetched.keys()).cloned().collect();
-    unrequired(&lock, &names, &mut lines);
+    // A walk stopped at a disagreement did not reach everything below it, so
+    // only a complete walk tells what is no longer required (#1040).
+    if lines.is_empty() {
+        let names: BTreeSet<String> = kept.keys().chain(fetched.keys()).cloned().collect();
+        unrequired(&lock, &names, &mut lines);
+    }
     if !lines.is_empty() {
         return Err(disagree(&lines));
     }
 
-    // What changes in pkg/, against what Blade installed there.
-    let installed = installed_lock(root, &lock)?;
-    let mut report = Vec::new();
-    for (name, package) in &fetched {
-        let version = package.version;
-        report.push(match installed.packages.get(name) {
-            _ if !root.join(PKG).join(name).is_dir() => format!("+ {name} {version}"),
-            Some(before) if before.version != version => {
-                format!("~ {name} {} -> {version}", before.version)
-            }
-            _ => format!("~ {name} {version} (files changed)"),
-        });
-    }
     let chosen: BTreeMap<String, Package> = kept.into_iter().chain(fetched).collect();
-    for (name, before) in &installed.packages {
-        if !chosen.contains_key(name) && root.join(PKG).join(name).is_dir() {
-            report.push(format!("- {name} {}", before.version));
-        }
-    }
     let new_lock = Lock {
         packages: chosen
             .iter()
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
+    let report = report(root, &installed_lock(root, &lock)?, &new_lock);
     if !commit(root, &chosen, &lock, &new_lock, true, &mut work)? {
         return Ok(Report::default());
     }
-    Ok(Report { lines: report })
+    Ok(report)
 }
 
 /// Requirements that the lock does not meet, one line each.
@@ -392,81 +417,6 @@ pub fn update(root: &Path, names: &[String]) -> Result<Report, String> {
     install_busy(root, &unlock)
 }
 
-/// `blade install SOURCE [VERSION]`, as before `blade add` (kept for one
-/// release): add the package at `source`, a git repository or a local
-/// directory, to `[dependencies]`, then install. Its name is the `[module]
-/// name` of its `blade.toml`, or else the last part of the URL or directory.
-pub fn add_source(
-    root: &Path,
-    source: &str,
-    version: Option<&str>,
-    git: bool,
-) -> Result<(String, Report), String> {
-    let mut work = Work::new()?;
-    let (source, spelled) = if git || looks_like_git(source) {
-        check_git_url(source)?;
-        (Source::Git(source.to_string()), source.to_string())
-    } else {
-        let dir = std::fs::canonicalize(source).map_err(|error| format!("{source}: {error}"))?;
-        // Внутри проекта путь пишется относительно его корня.
-        let spelled = match dir.strip_prefix(std::fs::canonicalize(root).unwrap_or(root.into())) {
-            Ok(relative) => relative.display().to_string(),
-            Err(_) => dir.display().to_string(),
-        };
-        (Source::Path(dir), spelled)
-    };
-    let requirement = version.map(Requirement::parse).transpose()?;
-    let available = work.versions(&source)?;
-    let picked = available
-        .keys()
-        .rev()
-        .find(|found| {
-            requirement
-                .as_ref()
-                .is_none_or(|wanted| wanted.matches(found))
-        })
-        .copied()
-        .ok_or_else(|| match &requirement {
-            Some(wanted) => format!(
-                "{} has no version matching {wanted}; available: {}{}",
-                source.id(),
-                list(available.keys()),
-                match &source {
-                    Source::Path(dir) if dir.join(".git").exists() => format!(
-                        " (the version of its {MANIFEST}; it is a git repository: \
-                         `blade install --git {}` installs its vX.Y.Z tags)",
-                        dir.display()
-                    ),
-                    _ => String::new(),
-                }
-            ),
-            None => format!("{} has no versions (no vX.Y.Z tags)", source.id()),
-        })?;
-    let name = match work.declared_name(&source, &picked)? {
-        Some(name) => name,
-        None => name_of(&source)?,
-    };
-    work.fetch(&name, &source, &picked, None)?;
-    let dependency = Dependency {
-        version: Some(version.map_or_else(|| picked.to_string(), str::to_string)),
-        git: matches!(source, Source::Git(_)).then(|| spelled.clone()),
-        path: matches!(source, Source::Path(_)).then_some(spelled),
-    };
-    // The manifest edit and the install are one operation of this blade.
-    let _busy = Busy::take(root)?;
-    let file = root.join(MANIFEST);
-    let before = std::fs::read(&file).map_err(|error| format!("{}: {error}", file.display()))?;
-    manifest::add_dependency(root, &name, &dependency)?;
-    match install_busy(root, &Unlock::Packages(BTreeSet::from([name.clone()]))) {
-        Ok(report) => Ok((name, report)),
-        Err(error) => {
-            // Неудачная установка не оставляет зависимость в манифесте.
-            let _ = std::fs::write(&file, before);
-            Err(error)
-        }
-    }
-}
-
 /// A git source as git will see it (#346): never an option, never a
 /// transport helper (`ext::…`), no control characters. Which transports git
 /// may use is also fixed in `git`.
@@ -480,28 +430,6 @@ fn check_git_url(url: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// The name a package without `[module] name` is added under: the last part
-/// of its URL or directory, without `.git`.
-fn name_of(source: &Source) -> Result<String, String> {
-    let spelled = match source {
-        Source::Git(url) => url.trim_end_matches('/').to_string(),
-        Source::Path(dir) => dir.display().to_string(),
-    };
-    let last = spelled.rsplit(['/', ':', '\\']).next().unwrap_or_default();
-    let name = last.strip_suffix(".git").unwrap_or(last).to_string();
-    manifest::check_package_name(&name).map_err(|error| {
-        format!(
-            "{}: cannot name the package \"{name}\" ({error}); give it [module] name in its {MANIFEST}",
-            source.id()
-        )
-    })?;
-    Ok(name)
-}
-
-fn looks_like_git(source: &str) -> bool {
-    source.contains("://") || source.starts_with("git@") || source.ends_with(".git")
 }
 
 fn list<'a>(versions: impl Iterator<Item = &'a Version>) -> String {
@@ -541,7 +469,7 @@ impl Package {
     /// The directory its path dependencies are relative to.
     fn base(&self) -> Option<&Path> {
         match &self.source {
-            Source::Path(dir) => Some(dir),
+            Source::Path { dir, .. } => Some(dir),
             Source::Git(_) => None,
         }
     }
@@ -557,8 +485,14 @@ struct Want {
     by: String,
 }
 
-/// The requirements a manifest declares; `by` names its chain.
-fn wants_of(declaring: &Manifest, base: Option<&Path>, by: &str) -> Result<Vec<Want>, String> {
+/// The requirements a manifest declares, for the project at the canonical
+/// `project`; `by` names its chain.
+fn wants_of(
+    declaring: &Manifest,
+    base: Option<&Path>,
+    project: &Path,
+    by: &str,
+) -> Result<Vec<Want>, String> {
     declaring
         .dependencies
         .iter()
@@ -568,7 +502,7 @@ fn wants_of(declaring: &Manifest, base: Option<&Path>, by: &str) -> Result<Vec<W
             })?;
             let requirement =
                 Requirement::parse(version).map_err(|error| format!("dependency \"{name}\" of {by}: {error}"))?;
-            let source = Source::of(name, dependency, base).map_err(|error| format!("{by}: {error}"))?;
+            let source = Source::of(name, dependency, base, project).map_err(|error| format!("{by}: {error}"))?;
             Ok(Want { name: name.clone(), source, requirement, by: by.to_string() })
         })
         .collect()
@@ -621,7 +555,8 @@ fn resolve(
         .name
         .clone()
         .unwrap_or_else(|| "the project".to_string());
-    let roots = wants_of(manifest, Some(root), &project)?;
+    let base = canonical(root)?;
+    let roots = wants_of(manifest, Some(root), &base, &project)?;
 
     // Pass 1.
     let mut mins: BTreeMap<Key, (Version, String)> = BTreeMap::new();
@@ -651,7 +586,7 @@ fn resolve(
             }
             let fetched = fetch_checked(work, &want, version, lock, unlock).and_then(|package| {
                 let by = format!("{} → {} {version}", want.by, want.name);
-                queue.extend(wants_of(&package.manifest, package.base(), &by)?);
+                queue.extend(wants_of(&package.manifest, package.base(), &base, &by)?);
                 Ok(package)
             });
             nodes.insert(node, fetched);
@@ -705,7 +640,7 @@ fn resolve(
             .cloned()
             .unwrap_or_else(|| fetch_checked(work, &want, version, lock, unlock))?;
         let by = format!("{} → {} {version}", want.by, want.name);
-        queue.extend(wants_of(&package.manifest, package.base(), &by)?);
+        queue.extend(wants_of(&package.manifest, package.base(), &base, &by)?);
         chosen.insert(want.name.clone(), (want, package));
     }
     Ok(chosen
@@ -775,7 +710,7 @@ impl Work {
     /// Versions of a source; for git — with the commit of each tag.
     fn versions(&mut self, source: &Source) -> Result<BTreeMap<Version, Option<String>>, String> {
         match source {
-            Source::Path(dir) => {
+            Source::Path { dir, .. } => {
                 let manifest = Manifest::read(dir)?;
                 let version = manifest
                     .version
@@ -802,29 +737,6 @@ impl Work {
         }
     }
 
-    /// The `[module] name` of a version, if it has `blade.toml` with one.
-    fn declared_name(
-        &mut self,
-        source: &Source,
-        version: &Version,
-    ) -> Result<Option<String>, String> {
-        let manifest = match source {
-            Source::Path(dir) => Manifest::read_package(dir)?,
-            Source::Git(url) => {
-                let commit = self.versions(source)?[version].clone().unwrap_or_default();
-                let clone = self.clone_of(url)?;
-                let blob = format!("{commit}:{MANIFEST}");
-                match git(&["-C", path_str(&clone)?, "show", &blob]) {
-                    Ok(text) => Manifest::parse(&text).map_err(|error| {
-                        format!("{} v{version}: {MANIFEST}: {error}", source.id())
-                    })?,
-                    Err(_) => Manifest::default(),
-                }
-            }
-        };
-        Ok(manifest.name)
-    }
-
     /// Copy version `version` of package `name` from `source`, by its tag,
     /// into the scratch space and check it. `expected` — what `blade.lock`
     /// says this version is.
@@ -836,7 +748,7 @@ impl Work {
         expected: Option<&Locked>,
     ) -> Result<Package, String> {
         let commit = match source {
-            Source::Path(_) => None,
+            Source::Path { .. } => None,
             Source::Git(url) => {
                 let commit = self.versions(source)?[version].clone().unwrap_or_default();
                 if let Some(locked) = expected.and_then(|locked| locked.commit.as_ref())
@@ -864,7 +776,7 @@ impl Work {
     ) -> Result<Package, String> {
         let version = locked.version;
         let commit = match source {
-            Source::Path(_) => None,
+            Source::Path { .. } => None,
             Source::Git(url) => {
                 let commit = locked.commit.clone().unwrap_or_default();
                 check_commit(&commit)
@@ -906,12 +818,12 @@ impl Work {
         // Every refusal names the package and its tag.
         let label = match source {
             Source::Git(_) => format!("{name} v{version} ({})", source.id()),
-            Source::Path(_) => format!("{name} {version} ({})", source.id()),
+            Source::Path { .. } => format!("{name} {version} ({})", source.id()),
         };
         self.count += 1;
         let dir = self.dir.join(format!("package-{}", self.count));
         match source {
-            Source::Path(origin) => {
+            Source::Path { dir: origin, .. } => {
                 copy_package(origin, &dir).map_err(|error| format!("{label}: {error}"))?;
             }
             Source::Git(url) => {
@@ -1243,7 +1155,8 @@ fn nested_in(name: &str, lock: &Lock) -> Vec<String> {
         .collect()
 }
 
-fn checksum_of(dir: &Path, files: &[String]) -> Result<String, String> {
+/// `sha256:` of `files` of `dir`: each one's path and bytes, in the given order.
+pub(crate) fn checksum_of(dir: &Path, files: &[String]) -> Result<String, String> {
     let mut hasher = Sha256::new();
     for file in files {
         let bytes = std::fs::read(dir.join(file)).map_err(|error| format!("{file}: {error}"))?;
@@ -1256,8 +1169,6 @@ fn checksum_of(dir: &Path, files: &[String]) -> Result<String, String> {
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     Ok(format!("sha256:{hex}"))
 }
-
-// ----- установка -----
 
 // ----- фиксация pkg/ и blade.lock -----
 //
@@ -1278,6 +1189,11 @@ const INSTALLED: &str = ".blade-installed";
 const OLD: &str = "pkg.blade-old";
 const STAGED_LOCK: &str = "blade.lock.blade-new";
 const COMMIT: &str = "pkg.blade-commit";
+
+/// The canonical project root, the base of the paths `blade.lock` records.
+fn canonical(root: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(root).map_err(io(root))
+}
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> String + use<> {
     let path = path.display().to_string();
@@ -1474,8 +1390,7 @@ fn unknown_entries(root: &Path, lock: &Lock) -> Result<Vec<String>, String> {
 /// The refusal for a package whose files in `pkg/` are not the locked ones,
 /// with the first file that differs when the locked commit can be fetched.
 fn local_changes(root: &Path, name: &str, locked: &Locked, lock: &Lock, work: &mut Work) -> String {
-    let detail = Source::from_id(&locked.source)
-        .filter(|source| matches!(source, Source::Git(_)))
+    let detail = Source::git_of_id(&locked.source)
         .and_then(|source| work.fetch_locked(name, &source, locked).ok())
         .and_then(|original| {
             first_difference(
@@ -1670,6 +1585,11 @@ pub fn recover(root: &Path) -> Result<(), String> {
 /// The installed state is consistent (no interrupted commit) — for commands
 /// that read pkg/ and blade.lock without changing them (`blade build`).
 pub fn settled(root: &Path) -> Result<(), String> {
+    // A blade at work has its staging files out: that is no interruption.
+    let busy = root.join(BUSY);
+    if busy.exists() {
+        return Err(busy_error(&busy));
+    }
     for name in [COMMIT, STAGED, STAGED_LOCK, OLD] {
         if root.join(name).exists() {
             return Err(format!(
@@ -1680,22 +1600,29 @@ pub fn settled(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The file a blade holds while it works on a project.
+const BUSY: &str = "pkg.blade-busy";
+
+fn busy_error(file: &Path) -> String {
+    format!(
+        "another blade is working on this project ({} exists; remove it if no blade is running)",
+        file.display()
+    )
+}
+
 /// Only one blade works on a project at a time.
 struct Busy(PathBuf);
 
 impl Busy {
     fn take(root: &Path) -> Result<Busy, String> {
-        let file = root.join("pkg.blade-busy");
+        let file = root.join(BUSY);
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&file)
             .map(|_| Busy(file.clone()))
             .map_err(|error| match error.kind() {
-                std::io::ErrorKind::AlreadyExists => format!(
-                    "another blade is working on this project ({} exists; remove it if no blade is running)",
-                    file.display()
-                ),
+                std::io::ErrorKind::AlreadyExists => busy_error(&file),
                 _ => format!("{}: {error}", file.display()),
             })
     }
@@ -1707,41 +1634,49 @@ impl Drop for Busy {
     }
 }
 
-fn report(old: &Lock, new: &Lock) -> Report {
+/// What a commit from what `pkg/` holds (`installed`, Blade's record of it)
+/// to `new` does, package by package: added (or missing from `pkg/`), moved
+/// to another version or source, its tag moved, its files changed (a local
+/// package edited, #1040), removed.
+fn report(root: &Path, installed: &Lock, new: &Lock) -> Report {
+    let present = |name: &str| root.join(PKG).join(name).is_dir();
+    let short = |commit: &Option<String>| {
+        commit
+            .as_deref()
+            .unwrap_or("-")
+            .chars()
+            .take(10)
+            .collect::<String>()
+    };
     let mut lines = Vec::new();
     for (name, package) in &new.packages {
-        match old.packages.get(name) {
-            None => lines.push(format!("+ {name} {}", package.version)),
-            Some(before)
-                if before.version != package.version || before.source != package.source =>
-            {
+        let version = package.version;
+        match installed.packages.get(name) {
+            None => lines.push(format!("+ {name} {version}")),
+            Some(_) if !present(name) => lines.push(format!("+ {name} {version}")),
+            Some(before) if before.version != version => {
+                lines.push(format!("~ {name} {} -> {version}", before.version));
+            }
+            Some(before) if before.source != package.source => {
                 lines.push(format!(
-                    "~ {name} {} -> {}",
-                    before.version, package.version
+                    "~ {name} {version} (source {} -> {})",
+                    before.source, package.source
                 ));
             }
-            Some(before) if before.commit != package.commit => {
-                let short = |commit: &Option<String>| {
-                    commit
-                        .as_deref()
-                        .unwrap_or("-")
-                        .chars()
-                        .take(10)
-                        .collect::<String>()
-                };
-                lines.push(format!(
-                    "~ {name} {} (tag moved: {} -> {})",
-                    package.version,
-                    short(&before.commit),
-                    short(&package.commit)
-                ));
+            Some(before) if before.commit != package.commit => lines.push(format!(
+                "~ {name} {version} (tag moved: {} -> {})",
+                short(&before.commit),
+                short(&package.commit)
+            )),
+            Some(before) if before.checksum != package.checksum => {
+                lines.push(format!("~ {name} {version} (files changed)"));
             }
             Some(_) => {}
         }
     }
-    for (name, package) in &old.packages {
-        if !new.packages.contains_key(name) {
-            lines.push(format!("- {name} {}", package.version));
+    for (name, before) in &installed.packages {
+        if !new.packages.contains_key(name) && present(name) {
+            lines.push(format!("- {name} {}", before.version));
         }
     }
     Report { lines }

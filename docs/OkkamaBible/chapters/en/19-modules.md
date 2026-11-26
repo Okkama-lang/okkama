@@ -509,9 +509,14 @@ The module declares no version. In a package the version lives in one place,
 and a module file that declares one is an error at the version. The
 package's files import one another as in 19.3: beside the importing file,
 then from the package root. `blade build` compiles the project as `[build]`
-says; `blade run` builds when a source, `blade.toml` or `blade.lock` is newer
-than the output, then runs it as `[run]` says, and the program's exit status
-is blade's.
+says; `blade run` builds unless the output was built from the sources as they
+are now, then runs it as `[run]` says, and the program's exit status is
+blade's. "The sources as they are" means which `.ok` files there are (the
+dependencies' in `pkg/` included), the bytes of each, `blade.toml` and
+`blade.lock`, recorded beside the output in `target/demo.spb.blade-stamp`.
+Times play no part: a deleted module, or one replaced by an older copy
+(`cp -p`, an unpacked archive), builds again exactly as an edit does, so
+`blade run` never runs a program that `blade build` would no longer make.
 
 ### A package is a repository
 
@@ -559,8 +564,14 @@ json = { git = "https://example.org/okkama/json", version = "1.4.0" }
 
 Without `MIN` the minimum is the repository's newest tag, so a new
 dependency starts current and the manifest says which version that was.
-A local directory is declared by hand, `tools = { path = "../tools" }`, and
-its version is the one in its `blade.toml`, since a directory has no tags.
+A local directory is declared by hand,
+`tools = { path = "../tools", version = "1.0.0" }`, and its version is the
+one in its `blade.toml`, since a directory has no tags. Its files are live:
+`blade sync` and `blade update` copy them again when they change and say
+`~ tools 1.0.0 (files changed)`, while a new version in its `blade.toml`
+stops `blade sync` until `blade update tools` takes it. The lock records the directory by its path
+from the project, `path+../tools`, so a project moved or cloned together
+with its local packages syncs as it is.
 
 Dependencies land in `pkg/<name>/` of the project root, and the project
 imports them by that path, `src/` included:

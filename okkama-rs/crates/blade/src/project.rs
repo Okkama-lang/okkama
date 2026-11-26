@@ -94,7 +94,17 @@ impl Project {
     fn output_path(&self) -> PathBuf {
         self.root.join(&self.output)
     }
+
+    /// `OUTPUT.blade-stamp`: what the output was built from (#1040).
+    fn stamp_path(&self) -> PathBuf {
+        let mut path = self.output_path().into_os_string();
+        path.push(STAMP);
+        PathBuf::from(path)
+    }
 }
+
+/// The suffix of the stamp beside the output.
+pub const STAMP: &str = ".blade-stamp";
 
 fn strings(values: &[toml::Value], what: &str) -> Result<Vec<String>, String> {
     values
@@ -141,14 +151,12 @@ fn check_installed(project: &Project) -> Result<(), String> {
     }
 }
 
-/// Is the output missing or older than a source Blade builds from: an `.ok`
-/// file outside the output directory, `blade.toml` or `blade.lock`?
-fn sources_changed(project: &Project) -> Result<bool, String> {
-    let output = project.output_path();
-    let Ok(built) = std::fs::metadata(&output).and_then(|m| m.modified()) else {
-        return Ok(true);
-    };
-    let skip = output.parent().map(Path::to_path_buf);
+/// The files Blade builds from, relative to the root with `/` separators and
+/// sorted: every `.ok` file outside the output's directory and hidden
+/// directories, `blade.toml` and `blade.lock`.
+fn inputs(project: &Project) -> Result<Vec<String>, String> {
+    let skip = project.output_path().parent().map(Path::to_path_buf);
+    let mut found = Vec::new();
     let mut stack = vec![project.root.clone()];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
@@ -156,25 +164,53 @@ fn sources_changed(project: &Project) -> Result<bool, String> {
             let entry = entry.map_err(|error| format!("{}: {error}", dir.display()))?;
             let path = entry.path();
             let kind = entry.file_type().map_err(|error| format!("{}: {error}", path.display()))?;
-            let hidden = entry.file_name().to_string_lossy().starts_with('.');
+            let name = entry.file_name();
             if kind.is_dir() {
-                if !hidden && Some(&path) != skip.as_ref() {
+                if !name.to_string_lossy().starts_with('.') && Some(&path) != skip.as_ref() {
                     stack.push(path);
                 }
                 continue;
             }
-            let name = entry.file_name();
-            let relevant = path.extension().is_some_and(|e| e == "ok") || name == MANIFEST || name == LOCK;
-            if relevant && entry.metadata().and_then(|m| m.modified()).is_ok_and(|time| time > built) {
-                return Ok(true);
+            if path.extension().is_some_and(|e| e == "ok") || name == MANIFEST || name == LOCK {
+                let relative = path.strip_prefix(&project.root).unwrap_or(&path);
+                let parts: Vec<String> =
+                    relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+                found.push(parts.join("/"));
             }
         }
     }
-    Ok(false)
+    found.sort();
+    Ok(found)
 }
 
-/// Build the project unless the output is newer than its sources (`force`
-/// always builds). `Ok(true)` — it was built.
+/// The stamp of a build: the fingerprint of its inputs (which files, and the
+/// bytes of each) and of the output it made. Modification times play no part:
+/// a deleted source, or one replaced by an older file (`cp -p`, an unpacked
+/// archive), changes the stamp as an edit does (#1040).
+fn stamp(project: &Project, inputs: &str) -> Result<String, String> {
+    let output = crate::install::checksum_of(&project.root, std::slice::from_ref(&project.output))?;
+    Ok(format!("inputs {inputs}\noutput {output}\n"))
+}
+
+/// The fingerprint of the files the project builds from, now.
+fn fingerprint(project: &Project) -> Result<String, String> {
+    crate::install::checksum_of(&project.root, &inputs(project)?)
+}
+
+/// Was the output built from these very inputs, and is it still what that
+/// build wrote?
+fn up_to_date(project: &Project, inputs: &str) -> Result<bool, String> {
+    let Ok(recorded) = std::fs::read_to_string(project.stamp_path()) else {
+        return Ok(false);
+    };
+    if !project.output_path().is_file() {
+        return Ok(false);
+    }
+    Ok(recorded == stamp(project, inputs)?)
+}
+
+/// Build the project unless its output was built from the sources as they are
+/// (`force` always builds). `Ok(true)` — it was built.
 pub fn build(project: &Project, force: bool) -> Result<bool, String> {
     check_installed(project)?;
     for file in &project.entry {
@@ -182,8 +218,17 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
             return Err(format!("[build] entry \"{file}\" does not exist"));
         }
     }
-    if !force && !sources_changed(project)? {
+    // Taken before the build: a source edited while it runs makes the next
+    // run build again.
+    let inputs = fingerprint(project)?;
+    if !force && up_to_date(project, &inputs)? {
         return Ok(false);
+    }
+    let stamp_file = project.stamp_path();
+    if let Err(error) = std::fs::remove_file(&stamp_file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("{}: {error}", stamp_file.display()));
     }
     let output = project.output_path();
     if let Some(dir) = output.parent() {
@@ -197,11 +242,12 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
         .arg(&project.output)
         .status()
         .map_err(|error| format!("cannot run {}: {error}", okkama().display()))?;
-    if status.success() {
-        Ok(true)
-    } else {
-        Err(format!("build failed ({status})"))
+    if !status.success() {
+        return Err(format!("build failed ({status})"));
     }
+    std::fs::write(&stamp_file, stamp(project, &inputs)?)
+        .map_err(|error| format!("{}: {error}", stamp_file.display()))?;
+    Ok(true)
 }
 
 /// The command `blade run` executes, after `extra` arguments.
@@ -253,5 +299,105 @@ mod tests {
             let error = Project::parse(root, text).unwrap_err();
             assert!(error.contains(expected), "{text}: {error}");
         }
+    }
+
+    /// A temporary project removed when dropped.
+    struct Temp(PathBuf);
+
+    impl Temp {
+        fn new(name: &str) -> Temp {
+            let dir = std::env::temp_dir().join(format!("blade-project-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Temp(dir)
+        }
+
+        fn write(&self, path: &str, text: &str) -> PathBuf {
+            let file = self.0.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, text).unwrap();
+            file
+        }
+    }
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn age(file: &Path, hours: u64) {
+        let time = std::time::SystemTime::now() - std::time::Duration::from_secs(3600 * hours);
+        std::fs::File::options().write(true).open(file).unwrap().set_modified(time).unwrap();
+    }
+
+    /// #1040: the inputs are a set of files by content. Deleting, adding or
+    /// renaming a source changes the fingerprint, and so does a source replaced
+    /// by an older file; a time alone changes nothing.
+    #[test]
+    fn the_fingerprint_follows_the_files_and_their_bytes_not_their_times() {
+        let temp = Temp::new("fingerprint");
+        temp.write(MANIFEST, "[module]\nname = \"app\"\n");
+        let main = temp.write("src/main.ok", "module app;\nimport \"greet\";\n");
+        let greet = temp.write("src/greet.ok", "module app/greet; // hello\n");
+        temp.write("pkg/util/src/util.ok", "module util;\n");
+        temp.write("target/app.spb", "built");
+        temp.write("target/old.ok", "module old;\n");
+        temp.write(".git/hooks/x.ok", "module x;\n");
+        temp.write("notes.txt", "not a source");
+        let project = Project::parse(&temp.0, "[module]\nname = \"app\"\n").unwrap();
+        assert_eq!(inputs(&project).unwrap(), ["blade.toml", "pkg/util/src/util.ok", "src/greet.ok", "src/main.ok"]);
+        let first = fingerprint(&project).unwrap();
+
+        age(&main, 2);
+        temp.write("notes.txt", "edited");
+        assert_eq!(fingerprint(&project).unwrap(), first, "times and other files do not count");
+
+        // The same length, other bytes, an older time (`cp -p`).
+        std::fs::write(&greet, "module app/greet; // HELLO\n").unwrap();
+        age(&greet, 3);
+        let older = fingerprint(&project).unwrap();
+        assert_ne!(older, first);
+        std::fs::write(&greet, "module app/greet; // hello\n").unwrap();
+        assert_eq!(fingerprint(&project).unwrap(), first);
+
+        std::fs::rename(&greet, temp.0.join("src/hello.ok")).unwrap();
+        let renamed = fingerprint(&project).unwrap();
+        std::fs::remove_file(temp.0.join("src/hello.ok")).unwrap();
+        let deleted = fingerprint(&project).unwrap();
+        temp.write(LOCK, "version = 1\n");
+        let locked = fingerprint(&project).unwrap();
+        let all = [&first, &older, &renamed, &deleted, &locked];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    /// #1040: a stamp holds only for the inputs it was written for and the
+    /// output that build made.
+    #[test]
+    fn a_stamp_holds_for_its_inputs_and_its_output_only() {
+        let temp = Temp::new("stamp");
+        temp.write("src/main.ok", "module app;\n");
+        let project = Project::parse(&temp.0, "[module]\nname = \"app\"\n").unwrap();
+        let inputs = fingerprint(&project).unwrap();
+        assert!(!up_to_date(&project, &inputs).unwrap(), "never built");
+        let output = temp.write("target/app.spb", "built");
+        assert_eq!(project.stamp_path(), temp.0.join("target/app.spb.blade-stamp"));
+        std::fs::write(project.stamp_path(), stamp(&project, &inputs).unwrap()).unwrap();
+        assert!(up_to_date(&project, &inputs).unwrap());
+
+        temp.write("src/main.ok", "module app; // edited\n");
+        assert!(!up_to_date(&project, &fingerprint(&project).unwrap()).unwrap());
+        temp.write("src/main.ok", "module app;\n");
+        assert!(up_to_date(&project, &fingerprint(&project).unwrap()).unwrap());
+
+        std::fs::write(&output, "other").unwrap();
+        assert!(!up_to_date(&project, &inputs).unwrap(), "the output was replaced");
+        std::fs::write(&output, "built").unwrap();
+        std::fs::remove_file(&output).unwrap();
+        assert!(!up_to_date(&project, &inputs).unwrap(), "no output");
     }
 }

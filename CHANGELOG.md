@@ -33,6 +33,23 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   A NAME its own manifest check rejects (`my-app`) is refused before anything is written; `blade new acme/web`
   writes the default `output = "target/web.spb"` (it wrote `target/acme/web.spb`); the unused empty `bin/` is
   gone, and the generated `src/main.ok` is fmt-clean. Bible §19.7.
+- **`blade run` ran a stale program (#1040).** It rebuilt only when some `.ok` file, `blade.toml` or `blade.lock`
+  was newer than the output, so a deleted module (the program still ran, exit 0, while `blade build` failed with
+  `Import "greet" not found`) or a module replaced by an older file (`cp -p`, an unpacked archive, `rsync -t`) ran
+  the old program. A build now writes `OUTPUT.blade-stamp`: a SHA-256 of the input files (which ones and the bytes
+  of each) and of the output it made; `blade run` builds unless both match now. Times play no part, so a `touch`
+  alone builds nothing; a failed build leaves no stamp. Bible §19.7.
+- **Blade and local packages (#1040).** `blade.lock` recorded a `path` dependency by its absolute directory
+  (`path+/home/me/proj/util`), so a project moved or checked out elsewhere with its packages could not
+  `blade sync`; it records the path from the project now (`path+../util`; a lock of 0.6.4 or older asks for
+  `blade update NAME` once, which reports `~ util 2.1.0 (source path+/… -> path+../util)`). `blade sync` after a
+  local package's version changed added a false `util: no longer required` (and one for each package below it):
+  a walk stopped at a disagreement no longer reports what it did not reach. `blade update` after a local package's
+  files changed said `dependencies are up to date`; `sync`, `update`, `add` and `remove` now report from the same
+  comparison with what `pkg/` holds, `~ util 2.1.0 (files changed)` included. `blade build`/`run` while another
+  blade works on the project said "an earlier blade was interrupted"; it says another blade is working.
+  `blade --help` printed an extra blank line, and `-V` was a usage error (now `--version`, `-V`, `-v`, `version`,
+  as the help lists).
 - **`Count < a >> 2` compares again (#1032).** After #1004 the parser read `Name<…>` as a type whenever the
   text after `<` parsed as type arguments closed by `>`, and the type parser splits `>>` and `>>>` into `>`
   tokens, so a shift on the right of `<` after a capitalised binding closed "type arguments" and the program
@@ -97,6 +114,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   18 (17 was Champ's, retired), the assembly header `sparrow 18`; a program built by 0.6.0–0.6.4 is refused with
   "unsupported SPB version 16 …; rebuild the program". Every new instruction or operation code bumps the version:
   a test pins the instruction set to it. The Sparrow assembly book is rebuilt (it described SPB 16 and 12).
+- **`blade install` is gone (#1040).** `blade install` and `blade install SOURCE`, kept "for one release" in 0.5.3
+  as `blade sync` and `blade add`, are usage errors (exit 2). A local directory is declared by hand in
+  `[dependencies]`, `util = { path = "../util", version = "2.1.0" }`, as before. Dead code of the command line
+  removed (`Cli::execute`, the commented-out dispatcher).
 
 ## [0.6.4] — 2026-11-23
 

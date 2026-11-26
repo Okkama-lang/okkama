@@ -15,6 +15,13 @@
   loops and `{ let engine = "sparrow"; … }` blocks collapsed (signals `engines()`, budgets `run(engine, …)`,
   terminal_pty, cli.rs); `both()` → `expect()`; the pty driver takes no engine; cli.rs no longer sets
   `OCS_RUST_ENGINE` (engine_selection.rs keeps the test that stale engine variables are ignored).
+- [x] #1040 (feature/1040): `blade run` rebuilds by `OUTPUT.blade-stamp` (blade/src/project.rs `inputs`,
+  `fingerprint`, `stamp`, `up_to_date`; SHA-256 through `install::checksum_of`), never by mtime; lock spells
+  `path` sources from the project (`Source::Path { dir, spelled }`, `install::relative`); one `report` for
+  sync/update/add/remove against `pkg/.blade-installed` (files changed, source moved); sync reports
+  "no longer required" only after a complete walk; `settled` names a busy blade; `blade install`,
+  `add_source`, `Cli::execute` and the commented-out code gone. Not covered by the stamp: the okkama binary and
+  its std (a new okkama with the same SPB version reuses the output).
 - [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
   (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
   sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to

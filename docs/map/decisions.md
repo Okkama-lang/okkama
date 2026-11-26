@@ -572,3 +572,12 @@ every declaration is open (#1005, owner decision).
 - `okkama ir --passes` refuses a name that selects nothing (usage error, as `--after`), through
   `lowering::unknown_passes`, the one list check; lowering warns once for `OKKAMA_IR_PASSES` or a list
   selected through the library and names which.
+## Blade rebuilds by content, locks local paths from the project (#1040, 2026-11-26)
+
+- `blade run` decides by a stamp beside the output (`OUTPUT.blade-stamp`): SHA-256 of the input set (`.ok`
+  files outside the output's directory and hidden directories, `blade.toml`, `blade.lock`; each by path and
+  bytes) and of the output the build wrote. No modification times: a deleted file or an older copy must
+  rebuild, and hashing a project's sources each run is cheap next to a build.
+- A `path` dependency is `path+<dir relative to the project root>` in `blade.lock` (canonical directories, `/`
+  separators); an absolute lock is not translated (pre-beta, no shims): `blade update NAME` rewrites it.
+- `blade install` is removed (pre-beta); local directories are declared by hand in `[dependencies]`.

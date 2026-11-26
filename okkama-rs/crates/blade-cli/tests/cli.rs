@@ -105,8 +105,6 @@ fn a_new_project_builds_and_runs_with_no_flags() {
     assert_eq!(tree.calls(), ["build src/main.ok -o target/app.spb"]);
 
     // Up to date: run does not build; the program's status is Blade's.
-    age(&tree.0.join("app/src/main.ok"));
-    age(&tree.0.join("app/blade.toml"));
     let ran = tree.blade("app", &["run", "--", "a", "--help"]);
     assert_eq!(ran.status.code(), Some(7), "{}", text(&ran.stderr));
     assert_eq!(tree.calls(), ["exec app/target/app.spb a --help"]);
@@ -115,6 +113,94 @@ fn a_new_project_builds_and_runs_with_no_flags() {
     tree.write("app/src/extra.ok", "module app;\n");
     assert_eq!(tree.blade("app", &["run"]).status.code(), Some(7));
     assert_eq!(tree.calls(), ["build src/main.ok -o target/app.spb", "exec app/target/app.spb"]);
+}
+
+/// #1040: `blade run` builds again whenever the sources are not the ones the
+/// output was built from, whatever their times say: a deleted source, one
+/// replaced by an older file (`cp -p`), a renamed one, a replaced output, a
+/// failed build; a time alone builds nothing.
+#[test]
+fn run_never_runs_a_program_built_from_other_sources() {
+    let tree = Tree::new("stale");
+    assert!(tree.blade(".", &["new", "app"]).status.success());
+    tree.write("app/src/greet.ok", "module app/greet; // hello\n");
+    let run = || {
+        let ran = tree.blade("app", &["run"]);
+        assert_eq!(ran.status.code(), Some(7), "{}", text(&ran.stderr));
+        tree.calls()
+    };
+    let (build, exec) = ("build src/main.ok -o target/app.spb", "exec app/target/app.spb");
+    assert_eq!(run(), [build, exec]);
+    assert_eq!(run(), [exec]);
+    assert!(tree.0.join("app/target/app.spb.blade-stamp").is_file());
+
+    std::fs::remove_file(tree.0.join("app/src/greet.ok")).unwrap();
+    assert_eq!(run(), [build, exec], "a deleted source");
+    assert_eq!(run(), [exec]);
+
+    // An older file of the same length copied over a source, its time kept.
+    tree.write("older.ok", "module app; // HELLO FROM OKKAMA\n");
+    tree.write("app/src/main.ok", "module app; // hello from okkama\n");
+    assert_eq!(run(), [build, exec]);
+    age(&tree.0.join("older.ok"));
+    let copied = Command::new("cp").args(["-p", "older.ok", "app/src/main.ok"]).current_dir(&tree.0).output().unwrap();
+    assert!(copied.status.success());
+    assert_eq!(run(), [build, exec], "a source replaced by an older file");
+
+    age(&tree.0.join("app/src/main.ok"));
+    age(&tree.0.join("app/target/app.spb"));
+    assert_eq!(run(), [exec], "a time alone builds nothing");
+
+    std::fs::rename(tree.0.join("app/src/main.ok"), tree.0.join("app/src/other.ok")).unwrap();
+    std::fs::copy(tree.0.join("app/src/other.ok"), tree.0.join("app/src/main.ok")).unwrap();
+    assert_eq!(run(), [build, exec], "a source added");
+
+    tree.write("app/target/app.spb", "something else");
+    assert_eq!(run(), [build, exec], "the output was replaced");
+
+    // A failed build leaves no stamp: the old output never runs.
+    tree.write("app/src/main.ok", "module app; FAIL\n");
+    let failed = tree.blade("app", &["run"]);
+    assert_eq!(failed.status.code(), Some(2));
+    assert!(text(&failed.stderr).contains("build failed"), "{}", text(&failed.stderr));
+    assert_eq!(tree.calls(), [build]);
+    assert!(!tree.0.join("app/target/app.spb.blade-stamp").exists());
+    std::fs::copy(tree.0.join("older.ok"), tree.0.join("app/src/main.ok")).unwrap();
+    assert_eq!(run(), [build, exec]);
+}
+
+/// #1040: a project and its local packages move together: `blade.lock`
+/// records `../util`, so the moved project syncs and runs as it is.
+#[test]
+fn a_project_moves_with_its_local_packages() {
+    let tree = Tree::new("moves");
+    assert!(tree.blade(".", &["new", "app"]).status.success());
+    tree.write("util/blade.toml", "[module]\nname = \"util\"\nversion = \"2.1.0\"\n");
+    tree.write("util/src/util.ok", "module util;\n");
+    let manifest = std::fs::read_to_string(tree.0.join("app/blade.toml")).unwrap();
+    tree.write("app/blade.toml", &format!("{manifest}util = {{ path = \"../util\", version = \"2.1.0\" }}\n"));
+    let synced = tree.blade("app", &["sync"]);
+    assert!(synced.status.success(), "{}", text(&synced.stderr));
+    assert_eq!(text(&synced.stdout), "+ util 2.1.0\n");
+    let lock = std::fs::read_to_string(tree.0.join("app/blade.lock")).unwrap();
+    assert!(lock.contains("source = \"path+../util\""), "{lock}");
+    assert_eq!(tree.blade("app", &["run"]).status.code(), Some(7));
+    tree.calls();
+
+    std::fs::create_dir(tree.0.join("moved")).unwrap();
+    for name in ["app", "util"] {
+        std::fs::rename(tree.0.join(name), tree.0.join("moved").join(name)).unwrap();
+    }
+    let synced = tree.blade("moved/app", &["sync"]);
+    assert!(synced.status.success(), "{}", text(&synced.stderr));
+    assert_eq!(text(&synced.stdout), "dependencies are up to date\n");
+    assert_eq!(tree.blade("moved/app", &["run"]).status.code(), Some(7));
+    assert_eq!(tree.calls(), ["exec moved/app/target/app.spb"], "the same sources: no build");
+
+    tree.write("moved/util/src/util.ok", "module util; // edited\n");
+    let updated = tree.blade("moved/app", &["update"]);
+    assert!(updated.status.success(), "{}", text(&updated.stderr));
+    assert_eq!(text(&updated.stdout), "~ util 2.1.0 (files changed)\n");
 }
 
 /// #1039: `blade new` writes only what it creates. It refuses an existing
@@ -260,7 +346,7 @@ fn sync_runs_no_git_when_pkg_matches_the_lock() {
 
 /// The walk-through of #351 through the binary: a new project, a package
 /// that brings another, a build, a higher minimum, an update, a removal and
-/// a sync; then the old spellings, the help and the exit codes.
+/// a sync; then the help, the version and the exit codes.
 #[test]
 fn a_project_walks_through_add_update_remove_and_sync() {
     let tree = Tree::new("walk");
@@ -324,25 +410,25 @@ fn a_project_walks_through_add_update_remove_and_sync() {
     assert!(!installed("http") && installed("json"));
     assert_eq!(blade(&["sync"]), "dependencies are up to date\n");
 
-    // The old spellings say what replaced them, and still work.
-    let old = tree.blade("app", &["install"]);
-    assert!(old.status.success());
-    assert_eq!(text(&old.stderr), "blade: `blade install` is now `blade sync`\n");
-    assert_eq!(text(&old.stdout), "dependencies are up to date\n");
-    let old = tree.blade("app", &["install", "--git", &http, "2.1.0"]);
-    assert!(old.status.success(), "{}", text(&old.stderr));
-    assert_eq!(
-        text(&old.stderr),
-        format!("blade: `blade install SOURCE` is now `blade add http {http} 2.1.0`\n")
-    );
-    assert_eq!(text(&old.stdout), "+ http 2.1.0\n");
-
-    let help = tree.blade(".", &["--help"]);
-    assert_eq!(help.status.code(), Some(0));
-    assert!(text(&help.stdout).contains("blade add NAME GIT [MIN]"));
-    for wrong in [&["add"][..], &["add", "json"], &["add", "a", "b", "c", "d"], &["sync", "x"], &["bogus"]] {
+    // The help on stdout is the usage text of an error, byte for byte.
+    for args in [&["--help"][..], &["-h"], &["help"], &[], &["sync", "--help"]] {
+        let help = tree.blade(".", args);
+        assert_eq!(help.status.code(), Some(0), "{args:?}");
+        assert_eq!(text(&help.stdout), blade::HELP, "{args:?}");
+    }
+    assert!(blade::HELP.contains("blade add NAME GIT [MIN]") && !blade::HELP.contains("blade install"));
+    for args in [&["--version"][..], &["-V"], &["-v"], &["version"]] {
+        let version = tree.blade(".", args);
+        assert_eq!(version.status.code(), Some(0), "{args:?}");
+        assert_eq!(text(&version.stdout), format!("{}\n", blade::VERSION), "{args:?}");
+    }
+    // `install` was replaced by `sync` and `add` in 0.5.3 and is gone (#1040).
+    let install = [&["install"][..], &["install", "--git", &http, "2.1.0"]];
+    for wrong in [&["add"][..], &["add", "json"], &["add", "a", "b", "c", "d"], &["sync", "x"], &["bogus"]].into_iter().chain(install) {
         let output = tree.blade("app", wrong);
         assert_eq!(output.status.code(), Some(2), "{wrong:?}");
-        assert!(text(&output.stderr).contains("USAGE:"), "{wrong:?}");
+        assert_eq!(text(&output.stderr), blade::HELP, "{wrong:?}");
+        assert!(output.stdout.is_empty(), "{wrong:?}");
     }
+    assert_eq!(locked(), [pair("json", "1.4.0")]);
 }

@@ -8,7 +8,6 @@ pub mod version;
 
 use std::{env::Args, io::Write, process::ExitCode};
 use std::path::PathBuf;
-//use std::path::{Path, PathBuf};
 
 use install::Report;
 
@@ -29,23 +28,27 @@ USAGE:
                                      they are; without NAME, everything
     blade remove NAME                drop a dependency and what only it needed
     blade build                      compile the project as [build] says
-    blade run [-- ARGS...]           build if sources changed, then run it as
-                                     [run] says; ARGS follow [run] args
-    blade --help
-    blade --version
+    blade run [-- ARGS...]           build if the sources differ from the last
+                                     build's (contents, files added or removed),
+                                     then run it as [run] says; ARGS follow
+                                     [run] args
+    blade --help                     (also -h, help)
+    blade --version                  (also -V, -v, version)
 
 MIN is MAJOR.MINOR.PATCH: that version or a later one of the same major.
 Blade installs the lowest version that meets every minimum in the project,
 so a new release changes nothing until a minimum is raised. A package is a
 git repository with its modules in src/, imported as pkg/NAME/src/…; its
 version is its vX.Y.Z tag, and it needs blade.toml only for dependencies of
-its own. `blade install` is now `blade sync`, `blade install SOURCE` is now
-`blade add`.
+its own. A local directory is declared by hand, NAME = { path = \"DIR\",
+version = \"MIN\" }, and versioned by its own blade.toml; blade.lock
+records DIR relative to the project, so the two move together.
 
 blade.toml, build and run (all keys optional, defaults shown):
     [build]
     entry = \"src/main.ok\"       # or a list of the root module's files
-    output = \"target/NAME.spb\"  # Sparrow bytecode
+    output = \"target/NAME.spb\"  # Sparrow bytecode; OUTPUT.blade-stamp beside
+                                # it fingerprints the sources it was built from
     [run]
     args = []
     env = {}
@@ -62,7 +65,6 @@ pub trait Command {
 #[derive(Debug)]
 pub struct Cli {
     args: Args,
-    //args: Vec<String>,
 }
 
 struct CommandNew {
@@ -70,10 +72,6 @@ struct CommandNew {
 }
 
 struct CommandAdd {
-    args: Vec<String>,
-}
-
-struct CommandInstall {
     args: Vec<String>,
 }
 
@@ -98,7 +96,6 @@ struct CommandRun {
 }
 
 struct CommandUsage {
-    //args: Args,
     error: bool,
 }
 
@@ -172,37 +169,6 @@ env = {{}}
         std::fs::File::create_new(root.join(path))?.write_all(text.as_bytes())?;
     }
     Ok(())
-}
-
-impl Command for CommandInstall {
-    fn execute(&self) -> ExitCode {
-        let git = self.args.iter().any(|arg| arg == "--git");
-        let rest: Vec<&String> = self.args.iter().filter(|arg| *arg != "--git").collect();
-        let root = match project_root() {
-            Ok(root) => root,
-            Err(e) => return failure(&e),
-        };
-        // Kept for one release, as the commands that replace them.
-        let result = match rest.as_slice() {
-            [] if !git => {
-                eprintln!("blade: `blade install` is now `blade sync`");
-                install::sync(&root)
-            }
-            [source] | [source, _] => {
-                let version = rest.get(1).map(|version| version.as_str());
-                install::add_source(&root, source, version, git).map(|(name, report)| {
-                    let min = version.map(|min| format!(" {min}")).unwrap_or_default();
-                    eprintln!("blade: `blade install SOURCE` is now `blade add {name} {source}{min}`");
-                    report
-                })
-            }
-            _ => {
-                eprint!("{HELP}");
-                return ExitCode::from(2);
-            }
-        };
-        finish(result)
-    }
 }
 
 impl Command for CommandAdd {
@@ -343,15 +309,15 @@ impl Command for CommandUsage {
             ExitCode::from(2)
         }
         else {
-            println!("{HELP}");
+            print!("{HELP}");
             ExitCode::SUCCESS
         }
     }
 }
 
 impl CommandNew {
-    fn new(args: Args) -> Self {
-        Self { args: args.collect() }
+    fn new(args: Vec<String>) -> Self {
+        Self { args }
     }
 }
 
@@ -376,29 +342,22 @@ impl Cli {
         let mut args = self.args;
         args.next();
         let command = args.next();
+        let args: Vec<String> = args.collect();
         // After `--` the arguments belong to the program (`blade run -- --help`).
-        let help = std::env::args().skip(2).take_while(|arg| arg != "--").any(|arg| arg == "--help" || arg == "-h");
+        let help = args.iter().take_while(|arg| *arg != "--").any(|arg| arg == "--help" || arg == "-h");
         let cmd: Box<dyn Command> = match command.as_deref() {
             Some(_) if help                       => Box::new(CommandUsage::new(false)),
             Some("new")                           => Box::new(CommandNew::new(args)),
-            Some("add")                           => Box::new(CommandAdd { args: args.collect() }),
-            Some("install")                       => Box::new(CommandInstall { args: args.collect() }),
-            Some("sync")                          => Box::new(CommandSync { args: args.collect() }),
-            Some("remove")                        => Box::new(CommandRemove { args: args.collect() }),
-            Some("update")                        => Box::new(CommandUpdate { args: args.collect() }),
-            Some("build")                         => Box::new(CommandBuild { args: args.collect() }),
-            Some("run")                           => Box::new(CommandRun { args: args.collect() }),
+            Some("add")                           => Box::new(CommandAdd { args }),
+            Some("sync")                          => Box::new(CommandSync { args }),
+            Some("remove")                        => Box::new(CommandRemove { args }),
+            Some("update")                        => Box::new(CommandUpdate { args }),
+            Some("build")                         => Box::new(CommandBuild { args }),
+            Some("run")                           => Box::new(CommandRun { args }),
             Some("--help" | "-h" | "help") | None => Box::new(CommandUsage::new(false)),
-            Some("--version" | "-v" | "version")  => Box::new(CommandVersion::new(String::from(VERSION))),
+            Some("--version" | "-V" | "-v" | "version") => Box::new(CommandVersion::new(String::from(VERSION))),
             Some(_)                               => Box::new(CommandUsage::new(true)),
         };
         cmd
-    }
-
-    //pub fn what(&self) {
-    //    println!("hehehe");
-    //}
-    pub fn execute(&self) -> ExitCode {
-        ExitCode::from(2)
     }
 }
