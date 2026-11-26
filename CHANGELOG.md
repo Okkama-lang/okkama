@@ -104,6 +104,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   the old program. A build now writes `OUTPUT.blade-stamp`: a SHA-256 of the input files (which ones and the bytes
   of each) and of the output it made; `blade run` builds unless both match now. Times play no part, so a `touch`
   alone builds nothing; a failed build leaves no stamp. Bible §19.7.
+- **`blade run` reused an output built by another `okkama` (#1080).** The #1040 stamp covered the project's
+  files only, so after installing a new `okkama` (with the same SPB version) or editing its std, `blade run` ran
+  the program the old compiler had built. The stamp now also records the toolchain, as the `okkama` Blade runs
+  names it in `okkama env`: its version line and a SHA-256 of its binary and of its std tree (which files, the
+  bytes of each; `OKKAMA_STDLIB_DIR` or the bundled std); any of them changed builds again, and a stamp written
+  before this change (no `blade-stamp 2` header) builds once. The digests are cached per file in
+  `OUTPUT.blade-cache`, keyed by size, modification time and, on Unix, device, inode and status-change time, so
+  a run that builds nothing reads no toolchain file; a key that changed (a `touch`) rereads that file and builds
+  only if its bytes differ. `okkama env` starts while Blade fingerprints the project. A run that builds nothing
+  costs about 4 ms more (8.4 → 12.3 ms on an M-series Mac, nearly all of it starting `okkama env`); the first
+  run after a toolchain change reads it whole (about 30 ms for a 22 MB binary and a 7 MB std). Bible §19.7.
 - **Blade and local packages (#1040).** `blade.lock` recorded a `path` dependency by its absolute directory
   (`path+/home/me/proj/util`), so a project moved or checked out elsewhere with its packages could not
   `blade sync`; it records the path from the project now (`path+../util`; a lock of 0.6.4 or older asks for

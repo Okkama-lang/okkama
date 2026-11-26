@@ -3740,8 +3740,10 @@ args = []                  # `blade run -- a b` appends a and b
 env = {}                   # extra environment variables
 ```
 
-`blade run` builds first when a `.ok` file, `blade.toml` or `blade.lock` is
-newer than the output, then runs the `.spb` (`okkama exec`); the program's exit status is Blade's. Both commands refuse a
+`blade run` builds first unless the output was built from the sources as
+they are (which `.ok` files, the bytes of each, `blade.toml`, `blade.lock`)
+by the same `okkama` (its version, its binary and its std), as recorded in
+`OUTPUT.blade-stamp`, then runs the `.spb` (`okkama exec`); the program's exit status is Blade's. Both commands refuse a
 project whose dependencies are not installed. Blade uses the `okkama` next to
 it, else the one on `PATH` (`BLADE_OKKAMA` names another).
 

@@ -14,13 +14,24 @@ impl Tree {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let tree = Tree(std::fs::canonicalize(&root).unwrap());
-        // Stand-in okkama: logs its arguments; `build … -o OUT` writes OUT
-        // (fails when the entry says FAIL); `exec` prints and exits 7.
+        // Stand-in okkama: `env` names its version (the file `version`),
+        // itself and its std (`OKKAMA_STDLIB_DIR` or `std/` beside it), and
+        // is not logged; other calls log their arguments; `build … -o OUT`
+        // writes OUT (fails when the entry says FAIL); `exec` prints and
+        // exits 7.
         let fake = tree.0.join("okkama");
         std::fs::write(
             &fake,
             r#"#!/bin/sh
-echo "$@" >> "$(dirname "$0")/okkama.log"
+here="$(dirname "$0")"
+if [ "$1" = env ]; then
+    echo "okkama $(cat "$here/version")"
+    echo "platform  test"
+    echo "binary    $0"
+    echo "std       ${OKKAMA_STDLIB_DIR:-$here/std}"
+    exit 0
+fi
+echo "$@" >> "$here/okkama.log"
 case "$1" in
 build)
     grep -q FAIL "$2" && { echo "compile error" >&2; exit 1; }
@@ -35,6 +46,8 @@ esac
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tree.write("version", "0.6.5\n");
+        tree.write("std/io/stdout.ok", "module io/stdout;\n");
         tree
     }
 
@@ -45,10 +58,16 @@ esac
     }
 
     fn blade(&self, dir: &str, args: &[&str]) -> Output {
+        self.blade_with(dir, args, &[])
+    }
+
+    fn blade_with(&self, dir: &str, args: &[&str], env: &[(&str, &Path)]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_blade"))
             .args(args)
             .current_dir(self.0.join(dir))
             .env("BLADE_OKKAMA", self.0.join("okkama"))
+            .env_remove("OKKAMA_STDLIB_DIR")
+            .envs(env.iter().copied())
             .output()
             .unwrap()
     }
@@ -167,6 +186,68 @@ fn run_never_runs_a_program_built_from_other_sources() {
     assert!(!tree.0.join("app/target/app.spb.blade-stamp").exists());
     std::fs::copy(tree.0.join("older.ok"), tree.0.join("app/src/main.ok")).unwrap();
     assert_eq!(run(), [build, exec]);
+}
+
+/// #1080: `blade run` builds again when the toolchain is not the one that
+/// built the output: another `okkama` version, other bytes of the binary, a
+/// std file edited, added or removed, another std (`OKKAMA_STDLIB_DIR`), a
+/// stamp written before #1080; the same toolchain, its files only touched,
+/// builds nothing.
+#[test]
+fn run_builds_again_for_another_toolchain() {
+    let tree = Tree::new("toolchain");
+    assert!(tree.blade(".", &["new", "app"]).status.success());
+    let run_with = |env: &[(&str, &Path)]| {
+        let ran = tree.blade_with("app", &["run"], env);
+        assert_eq!(ran.status.code(), Some(7), "{}", text(&ran.stderr));
+        tree.calls()
+    };
+    let run = || run_with(&[]);
+    let (build, exec) = ("build src/main.ok -o target/app.spb", "exec app/target/app.spb");
+    assert_eq!(run(), [build, exec]);
+    assert_eq!(run(), [exec], "the same toolchain");
+    assert!(tree.0.join("app/target/app.spb.blade-cache").is_file());
+
+    tree.write("version", "0.6.6\n");
+    assert_eq!(run(), [build, exec], "another version");
+    assert_eq!(run(), [exec]);
+
+    // Other bytes, the same version: a rebuilt okkama.
+    let fake = tree.0.join("okkama");
+    let script = std::fs::read_to_string(&fake).unwrap();
+    std::fs::write(&fake, format!("{script}# rebuilt\n")).unwrap();
+    assert_eq!(run(), [build, exec], "another binary");
+    assert_eq!(run(), [exec]);
+
+    tree.write("std/io/stdout.ok", "module io/stdout; // edited\n");
+    assert_eq!(run(), [build, exec], "a std file edited");
+    tree.write("std/text.ok", "module text;\n");
+    assert_eq!(run(), [build, exec], "a std file added");
+    std::fs::remove_file(tree.0.join("std/text.ok")).unwrap();
+    assert_eq!(run(), [build, exec], "a std file removed");
+    age(&tree.0.join("std/io/stdout.ok"));
+    age(&fake);
+    assert_eq!(run(), [exec], "times alone build nothing");
+
+    tree.write("other/io/stdout.ok", "module io/stdout; // another std\n");
+    let other = tree.0.join("other");
+    assert_eq!(run_with(&[("OKKAMA_STDLIB_DIR", &other)]), [build, exec], "OKKAMA_STDLIB_DIR");
+    assert_eq!(run_with(&[("OKKAMA_STDLIB_DIR", &other)]), [exec]);
+    assert_eq!(run(), [build, exec], "back to the std beside okkama");
+
+    // A stamp of #1040 (the inputs and the output alone) for this very
+    // output: the toolchain that made it is unknown, so it builds.
+    let stamp = tree.0.join("app/target/app.spb.blade-stamp");
+    let current = std::fs::read_to_string(&stamp).unwrap();
+    let old: String = current
+        .lines()
+        .filter(|line| line.starts_with("inputs ") || line.starts_with("output "))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert_eq!(old.lines().count(), 2, "{current}");
+    std::fs::write(&stamp, old).unwrap();
+    assert_eq!(run(), [build, exec], "a stamp from before #1080");
+    assert_eq!(run(), [exec]);
 }
 
 /// #1040: a project and its local packages move together: `blade.lock`

@@ -17,6 +17,7 @@ use std::process::Command;
 
 use crate::lock::{LOCK, Lock};
 use crate::manifest::{MANIFEST, Manifest, PKG};
+use crate::toolchain::{self, Toolchain};
 
 /// A project with its build and run settings resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,10 +102,23 @@ impl Project {
         path.push(STAMP);
         PathBuf::from(path)
     }
+
+    /// `OUTPUT.blade-cache`: the digests of the toolchain's files (#1080).
+    fn cache_path(&self) -> PathBuf {
+        let mut path = self.output_path().into_os_string();
+        path.push(CACHE);
+        PathBuf::from(path)
+    }
 }
 
 /// The suffix of the stamp beside the output.
 pub const STAMP: &str = ".blade-stamp";
+/// The suffix of the toolchain's digest cache beside the output.
+pub const CACHE: &str = ".blade-cache";
+/// The first line of a stamp. A stamp of another format (one of 0.6.5's
+/// first builds, `inputs …` and `output …` alone) never matches, so the
+/// output is built again (#1080).
+const STAMP_FORMAT: &str = "blade-stamp 2";
 
 fn strings(values: &[toml::Value], what: &str) -> Result<Vec<String>, String> {
     values
@@ -183,13 +197,15 @@ fn inputs(project: &Project) -> Result<Vec<String>, String> {
     Ok(found)
 }
 
-/// The stamp of a build: the fingerprint of its inputs (which files, and the
-/// bytes of each) and of the output it made. Modification times play no part:
-/// a deleted source, or one replaced by an older file (`cp -p`, an unpacked
-/// archive), changes the stamp as an edit does (#1040).
-fn stamp(project: &Project, inputs: &str) -> Result<String, String> {
+/// The stamp of a build: the toolchain that made it (the `okkama` version,
+/// its binary and its std, by content, #1080), the fingerprint of its inputs
+/// (which files, and the bytes of each) and of the output it made.
+/// Modification times play no part: a deleted source, or one replaced by an
+/// older file (`cp -p`, an unpacked archive), changes the stamp as an edit
+/// does (#1040).
+fn stamp(project: &Project, toolchain: &Toolchain, inputs: &str) -> Result<String, String> {
     let output = crate::install::checksum_of(&project.root, std::slice::from_ref(&project.output))?;
-    Ok(format!("inputs {inputs}\noutput {output}\n"))
+    Ok(format!("{STAMP_FORMAT}\n{toolchain}inputs {inputs}\noutput {output}\n"))
 }
 
 /// The fingerprint of the files the project builds from, now.
@@ -197,16 +213,16 @@ fn fingerprint(project: &Project) -> Result<String, String> {
     crate::install::checksum_of(&project.root, &inputs(project)?)
 }
 
-/// Was the output built from these very inputs, and is it still what that
-/// build wrote?
-fn up_to_date(project: &Project, inputs: &str) -> Result<bool, String> {
+/// Was the output built by this toolchain from these very inputs, and is it
+/// still what that build wrote?
+fn up_to_date(project: &Project, toolchain: &Toolchain, inputs: &str) -> Result<bool, String> {
     let Ok(recorded) = std::fs::read_to_string(project.stamp_path()) else {
         return Ok(false);
     };
     if !project.output_path().is_file() {
         return Ok(false);
     }
-    Ok(recorded == stamp(project, inputs)?)
+    Ok(recorded == stamp(project, toolchain, inputs)?)
 }
 
 /// Build the project unless its output was built from the sources as they are
@@ -218,10 +234,12 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
             return Err(format!("[build] entry \"{file}\" does not exist"));
         }
     }
-    // Taken before the build: a source edited while it runs makes the next
-    // run build again.
+    // Taken before the build: a source or the toolchain changed while it runs
+    // makes the next run build again.
+    let probe = toolchain::Probe::start(&okkama(), &project.cache_path());
     let inputs = fingerprint(project)?;
-    if !force && up_to_date(project, &inputs)? {
+    let toolchain = probe.finish()?;
+    if !force && up_to_date(project, &toolchain, &inputs)? {
         return Ok(false);
     }
     let stamp_file = project.stamp_path();
@@ -245,7 +263,7 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
     if !status.success() {
         return Err(format!("build failed ({status})"));
     }
-    std::fs::write(&stamp_file, stamp(project, &inputs)?)
+    std::fs::write(&stamp_file, stamp(project, &toolchain, &inputs)?)
         .map_err(|error| format!("{}: {error}", stamp_file.display()))?;
     Ok(true)
 }
@@ -383,21 +401,65 @@ mod tests {
         temp.write("src/main.ok", "module app;\n");
         let project = Project::parse(&temp.0, "[module]\nname = \"app\"\n").unwrap();
         let inputs = fingerprint(&project).unwrap();
-        assert!(!up_to_date(&project, &inputs).unwrap(), "never built");
+        let tools = toolchain();
+        assert!(!up_to_date(&project, &tools, &inputs).unwrap(), "never built");
         let output = temp.write("target/app.spb", "built");
         assert_eq!(project.stamp_path(), temp.0.join("target/app.spb.blade-stamp"));
-        std::fs::write(project.stamp_path(), stamp(&project, &inputs).unwrap()).unwrap();
-        assert!(up_to_date(&project, &inputs).unwrap());
+        std::fs::write(project.stamp_path(), stamp(&project, &tools, &inputs).unwrap()).unwrap();
+        assert!(up_to_date(&project, &tools, &inputs).unwrap());
 
         temp.write("src/main.ok", "module app; // edited\n");
-        assert!(!up_to_date(&project, &fingerprint(&project).unwrap()).unwrap());
+        assert!(!up_to_date(&project, &tools, &fingerprint(&project).unwrap()).unwrap());
         temp.write("src/main.ok", "module app;\n");
-        assert!(up_to_date(&project, &fingerprint(&project).unwrap()).unwrap());
+        assert!(up_to_date(&project, &tools, &fingerprint(&project).unwrap()).unwrap());
 
         std::fs::write(&output, "other").unwrap();
-        assert!(!up_to_date(&project, &inputs).unwrap(), "the output was replaced");
+        assert!(!up_to_date(&project, &tools, &inputs).unwrap(), "the output was replaced");
         std::fs::write(&output, "built").unwrap();
         std::fs::remove_file(&output).unwrap();
-        assert!(!up_to_date(&project, &inputs).unwrap(), "no output");
+        assert!(!up_to_date(&project, &tools, &inputs).unwrap(), "no output");
+    }
+
+    fn toolchain() -> Toolchain {
+        Toolchain {
+            version: "okkama 0.6.5".to_string(),
+            binary: format!("sha256:{}", "b".repeat(64)),
+            std: format!("sha256:{}", "5".repeat(64)),
+        }
+    }
+
+    /// #1080: a stamp holds only for the toolchain that made the output: its
+    /// version, its binary and its std. A stamp from before #1080 (inputs and
+    /// output alone) holds for none, so the output is built again.
+    #[test]
+    fn a_stamp_holds_for_its_toolchain_only() {
+        let temp = Temp::new("toolchain");
+        temp.write("src/main.ok", "module app;\n");
+        temp.write("target/app.spb", "built");
+        let project = Project::parse(&temp.0, "[module]\nname = \"app\"\n").unwrap();
+        let inputs = fingerprint(&project).unwrap();
+        let built = toolchain();
+        std::fs::write(project.stamp_path(), stamp(&project, &built, &inputs).unwrap()).unwrap();
+        assert!(up_to_date(&project, &built, &inputs).unwrap());
+        let other = |change: fn(&mut Toolchain)| {
+            let mut now = built.clone();
+            change(&mut now);
+            now
+        };
+        for (what, now) in [
+            ("version", other(|t| t.version = "okkama 0.6.6".to_string())),
+            ("binary", other(|t| t.binary = format!("sha256:{}", "c".repeat(64)))),
+            ("std", other(|t| t.std = "missing".to_string())),
+        ] {
+            assert!(!up_to_date(&project, &now, &inputs).unwrap(), "another {what}");
+        }
+
+        // What a #1040 blade wrote for this very output and these inputs.
+        let output = crate::install::checksum_of(&temp.0, std::slice::from_ref(&project.output)).unwrap();
+        std::fs::write(project.stamp_path(), format!("inputs {inputs}\noutput {output}\n")).unwrap();
+        assert!(!up_to_date(&project, &built, &inputs).unwrap(), "a stamp of the old format");
+        let current = stamp(&project, &built, &inputs).unwrap();
+        assert!(current.starts_with("blade-stamp 2\nokkama 0.6.5\nbinary sha256:"), "{current}");
+        assert!(current.ends_with(&format!("inputs {inputs}\noutput {output}\n")), "{current}");
     }
 }

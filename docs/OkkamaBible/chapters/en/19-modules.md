@@ -513,9 +513,13 @@ says; `blade run` builds unless the output was built from the sources as they
 are now, then runs it as `[run]` says, and the program's exit status is
 blade's. "The sources as they are" means which `.ok` files there are (the
 dependencies' in `pkg/` included), the bytes of each, `blade.toml` and
-`blade.lock`, recorded beside the output in `target/demo.spb.blade-stamp`.
-Times play no part: a deleted module, or one replaced by an older copy
-(`cp -p`, an unpacked archive), builds again exactly as an edit does, so
+`blade.lock`, and the compiler that builds them: the `okkama` version, the
+bytes of the `okkama` binary and of the std it compiles against
+(`OKKAMA_STDLIB_DIR` or the one it was installed with, as `okkama env`
+names it). All of it is recorded beside the output in
+`target/demo.spb.blade-stamp`. Times play no part: a deleted module, or one
+replaced by an older copy (`cp -p`, an unpacked archive), builds again
+exactly as an edit does, and so does a new `okkama` or an edited std, so
 `blade run` never runs a program that `blade build` would no longer make.
 
 ### A package is a repository

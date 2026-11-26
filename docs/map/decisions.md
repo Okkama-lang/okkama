@@ -627,6 +627,24 @@ every declaration is open (#1005, owner decision).
   separators); an absolute lock is not translated (pre-beta, no shims): `blade update NAME` rewrites it.
 - `blade install` is removed (pre-beta); local directories are declared by hand in `[dependencies]`.
 
+## Blade's stamp covers the toolchain (#1080, 2026-11-27, no owner comment: own design)
+
+- The toolchain is what the `okkama` Blade runs says in `okkama env` (version line, `binary`, `std`); Blade
+  does not resolve std itself (`OKKAMA_STDLIB_DIR`, install root, repository ancestors stay in one place,
+  okkama-cli `stdlib_dir`). The stamp records the version line and SHA-256 of the binary and of the std tree
+  (every non-hidden file by tree path and digest), by content only: the same std or binary at another path
+  reuses the output (an SPB holds no std paths).
+- Stamp format `blade-stamp 2` as the first line; up to date only on an exact match, so a stamp of another
+  format (#1040's `inputs`/`output` alone) rebuilds once. No compatibility reading of old stamps (pre-beta).
+- Digests cached per file in `OUTPUT.blade-cache`, keyed by (path, size, mtime) plus on Unix (dev, inode,
+  ctime): ctime cannot be set back, so a `cp -p` or a restored mtime still rereads. The key decides only
+  whether to reread, never whether to build; a file younger than 2 s is not remembered (racy-clean, as git).
+  Measured: uncached hashing ~29 ms per no-op run (22.6 MB binary, 7 MB std), cached ~1 ms, so the cache is
+  needed; per output beside the stamp (no global cache dir).
+- `okkama env` (~3.7 ms to start) runs while Blade fingerprints the project, and the std the cache last saw
+  is listed on a thread meanwhile, used only if `okkama env` names the same directory. The remaining +~4 ms
+  per no-op run is the price of asking `okkama` itself; caching its answer would duplicate std resolution.
+
 ## `unreachable` compiles as a trap (#1072, 2026-11-27)
 
 - `unreachable` stays in SPB (opcode 145, verifier and codegen unchanged): Sparrow compiles it as

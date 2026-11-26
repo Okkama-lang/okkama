@@ -101,7 +101,14 @@
   sync/update/add/remove against `pkg/.blade-installed` (files changed, source moved); sync reports
   "no longer required" only after a complete walk; `settled` names a busy blade; `blade install`,
   `add_source`, `Cli::execute` and the commented-out code gone. Not covered by the stamp: the okkama binary and
-  its std (a new okkama with the same SPB version reuses the output).
+  its std (a new okkama with the same SPB version reuses the output) — covered since #1080.
+- [x] #1080 (feature/1080, not committed): the stamp records the toolchain (`blade-stamp 2` header, then the
+  `okkama env` version line, `binary sha256:…`, `std sha256:…`, inputs, output; blade/src/toolchain.rs
+  `Probe::start`/`finish`, `Digests`, `Key`, `list`; project.rs `stamp`, `up_to_date`, `STAMP_FORMAT`, `CACHE`).
+  Per-file digest cache `OUTPUT.blade-cache` (size, mtime, dev, inode, ctime; entries younger than 2 s not
+  remembered). No-op `blade run` 8.4 → 12.3 ms (gate build, ~/.local okkama 0.6.4, 22.6 MB binary + 499 std
+  files), ~3.7 ms of it `okkama env` start; uncached 41 ms. Not covered: `OKKAMA_IMPORT_DIRS` trees and
+  compile-affecting environment (`OKKAMA_IR_PASSES` …).
 - [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
   (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
   sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to

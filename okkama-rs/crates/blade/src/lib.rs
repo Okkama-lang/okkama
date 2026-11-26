@@ -4,6 +4,7 @@ pub mod install;
 pub mod lock;
 pub mod manifest;
 pub mod project;
+mod toolchain;
 pub mod version;
 
 use std::{env::Args, io::Write, process::ExitCode};
@@ -29,9 +30,10 @@ USAGE:
     blade remove NAME                drop a dependency and what only it needed
     blade build                      compile the project as [build] says
     blade run [-- ARGS...]           build if the sources differ from the last
-                                     build's (contents, files added or removed),
-                                     then run it as [run] says; ARGS follow
-                                     [run] args
+                                     build's (contents, files added or removed)
+                                     or okkama does (its version, its binary,
+                                     its std), then run it as [run] says; ARGS
+                                     follow [run] args
     blade --help                     (also -h, help)
     blade --version                  (also -V, -v, version)
 
@@ -48,7 +50,8 @@ blade.toml, build and run (all keys optional, defaults shown):
     [build]
     entry = \"src/main.ok\"       # or a list of the root module's files
     output = \"target/NAME.spb\"  # Sparrow bytecode; OUTPUT.blade-stamp beside
-                                # it fingerprints the sources it was built from
+                                # it fingerprints the sources and the okkama
+                                # it was built from
     [run]
     args = []
     env = {}
