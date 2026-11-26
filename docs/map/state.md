@@ -57,6 +57,8 @@ no full test suites, Docker, cargo fmt or clippy.
   `hash_password_into_with_memory`), `argon2_hash` mirrors `hash_password_with_salt`,
   `argon2-verify` mirrors `verify_password` over it; direct dependency `ed25519` with
   `zeroize` (Cargo.lock and fuzz/Cargo.lock).
+- [x] #1062 (feature/1062): `typing::non_finite` walks `GlobalDecl.data` after `fits`;
+  the global check refuses the first non-finite float; unit test `typing::data_tests`.
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 

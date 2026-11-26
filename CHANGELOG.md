@@ -18,6 +18,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   owns and zeroes before freeing them (the crate's own `zeroize` feature leaves them; about +0.6 ms, +4.5%, at
   std's default 19 MiB, t=2); the Ed25519 seed copy in `KeypairBytes` (PKCS#8 in and out) is zeroed on drop
   (`ed25519/zeroize`, which ed25519-dalek does not forward).
+- **Sparrow verifier (#1062).** A NaN or an infinity in a module constant's data (a scalar, an array element, a map
+  key or value) is refused as it is in `const` ("float 0x7ff8000000000000 in the data of global g0 is not finite");
+  it used to verify and run.
 
 ## [0.6.4] — 2026-11-23
 
