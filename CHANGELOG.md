@@ -7,6 +7,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **A discarded Future of a bound async action's call never released the fresh argument it owned (#1102).** A
+  Future is lazy, so a discarded one runs nothing (Bible §20.1), but it owns the fresh arguments of its call
+  (#587). For a direct call (`job.take(Res(n: 1));`) lowering tracks the Future in its scope, which releases them
+  when the scope ends. A call of a bound async action (`let t is async (Res) is int = job.take; t(Res(n: 2));`)
+  returned a Future no region tracked, so `Res(n: 2)` was never destroyed. Async cap fields and async anonymous
+  closures do not exist, so this was the only case. That Future is now tracked like a direct call's. Awaited at
+  once, it follows #932: no track on the normal path, the await's landing block tracks it on failure or
+  cancellation. When the bound action's closure is not visible in the function (a parameter of type
+  `async (…) is R`), it counts as a runtime driver, and the track follows the take. Corpus SPB changes in 34 of
+  2279 programs (std net/mail/http/web/fs and the examples and micro programs using them). Un-awaited Futures,
+  spawned ones mostly, are now tracked, and awaited ones gain the landing block.
 - **CI: the debug-only checks ran only in the nightly gate, after the merge (#1100).** The Wave and CI test in the
   `gate` profile, where `debug_assertions` are off, so the ownership linearity check that always runs in debug
   builds first failed on #1093 in the nightly after the merge into develop. The Wave's test matrix has a `debug`

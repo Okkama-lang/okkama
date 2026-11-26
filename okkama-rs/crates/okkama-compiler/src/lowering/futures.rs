@@ -161,7 +161,9 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
 /// running body exactly as before.
 ///
 /// Qualifies: `call %f = F(...)`, then only `region.track R, %f`, then `await.take %f`, in one block with an unwind
-/// edge, where F is async. A runtime driver keeps fresh inputs past its settlement (#587, #845: a collector's
+/// edge, where F is async; or a `call.fn` of a bound async action in its place (#1102: lowering takes its Future only
+/// when the callee's type is async), which counts as a driver unless the closure it calls is defined in the function
+/// and names an action that is not one. A runtime driver keeps fresh inputs past its settlement (#587, #845: a collector's
 /// items, a send's message), so for a driver the track follows the take on the normal path: the scope still closes
 /// those inputs, and a Future with nothing left to close is not kept (`region_add`).
 pub(super) fn own_awaited_temporaries(functions: &mut [Function]) {
@@ -186,11 +188,21 @@ fn awaited_temporary(function: &Function, block: usize, async_calls: &[bool], dr
     let body = &function.blocks[block];
     body.unwind.as_ref()?;
     body.insts.windows(3).enumerate().find_map(|(index, triple)| {
-        let (Some(future), InstKind::Call { func, .. }) = (triple[0].result, &triple[0].kind) else { return None };
-        (async_calls[func.0]
+        let future = triple[0].result?;
+        let (asynchronous, driver) = match &triple[0].kind {
+            InstKind::Call { func, .. } => (async_calls[func.0], drivers[func.0]),
+            InstKind::CallFn { callee, .. } => {
+                let closure = function.blocks.iter().flat_map(|block| &block.insts)
+                    .find(|inst| inst.result == Some(*callee))
+                    .and_then(|inst| match inst.kind { InstKind::FnClosure { func, .. } => Some(func), _ => None });
+                (true, closure.is_none_or(|func| drivers[func.0]))
+            }
+            _ => return None,
+        };
+        (asynchronous
             && matches!(triple[1].kind, InstKind::RegionTrack { value, .. } if value == future)
             && matches!(triple[2].kind, InstKind::AwaitTake(input) if input == future))
-            .then_some((index, drivers[func.0]))
+            .then_some((index, driver))
     })
 }
 

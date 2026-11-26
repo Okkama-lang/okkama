@@ -70,8 +70,9 @@ calls it a new identity: a cap field returning its owner's field or a closure re
 fresh argument (#555; a worker entry's rebuilt receiver), on the call's failure path too, and a branch moves a
 resource's state into the block parameter it is passed to. The `statics` pass removes the regions it empties,
 so it leaves none open when it runs without `regions`.
-Since #1099 lowering tracks a closure's or a cap field's result in its scope like any call's (`BodyLowerer::emit`,
-not a Future), and `lowering::untrack_borrowed_results` drops that track again where the census reports no
+Since #1099 lowering tracks a closure's or a cap field's result in its scope like any call's (`BodyLowerer::emit`;
+since #1102 a bound async action's Future too, which `futures::own_awaited_temporaries` treats as #932 does a direct
+call's, a closure not defined in the function counting as a driver), and `lowering::untrack_borrowed_results` drops that track again where the census reports no
 creation, so a discarded new resource is destroyed at its scope's end and a borrowed result stays untracked.
 
 **Next.** The static pass (#909 2b) takes a resource alone in its region or the oldest member of one (newer

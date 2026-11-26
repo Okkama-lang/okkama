@@ -55,6 +55,12 @@ the session's memory; older rulings live in the commits and tickets named.
   in the order of first use; the enclosing action captures a name for a nested
   one at the nested action's position. Nothing iterates a hash map to decide
   captures; a closure written in a default value sees no caller locals (#149).
+- **2026-11-27. A bound async action's Future is tracked like a direct call's (#1102, coordinator's task, lead
+  design).** `call.fn` of an async action value returns a lazy Future that owns the call's fresh arguments
+  (#587), so lowering tracks it in the scope. An immediately taken one follows #932 (`awaited_temporary` accepts
+  `call.fn`). The bound action's closure, when it is defined in the function, decides driver or not. An unresolved
+  one (a parameter) counts as a driver, so the track follows the take: the conservative form, which costs a
+  skipped add of a spent Future.
 - **2026-11-27. Closure and cap-field results are tracked like call results (#1099, coordinator's task, lead
   design).** `BodyLowerer::emit` tracks the result of `call.fn` and `call.cap` in its scope as it does for
   `call`/`call.role`/`await.take` (a Future result excepted: its rules are #932/#587).

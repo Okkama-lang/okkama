@@ -2,6 +2,15 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1102 (feature/1099 rebased on release/065 6e13e1d1e, not committed): a discarded Future of an ordinary async
+  call runs nothing (lazy, Bible §20.1) and its scope releases the fresh arguments it owns (#587). A bound async
+  action's (`call.fn`) Future was never tracked, so its argument leaked (`destroy 12`/`13` never ran). `emit`
+  now tracks it, and `futures::awaited_temporary` takes `call.fn` (driver unless its `fn.closure` is in the function
+  and names a non-driver). Corpus SPB vs #1099: 34 of 2279 differ (std net/mail/http/web/fs, their examples, 9 web
+  micro programs). Docker std -t of the 12 changed modules: same pass/fail on both (web/routing and fs/root have
+  1 failure each on both). Micro A/B (n=10⁴, 5 runs, quiet round A3 B3 B4 A4): web cells within −2.7…+2.6%
+  (session-lifecycle +2.6% the largest); the first round's A2 was under host load (Spotlight). Toolchains:
+  okkama-work/micro-tc/1102-cand against 1099-cand (= release/065 code).
 - [x] #1100/#1101 (feature/1100, not committed): `wave.yml` part `debug` and `ci.yml` job `debug` ("Tests
   (debug)"): `CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test --locked --no-fail-fast -p okkama-compiler -p
   okkama-cli`, caches `wave-debug`/`tests-debug`; not yet run on GitHub (first run: time, disk, the linearity

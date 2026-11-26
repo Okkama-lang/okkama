@@ -1308,9 +1308,11 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
     fn emit(&mut self, kind: InstKind, ty: Type, span: Span) -> Typed {
         // A closure or cap-field call too (#1099): one that makes a new resource left it to whoever took the value,
-        // so a discarded one was never destroyed. A Future such a call returns keeps its own rules (#932).
-        let result = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. } | InstKind::AwaitTake(_))
-            || matches!(kind, InstKind::CallFn { .. } | InstKind::CallCap { .. }) && !matches!(ty, Type::Future(_));
+        // so a discarded one was never destroyed. So is the Future of a bound async action's call (#1102): it owns
+        // the call's fresh arguments, and a discarded one was never closed; awaited at once, it follows #932
+        // (`futures::own_awaited_temporaries`).
+        let result = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. } | InstKind::AwaitTake(_)
+            | InstKind::CallFn { .. } | InstKind::CallCap { .. });
         let value = Typed {
             value: self.b.emit(kind, ty.clone(), span),
             ty,

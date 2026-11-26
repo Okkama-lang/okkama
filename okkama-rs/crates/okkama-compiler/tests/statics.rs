@@ -400,6 +400,33 @@ fn closure_and_cap_results_are_tracked_only_when_they_are_new() {
     ir::linearity::check(&module).expect("every new resource has an owner");
 }
 
+/// #1102: the Future of a bound async action's call is tracked in its scope like a direct call's: discarded, right
+/// after the call; awaited at once (#932), only on the await's failure path, in the landing block before the
+/// handler.
+#[test]
+fn a_bound_async_call_future_is_tracked_like_a_direct_calls() {
+    let module = lowered(&format!("{RES} object Job {{ Job(); async take(r is Res) is int {{ r.read(); }} }} \
+        async main() is int {{ let t is async (Res) is int = Job().take; t(Res(n: 1)); await t(Res(n: 2)); }}"), "none");
+    let function = &module.functions[symbol(&module, "main")];
+    let futures: Vec<ir::ValueId> = function.blocks.iter().flat_map(|block| &block.insts)
+        .filter(|inst| matches!(inst.kind, ir::InstKind::CallFn { .. }))
+        .filter_map(|inst| inst.result)
+        .collect();
+    assert_eq!(futures.len(), 2, "{module}");
+    let after_call = |future: ir::ValueId| function.blocks.iter().any(|block| block.insts.windows(2).any(|pair| {
+        pair[0].result == Some(future) && matches!(pair[1].kind, ir::InstKind::RegionTrack { value, .. } if value == future)
+    }));
+    let landing = |future: ir::ValueId| function.blocks.iter().any(|block| block.params.len() == 1
+        && matches!(block.insts.as_slice(), [ir::Inst { kind: ir::InstKind::RegionTrack { value, .. }, .. }] if *value == future));
+    assert!(after_call(futures[0]) && !landing(futures[0]), "the discarded Future: {module}");
+    assert!(!after_call(futures[1]) && landing(futures[1]), "the awaited Future: {module}");
+    // `Job.take` is no runtime driver: the normal path tracks the taken Future nowhere.
+    let tracks = function.blocks.iter().flat_map(|block| &block.insts)
+        .filter(|inst| matches!(inst.kind, ir::InstKind::RegionTrack { value, .. } if value == futures[1])).count();
+    assert_eq!(tracks, 1, "{module}");
+    ir::linearity::check(&module).expect("every resource has an owner");
+}
+
 const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \
     async destroy { confirm n > 0; } }";
 

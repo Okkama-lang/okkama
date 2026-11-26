@@ -1025,3 +1025,41 @@ fn a_discarded_role_call_result_is_destroyed_when_its_scope_ends() {
         support::assert_value(&module, "100007");
     }
 }
+
+/// #1102: the Future of a bound async action's call owns the call's fresh arguments (#587) like a direct call's,
+/// and is lazy: discarded, it runs nothing, and it closes with its scope, which releases what it owns. Awaited,
+/// bound or spawned, its argument is released once as before. Digits: 1 direct call, 2 bound call, 3 bound call in
+/// an inner block (released when that block ends: the log is 3 inside run after it), 4 awaited, 5 bound to a name,
+/// 6 spawned and awaited; `run` returns the log inside its scope.
+fn discarded_futures(asynchronous: bool) -> ir::Module {
+    let awaited = if asynchronous {
+        "let taking is async (Vault) is int = Taker().take; await taking(Vault(log: log, id: 4)); \
+         let kept = taking(Vault(log: log, id: 5)); await spawn taking(Vault(log: log, id: 6));"
+    } else {
+        ""
+    };
+    let (run, main) = if asynchronous {
+        ("async run(log is Log) is int", "async main() is int { let log = Log(n: Atomic(0)); \
+            let result = await Probe().run(log); result * 10000000 + log.value(); }")
+    } else {
+        ("run(log is Log) is int", "main() is int { let log = Log(n: Atomic(0)); \
+            let result = Probe().run(log); result * 10000000 + log.value(); }")
+    };
+    lower(&format!("{LEDGERS} object Taker {{ Taker(); async take(vault is Vault) is int {{ vault.balance(); }} }} \
+        object Probe {{ Probe(); {run} {{ Taker().take(Vault(log: log, id: 1)); \
+        let bound is async (Vault) is int = Taker().take; bound(Vault(log: log, id: 2)); \
+        {{ let inner is async (Vault) is int = Taker().take; inner(Vault(log: log, id: 3)); }} {awaited} \
+        log.value(); }} }} {main}"))
+}
+
+#[test]
+fn a_discarded_future_of_a_bound_async_action_releases_its_argument_with_its_scope() {
+    // Inside run: the inner block's 3 is released; at run's end, newest first, 2 then 1.
+    support::assert_value(&discarded_futures(false), "30000321");
+}
+
+#[test]
+fn a_bound_async_action_releases_its_argument_once_however_its_future_is_used() {
+    // Inside run: 3 (inner block), 4 (awaited), 6 (spawned, awaited); at run's end, newest first, 5, 2, 1.
+    support::assert_value(&discarded_futures(true), "3460346521");
+}
