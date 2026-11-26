@@ -1,11 +1,11 @@
 //! Handlers, cleanup regions and nested failing calls under a stressed
 //! collector (audit S03, #22): Sparrow preserves the report under GC stress.
+mod tree;
 
-use std::process::Command;
 
 fn run(stress: &str) -> (Option<i32>, String) {
     let program = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/handlers/main.ok");
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run"])
         .arg(&program)
         .env("SPARROW_CORE_GC_STRESS", stress)

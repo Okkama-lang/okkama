@@ -121,9 +121,12 @@ summary.
 - **Heavy runs on GitHub's runners.** The repository is public, so Actions
   minutes are free. Push a branch named `wave/<name>` at the commit to test.
   The `Wave` workflow (`.github/workflows/wave.yml`) runs every test target
-  of every crate, conformance (a failing case fails the job) and the corpora
-  (t/, micro programs, examples, the Bible's examples) on Tomato's pipeline,
-  and checks the code maps. After a fast-forward, also check the release
+  of every crate in the gate profile, the tests of okkama-compiler and
+  okkama-cli in the dev profile too (part `debug`: the checks that run only
+  with debug assertions, such as the ownership linearity check; CI's job
+  "Tests (debug)" runs the same, #1100), conformance (a failing case fails
+  the job) and the corpora (t/, micro programs, examples, the Bible's
+  examples) on Tomato's pipeline, and checks the code maps. After a fast-forward, also check the release
   branch's own `CI` run: it is the release gate, and a red one is fixed
   before the next ticket. Delete the `wave/*` branch afterwards. Timing runs stay local: the runners are
   bimodal.
@@ -342,6 +345,13 @@ For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/owne
 | Tooling (Python) | `tools/test-python.sh` | every tracked `test_*.py` (fuzz orchestration, t/ generator, ownership oracle, micro harness, conformance runner), dry: no toolchain or Docker; CI job "Tool tests" and the Wave's maps job run it (#1092) |
 | Generated programs | `tools/gen/okgen.py run --seeds N` (`show SEED`) | terminating deterministic programs (BigInt, strings, arrays, objects, roles, closures, try/catch, recursion) on Sparrow configurations; a disagreement is minimized (ddmin over `main`) into `conformance/reports/runs/okgen/<seed>`; `tools/gen/mutants.sh` checks it finds a seeded defect in each engine. Containers only |
 | Release gate | `make gate` (= `tools/gate/docker.sh`, ~15 min) | Rust tests (profile `gate`: release optimizations without fat LTO; and debug), clippy with `-D warnings`, conformance sparrow/sparrow-passes-off/sparrow-gc-stress, std inventory, natives (`gen-abi.py --check` and `native-callers.py`), std fmt (`fmt --check`), std tests Sparrow vs `tools/gate/known-failures.txt`, the t/ suite on all three configurations; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `packages.yml` calls `gate.yml` for release tags and every push to develop (nightly), and publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO for the release binaries only) |
+
+okkama-cli's integration tests start the binary only through
+`tests/tree/mod.rs` (#1101): `tree::okkama()` sets `OKKAMA_STDLIB_DIR` to
+the tree's std, so a build into any `CARGO_TARGET_DIR` tests this std, never
+an installed one; a test that starts it from another program passes
+`tree::OKKAMA` and `tree::std_dir()`. `cli.rs` refuses a test file that names
+the binary any other way.
 
 Sparrow is the only Okkama engine (#584, #585): `okkama run` has no
 `--engine`, and `OKKAMA_ENGINE` is ignored.

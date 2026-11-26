@@ -5,6 +5,7 @@
 //! handshakes are still in flight (#1000, #1021). Runs
 //! `tests/signals/serve.ok` with `okkama run`.
 #![cfg(unix)]
+mod tree;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -38,7 +39,7 @@ impl App {
             .and_then(|listener| listener.local_addr())
             .expect("a free port")
             .port();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+        let mut command = tree::okkama();
         command
             .args(["run"])
             .arg(here.join("tests/signals/serve.ok"))
@@ -48,7 +49,6 @@ impl App {
             command.arg("tls");
         }
         let mut child = command
-            .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

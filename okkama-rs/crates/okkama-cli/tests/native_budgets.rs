@@ -1,6 +1,7 @@
 //! A memory budget stops one operation whose result would cross it before
 //! the result is built (#72): a join of 200 copies of a 1 MiB string under a
 //! 64 MiB budget stops without allocating 200 MiB.
+mod tree;
 
 use std::process::Command;
 
@@ -10,18 +11,17 @@ const JOIN: &str = "module app v1.0.0;\nobject Text {\n    Text();\n    doubled(
 fn a_join_past_the_memory_budget_is_stopped_before_it_is_built() {
     let path = std::env::temp_dir().join(format!("native-budgets-{}.ok", std::process::id()));
     std::fs::write(&path, JOIN).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut command = if cfg!(target_os = "macos") {
         let mut timed = Command::new("/usr/bin/time");
-        timed.arg("-l").arg(env!("CARGO_BIN_EXE_okkama"));
+        timed.arg("-l").arg(tree::OKKAMA);
         timed
     } else {
-        Command::new(env!("CARGO_BIN_EXE_okkama"))
+        tree::okkama()
     };
     let output = command
         .args(["run", "--max-memory", "64M", "--timeout", "60"])
         .arg(&path)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
+        .env("OKKAMA_STDLIB_DIR", tree::std_dir())
         .env("OKKAMA_TRACE", "off")
         .output()
         .unwrap();

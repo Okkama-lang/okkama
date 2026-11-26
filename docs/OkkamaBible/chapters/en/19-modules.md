@@ -660,7 +660,17 @@ that is not installed points to `blade sync`. The only commands that fetch
 new versions are the ones that say so, `add` and `update`, and even they stop
 when a tag now points at a different commit than the lock remembers, until
 `blade update NAME` accepts the new state. A moved tag is how a supply
-chain is attacked, and blade will not follow one silently.
+chain is attacked, and blade will not follow one silently. The update names
+the commits, and a change only the lock sees, because `pkg/` already holds
+the new commit (a `blade.lock` checked out from before, say), ends with
+`in blade.lock`:
+
+```
+~ json 1.0.0 (tag moved: b91931b56b -> 479dd466b6)
+~ json 1.0.0 (tag moved: b91931b56b -> 479dd466b6) in blade.lock
+```
+
+`dependencies are up to date` means that neither `pkg/` nor the lock changed.
 
 ### Work done by hand is never lost
 

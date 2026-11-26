@@ -2,10 +2,10 @@
 //! through Rust (`destroy`, closures) ends at the stack limit — under a
 //! memory budget, which caps the stack, as running out of memory (#241) — the
 //! process stays usable, and helper calls do not grow the machine frame.
+mod tree;
 
 use sparrow_core::budget::{Counted, Limits, Meter, counted_bytes};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[global_allocator]
 static ALLOCATOR: Counted<std::alloc::System> = Counted(std::alloc::System);
@@ -17,7 +17,7 @@ fn program(name: &str) -> PathBuf {
 /// Bytecode of `name`, built by the okkama binary.
 fn build(name: &str) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!("okkama-nested-{}-{name}.spb", std::process::id()));
-    let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let status = tree::okkama()
         .args(["build", "-o"])
         .arg(&output)
         .arg(program(name))
@@ -48,7 +48,7 @@ fn recursion_through_rust_ends_in_a_failure_and_the_process_goes_on() {
 
 #[test]
 fn helper_calls_share_one_argument_area() {
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run"])
         .arg(program("calls"))
         .env("SPARROW_CORE_STATS", "1")

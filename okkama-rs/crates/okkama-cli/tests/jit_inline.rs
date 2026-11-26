@@ -1,8 +1,8 @@
 //! #926/#927: a small static callee is compiled into its caller, and the program cannot tell: the same output,
 //! the same failure and trace, the same handler, and the same step count (an inlined entry is still a step), as
 //! with inlining off (`SPARROW_CORE_NO_INLINE=*`).
+mod tree;
 
-use std::process::Command;
 
 const PROGRAM: &str = "module app v1.0.0;
 import \"io/stdout\" take Stdout;
@@ -31,7 +31,7 @@ fn run(inline: bool, steps: Option<u64>) -> (bool, String, String) {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.ok");
     std::fs::write(&file, PROGRAM).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+    let mut command = tree::okkama();
     command.arg("run");
     if let Some(steps) = steps {
         command.args(["--max-steps", &steps.to_string()]);

@@ -1,16 +1,17 @@
 //! Call stacks of uncaught failures on Sparrow (#10): `okkama run` maps them
 //! to source, `okkama exec` of a built `.spb` prints them in Sparrow terms,
 //! and `OKKAMA_TRACE=off` leaves them out.
+mod tree;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn program(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/traces/{name}.ok"))
 }
 
 fn okkama(args: &[&str], path: &Path, trace: bool) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+    let mut command = tree::okkama();
     command.args(args).arg(path);
     command.env("OKKAMA_TRACE", if trace { "1" } else { "off" });
     command.output().unwrap()
@@ -83,7 +84,7 @@ fn sparrow_reports_failures_causes_and_cleanup() {
 #[test]
 fn bytecode_runs_print_the_stack_in_sparrow_terms() {
     let output = std::env::temp_dir().join(format!("okkama-traces-{}.spb", std::process::id()));
-    let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let status = tree::okkama()
         .args(["build", "-o"])
         .arg(&output)
         .arg(program("recursion"))
@@ -156,7 +157,7 @@ fn bytecode_cause_stacks_preserve_each_origin() {
         ("cause_callee", 2, &["Store.failed", "Disk.write"][..]),
     ] {
         let output = std::env::temp_dir().join(format!("okkama-cause-traces-{}-{name}.spb", std::process::id()));
-        let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
+        let built = tree::okkama()
             .args(["build", "-o"])
             .arg(&output)
             .arg(program(name))

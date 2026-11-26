@@ -1,5 +1,6 @@
 //! Behaviour of the `okkama` binary: commands, options, streams and exit
 //! codes.
+mod tree;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -7,9 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 const HELLO: &str = "module app v1.0.0;\n\nmain() is int {\n    0;\n}\n";
 
-fn okkama() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_okkama"))
-}
+use tree::okkama;
 
 fn run(args: &[&str]) -> Output {
     okkama().args(args).output().expect("run okkama")
@@ -336,8 +335,7 @@ const REPORTED: &str = "module app v1.0.0;\n\
     test \"fourth\" { test.is(PcgRandom(7).bytes(3), [byte(215), byte(136), byte(231)]); }\n";
 
 fn run_with_std(args: &[&str]) -> Output {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    okkama().env("OKKAMA_STDLIB_DIR", std).args(args).output().expect("run okkama")
+    okkama().args(args).output().expect("run okkama")
 }
 
 /// #339: one report of a run, shown as people read it (the default), as one
@@ -547,10 +545,8 @@ const SHOWN_VALUES_REPORT: &str = "=== RUN   values\n\
 #[test]
 fn failed_checks_show_objects_and_variants_by_value() {
     let source = TempFile::new("shown.ok", SHOWN_VALUES.as_bytes());
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let output = okkama()
         .args(["run", "-t", source.path()])
-        .env("OKKAMA_STDLIB_DIR", &std)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -616,10 +612,8 @@ fn a_drivers_program_failure_passes_a_catch_of_error() {
     let source = b"module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimport \"runtime/time\" take sleep_nanoseconds;\n\
         async main() is int {\n    let r = try { await sleep_nanoseconds(\"01\"); \"none\"; } catch e is Error { e.text(); };\n\
         Stdout().writeln(\"caught \" + r);\n    0;\n}\n";
-    let std = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let mut child = okkama()
         .args(["run", "-"])
-        .env("OKKAMA_STDLIB_DIR", std)
         .env("OKKAMA_TRACE", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1555,11 +1549,9 @@ fn blade_project(name: &str) -> TempTree {
 }
 
 fn in_dir(dir: &str, args: &[&str]) -> Output {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     okkama()
         .args(args)
         .current_dir(dir)
-        .env("OKKAMA_STDLIB_DIR", &std)
         .output()
         .unwrap()
 }
@@ -1671,10 +1663,8 @@ fn a_cell_stays_in_synchronous_code() {
         sum(items is @int) is int { let sum = Cell(0); for items -> item { sum.replace(sum.value() + item); } sum.value(); }\n\
         async fine(items is @int) is int { self.sum(items); }\n}\n\
         async main() is int { await Work().fine([1]); }\n";
-    let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let mut child = okkama()
         .args(["check", "-"])
-        .env("OKKAMA_STDLIB_DIR", std)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1743,7 +1733,6 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
 /// record of a past cursor stays behind, whatever the number of steps.
 #[test]
 fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let source = TempFile::new(
         "steps.ok",
         b"module app v1.0.0;\n\
@@ -1754,7 +1743,7 @@ fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
               available() is bool { at < 3; } item() is int { at; } successor() is Cursor<int> { Step(res, at + 1); } }\n\
           main() is int { for View(Res()) -> n { n; } 0; }\n",
     );
-    let output = okkama().args(["ir", source.path()]).env("OKKAMA_STDLIB_DIR", &std).output().unwrap();
+    let output = okkama().args(["ir", source.path()]).output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     let main = &text[text.find("func @main").expect("main")..];
@@ -2095,7 +2084,6 @@ fn man(args: &[&str]) -> Output {
     okkama()
         .arg("man")
         .args(args)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("OKKAMA_IMPORT_DIRS")
         .env_remove("PAGER")
         .output()
@@ -2167,7 +2155,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let local = okkama()
         .args(["man", "./json.ok"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2178,7 +2165,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let ambiguous = okkama()
         .args(["man", "json"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2187,7 +2173,6 @@ fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
     let std_json = okkama()
         .args(["man", "std/json"])
         .current_dir(&dir)
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .output()
         .unwrap();
@@ -2215,7 +2200,6 @@ fn man_writes_markdown_and_an_index() {
 fn man_survives_a_reader_that_leaves_early() {
     let mut child = okkama()
         .args(["man", "json"])
-        .env("OKKAMA_STDLIB_DIR", std_dir())
         .env_remove("PAGER")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2424,7 +2408,6 @@ fn a_big_async_body_keeps_its_values_in_its_frame() {
     for stress in ["0", "1"] {
         let mut child = okkama()
             .args(["run", "-"])
-            .env("OKKAMA_STDLIB_DIR", std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std"))
             .env("SPARROW_CORE_GC_STRESS", stress)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2440,8 +2423,7 @@ fn a_big_async_body_keeps_its_values_in_its_frame() {
 
 fn doctest_run(name: &str, source: &str) -> Output {
     let file = TempFile::new(name, source.as_bytes());
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    okkama().args(["run", "-t", file.path()]).env("OKKAMA_STDLIB_DIR", std).output().unwrap()
+    okkama().args(["run", "-t", file.path()]).output().unwrap()
 }
 
 #[test]
@@ -2700,8 +2682,7 @@ fn man_publishing_formats_select_public_declarations_without_running_examples() 
 fn man_publishing_builds_all_std_html_man_and_versioned_json() {
     let root = std::env::temp_dir().join(format!("okkama-publish-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std_dir()).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
+    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()]).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
     let html_dir = root.join("html");
     let output = export("html", &html_dir);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -2741,14 +2722,14 @@ fn man_publishing_installs_only_generated_section_three_pages() {
     std::fs::create_dir_all(library.join("io")).unwrap();
     std::fs::write(library.join("io/stdout.ok"), "module io/stdout;\n// Output reference.\n\n// Public sink.\nobject Sink {}\n").unwrap();
     let script = std_dir().parent().unwrap().join("tools/install-man.sh");
-    let output = Command::new("bash").arg(&script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    let output = Command::new("bash").arg(&script).arg(tree::OKKAMA).arg(&library).arg(&prefix).output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
     assert_eq!(std::fs::read_to_string(prefix.join("lib/okkama/man-pages.txt")).unwrap(), "io-stdout.3ok\n");
     // A failed generation must not replace an installed page or its manifest.
     let original = std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap();
     std::fs::write(library.join("io/stdout.ok"), "module broken; object {").unwrap();
-    let failed = Command::new("bash").arg(script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    let failed = Command::new("bash").arg(script).arg(tree::OKKAMA).arg(&library).arg(&prefix).output().unwrap();
     assert!(!failed.status.success());
     assert_eq!(std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap(), original);
     std::fs::remove_dir_all(root).unwrap();
@@ -2761,7 +2742,7 @@ fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
     let target = root.join("target");
     std::fs::create_dir_all(target.join("release")).unwrap();
     for tool in ["okkama", "sparrow", "blade"] {
-        std::fs::copy(env!("CARGO_BIN_EXE_okkama"), target.join("release").join(tool)).unwrap();
+        std::fs::copy(tree::OKKAMA, target.join("release").join(tool)).unwrap();
     }
     let repo = std_dir().parent().unwrap().to_path_buf();
     let out = root.join("dist");
@@ -2949,4 +2930,39 @@ fn env_names_the_import_dirs_and_the_build_environment() {
     let text = stdout(&plain);
     assert!(!text.lines().any(|line| line.starts_with("import ") || line.starts_with("build ")), "{text}");
     assert!(text.starts_with("okkama ") && text.contains("\nstd       "), "{text}");
+}
+
+/// #1101: a test runs the binary with the std of this tree, whatever `CARGO_TARGET_DIR` it was built into: through
+/// `tree::okkama()`, and no test file names the binary any other way (one that starts it from another program
+/// passes `tree::OKKAMA` and `tree::std_dir()`).
+#[test]
+fn tests_run_okkama_with_the_std_of_this_tree() {
+    let output = okkama().arg("env").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let line = format!("std       {}", tree::std_dir().display());
+    assert!(text.lines().any(|found| found == line), "{line:?} in\n{text}");
+
+    let binary = concat!("CARGO_BIN_EXE", "_okkama");
+    let tests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut files = Vec::new();
+    let mut directories = vec![tests.clone()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let stray: Vec<_> = files
+        .iter()
+        .filter(|file| !file.ends_with("tree/mod.rs"))
+        .filter(|file| std::fs::read_to_string(file).unwrap().contains(binary))
+        .map(|file| file.strip_prefix(&tests).unwrap().display().to_string())
+        .collect();
+    assert!(files.len() > 40, "{files:?}");
+    assert!(stray.is_empty(), "run the binary through tree::okkama(): {stray:?}");
 }

@@ -1,8 +1,9 @@
 //! Execution budgets on Sparrow (#71, #237):
 //! the same options, reports and exit status. Every run carries a
 //! timeout, so a budget that failed to stop a program cannot hang the test.
+mod tree;
 
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn run(source: &str, budget: &[&str]) -> Output {
     // One file per run: tests run in parallel, and two of them may run with
@@ -15,12 +16,10 @@ fn run(source: &str, budget: &[&str]) -> Output {
         budget.join("_").replace(['-', '/'], "")
     ));
     std::fs::write(&path, source).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run"])
         .args(budget)
         .arg(&path)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .env("OKKAMA_TRACE", "off")
         .output()
         .unwrap();
@@ -90,12 +89,10 @@ fn deep_recursion_is_bounded_and_its_trace_is_cheap() {
 
     let path = std::env::temp_dir().join(format!("budgets-trace-{}.ok", std::process::id()));
     std::fs::write(&path, DEEP_FAILURE).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let started = std::time::Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", "--timeout", "60"])
         .arg(&path)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .env("OKKAMA_TRACE", "1")
         .output()
         .unwrap();
@@ -207,13 +204,12 @@ fn budgets_bound_tests() {
     assert_eq!(refused.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&refused.stderr).contains("--test-timeout"));
 
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source = std::env::temp_dir().join(format!("budgets-{}-tests.ok", std::process::id()));
     let spb = source.with_extension("spb");
     std::fs::write(&source, TESTS).unwrap();
     let okkama = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
-        command.env("OKKAMA_STDLIB_DIR", root.join("std")).env("OKKAMA_TRACE", "off");
+        let mut command = tree::okkama();
+        command.env("OKKAMA_TRACE", "off");
         command
     };
     let built = okkama().args(["build", "-t"]).arg(&source).arg("-o").arg(&spb).output().unwrap();

@@ -1,8 +1,8 @@
 //! #541: a field accessor's call is compiled as its load, and the program
 //! cannot tell: same output, and the same step count (an accessor's entry is
 //! still a step), as with Sparrow's fast paths off (`SPARROW_CORE_PLAIN=*`).
+mod tree;
 
-use std::process::Command;
 
 const PROGRAM: &str = "module app v1.0.0;
 import \"io/stdout\" take Stdout;
@@ -31,7 +31,7 @@ fn run(plain: bool, steps: Option<u64>) -> (bool, String) {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.ok");
     std::fs::write(&file, PROGRAM).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+    let mut command = tree::okkama();
     command.arg("run");
     if let Some(steps) = steps {
         command.args(["--max-steps", &steps.to_string()]);

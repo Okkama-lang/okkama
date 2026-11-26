@@ -2,6 +2,7 @@
 //! a resource reached through a role field of an object travels with that object, and objects that reach no
 //! resource cost nothing. The result encodes the order of events (a log of digits), so a resource destroyed early,
 //! late or twice changes it.
+mod tree;
 #[path = "sparrow_support/mod.rs"]
 mod support;
 use okkama_compiler::{SourceFile, ir, lowering, syntax};
@@ -276,10 +277,8 @@ async main() is int {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("keeps.ok");
     std::fs::write(&file, &program).unwrap();
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", file.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std)
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -467,10 +466,8 @@ fn stdout_of(name: &str, program: &str) -> String {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.ok");
     std::fs::write(&file, program).unwrap();
-    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", file.to_str().unwrap()])
-        .env("OKKAMA_STDLIB_DIR", std)
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);

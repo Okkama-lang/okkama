@@ -1,18 +1,17 @@
 //! IR passes keep meaning (H-09, #29): programs print the same with every
 //! pass, each pass alone and none, and a deliberately wrong pass is caught.
+mod tree;
 
-use std::process::Command;
 
 
 
 /// Stdout, stderr and status of `program` on Sparrow with `passes`.
 fn run(program: &str, passes: &str) -> (String, String, Option<i32>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/ir-passes/{program}.ok"));
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run"])
         .arg(&path)
         .env("OKKAMA_IR_PASSES", passes)
-        .env("OKKAMA_STDLIB_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std"))
         .output()
         .unwrap();
     (

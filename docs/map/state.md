@@ -2,6 +2,13 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1100/#1101 (feature/1100, not committed): `wave.yml` part `debug` and `ci.yml` job `debug` ("Tests
+  (debug)"): `CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test --locked --no-fail-fast -p okkama-compiler -p
+  okkama-cli`, caches `wave-debug`/`tests-debug`; not yet run on GitHub (first run: time, disk, the linearity
+  check's refusals). `okkama-cli/tests/tree/mod.rs` (`okkama()`, `OKKAMA`, `std_dir()`, `root()`) is the one way
+  tests start okkama; `cli.rs` `tests_run_okkama_with_the_std_of_this_tree` guards it. Bible §19 lock section
+  (EN/RU) has the `in blade.lock` line.
+
 - [x] #1098 (feature/1098, not committed): `lowering/natives.rs::check_abi`, called from `lower_native`, refuses
   a native whose canonical symbol is in the ABI table but whose parameters, result or asynchrony differ
   (semantic error at the declaration); unknown symbols stay the runtime's. `okkama-runtime-abi`

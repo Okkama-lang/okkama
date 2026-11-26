@@ -54,6 +54,28 @@ jobs:
         working-directory: okkama-rs
         run: cargo test --doc --profile gate --locked --workspace
 
+  # The dev profile of the crates whose checks are debug-only (the ownership
+  # linearity check, debug_assertions), off in the gate profile above: before,
+  # only the nightly gate ran them, after the merge (#1100, #1093).
+  debug:
+    name: Tests (debug)
+    runs-on: ubuntu-24.04
+    env:
+      # Line tables are enough for a panic's backtrace; full debug info in some
+      # seventy linked test binaries fills the runner's disk (#1100).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: tests-debug
+      - name: Test
+        working-directory: okkama-rs
+        run: cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli
+
   conformance:
     name: Conformance (${{ matrix.engine }})
     strategy:

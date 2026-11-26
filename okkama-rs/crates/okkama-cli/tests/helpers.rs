@@ -1,8 +1,8 @@
 //! Every runtime helper of the Sparrow core runs in a test (H-06, #23): three
 //! programs reach all of them, and `--stats` counts each helper call.
+mod tree;
 
 use std::collections::BTreeSet;
-use std::process::Command;
 
 /// Helper names counted while running `name`, with its stdout and status.
 fn helpers_of(name: &str, budget: &[&str]) -> (BTreeSet<String>, String, Option<i32>) {
@@ -13,7 +13,7 @@ fn helpers_of(name: &str, budget: &[&str]) -> (BTreeSet<String>, String, Option<
 fn helpers_with(name: &str, budget: &[&str], env: &[(&str, &str)]) -> (BTreeSet<String>, String, Option<i32>) {
     let program = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/helpers/{name}.ok"));
     // A step budget makes machine code poll, which reaches the poll helper.
-    let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let output = tree::okkama()
         .args(["run", "--max-steps", "1000000000000"])
         .args(budget)
         .arg(&program)

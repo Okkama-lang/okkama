@@ -2,10 +2,10 @@
 //! channel endpoints of different payload types, or a scope whose action
 //! yields another type than its result, is refused by `sparrow check`; the
 //! compiler's own SPB is accepted.
+mod tree;
 
 use okkama_sparrow::{Type, TypeRef};
 use std::path::Path;
-use std::process::Command;
 
 fn compiled(case: &str) -> okkama_sparrow::Program {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -18,12 +18,11 @@ fn compiled(case: &str) -> okkama_sparrow::Program {
         std::process::id(),
         case.replace('/', "-")
     ));
-    let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let built = tree::okkama()
         .args(["build"])
         .arg(&source)
         .arg("-o")
         .arg(&out)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .output()
         .unwrap();
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
@@ -96,12 +95,11 @@ fn atomic(cases: &str) -> okkama_sparrow::Program {
     std::fs::create_dir_all(&dir).unwrap();
     let (file, out) = (dir.join("atomic.ok"), dir.join("atomic.spb"));
     std::fs::write(&file, source).unwrap();
-    let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
+    let built = tree::okkama()
         .arg("build")
         .arg(&file)
         .arg("-o")
         .arg(&out)
-        .env("OKKAMA_STDLIB_DIR", root.join("std"))
         .output()
         .unwrap();
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));

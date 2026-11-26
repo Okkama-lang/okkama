@@ -11,6 +11,12 @@ the session's memory; older rulings live in the commits and tickets named.
   branches are cut from `main`, features leave and rejoin the release branch, a merge into `develop` is a nightly
   build (`okkama-nightly-YYYY-MM-DD`), the release ends with a pull request into `main` and the tag on its merge
   commit. A ruleset on `main` enforces it; LLM-GUIDE §10 has the steps.
+- **2026-11-27. #1100 debug tests before the merge (lead decision).** The Wave and CI run `cargo test` of
+  okkama-compiler and okkama-cli in the dev profile (debug assertions, the ownership linearity check) besides the
+  gate profile; the nightly's workspace debug run stays. Debug info is line tables only on the runners (disk).
+- **2026-11-27. #1101 okkama-cli tests start okkama through `tests/tree` (lead decision).** `tree::okkama()`
+  sets the tree's std; no test relies on the binary's own std lookup, and `cli.rs` refuses a file that names
+  `CARGO_BIN_EXE_okkama` itself. A test of another std sets `OKKAMA_STDLIB_DIR` again on that command.
 - **2026-11-27. #1095 one switch implementation in okkama-devtrace (lead decision).** The environment-switch rule
   lives once, in `okkama_devtrace::env_switch`: the lowest crate the six readers share, with no dependencies, and
   not compiled out in a release (only its gates are). No new crate; okkama-runtime-core, whose only switch is a

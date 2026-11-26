@@ -1,9 +1,10 @@
 //! One engine (Tweed, owner 2026-11-20): Sparrow. There is no engine to select: `--engine` is an unknown
 //! option, and the environment variables that used to select one are ignored.
+mod tree;
 use std::process::Command;
 
 fn command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
+    let mut command = tree::okkama();
     command.env_remove("OKKAMA_ENGINE").env_remove("OCS_RUST_ENGINE");
     command
 }

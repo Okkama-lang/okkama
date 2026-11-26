@@ -1,8 +1,9 @@
 //! Глубина графа импортов (аудит S06, #20): обход не расходует стек
 //! потока, а слишком глубокая цепочка — диагностика, не аварийный выход.
+mod tree;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
@@ -44,7 +45,7 @@ impl Drop for WorkDir {
 }
 
 fn check(dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_okkama"))
+    tree::okkama()
         .arg("check")
         .arg("main.ok")
         .current_dir(dir)

@@ -2,6 +2,7 @@
 //! workers, with captured output, deadlines and crashes, reported in
 //! declaration order. Runs `tests/test_workers/suite.ok`.
 #![cfg(unix)]
+mod tree;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -18,10 +19,8 @@ fn suite(tag: &str) -> PathBuf {
 }
 
 fn okkama(args: &[&str]) -> Output {
-    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    Command::new(env!("CARGO_BIN_EXE_okkama"))
+    tree::okkama()
         .args(args)
-        .env("OKKAMA_STDLIB_DIR", here.join("../../../std"))
         .output()
         .expect("run okkama")
 }
@@ -37,7 +36,7 @@ fn no_worker_left(path: &Path) {
     let needle = path.display().to_string();
     assert!(
         !running.lines().any(|line| {
-            line.starts_with(env!("CARGO_BIN_EXE_okkama")) && line.contains("--worker-test") && line.contains(&needle)
+            line.starts_with(tree::OKKAMA) && line.contains("--worker-test") && line.contains(&needle)
         }),
         "a worker is left:\n{running}"
     );

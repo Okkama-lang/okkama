@@ -7,6 +7,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **CI: the debug-only checks ran only in the nightly gate, after the merge (#1100).** The Wave and CI test in the
+  `gate` profile, where `debug_assertions` are off, so the ownership linearity check that always runs in debug
+  builds first failed on #1093 in the nightly after the merge into develop. The Wave's test matrix has a `debug`
+  part and CI a job "Tests (debug)": `cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli` in
+  the dev profile, each with its own cache (`wave-debug`, `tests-debug`), with line tables only for debug info
+  (some seventy linked test binaries would fill the runner's disk otherwise).
+- **okkama-cli tests ran std-importing programs against whatever std the binary found (#1101).** `okkama` finds
+  the repository's std by itself only when it runs from `okkama-rs/target`; built into another
+  `CARGO_TARGET_DIR`, `tests/traces.rs` failed with `Import "async/event" not found`, and five other files
+  (handlers, helpers, jit_accessors, jit_inline, nested) ran against an installed std, if any. Every okkama-cli
+  test file now starts the binary through one helper, `tests/tree/mod.rs` (`tree::okkama()` sets
+  `OKKAMA_STDLIB_DIR` to the tree's std; `tree::OKKAMA` and `tree::std_dir()` for a test that starts it from
+  another program) instead of a std path spelled in each file; a test in `cli.rs` refuses a file that names
+  the binary otherwise. The Bible's §19 "The lock and sync" (EN, RU) shows the `… in blade.lock` report line of
+  #1096 and what "dependencies are up to date" means.
 - **Compiler: a native declaration unlike the runtime's native table passed lowering and failed codegen
   (#1098).** The fuzzer mutated `std/runtime/time_zone.ok` so that `timezone_local_candidates` took a `bool` and
   returned `rat` where the table has `int`. Lowering gave it the table's symbol
