@@ -460,7 +460,6 @@ impl FunctionGen<'_> {
                     ir::TrapCode::Range => TrapCode::Range,
                     ir::TrapCode::Empty => TrapCode::Empty,
                     ir::TrapCode::Unbound => TrapCode::Unbound,
-                    ir::TrapCode::Unreachable => TrapCode::Unreachable,
                     ir::TrapCode::Pending => TrapCode::Pending,
                 },
                 message: message.clone(),

@@ -51,6 +51,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   check (debug builds and `OKKAMA_VERIFY_OWNERSHIP=1`, which it found this with) now refuses a resource that may
   be in no region when a function leaves, other than the value it returns or throws, and reports a
   `region.enter` of a region that may still be open at that enter instead of at the function's exit.
+- **IR documentation and messages (#1070, #1075).** The pass driver says loop constants go to the nearest block
+  outside the loop that dominates it, not the entry block (#239); `char` comparison takes every operator; `float`
+  and `rat` `%` keep the sign of the dividend (`-2.5 % 2.0` is `-0.5`), as `int`'s; `rat` parts are `int`; the
+  SPB `Move` doc names `future.handoff`. The IR verifier says "a rotation needs a count" for a rotation without
+  one; the ownership linearity check calls a resource open on every path "open" (a second `resource.pin` said
+  "not opened on some paths"). The unused `IntBinaryOp::traps()` and the IR trap code `unreachable`, which
+  lowering never produced, are removed.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

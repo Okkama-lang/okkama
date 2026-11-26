@@ -1908,7 +1908,8 @@ impl<'a> FunctionVerifier<'a> {
                 match (op.rotates(), count) {
                     (true, Some(count)) => self.expect_int(*count)?,
                     (false, None) => {}
-                    _ => return Err(format!("{kind}: only rotations take a count")),
+                    (true, None) => return Err(format!("{kind}: a rotation needs a count")),
+                    (false, Some(_)) => return Err(format!("{kind}: only rotations take a count")),
                 }
                 if op.counts() { Type::Int } else { word }
             }

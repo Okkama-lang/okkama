@@ -540,7 +540,8 @@ fn lower_analyzed(
     if passes.on("fold") {
         ir::fold::fold_constants(&mut module);
     }
-    // Константы циклов вычисляются один раз, во входном блоке.
+    // Константы циклов вычисляются один раз, в ближайшем внешнем доминаторе
+    // цикла, а не во входном блоке функции (#239).
     if passes.on("hoist") {
         ir::hoist::hoist_loop_constants(&mut module);
     }

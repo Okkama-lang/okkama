@@ -269,3 +269,18 @@ fn a_returned_async_destroy_guard_stays_with_its_region() {
     assert!(!text.contains("resource."), "{text}");
 }
 
+/// #1070: a second `resource.pin` of a pinned resource names its state as open, not "not opened on some paths".
+#[test]
+fn the_linearity_check_names_an_open_resource_open() {
+    let source = SourceFile::new("test.ok", format!("{RES} main() is int {{ let r = Res(n: 1); r.read(); }}")).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let mut module = okkama_compiler::lowering::with_passes("all", || lower_program(&prune::strip_test_items(program))).expect("lowers");
+    let main = module.functions.iter().position(|function| function.symbol == "main").expect("main");
+    let (block, at, pin) = module.functions[main].blocks.iter().enumerate()
+        .find_map(|(block, body)| body.insts.iter().position(|inst| matches!(inst.kind, ir::InstKind::ResourcePin { .. }))
+            .map(|at| (block, at, body.insts[at].clone())))
+        .expect("the resource is pinned");
+    module.functions[main].blocks[block].insts.insert(at + 1, pin);
+    let error = ir::linearity::check(&module).expect_err("a second pin");
+    assert!(error.contains(&format!("at block {block}, instruction {} while it is open", at + 1)), "{error}");
+}

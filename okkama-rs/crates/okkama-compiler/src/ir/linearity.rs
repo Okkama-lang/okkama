@@ -399,11 +399,14 @@ fn check_function(module: &Module, function: &Function) -> Result<(), String> {
     }
 }
 
+/// The state of a value on the paths that reach a point: one name per set of states (#1070).
 fn describe(bits: u8) -> &'static str {
     match bits {
         UNOPENED => "not yet opened",
+        OPEN => "open",
         CLOSED => "already closed",
         _ if bits & CLOSED != 0 && bits & OPEN != 0 => "closed on some paths",
+        // Not opened on some paths, and open or closed on the others.
         _ => "not opened on some paths",
     }
 }

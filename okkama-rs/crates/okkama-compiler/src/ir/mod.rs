@@ -804,7 +804,8 @@ pub enum FloatOp {
     Sub,
     Mul,
     Div,
-    /// Остаток со знаком делителя, как `%` над `int`.
+    /// Остаток со знаком делимого (`fmod`), как `%` над `int`: `-2.5 % 2.0`
+    /// — `-0.5`, `2.5 % -2.0` — `0.5`.
     Mod,
     Pow,
     Neg,
@@ -845,7 +846,7 @@ pub enum RatOp {
     Sub,
     Mul,
     Div,
-    /// Остаток со знаком делителя.
+    /// Остаток со знаком делимого: `a - b * trunc(a / b)`, `(-7/3) % (1/2)` — `-1/3`.
     Mod,
     Neg,
     Abs,
@@ -968,11 +969,6 @@ impl IntBinaryOp {
     /// Мнемоника той же операции над `byte` (`byte.and`, `byte.shl`, …).
     pub fn byte_mnemonic(self) -> String {
         self.mnemonic().replacen("int.", "byte.", 1)
-    }
-
-    /// Класс отказа: `true`, если инструкция может дать программную ошибку.
-    pub fn traps(self) -> bool {
-        !matches!(self, IntBinaryOp::Add | IntBinaryOp::Sub | IntBinaryOp::Mul)
     }
 }
 
@@ -1293,7 +1289,8 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
-    /// Только `Eq` и `Ne`.
+    /// Char equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`
+    /// (`c.order(d)` lowers to `char.lt`), as `StrCompare`.
     CharCompare {
         op: CompareOp,
         left: ValueId,
@@ -1407,7 +1404,7 @@ pub enum InstKind {
     },
     /// Знак `rat`: `int` −1, 0 или 1.
     RatSign(ValueId),
-    /// Числитель (`denominator == false`) или знаменатель `rat` — `str`.
+    /// Числитель (`denominator == false`) или знаменатель `rat` — `int` (#743).
     RatPart {
         value: ValueId,
         denominator: bool,
@@ -1726,8 +1723,6 @@ pub enum TrapCode {
     Empty,
     /// Поле не связано после тела конструктора.
     Unbound,
-    /// Исполнение достигло `unreachable`-точки lowering.
-    Unreachable,
     /// Действие вызвано у объекта, чьё создание не завершено (§11.4, #271).
     Pending,
 }
@@ -1739,7 +1734,6 @@ impl TrapCode {
             TrapCode::Range => "range",
             TrapCode::Empty => "empty",
             TrapCode::Unbound => "unbound",
-            TrapCode::Unreachable => "unreachable",
             TrapCode::Pending => "pending",
         }
     }

@@ -52,6 +52,12 @@
   (`lowering/body/scopes.rs`). Compile sweep (2382 files) with `OKKAMA_VERIFY_OWNERSHIP=1`, passes on and off:
   exit codes as release/065; SPB differs in 78 files beyond #1077's nondeterminism (std http/db/net/web/mail,
   conformance L07/L11/L12/L13, examples), all from the added tracks.
+- [x] #1075 + #1070 (feature/1075-1070): the hoist driver comment names the nearest outside dominator (#239);
+  IR docs: `char` compare takes every operator, `float`/`rat` `%` keeps the dividend's sign, `rat.part` is
+  `int`, `Move` lists `future.handoff`; verifier: a rotation without a count gets its own message; the
+  linearity check names plain OPEN "open"; dead `IntBinaryOp::traps()` and IR `TrapCode::Unreachable`
+  removed (SPB's `TrapCode::Unreachable` stays). The `map.keys` operand already prints once ("of non-map
+  type", since #1043/#1044).
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

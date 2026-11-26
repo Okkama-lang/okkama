@@ -879,3 +879,20 @@ fn worker_spawn_requires_a_synchronous_entry() {
     sig.result = ResultType::Value(Type::Future(Box::new(ResultType::Value(Type::Int))));
     rejects(&broken, &format!("worker.spawn of {entry}: the entry must be synchronous, it returns fn(int, int) -> future<int>"));
 }
+
+/// #1070: a rotation without its count and another bit action with one get their own messages.
+#[test]
+fn bit_actions_take_a_count_only_to_rotate() {
+    let bits = |op, count| {
+        module(
+            vec![Type::Int, Type::Int],
+            vec![block(
+                vec![inst(0, int(1)), inst(1, InstKind::Bits { op, byte: false, value: ValueId(0), count })],
+                TermKind::Ret(Some(ValueId(1))),
+            )],
+        )
+    };
+    ir::verify(&bits(ir::BitOp::BitCount, None)).expect("a bit count takes no count");
+    rejects(&bits(ir::BitOp::RotateLeft, None), "int.rotl %0: a rotation needs a count");
+    rejects(&bits(ir::BitOp::BitCount, Some(ValueId(0))), "only rotations take a count");
+}

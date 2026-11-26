@@ -241,7 +241,7 @@ macro_rules! instructions {
 instructions! {
     /// Константа.
     Const = 1, "const" { dst: Dst, value: Constant }
-    /// Копия значения: `succ.take`, `retag`, `map.retag`, `cap.make`.
+    /// Копия значения: `succ.take`, `future.handoff`, `retag`, `map.retag`, `cap.make`.
     Move = 2, "move" { dst: Dst, source: Register }
     /// Заглушка значения типа назначения: её переносят (`move`, рёбра, поля `obj.new`/`obj.init`),
     /// а читают только под проверкой связывания — это проверяет верификатор (#1069).
