@@ -67,6 +67,11 @@ no full test suites, Docker, cargo fmt or clippy.
 - [x] #1057 (feature/1057): `session::place` names a changed item by (fresh position, item);
   constants by their init's symbol (`fresh_globals`); test `tests/session.rs`.
 
+- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 18` in every `.spa` and test
+  source (51 files); `codec::tests::the_instruction_set_is_pinned_to_the_version` hashes
+  `Instruction::SIGNATURES` (test-only) and the `op_enum!` codes. SparrowBook rebuilt
+  (build.py gained the six missing mnemonics 157–162). Branches still writing `sparrow 16`
+  in new tests need the same rename when they land.
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 

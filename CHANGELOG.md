@@ -31,6 +31,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Session merge (#1057).** A REPL session that changes a published module constant names it by its init's symbol
   ("the session changes the published constant const.LIMIT"), as the other tables name their items; it said
   `FuncRef(1)`.
+### Changed
+- **SPB 18 (#1061).** `resource.settle` and `resource.settle_unwind` (opcodes 161, 162, since 0.6.2) came without a
+  format version, so a 0.6.0 or 0.6.1 runtime refused such a program with "unknown opcode 161". SPB is now version
+  18 (17 was Champ's, retired), the assembly header `sparrow 18`; a program built by 0.6.0–0.6.4 is refused with
+  "unsupported SPB version 16 …; rebuild the program". Every new instruction or operation code bumps the version:
+  a test pins the instruction set to it. The Sparrow assembly book is rebuilt (it described SPB 16 and 12).
 
 ## [0.6.4] — 2026-11-23
 

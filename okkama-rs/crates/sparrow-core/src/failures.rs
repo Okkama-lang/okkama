@@ -2466,7 +2466,7 @@ mod cause_stack_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 18\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2574,7 +2574,7 @@ mod structure_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 18\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2619,7 +2619,7 @@ mod inline_identity_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+            "sparrow 18\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
              object obj0 \"Vault\" {\n field \"n\" t0\n destroy f1\n}\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\n\

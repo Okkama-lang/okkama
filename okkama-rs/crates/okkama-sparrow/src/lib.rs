@@ -176,6 +176,12 @@ macro_rules! instructions {
             /// Все мнемоники в порядке объявления (не в порядке кодов операций).
             pub const MNEMONICS: &'static [&'static str] = &[$($mnemonic),*];
 
+            /// Код, мнемоника и типы операндов каждой инструкции: то, что
+            /// закреплено за версией SPB (#1061, `codec::tests`).
+            #[cfg(test)]
+            pub(crate) const SIGNATURES: &'static [(u8, &'static str, &'static str)] =
+                &[$(($code, $mnemonic, stringify!($($ty),*))),*];
+
             pub(crate) fn encode_operands(&self, writer: &mut codec::Writer) {
                 match self {
                     $( #[allow(unused_variables)] Instruction::$name { $($field),* } => { $( Operand::encode($field, writer); )* } )*
@@ -227,6 +233,11 @@ macro_rules! instructions {
     };
 }
 
+// Новая инструкция, новый код в `op_enum!` или другой состав операндов — это
+// несовместимое изменение формата: `codec::VERSION` растёт вместе с ним, чтобы
+// старый рантайм отказал файлу по версии, а не на неизвестном коде (#1061).
+// Тест `codec::tests::the_instruction_set_is_pinned_to_the_version` сверяет набор
+// с версией.
 instructions! {
     /// Константа.
     Const = 1, "const" { dst: Dst, value: Constant }

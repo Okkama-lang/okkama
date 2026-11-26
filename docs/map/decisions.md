@@ -514,3 +514,11 @@ every declaration is open (#1005, owner decision).
   checking mirror the crate's code over it (tests compare with the crate).
 - A crate whose `zeroize` feature a wrapper does not forward gets a direct
   dependency only to enable it (`ed25519` for `KeypairBytes`).
+## Every new opcode bumps SPB (#1061, 2026-11-26)
+
+- `codec::VERSION` changes with every new instruction, operation-enum code or
+  operand list, not only with encoding changes: a runtime that cannot run a file
+  refuses it by version. A test pins (VERSION, instruction-set fingerprint); when
+  it fails, bump the version and record the new pair.
+- SPB 17 was Champ's format (retired, #911) and is skipped: SPB 16 → 18.
+  The assembly text version stays equal to the SPB version.

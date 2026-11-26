@@ -5,7 +5,7 @@ use super::*;
 use cranelift_codegen::ir::{ExternalName, InstructionData, Opcode};
 
 const PAIR: &str = r#"
-sparrow 16
+sparrow 18
 module "ready-callees" "1.0.0"
 type t0 int
 function f0 "identity" {
@@ -181,7 +181,7 @@ fn ordinary_signatures_keep_register_and_stack_arguments() {
             let mut init = (0..arity).map(|i| format!(" {i}: const r{i}, int {}\n", 43 - arity + i)).collect::<String>();
             init.push_str(&format!(" {arity}: call r{arity}, f0, [{params}]\n {}: ret r{arity}", arity + 1));
             let text = format!(r#"
-sparrow 16
+sparrow 18
 module "arity" "1.0.0"
 type t0 int
 function f0 "callee" {{
@@ -208,7 +208,7 @@ function f1 "caller" {{
 #[test]
 fn native_trampolines_are_not_used_as_ready_static_ordinary_entries() {
     let text = r#"
-sparrow 16
+sparrow 18
 module "native" "1.0.0"
 type t0 int
 function f0 "clock" native "runtime/time@1::wall_clock/0" {
@@ -298,7 +298,7 @@ fn lazy_compilation_failure_propagates_and_never_publishes_a_zero_entry() {
 #[test]
 fn bounded_self_and_mutual_recursion_keep_stack_and_step_checks() {
     let recursive = r#"
-sparrow 16
+sparrow 18
 module "recursion" "1.0.0"
 type t0 int
 type t1 bool
@@ -357,7 +357,7 @@ function f1 "caller" {
 #[test]
 fn ready_async_entries_still_construct_cold_futures() {
     let text = r#"
-sparrow 16
+sparrow 18
 module "async-entry" "1.0.0"
 type t0 int
 type t1 future t0
@@ -387,7 +387,7 @@ function f1 "caller" {
 #[test]
 fn cap_fields_prove_the_target_and_use_the_ordinary_receiver_abi() {
     let text = r#"
-sparrow 16
+sparrow 18
 module "cap-entry" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -424,7 +424,7 @@ function f1 "caller" {
 #[test]
 fn mixed_closure_captures_keep_the_existing_bridge_and_roots() {
     let text = r#"
-sparrow 16
+sparrow 18
 module "captures" "1.0.0"
 type t0 int
 type t1 str

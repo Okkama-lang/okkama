@@ -143,6 +143,9 @@ fn decoding_rejects_malformed_files() {
     let mut old = bytes.clone();
     old[5] = 8;
     assert!(decode(&old).unwrap_err().to_string().contains("unsupported SPB version 8"));
+    // #1061: a file of the 0.6.0–0.6.4 format is refused by its version, not by an opcode.
+    old[5] = 16;
+    assert!(decode(&old).unwrap_err().to_string().contains("unsupported SPB version 16 (this VM reads SPB 18; rebuild the program)"));
     for cut in [6, bytes.len() / 2, bytes.len() - 1] {
         assert!(decode(&bytes[..cut]).is_err(), "truncated at {cut}");
     }

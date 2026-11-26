@@ -4,7 +4,7 @@ use super::*;
 use cranelift_codegen::ir::Opcode;
 
 const PROGRAM: &str = r#"
-sparrow 16
+sparrow 18
 module "inline" "1.0.0"
 type t0 int
 type t1 bool

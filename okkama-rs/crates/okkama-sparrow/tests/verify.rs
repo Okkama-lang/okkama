@@ -261,7 +261,7 @@ fn variant_accesses_must_match_the_case_layouts() {
 /// #974: a global's type outside the type table is a verification error, not a panic in typing.
 #[test]
 fn rejects_a_global_whose_type_is_out_of_bounds() {
-    let text = "sparrow 16\nmodule \"bad\" \"1\"\ntype t0 int\nglobal g0 t99 f0\n\
+    let text = "sparrow 18\nmodule \"bad\" \"1\"\ntype t0 int\nglobal g0 t99 f0\n\
                 function f0 \"main\" { registers [t0] params [] result t0  0: const r0, int 0  1: ret r0 }\nentry f0\n";
     let error = okkama_sparrow::assemble(text).expect_err("must be rejected").to_string();
     assert!(error.contains("global g0 has type t99, which is out of bounds"), "{error}");

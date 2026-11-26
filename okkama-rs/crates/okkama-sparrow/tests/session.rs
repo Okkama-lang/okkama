@@ -3,7 +3,7 @@
 use okkama_sparrow::session::extend;
 use okkama_sparrow::{assemble, FuncRef, Instruction, ObjectRef, Program};
 
-const PUBLISHED: &str = "sparrow 16\nmodule \"repl\" \"1.0.0\"\n\
+const PUBLISHED: &str = "sparrow 18\nmodule \"repl\" \"1.0.0\"\n\
 type t0 int\ntype t1 object obj0\n\
 object obj0 \"A\" {\n field \"n\" t0\n}\n\
 function f0 \"a\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
@@ -11,7 +11,7 @@ function f1 \"make a\" {\n registers [t0, t1]\n params []\n result t1\n 0: call 
 
 /// The same session recompiled with one more cell, numbered differently: the new object and function come
 /// first, the types in another order.
-const FRESH: &str = "sparrow 16\nmodule \"repl\" \"1.0.0\"\n\
+const FRESH: &str = "sparrow 18\nmodule \"repl\" \"1.0.0\"\n\
 type t0 object obj0\ntype t1 object obj1\ntype t2 int\n\
 object obj0 \"B\" {\n field \"a\" t1\n}\n\
 object obj1 \"A\" {\n field \"n\" t2\n}\n\
