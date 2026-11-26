@@ -10,6 +10,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Sparrow (#1033).** `builder.finish` (the array of a `map` or `filter`) and an int's decimal text check the
   length limit before they allocate, in machine code as in the generic path: past 2^32 − 1 elements or 4 GiB
   they fail the program instead of aborting the process.
+- **Sparrow (#1034).** A failure trace cut at its million activations keeps the outermost ones too, so a stack
+  overflow's report ends with `main` again; a cause whose trace was cut says how many activations it left out, as
+  the root does ("... and N more activations in the middle, not recorded").
 
 ## [0.6.4] — 2026-11-23
 

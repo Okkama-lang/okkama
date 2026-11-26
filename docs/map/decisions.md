@@ -500,3 +500,9 @@ every declaration is open (#1005, owner decision).
   the program, as `+` and `join` do; `heap::length` stays the panic of last resort,
   caught only by `rt_exec` and `rt_native`. No `catch_unwind` per direct helper.
   Tests lower the limit per thread (`heap::MAX_LENGTH`, test builds only).
+## A cut trace keeps its tail (#1034, 2026-11-26)
+
+- A failure trace past `TRACE_LIMIT` keeps the innermost `TRACE_LIMIT − TRACE_TAIL`
+  activations and a ring of the 4096 outermost; the omitted ones are between the
+  two. The renderers keep their `Fn(&[Site])` shape: the joined trace is rendered
+  and one line after it counts the middle, for the root and for every cause.

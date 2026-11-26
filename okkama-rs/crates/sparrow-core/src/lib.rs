@@ -195,7 +195,7 @@ pub fn run_executable(
             // Launchers print the prefix with a newline, then this suffix. Split
             // before the first inserted stack (a secondary's cause can precede
             // the root stack) so each cause stays beside its own stack.
-            let offset = uncaught.cause_traces.iter().map(|(offset, _)| *offset)
+            let offset = uncaught.cause_traces.iter().map(|(offset, ..)| *offset)
                 .fold(uncaught.trace_offset, usize::min);
             let (prefix, suffix) = report.split_at(offset);
             let mut rendered = suffix.strip_prefix('\n').unwrap_or(suffix).to_owned();
@@ -251,14 +251,16 @@ pub struct Uncaught {
     /// Function and instruction numbers; they are shared with OIR, so a
     /// compiler can map them to source (`okkama-cli/src/trace.rs`).
     pub trace: Vec<Site>,
-    /// Activations of the root's unwind past the recorded limit (#1009).
+    /// Activations of the root's unwind past the recorded limit (#1009),
+    /// missing between the innermost and the outermost ones of `trace` (#1034).
     pub trace_omitted: u64,
     /// Byte offset after the root and its secondaries in the plain report,
     /// before its cause entries.
     pub trace_offset: usize,
-    /// Byte offsets after cause entries and their original unwind stacks.
-    /// Secondary cleanup failures deliberately have no diagnostic stack.
-    pub cause_traces: Vec<(usize, Vec<Site>)>,
+    /// Byte offsets after cause entries, their original unwind stacks and the
+    /// activations each left out (#1034). Secondary cleanup failures
+    /// deliberately have no diagnostic stack.
+    pub cause_traces: Vec<(usize, Vec<Site>, u64)>,
 }
 
 impl Uncaught {
@@ -267,15 +269,21 @@ impl Uncaught {
     pub fn render_report(&self, report: &str, render: impl Fn(&[Site]) -> String) -> String {
         let mut output = String::new();
         let mut start = 0;
-        let mut traces: Vec<_> = self.cause_traces.iter().map(|(offset, trace)| (*offset, trace.as_slice(), "  "))
-            .chain(std::iter::once((self.trace_offset, self.trace.as_slice(), "")))
+        let mut traces: Vec<_> = self.cause_traces.iter()
+            .map(|(offset, trace, omitted)| (*offset, trace.as_slice(), *omitted, "  "))
+            .chain(std::iter::once((self.trace_offset, self.trace.as_slice(), self.trace_omitted, "")))
             .collect();
         traces.sort_by_key(|entry| entry.0);
-        for (offset, trace, indent) in traces {
+        for (offset, trace, omitted, indent) in traces {
             output.push_str(&report[start..offset]);
             let mut stack = render(trace);
-            if indent.is_empty() && self.trace_omitted > 0 && !stack.is_empty() {
-                stack = format!("{}\n... and {} more activations, not recorded\n", stack.trim_end_matches('\n'), self.trace_omitted);
+            // The stack shows the innermost and the outermost activations; the
+            // ones between were only counted (#1009, #1034).
+            if omitted > 0 && !stack.is_empty() {
+                stack = format!(
+                    "{}\n... and {omitted} more activations in the middle, not recorded\n",
+                    stack.trim_end_matches('\n')
+                );
             }
             if !stack.is_empty() {
                 output.push('\n');
@@ -746,10 +754,10 @@ mod session_tests;
 mod uncaught_report_tests {
     use super::{Site, Uncaught};
 
-    /// #1009: a trace cut at the recording limit says how many activations
-    /// it left out, under the root's stack only.
+    /// #1009, #1034: a trace cut at the recording limit says how many
+    /// activations it left out, under the root's stack and under each cause's.
     #[test]
-    fn an_omitted_tail_of_the_trace_is_reported() {
+    fn an_omitted_middle_of_a_trace_is_reported() {
         let uncaught = Uncaught {
             category: "runtime",
             error_type: None,
@@ -760,8 +768,20 @@ mod uncaught_report_tests {
             cause_traces: Vec::new(),
         };
         let report = uncaught.render_report("Stack overflow", |_| "  at f\n".into());
-        assert_eq!(report, "Stack overflow\n  at f\n... and 7 more activations, not recorded");
-        let whole = Uncaught { trace_omitted: 0, ..uncaught };
+        assert_eq!(report, "Stack overflow\n  at f\n... and 7 more activations in the middle, not recorded");
+        let whole = Uncaught { trace_omitted: 0, ..uncaught.clone() };
         assert_eq!(whole.render_report("Stack overflow", |_| "  at f\n".into()), "Stack overflow\n  at f");
+        // A stack overflow caught and rethrown as the cause of another failure.
+        let text = "E: rethrown\nCaused by:\n  RuntimeError: Stack overflow";
+        let caused = Uncaught {
+            trace_omitted: 0,
+            trace_offset: 11,
+            cause_traces: vec![(text.len(), vec![Site { function: 0, pc: 1 }], 5)],
+            ..uncaught
+        };
+        assert_eq!(
+            caused.render_report(text, |_| "  at f\n".into()),
+            "E: rethrown\n  at f\nCaused by:\n  RuntimeError: Stack overflow\n    at f\n  ... and 5 more activations in the middle, not recorded"
+        );
     }
 }

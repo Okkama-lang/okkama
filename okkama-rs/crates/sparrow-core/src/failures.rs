@@ -2083,8 +2083,15 @@ impl Runtime {
                 ("uncaught-error", Some(name), messages.get(&root).cloned().unwrap_or_default())
             }
         };
-        let trace = record.trace.iter().map(|&(function, pc)| crate::Site { function, pc }).collect();
-        Some(crate::Uncaught { category, error_type, message, trace, trace_omitted: record.trace_omitted, trace_offset: 0, cause_traces: Vec::new() })
+        Some(crate::Uncaught {
+            category,
+            error_type,
+            message,
+            trace: record.sites(),
+            trace_omitted: record.trace_omitted,
+            trace_offset: 0,
+            cause_traces: Vec::new(),
+        })
     }
 
     fn error_text_method(&self, object: Word) -> Option<usize> {
@@ -2176,8 +2183,8 @@ impl Runtime {
             // Offsets refer to the plain report. Hosts map these saved stacks
             // to source or SPB terms; secondaries keep their text-only rendering.
             if label == "Caused by:" && let Some(uncaught) = uncaught {
-                let trace = record.trace.iter().map(|&(function, pc)| crate::Site { function, pc }).collect();
-                uncaught.cause_traces.push((output.len(), trace));
+                // A cause cut at the limit says so as the root does (#1034).
+                uncaught.cause_traces.push((output.len(), record.sites(), record.trace_omitted));
             }
             if let Some(cause) = record.cause {
                 pending.push((cause, "Caused by:", failure == root));

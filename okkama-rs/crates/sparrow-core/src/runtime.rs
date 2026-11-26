@@ -49,9 +49,11 @@ pub struct Ctx {
 pub struct Failure {
     pub kind: FailureKind,
     /// (function, pc) of each activation it unwound through, innermost first;
-    /// at most `TRACE_LIMIT` of them, the rest only counted (#1009).
+    /// at most `TRACE_LIMIT` of them, the rest only counted (#1009). Past the
+    /// limit the last `TRACE_TAIL` slots are a ring of the outermost
+    /// activations seen so far (#1034): read it through [`Failure::sites`].
     pub trace: Vec<(u32, u32)>,
-    /// Activations past `TRACE_LIMIT`, not recorded.
+    /// Activations between the head and the tail of the trace, not recorded.
     pub trace_omitted: u64,
     pub cause: Option<Word>,
     pub secondary: Vec<Word>,
@@ -870,6 +872,45 @@ pub extern "C" fn rt_throw(ctx: *mut Ctx, value: Word) -> Word {
 
 /// The most activations a failure's trace records (8 MiB of sites).
 pub const TRACE_LIMIT: usize = 1 << 20;
+/// Of those, the outermost ones kept once the trace is full (#1034): a stack
+/// overflow still shows how the recursion was entered (`main` and its callers).
+pub const TRACE_TAIL: usize = 1 << 12;
+
+impl Failure {
+    /// Record one more activation, the next one outwards.
+    pub(crate) fn record(&mut self, site: (u32, u32)) {
+        record_site(&mut self.trace, &mut self.trace_omitted, site, TRACE_LIMIT, TRACE_TAIL);
+    }
+
+    /// The recorded activations innermost first: the head, then the tail in
+    /// order; `trace_omitted` of them are missing between the two.
+    pub fn sites(&self) -> Vec<crate::Site> {
+        ordered_sites(&self.trace, self.trace_omitted, TRACE_TAIL)
+    }
+}
+
+/// Up to `limit` sites are pushed; after that each new one overwrites the
+/// oldest of the last `tail` slots and counts one omitted activation (#1034).
+fn record_site(trace: &mut Vec<(u32, u32)>, omitted: &mut u64, site: (u32, u32), limit: usize, tail: usize) {
+    if trace.len() < limit {
+        trace.push(site);
+    } else {
+        let at = limit - tail + (*omitted % tail as u64) as usize;
+        trace[at] = site;
+        *omitted += 1;
+    }
+}
+
+/// The trace in unwinding order: a full trace's ring starts at its oldest slot.
+fn ordered_sites(trace: &[(u32, u32)], omitted: u64, tail: usize) -> Vec<crate::Site> {
+    let site = |&(function, pc): &(u32, u32)| crate::Site { function, pc };
+    if omitted == 0 {
+        return trace.iter().map(site).collect();
+    }
+    let (head, ring) = trace.split_at(trace.len() - tail);
+    let oldest = (omitted % tail as u64) as usize;
+    head.iter().chain(&ring[oldest..]).chain(&ring[..oldest]).map(site).collect()
+}
 
 /// Record that the pending failure reaches `function` at `pc` in the
 /// activation with frame pointer `frame`; each activation is recorded once, at
@@ -881,12 +922,9 @@ pub extern "C" fn rt_trace(ctx: *mut Ctx, function: u64, pc: u64, frame: u64) {
     if let Some(failure) = runtime.heap.payload_mut::<Failure>(failure)
         && failure.last_frame != Some((function as u32, frame)) {
             // A stack overflow unwinds through tens of millions of
-            // activations: the first million are kept, the rest counted (#1009).
-            if failure.trace.len() < TRACE_LIMIT {
-                failure.trace.push((function as u32, pc as u32));
-            } else {
-                failure.trace_omitted += 1;
-            }
+            // activations: about a million innermost and the outermost few
+            // thousand are kept, the ones between counted (#1009, #1034).
+            failure.record((function as u32, pc as u32));
             failure.last_frame = Some((function as u32, frame));
         }
 }
@@ -1364,5 +1402,39 @@ mod embedding_tests {
         assert!(again.0.contains("unusable"), "{}", again.0);
         // A fresh runtime in the same process works.
         assert!(clock().run_function(1, 1 << 24).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::{ordered_sites, record_site};
+    use crate::Site;
+
+    fn recorded(count: u32, limit: usize, tail: usize) -> (Vec<Site>, u64) {
+        let (mut trace, mut omitted) = (Vec::new(), 0);
+        for activation in 0..count {
+            record_site(&mut trace, &mut omitted, (activation, 0), limit, tail);
+        }
+        (ordered_sites(&trace, omitted, tail), omitted)
+    }
+
+    fn functions(sites: &[Site]) -> Vec<u32> {
+        sites.iter().map(|site| site.function).collect()
+    }
+
+    /// #1034: a trace cut at its limit keeps the innermost activations and the
+    /// outermost ones (the entry frames), in unwinding order, and counts the
+    /// ones between.
+    #[test]
+    fn a_full_trace_keeps_its_head_and_its_tail() {
+        let (sites, omitted) = recorded(8, 8, 3);
+        assert_eq!((functions(&sites), omitted), ((0..8).collect(), 0));
+        let (sites, omitted) = recorded(9, 8, 3);
+        assert_eq!((functions(&sites), omitted), (vec![0, 1, 2, 3, 4, 6, 7, 8], 1));
+        for count in [10, 11, 12, 100, 101] {
+            let (sites, omitted) = recorded(count, 8, 3);
+            assert_eq!(functions(&sites), vec![0, 1, 2, 3, 4, count - 3, count - 2, count - 1], "{count}");
+            assert_eq!(omitted, u64::from(count) - 8, "{count}");
+        }
     }
 }

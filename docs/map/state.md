@@ -49,6 +49,10 @@ passes. No remaining work in this six-ticket scope. No commits, CHANGELOG,
 std source, parser, IR verifier/printer or Sparrow verification/typing changes;
 no full test suites, Docker, cargo fmt or clippy.
 
+- [x] #1034 (feature/1034): `Failure::record`/`Failure::sites` (runtime.rs): the head of
+  `TRACE_LIMIT − TRACE_TAIL` innermost activations, then a ring of the `TRACE_TAIL` = 4096
+  outermost; `Uncaught::cause_traces` carries each cause's omitted count; the count line
+  says "in the middle" under the root and under causes.
 
 ## Test/tool audit (2026-11-26, feature/065-tools)
 
