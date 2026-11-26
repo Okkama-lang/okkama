@@ -316,7 +316,7 @@ impl Digests {
             hasher.update(name.as_bytes());
             hasher.update([0]);
             hasher.update(digest.as_bytes());
-            hasher.update([b'\n']);
+            hasher.update(b"\n");
         }
         Ok(hex(&hasher.finalize()))
     }
