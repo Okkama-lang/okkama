@@ -55,6 +55,13 @@ the session's memory; older rulings live in the commits and tickets named.
   in the order of first use; the enclosing action captures a name for a nested
   one at the nested action's position. Nothing iterates a hash map to decide
   captures; a closure written in a default value sees no caller locals (#149).
+- **2026-11-27. Closure and cap-field results are tracked like call results (#1099, coordinator's task, lead
+  design).** `BodyLowerer::emit` tracks the result of `call.fn` and `call.cap` in its scope as it does for
+  `call`/`call.role`/`await.take` (a Future result excepted: its rules are #932/#587).
+  `lowering::untrack_borrowed_results`, run once the module is whole, drops that track where the ownership census
+  reports no creation (the census, not the type, decides: the same notion as the check, #1093), so borrowed
+  results stay untracked as before. The census is computed once and handed to the statics pass, which it does
+  not invalidate (the census reads no region operation); `okkama check` skips the step.
 - **2026-11-27. The linearity check takes freshness and argument ownership from the model (#1093, lead
   decision applying #553/#555).** A call result is a resource the function must own only where the ownership
   census reports a creation site (`ownership::analyze`; call resolution shared via `ownership::resolved_call`),

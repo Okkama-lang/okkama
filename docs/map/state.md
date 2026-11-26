@@ -9,6 +9,17 @@
   tests start okkama; `cli.rs` `tests_run_okkama_with_the_std_of_this_tree` guards it. Bible §19 lock section
   (EN/RU) has the `in blade.lock` line.
 
+- [x] #1099 (feature/1099, not committed): `BodyLowerer::emit` tracks `call.fn`/`call.cap` results (not Futures);
+  `lowering::untrack_borrowed_results` drops the track where the census reports no creation; the census is
+  computed once and passed to `statics::make_static(module, census)`; skipped for `okkama check`. Release
+  compile of std/http/server.ok -t: 460 ms on both (a second census cost +80 ms before sharing). Corpus SPB vs
+  release/065 (2279 programs that build): 14 differ, all HTTP/web, 34 new tracks, every one after
+  `ClientResponse::Exchange.history` (an `@ExchangeHop` field wrapped in a new `Sequencing` adapter per read).
+  bench/micro check.py on 99 closure/cap programs: same as release/065 (10 cage-only fs/process failures).
+  Micro A/B (okkama-dev, toolchain.sh builds of 57da2e6c2 and the candidate, n=10⁴, 5 runs, A1 B1 B2 A2), the
+  two programs whose SPB changed: http-cache-response 37018/37369 → 36883/36732 ns, http-connection-policies
+  98698/98955 → 98735/99769 ns: within noise. Toolchains in okkama-work/micro-tc/1099-{base,cand}. Tests: tweed_ownership (4, sync+async), statics
+  `closure_and_cap_results_are_tracked_only_when_they_are_new`; #1093's census test now also drops the new track.
 - [x] #1098 (feature/1098, not committed): `lowering/natives.rs::check_abi`, called from `lower_native`, refuses
   a native whose canonical symbol is in the ABI table but whose parameters, result or asynchrony differ
   (semantic error at the declaration); unknown symbols stay the runtime's. `okkama-runtime-abi`

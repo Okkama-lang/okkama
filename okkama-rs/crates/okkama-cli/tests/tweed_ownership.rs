@@ -958,3 +958,70 @@ async main() is int {
 "#);
     assert_eq!(output, "dgkdgdgcdba\n");
 }
+
+/// #1099: a closure or cap-field call that makes a resource hands it to its scope like any call, so a result
+/// nobody takes is destroyed once when that scope ends; a result that is someone else's (a cap field reading its
+/// owner's field, a closure returning its argument) is not destroyed again. The digits: 3 closure, 4 cap field,
+/// 5 borrowed field, 6 closure argument, 7 role call; `run` returns the log as it is inside its scope, plus 1.
+const DISCARDED: &str = r#"
+    object Bank {
+        has log is Log;
+        Bank(:log);
+        cap Open { vault is Vault { Vault(log: log, id: 4); } }
+    }
+    object Safe {
+        has vault is Vault;
+        Safe(:vault);
+        cap View { vault is Vault { vault; } }
+    }
+    role Maker { make(log is Log) is Vault; }
+    object Factory does Maker {
+        Factory();
+        make(log is Log) is Vault { Vault(log: log, id: 7); }
+    }
+"#;
+
+fn discarded(body: &str, asynchronous: bool) -> ir::Module {
+    let (run, main) = if asynchronous {
+        ("async run(log is Log) is int", "async main() is int { let log = Log(n: Atomic(0)); \
+            let result = await Probe().run(log); result * 100000 + log.value(); }")
+    } else {
+        ("run(log is Log) is int", "main() is int { let log = Log(n: Atomic(0)); \
+            let result = Probe().run(log); result * 100000 + log.value(); }")
+    };
+    lower(&format!("{LEDGERS}{DISCARDED} object Probe {{ Probe(); {run} {{ {body} log.value() + 1; }} }} {main}"))
+}
+
+#[test]
+fn a_discarded_closure_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let f = () is Vault { Vault(log: log, id: 3); }; f();", asynchronous);
+        support::assert_value(&module, "100003");
+    }
+}
+
+#[test]
+fn a_discarded_cap_field_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let open = Bank(log: log)::Open; open::vault;", asynchronous);
+        support::assert_value(&module, "100004");
+    }
+}
+
+#[test]
+fn a_borrowed_cap_field_or_closure_result_is_destroyed_once_by_its_owner() {
+    for asynchronous in [false, true] {
+        let module = discarded("let view = Safe(vault: Vault(log: log, id: 5))::View; view::vault; \
+            let same = (v is Vault) is Vault { v; }; same(Vault(log: log, id: 6));", asynchronous);
+        // Newest first at the scope's end: the closure's argument (6), then the safe's vault (5).
+        support::assert_value(&module, "100065");
+    }
+}
+
+#[test]
+fn a_discarded_role_call_result_is_destroyed_when_its_scope_ends() {
+    for asynchronous in [false, true] {
+        let module = discarded("let maker is Maker = Factory(); maker.make(log);", asynchronous);
+        support::assert_value(&module, "100007");
+    }
+}

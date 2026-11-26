@@ -273,8 +273,9 @@ fn the_linearity_check_accepts_borrowed_call_results_and_adopted_arguments() {
 }
 
 /// #1093: whether a call makes a resource is the census's answer. A closure that makes one hands it out fresh, so
-/// when the action it goes to only borrows it, nothing owns it; a closure that returns its argument hands back the
-/// caller's own (tracked) resource, so the same borrowing action leaves nothing unowned.
+/// without the scope's track of it (#1099) and with an action that only borrows it, nothing owns it; a closure that
+/// returns its argument hands back the caller's own (tracked) resource, so the same borrowing action leaves nothing
+/// unowned.
 #[test]
 fn the_linearity_check_takes_fresh_call_results_from_the_census() {
     let module = lowered(&format!("{RES} object Use {{ Use(); \
@@ -285,6 +286,9 @@ fn the_linearity_check_takes_fresh_call_results_from_the_census() {
     let made = borrowed.functions[index].blocks.iter().flat_map(|block| &block.insts)
         .find_map(|inst| matches!(inst.kind, ir::InstKind::CallFn { .. }).then_some(inst.result).flatten())
         .expect("Use.made calls its closure");
+    for block in &mut borrowed.functions[index].blocks {
+        block.insts.retain(|inst| !matches!(inst.kind, ir::InstKind::RegionTrack { value, .. } if value == made));
+    }
     let error = ir::linearity::check(&borrowed).expect_err("the closure's resource is in no region");
     assert!(error.contains(&format!("in Use.made: {made} may be in no region")), "{error}");
     let mut alias = lowered(&format!("{RES} object Use {{ Use(); \
@@ -373,6 +377,27 @@ fn the_statics_pass_alone_leaves_no_emptied_region() {
         assert!(pins >= 1, "{symbol_name} has a static resource: {module}");
     }
     ir::linearity::check(&module).expect("no region stays open");
+}
+
+/// #1099: lowering tracks a closure's or a cap field's result in its scope when the census finds it is a new
+/// identity, and leaves a borrowed one (the owner's field, the closure's argument) untracked, as before.
+#[test]
+fn closure_and_cap_results_are_tracked_only_when_they_are_new() {
+    let module = lowered(&format!("{RES} object Box {{ has item is Res; Box(:item); cap View {{ item is Res {{ item; }} \
+        fresh is Res {{ Res(n: 7); }} }} }} object Use {{ Use(); \
+        run(b is Box) is int {{ let v = b::View; v::item; v::fresh; let f = () is Res {{ Res(n: 5); }}; f(); \
+        let same = (r is Res) is Res {{ r; }}; same(Res(n: 6)); 0; }} }} main() is int {{ 0; }}"), "none");
+    let function = &module.functions[symbol(&module, "Use.run")];
+    let insts: Vec<&ir::Inst> = function.blocks.iter().flat_map(|block| &block.insts).collect();
+    let results: Vec<ir::ValueId> = insts.iter()
+        .filter(|inst| matches!(inst.kind, ir::InstKind::CallCap { .. } | ir::InstKind::CallFn { .. }))
+        .filter_map(|inst| inst.result)
+        .collect();
+    let tracked = |value: ir::ValueId| insts.iter().any(|inst| matches!(inst.kind, ir::InstKind::RegionTrack { value: v, .. } if v == value));
+    // In order: the owner's field, the fresh cap field, the closure that makes one, the closure returning its argument.
+    assert_eq!(results.len(), 4, "{module}");
+    assert_eq!(results.iter().map(|&value| tracked(value)).collect::<Vec<_>>(), [false, true, true, false], "{module}");
+    ir::linearity::check(&module).expect("every new resource has an owner");
 }
 
 const GUARD: &str = "module app v1.0.0; object Guard { has n is int; Guard(:n); read() is int { n; } \

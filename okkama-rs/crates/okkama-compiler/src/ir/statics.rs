@@ -32,12 +32,14 @@ use super::ownership::{self, Owner};
 use super::regions::{self, Plain};
 use super::{Block, BlockId, Function, Inst, InstKind, Module, Target, TermKind, Terminator, Type, ValueId, cfg};
 
-/// Make the module's provably local resources static; the number made static.
-pub fn make_static(module: &mut Module) -> usize {
+/// Make the module's provably local resources static; the number made static. `census` is the ownership census
+/// of this module when the caller has one (#1099): one taken before region operations were removed still holds,
+/// because the census does not read them.
+pub fn make_static(module: &mut Module, census: Option<ownership::Report>) -> usize {
     if module.objects.iter().all(|object| object.destroy.is_none()) {
         return 0;
     }
-    let report = ownership::analyze(module);
+    let report = census.unwrap_or_else(|| ownership::analyze(module));
     let plain = Plain::of(module);
     let mut count = 0;
     for found in &report.functions {

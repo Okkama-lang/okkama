@@ -22,6 +22,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   another program) instead of a std path spelled in each file; a test in `cli.rs` refuses a file that names
   the binary otherwise. The Bible's §19 "The lock and sync" (EN, RU) shows the `… in blade.lock` report line of
   #1096 and what "dependencies are up to date" means.
+- **A discarded closure or cap-field result that is a new resource was never destroyed (#1099).** Lowering
+  tracked the result of a method, function or role call in its scope, but not of a closure call (`f()`) or a cap
+  field (`view::fresh`). When such a call made a resource and nothing took it (no `let`, no action adopting it,
+  not returned), its `destroy` never ran. The ownership linearity check refused such programs in debug builds.
+  Such a result is now tracked like any call's and destroyed when its scope ends, sync or async. A result the
+  ownership census finds is no new identity stays untracked, as before: a cap field reading its owner's field, or
+  a closure returning its argument. A Future from an async closure call keeps its own rules. Corpus SPB changes
+  only in the HTTP/web stack (14 of 2279 programs): `ClientResponse::Exchange.history` wraps the hops array in a
+  new `Sequencing` adapter on each read, so its 34 call sites now track that adapter.
 - **Compiler: a native declaration unlike the runtime's native table passed lowering and failed codegen
   (#1098).** The fuzzer mutated `std/runtime/time_zone.ok` so that `timezone_local_candidates` took a `bool` and
   returned `rat` where the table has `int`. Lowering gave it the table's symbol

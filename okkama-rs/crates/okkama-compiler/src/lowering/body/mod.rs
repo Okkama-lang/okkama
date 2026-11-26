@@ -1307,13 +1307,18 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     }
 
     fn emit(&mut self, kind: InstKind, ty: Type, span: Span) -> Typed {
-        let result = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. } | InstKind::AwaitTake(_));
+        // A closure or cap-field call too (#1099): one that makes a new resource left it to whoever took the value,
+        // so a discarded one was never destroyed. A Future such a call returns keeps its own rules (#932).
+        let result = matches!(kind, InstKind::Call { .. } | InstKind::CallRole { .. } | InstKind::AwaitTake(_))
+            || matches!(kind, InstKind::CallFn { .. } | InstKind::CallCap { .. }) && !matches!(ty, Type::Future(_));
         let value = Typed {
             value: self.b.emit(kind, ty.clone(), span),
             ty,
         };
         // A call or unique temporary await result belongs to this scope,
-        // including an unnamed expression whose value is discarded.
+        // including an unnamed expression whose value is discarded. A closure
+        // or cap-field result the census finds is no new identity loses its
+        // track again once the module is whole (`untrack_borrowed_results`).
         if result {
             self.track(&value, span);
         }

@@ -521,6 +521,12 @@ fn lower_analyzed(
         };
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
+    // One census serves the untracking below and the statics pass: neither reads the region operations it changes.
+    // `okkama check` builds no code, and a track of a borrowed result changes nothing, so it skips both.
+    let mut census = None;
+    if optimize {
+        untrack_borrowed_results(&mut module, &mut census);
+    }
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
     dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
@@ -528,7 +534,7 @@ fn lower_analyzed(
     // regions go with the next pass.
     if passes.on("statics") {
         let _span = okkama_devtrace::span!("lower", "pass statics");
-        ir::statics::make_static(&mut module);
+        ir::statics::make_static(&mut module, census.take());
     }
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
@@ -780,6 +786,46 @@ pub fn inspect_parsed(
     inspection.scopes = index.scopes;
     inspection.globals = index.globals;
     inspection
+}
+
+/// A closure or cap-field call's result is tracked in its scope like any call's (#1099), but only a new identity
+/// needs it: the ownership census (`ir::ownership`, the same answer the linearity check uses) says which results
+/// are. A track right after a `call.fn` or `call.cap` whose result the census reports as no creation (a cap field
+/// reading its owner, a closure returning its argument or a capture) goes: that identity has its owner already.
+/// The census runs only when such a track exists; it is left in `census` for the statics pass.
+fn untrack_borrowed_results(module: &mut ir::Module, census: &mut Option<ir::ownership::Report>) {
+    let tracked_after = |block: &ir::Block, at: usize| match (&block.insts[at], block.insts.get(at + 1)) {
+        (
+            ir::Inst { result: Some(value), kind: ir::InstKind::CallFn { .. } | ir::InstKind::CallCap { .. }, .. },
+            Some(ir::Inst { kind: ir::InstKind::RegionTrack { value: tracked, .. }, .. }),
+        ) if tracked == value => Some(*value),
+        _ => None,
+    };
+    let any = module.functions.iter().flat_map(|function| &function.blocks)
+        .any(|block| (0..block.insts.len()).any(|at| tracked_after(block, at).is_some()));
+    if !any {
+        return;
+    }
+    let report = census.get_or_insert_with(|| ir::ownership::analyze(module));
+    let made: Vec<std::collections::HashSet<usize>> = report.functions.iter()
+        .map(|found| found.creations.iter().map(|creation| creation.value).collect())
+        .collect();
+    let mut untracked = 0u64;
+    for (function, made) in module.functions.iter_mut().zip(&made) {
+        for block in &mut function.blocks {
+            let mut at = 0;
+            while at < block.insts.len() {
+                if let Some(value) = tracked_after(block, at)
+                    && !made.contains(&value.0)
+                {
+                    block.insts.remove(at + 1);
+                    untracked += 1;
+                }
+                at += 1;
+            }
+        }
+    }
+    okkama_devtrace::count!("lower", "borrowed closure and cap results untracked", untracked);
 }
 
 fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()> {
