@@ -68,7 +68,20 @@ def aggregate(rounds):
             "spread": max((cell.get("spread", 0) for cell in cells), default=0),
             # #933: the spread of the per-placement medians, when the campaign ran under --placements.
             "layout": max((cell["layout_spread"] for cell in cells if "layout_spread" in cell), default=None),
+            "binary": binary_spread(rounds) if measured else None,
             "rounds": len(rounds)}
+
+
+def binary_spread(rounds):
+    """#1086: the spread of the per-binary medians when one version ran on several builds of the same source
+    (toolchain.sh LAYOUT_SEED: another function order), or None with one binary."""
+    by_binary = {}
+    for cell, result in rounds:
+        by_binary.setdefault(result.get("toolchain", {}).get("binary_sha256"), []).append(cell["ns_per_iteration"])
+    if len(by_binary) < 2 or None in by_binary:
+        return None
+    medians = [statistics.geometric_mean(values) for values in by_binary.values()]
+    return (max(medians) - min(medians)) / statistics.geometric_mean(medians)
 
 
 def cells(old_files, new_files):
@@ -87,18 +100,21 @@ def cells(old_files, new_files):
             out = {"before": before["ns_per_iteration"], "after": cell["ns_per_iteration"],
                    "spreadBefore": before["spread"], "spreadAfter": cell["spread"],
                    "layoutBefore": before["layout"], "layoutAfter": cell["layout"],
+                   "binaryBefore": before["binary"], "binaryAfter": cell["binary"],
                    "statusBefore": before["status"], "statusAfter": cell["status"],
                    "roundsBefore": len(bases), "roundsAfter": len(rounds),
                    "n": rounds[0][1]["n"]}
             if any(campaign_key(result) != campaign_key(bases[0][1]) for _, result in all_rounds) or any(
                     result.get("toolchain", {}).get("version_check", {}).get("status") == "MISMATCH"
-                    for _, result in all_rounds):
+                    for _, result in all_rounds) or any(
+                    result.get("toolchain", {}).get("devtrace") for _, result in all_rounds):
                 out["verdict"] = "incompatible"
             elif before["status"] != "VALID" or cell["status"] != "VALID":
                 out["verdict"] = "inconclusive"
             else:
                 change = cell["ns_per_iteration"] / before["ns_per_iteration"] - 1
-                band = max(0.10, 2 * max(cell["spread"], before["spread"]))
+                # The binaries' own layout (#1086) widens the band like a noisy series.
+                band = max(0.10, 2 * max(cell["spread"], before["spread"], cell["binary"] or 0, before["binary"] or 0))
                 out.update(change=change, band=band,
                            verdict="faster" if change < -band else "slower" if change > band else "noise")
             if out.get("change") is None and out["before"] and out["after"]:
@@ -233,8 +249,10 @@ function chip(c) {
 }
 const spread = c => `±${((c.spreadBefore || 0) * 100).toFixed(0)}% / ±${((c.spreadAfter || 0) * 100).toFixed(0)}%` + layout(c);
 // #933: the part of the spread that follows the placement of machine code (run.py --placements).
-const layout = c => c.layoutBefore == null && c.layoutAfter == null ? "" :
-  ` <span class="muted" title="разброс медиан по раскладкам машинного кода">раскладка ±${((c.layoutBefore || 0) * 100).toFixed(0)}% / ±${((c.layoutAfter || 0) * 100).toFixed(0)}%</span>`;
+const layout = c => (c.layoutBefore == null && c.layoutAfter == null ? "" :
+  ` <span class="muted" title="разброс медиан по раскладкам машинного кода">раскладка ±${((c.layoutBefore || 0) * 100).toFixed(0)}% / ±${((c.layoutAfter || 0) * 100).toFixed(0)}%</span>`) +
+  (c.binaryBefore == null && c.binaryAfter == null ? "" :
+  ` <span class="muted" title="разброс медиан по сборкам с разным порядком функций (#1086)">бинарник ±${((c.binaryBefore || 0) * 100).toFixed(0)}% / ±${((c.binaryAfter || 0) * 100).toFixed(0)}%</span>`);
 
 function tiles() {
   const items = [];

@@ -38,6 +38,23 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(cell['verdict'], 'slower')
         self.assertEqual(cell, self.cell(old[::-1], new[::-1]))
 
+    def test_builds_of_one_source_give_the_binary_spread_and_widen_the_band(self):
+        old = [self.campaign('a1', 100, toolchain={'version': 'okkama 1.0', 'binary_sha256': 's1'}),
+               self.campaign('a2', 100, toolchain={'version': 'okkama 1.0', 'binary_sha256': 's1'})]
+        new = [self.campaign('b1', 106, toolchain={'version': 'okkama 1.1', 'binary_sha256': 't1'}),
+               self.campaign('b2', 124, toolchain={'version': 'okkama 1.1', 'binary_sha256': 't2'})]
+        cell = self.cell(old, new)
+        self.assertIsNone(cell['binaryBefore'])
+        self.assertAlmostEqual(cell['binaryAfter'], 18 / (106 * 124) ** .5)
+        # +14.7% is past 10% and twice every series spread, but within twice the binaries' spread.
+        self.assertAlmostEqual(cell['band'], 2 * cell['binaryAfter'])
+        self.assertEqual(cell['verdict'], 'noise')
+        one = [self.campaign('c1', 124, toolchain={'version': 'okkama 1.1', 'binary_sha256': 't2'})]
+        self.assertEqual(self.cell(old, one)['verdict'], 'slower')
+    def test_a_devtrace_toolchain_is_incompatible(self):
+        old = [self.campaign('a', 100, toolchain={'version': 'okkama 1.0', 'devtrace': True})]
+        new = [self.campaign('b', 100, toolchain={'version': 'okkama 1.1', 'devtrace': False})]
+        self.assertEqual(self.cell(old, new)['verdict'], 'incompatible')
     def test_any_nonvalid_or_missing_round_excludes_pair(self):
         good = self.campaign('good', 100)
         for status in ['INVALID', 'INCONCLUSIVE']:

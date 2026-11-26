@@ -69,8 +69,13 @@ python3 run.py --image okkama-dev \
   --label candidate-unique-id --build-profile "release fat-LTO" --revision COMMIT
 ```
 
-Build the toolchain as the packages are: `RUSTFLAGS="--cfg okkama_release -C force-frame-pointers=yes" cargo build
---release --locked -p okkama-cli -p sparrow-cli -p blade-cli` in the `okkama-dev` image. Without `okkama_release`
+Build the toolchain as the packages are, with `toolchain.sh WORKTREE OUT [LAYOUT_SEED]`: fat LTO release,
+`--cfg okkama_release -C force-frame-pointers=yes`, `-p okkama-cli -p sparrow-cli -p blade-cli`, in the `okkama-dev`
+image, with the std of that worktree. A positive `LAYOUT_SEED` links with rust-lld and `--shuffle-sections=*=SEED`:
+the same code with its functions in another order (#1086). A release A/B builds each version twice (seeds 1 and 2)
+and runs one campaign per binary in the order A1 B1 B2 A2; `report.py` gives each cell the spread of its per-binary
+medians («бинарник ±x%») and widens the noise band to twice it, so a change that only follows the runtime's own
+layout (the v0.6.1 array-plus gap, #933) reads as noise. Without `okkama_release`
 devtrace stays compiled in and its gates cost the Future, await and allocation helpers 2–5% (#1025: the 0.6.4
 report's "async 4–6% slower" was this). The runner records `toolchain.devtrace` (the binary carries the name of
 `OKKAMA_DEV_OUT` only then), warns, and compares such a campaign with no other.

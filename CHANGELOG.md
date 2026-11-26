@@ -7,6 +7,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Micro A/B: the layout of the runtime binary itself was not measured (#1086).** `bench/micro/toolchain.sh` builds a
+  micro toolchain as the packages are and, with a `LAYOUT_SEED`, links it with rust-lld `--shuffle-sections` (the
+  same code, another function order). `report.py` gives every cell of a version run on several builds the spread of
+  the per-binary medians and widens its noise band to twice that; a campaign whose toolchain has devtrace is
+  incompatible in the report too (#1025).
 - **Micro harness: the first clock read of `finish` was compiled inside the timed interval (#1085).** The interval
   ends in `Measurement.elapsed_since`, which `start()` now runs once before it reads the start instant. The constant
   left in the interval falls from 1.25 to 0.38 ms on baseline without inlining and from 1.40 to 0.51 ms on

@@ -6,6 +6,10 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-27. #1086 release A/B on two builds per version (lead decision).** Each version is built with
+  `toolchain.sh` at LAYOUT_SEED 1 and 2 and runs one campaign per binary, A1 B1 B2 A2 (order balance and binary
+  layout in the same four campaigns). The binaries' spread widens the band instead of being reported apart: a
+  change smaller than twice it is the runtime's layout, not the code.
 - **2026-11-27. #1085 micro harness warms the closing clock path, not `finish` (lead decision).** The span ends at
   the clock read in `Measurement.elapsed_since`; `start()` calls it once before reading the start instant. A quiet
   warm call of `finish` was measured worse (0.76/0.87 ms left against 0.38/0.51), so `finish` keeps one meaning,

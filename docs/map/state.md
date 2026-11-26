@@ -2,6 +2,10 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1086: `bench/micro/toolchain.sh WORKTREE OUT [LAYOUT_SEED]` (release cfg, rust-lld `--shuffle-sections=*=SEED`
+  via rustc's gcc-ld wrapper; refuses seed 0 = random and a devtrace binary); `report.py` `binary_spread` per cell
+  (per-binary geometric medians by `toolchain.binary_sha256`), band = 2 × max(series spreads, binary spreads),
+  devtrace campaigns incompatible. Seeds 1 and 2 of 6d84de2fd: different binaries and symbol order, same checksums.
 - [x] #1085: `bench/micro/support/harness.ok` — `Measurement.elapsed_since` holds the closing clock read; `start()`
   runs it once before the start instant. Constant in the interval (slope over N=25k/100k, 3 interleaved rounds,
   rc 6d84de2fd): baseline no-inline 1.25 → 0.38 ms, default 0.025 → 0.002; async-await default 1.40 → 0.51,
