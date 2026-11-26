@@ -286,7 +286,7 @@ fn lazy_compilation_failure_propagates_and_never_publishes_a_zero_entry() {
         runtime.limits.memory = Some(1);
         runtime.limits.memory_scope = crate::budget::MemoryScope::Runtime;
         let error = runtime.run_function_with(1, &[word::small(17).unwrap()], 2 << 20).unwrap_err();
-        assert!(error.0.starts_with("identity: compiling it would take more than 0 MiB"), "{}", error.0);
+        assert!(error.0.starts_with("identity: compiling it would take more than 0 bytes"), "{}", error.0);
         assert_eq!(runtime.invocations[0].code, 0);
         assert_eq!(compiles(&runtime, 1), 1);
         runtime.limits.memory = None;
