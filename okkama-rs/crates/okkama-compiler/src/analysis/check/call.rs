@@ -2073,9 +2073,10 @@ impl Checker<'_, '_> {
             ast::ActionResult::Void(_) => None,
             ast::ActionResult::Type(ty) => Some(self.reg.resolve(ty, &generics)),
         };
-        let visible = self.visible();
+        let (visible, inherited) = self.outer_view();
         let outer = Outer {
             visible,
+            inherited,
             self_ty: if matches!(
                 self.kind,
                 Kind::Method | Kind::Successor | Kind::Destroy | Kind::Closure
@@ -2097,11 +2098,13 @@ impl Checker<'_, '_> {
             }
             let block = inner.body(body, "<anonymous>");
             let captures = std::mem::take(&mut inner.captures);
+            let pending = std::mem::take(&mut inner.pending_captures);
             let body = inner.finish(BodyOwner::Closure, locals, block, span);
-            (body, captures)
+            (body, captures, pending)
         };
         self.reg.set_module(self.module);
-        let (body, captures) = checked;
+        let (body, mut captures, pending) = checked;
+        self.resolve_captures(&mut captures, pending);
         let ty = Ty::Action(Box::new(ActionTy {
             is_async: false,
             params: param_types,

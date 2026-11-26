@@ -31,6 +31,14 @@
   tests; load cost 10 ms over 1245 programs (0.7% of their verification). Blast radius vs release/065
   (0269ef0e7): conformance full-release 1075/1075 on both; std `run -t` 395 modules, examples 75 identical
   (cage and Docker); Bible examples, bench/micro check, t/ identical.
+- [x] #1077 (feature/1077): closure captures in first-use order. `Checker::outer_view` gives a nested
+  anonymous action the enclosing body's locals plus the names it has not captured yet (`Outer::inherited`);
+  a use records a pending capture, which `Checker::resolve_captures` turns into a capture of the enclosing
+  body after the nested one is checked. Before, `visible()` captured every outer name in HashMap order, so
+  nested closures over-captured and their SPB varied run to run. Compile sweep (2382 files, std -t, t/ with
+  t/gen, examples, conformance, Bible examples): exit codes as release/065; SPB differs in 22 files, all with
+  nested closures (16 were already nondeterministic on release/065), their runs print the same; three branch
+  sweeps byte-identical.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

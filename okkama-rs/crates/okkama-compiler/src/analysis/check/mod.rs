@@ -67,8 +67,17 @@ pub(super) struct LoopCtx {
 pub(super) struct Outer {
     /// Имя → (локальная внешнего тела, тип).
     pub visible: HashMap<String, (LocalId, Ty)>,
+    /// Names the enclosing body sees only through its own outer bodies and
+    /// has not captured yet: the enclosing body captures one when this body
+    /// first uses it (#1077), so nothing unused is captured and captures
+    /// keep the order of first use.
+    pub inherited: HashMap<String, Ty>,
     pub self_ty: Option<Ty>,
 }
+
+/// A capture whose outer local does not exist yet: the enclosing body
+/// creates it after this body is checked ([`Checker::resolve_captures`]).
+pub(super) const PENDING_CAPTURE: LocalId = LocalId(usize::MAX);
 
 pub(super) struct Checker<'r, 'a> {
     pub reg: &'r mut Registry<'a>,
@@ -94,7 +103,12 @@ pub(super) struct Checker<'r, 'a> {
     pub unbounded: Vec<LocalId>,
     /// Внешнее тело анонимного действия.
     pub outer: Option<Outer>,
+    /// (outer local, inner local) in the order of first use in the body;
+    /// the outer local is [`PENDING_CAPTURE`] for a name from
+    /// [`Outer::inherited`], named in `pending_captures`.
     pub captures: Vec<(LocalId, LocalId)>,
+    /// Index into `captures` and the name of each pending capture.
+    pub pending_captures: Vec<(usize, String)>,
     /// Поля, которые тело shorthand-конструктора читает по имени.
     pub shorthand_fields: Vec<usize>,
     /// Тело поля внешнего cap: поля владельца читаются как `Owner::field`.
@@ -464,6 +478,7 @@ impl<'r, 'a> Checker<'r, 'a> {
             unbounded: Vec::new(),
             outer: None,
             captures: Vec::new(),
+            pending_captures: Vec::new(),
             shorthand_fields: Vec::new(),
             cap_external: false,
             barrier: None,
@@ -677,13 +692,20 @@ impl<'r, 'a> Checker<'r, 'a> {
         if self.barrier.is_some() {
             return None;
         }
-        let (outer_local, ty) = self.outer.as_ref()?.visible.get(name).cloned()?;
-        if let Some((_, inner)) = self
-            .captures
-            .iter()
-            .find(|(outer, _)| *outer == outer_local)
+        let outer = self.outer.as_ref()?;
+        let (outer_local, ty) = match outer.visible.get(name) {
+            Some((local, ty)) => (Some(*local), ty.clone()),
+            None => (None, outer.inherited.get(name)?.clone()),
+        };
+        if let Some(outer_local) = outer_local
+            && let Some((_, inner)) = self.captures.iter().find(|(outer, _)| *outer == outer_local)
         {
             return Some(*inner);
+        }
+        if outer_local.is_none()
+            && let Some((index, _)) = self.pending_captures.iter().find(|(_, pending)| pending == name)
+        {
+            return Some(self.captures[*index].1);
         }
         let inner = self.new_local(
             &ast::Name {
@@ -694,7 +716,10 @@ impl<'r, 'a> Checker<'r, 'a> {
             false,
         );
         self.scopes[0].insert(name.to_string(), inner);
-        self.captures.push((outer_local, inner));
+        if outer_local.is_none() {
+            self.pending_captures.push((self.captures.len(), name.to_string()));
+        }
+        self.captures.push((outer_local.unwrap_or(PENDING_CAPTURE), inner));
         Some(inner)
     }
 
@@ -706,25 +731,43 @@ impl<'r, 'a> Checker<'r, 'a> {
         self.scopes.pop();
     }
 
-    /// Все видимые сейчас локальные (для тела анонимного действия). Имена
-    /// внешнего тела сначала захватываются этим телом: вложенное действие
-    /// ссылается только на локальные своего непосредственного окружения.
-    pub fn visible(&mut self) -> HashMap<String, (LocalId, Ty)> {
-        let inherited: Vec<String> = self
-            .outer
-            .as_ref()
-            .map(|outer| outer.visible.keys().cloned().collect())
-            .unwrap_or_default();
-        for name in inherited {
-            let _ = self.local(&name);
-        }
+    /// What an anonymous action written here sees: the locals in scope, and
+    /// the names of the outer bodies this body has not captured yet. Those
+    /// are captured only when the nested action uses them
+    /// ([`Self::resolve_captures`], #1077): a body captures exactly the
+    /// names it (or an action inside it) uses, in the order of first use.
+    /// Scopes below a barrier (a default value, #149) stay hidden.
+    pub fn outer_view(&self) -> (HashMap<String, (LocalId, Ty)>, HashMap<String, Ty>) {
         let mut visible: HashMap<String, (LocalId, Ty)> = HashMap::new();
-        for scope in &self.scopes {
+        for scope in &self.scopes[self.barrier.unwrap_or(0)..] {
             for (name, local) in scope {
                 visible.insert(name.clone(), (*local, self.locals[local.0].ty.clone()));
             }
         }
-        visible
+        let mut inherited = HashMap::new();
+        if self.barrier.is_none()
+            && let Some(outer) = &self.outer
+        {
+            let names = outer.visible.iter().map(|(name, (_, ty))| (name, ty)).chain(outer.inherited.iter());
+            for (name, ty) in names {
+                if !visible.contains_key(name) {
+                    inherited.insert(name.clone(), ty.clone());
+                }
+            }
+        }
+        (visible, inherited)
+    }
+
+    /// The nested action's captures of names this body had not captured:
+    /// capture each here now, in the nested action's order, and point the
+    /// nested capture at the new local.
+    pub fn resolve_captures(&mut self, captures: &mut [(LocalId, LocalId)], pending: Vec<(usize, String)>) {
+        for (index, name) in pending {
+            let local = self
+                .local(&name)
+                .expect("a pending capture names a local the enclosing body can see");
+            captures[index].0 = local;
+        }
     }
 
     // ----- границы типов -----

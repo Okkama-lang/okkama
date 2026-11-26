@@ -33,6 +33,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `data_kind`/`data_dump` take it as undefined. Every other field is a bare load as before: 0 of 774
   bench/micro programs but two (`http2-server-lifecycle`, `http-form-read`) have such a field; std, t/,
   examples and the Bible's examples run as before.
+- **Codegen was not deterministic for nested anonymous actions (#1077).** An anonymous action that held
+  another captured every name of its own enclosing body, in hash-map order, when the inner one was checked:
+  the same source gave different SPB from build to build (`L03.anonymous.lexical-scope`), and the outer action
+  kept values it never used. Now each action captures only the names it or an action inside it uses, in the
+  order of first use, as the Bible states (§18.2); builds of one source are byte-identical.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

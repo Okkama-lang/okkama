@@ -14,6 +14,11 @@ the session's memory; older rulings live in the commits and tickets named.
   layout perturbation; the micro A/B uses it through `run.py --placements`, every placement in every round.
   The v0.6.1 array-plus gap is not JIT placement (it follows the AOT runtime binary's layout); no
   instruction-count mode, because the Docker VM has no PMU.
+- **2026-11-26. Closure captures (#1077, lead decision).** An anonymous action
+  captures exactly the names its body uses, a nested action's uses included,
+  in the order of first use; the enclosing action captures a name for a nested
+  one at the nested action's position. Nothing iterates a hash map to decide
+  captures; a closure written in a default value sees no caller locals (#149).
 
 - **2026-11-26. #1029 entry-result report (implementation choice under the
   owner's six-ticket task).** Preserve the bare runtime message used for

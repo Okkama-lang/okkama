@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 22375 lines
+## front — 36 files, 22403 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -11,13 +11,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 223 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 622 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
-- `okkama-compiler/src/analysis/check/call.rs` 2021 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
+- `okkama-compiler/src/analysis/check/call.rs` 2024 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
 - `okkama-compiler/src/analysis/check/collections.rs` 656 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 335 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
 - `okkama-compiler/src/analysis/check/expr.rs` 1962 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/frame.rs` 262 — Local non-escaping Cell actions (#957). One lexical walk per body, with
 - `okkama-compiler/src/analysis/check/generics.rs` 397 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
-- `okkama-compiler/src/analysis/check/mod.rs` 912 — Проверка тел: имена, типы, вызовы, управление потоком.
+- `okkama-compiler/src/analysis/check/mod.rs` 937 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 722 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
 - `okkama-compiler/src/analysis/check/variants.rs` 580 — Nominal variant construction, pattern bindings, and optional fallback.
 - `okkama-compiler/src/syntax/format.rs` 1732 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
