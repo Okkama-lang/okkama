@@ -294,7 +294,8 @@ impl Runtime {
     }
     /// A map key (#242): a value whose type is not a key type — an array, a
     /// map, an object holding one — is refused instead of being compared by
-    /// identity; a generic map could otherwise reach one at run time.
+    /// identity; a generic map could otherwise reach one at run time. So is
+    /// an object with a field not bound yet (#1076).
     pub(crate) fn checked_key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> Result<Key, String> {
         if self.is_key(word, kind, ty) {
             Ok(self.key(word, kind, ty))
@@ -326,7 +327,11 @@ impl Runtime {
                     .iter()
                     .enumerate()
                     .filter(|(_, (name, _))| !is_once_slot(name))
-                    .all(|(index, &(_, field))| self.is_key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
+                    .all(|(index, &(_, field))| {
+                        // A field not bound yet (#1076) holds no value to key by.
+                        let (value, kind) = (self.heap.field(word, index), self.kind_of(field));
+                        value != word::unbound(kind.repr()) && self.is_key(value, kind, program.ty(field))
+                    })
             }
             _ => false,
         }

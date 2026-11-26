@@ -559,6 +559,83 @@ fn carries(instruction: &Instruction, register: Register) -> bool {
     }
 }
 
+/// The object fields a stub of `undef` may reach (#1076), per object: `true` at `[object][field]`, if some
+/// `obj.new` or `obj.init` may store a stub there. A stub reaches a field only so ([`carries`]); `obj.next`
+/// copies fields within one object type, so the answer per type covers every copy. A register may hold a
+/// stub, if it is an `undef` destination or a `move`, edge move or handler move copies one into it, on
+/// any path: flow-insensitive, so it can only say `true` more often than [`check_initialization`] lets a
+/// stub through, never less. Linear in the code (and a sort of the copies). Sparrow checks reads of these
+/// fields for the stub.
+pub(crate) fn stub_fields(program: &Program) -> Vec<Vec<bool>> {
+    let mut fields: Vec<Vec<bool>> = program.objects.iter().map(|_| Vec::new()).collect();
+    let mut mark = |object: usize, field: usize| {
+        let count = program.objects.get(object).map_or(0, |declared| declared.fields.len());
+        if field < count {
+            fields[object].resize(count, false);
+            fields[object][field] = true;
+        }
+    };
+    for function in &program.functions {
+        // Most functions have no `undef`: they are passed over without looking at their copies.
+        if !function.code.iter().any(|instruction| matches!(instruction, Instruction::Undef { .. })) {
+            continue;
+        }
+        let mut stub = vec![false; function.registers.len()];
+        let mut work = Vec::new();
+        // Copies as (source, destination).
+        let mut copies: Vec<(u32, u32)> = Vec::new();
+        for (pc, instruction) in function.code.iter().enumerate() {
+            match instruction {
+                Instruction::Undef { dst } => {
+                    if let Some(flag) = stub.get_mut(dst.0.0 as usize).filter(|flag| !**flag) {
+                        *flag = true;
+                        work.push(dst.0.0);
+                    }
+                }
+                Instruction::Move { dst, source } => copies.push((source.0, dst.0.0)),
+                _ => {}
+            }
+            // Only a terminator has edge moves.
+            if instruction.is_terminator() {
+                for (_, moves, _) in edges(pc, instruction) {
+                    copies.extend(moves.iter().map(|(dst, source)| (source.0, dst.0)));
+                }
+            }
+        }
+        for handler in &function.handlers {
+            copies.extend(handler.target.moves.iter().map(|(dst, source)| (source.0, dst.0)));
+        }
+        copies.sort_unstable();
+        while let Some(register) = work.pop() {
+            let from = copies.partition_point(|(source, _)| *source < register);
+            for &(_, dst) in copies[from..].iter().take_while(|(source, _)| *source == register) {
+                if let Some(flag) = stub.get_mut(dst as usize).filter(|flag| !**flag) {
+                    *flag = true;
+                    work.push(dst);
+                }
+            }
+        }
+        let holds = |register: &Register| stub.get(register.0 as usize).copied().unwrap_or(false);
+        for instruction in &function.code {
+            match instruction {
+                Instruction::ObjNew { object, fields, .. } => {
+                    for (index, _) in fields.iter().enumerate().filter(|(_, register)| holds(register)) {
+                        mark(object.0 as usize, index);
+                    }
+                }
+                Instruction::ObjInit { object, field, value } if holds(value) => {
+                    let declared = function.registers.get(object.0 as usize).and_then(|ty| program.ty(*ty));
+                    if let Some(Type::Object(owner)) = declared {
+                        mark(owner.0 as usize, *field as usize);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fields
+}
+
 /// Ребро инструкции: цель, присваивания и регистр значения ребра.
 pub(crate) type Edge<'a> = (u32, &'a [(Register, Register)], Option<Register>);
 

@@ -680,6 +680,14 @@ impl Program {
         verify::verify(self)
     }
 
+    /// Per object, the fields into which some `obj.new` or `obj.init` may store a stub of `undef`
+    /// (#1076): `fields[object][field]`, an empty list for an object without such a field. An
+    /// over-approximation of what [`Program::verify`] lets through; a runtime checks reads of these
+    /// fields, and only of these, for the stub.
+    pub fn stub_fields(&self) -> Vec<Vec<bool>> {
+        verify::stub_fields(self)
+    }
+
     /// Структурное равенство типов (одинаковые типы могут стоять в таблице дважды).
     pub fn same_type(&self, a: TypeRef, b: TypeRef) -> bool {
         typing::same(self, a, b)

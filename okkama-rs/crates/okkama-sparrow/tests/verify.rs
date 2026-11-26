@@ -479,3 +479,45 @@ function f0 "pick" {
     let swapped = text.replace("0: br r0, @1, @3", "0: br r0, @3, @1");
     assert!(stub_read(&swapped, 1), "{:?}", verdict(&swapped));
 }
+
+#[test]
+fn the_fields_a_stub_may_reach_are_those_obj_new_and_obj_init_store_it_in() {
+    // #1076: Sparrow checks reads of exactly these fields for the stub.
+    let text = r#"sparrow 18
+module "stub" "v1.0.0"
+type t0 int
+type t1 str
+type t2 object obj0
+type t3 object obj1
+type t4 bool
+object obj0 "Pair" { field "left" t1 field "right" t1 field "count" t0 }
+object obj1 "Plain" { field "x" t1 }
+function f0 "pair" {
+    registers [t1, t1, t0, t2, t1, t3, t4, t1]
+    params [r6]
+    result t2
+    0: undef r0
+    1: const r1, str "b"
+    2: const r2, int 1
+    3: br r6, @4, @6(r7 <- r0)
+    4: const r7, str "c"
+    5: jmp @6
+    6: obj.new r3, obj0, [r1, r7, r2]
+    7: move r4, r0
+    8: obj.init r3, 0, r4
+    9: obj.new r5, obj1, [r1]
+    10: ret r3
+}
+"#;
+    let program = okkama_sparrow::assemble(text).expect("verifies");
+    // `left` through a move into obj.init, `right` through an edge move into obj.new; `count` and Plain.x hold values.
+    assert_eq!(program.stub_fields(), vec![vec![true, true, false], vec![]]);
+    // No `undef`: no field is checked.
+    let bound = text.replace("0: undef r0", "0: const r0, str \"a\"");
+    let program = okkama_sparrow::assemble(&bound).expect("verifies");
+    assert_eq!(program.stub_fields(), vec![Vec::<bool>::new(), vec![]]);
+    // Only the edge move brings the stub to `right`.
+    let direct = text.replace("@6(r7 <- r0)", "@6(r7 <- r1)");
+    let program = okkama_sparrow::assemble(&direct).expect("verifies");
+    assert_eq!(program.stub_fields(), vec![vec![true, false, false], vec![]]);
+}

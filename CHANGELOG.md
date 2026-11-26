@@ -21,6 +21,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   passes over its frame as over a Rust one); machine code calls such closures directly as it does narrower
   ones. Any number of parameters works, as for static calls. No program of std, t/, examples, conformance or
   bench/micro has such a closure or a `call.fn` with 7 or more arguments, so their code is unchanged.
+- **Sparrow: a stub of `undef` stored in an object field and read back crashed Sparrow (#1076).** #1069 left the
+  heap open: `obj.new`/`obj.init` may store a stub (a constructor's field not bound yet when `self` leaves
+  early, #271), and `obj.get` handed its word 0 to machine code (`undef r0; obj.new r1, obj0, [r0]; obj.get
+  r2, r1, 0; str.len`, SIGSEGV). `Program::stub_fields` now lists, per object type, the fields some
+  `obj.new`/`obj.init` may store a stub in (a linear pass at load), and Sparrow checks only reads of those:
+  `obj.get`, `variant.get` and the accessors it would inline (those stay calls) fail the program with "Field
+  `x` of `T` is read before it is bound", a program error a handler catches; the stub of a `bool` field reads
+  as `true`, which the compiler's construction check relies on (an unbound `$pending` means "still under
+  construction"). Map keys refuse an object with such a field, and `data_items` refuses to box one;
+  `data_kind`/`data_dump` take it as undefined. Every other field is a bare load as before: 0 of 774
+  bench/micro programs but two (`http2-server-lifecycle`, `http-form-read`) have such a field; std, t/,
+  examples and the Bible's examples run as before.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

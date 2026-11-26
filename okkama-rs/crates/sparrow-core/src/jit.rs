@@ -1377,6 +1377,48 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// #1076: `value`, just read from field `field` of an object of `descriptor`, when a stub of `undef` may
+    /// reach that field (`Loaded::may_hold_stub`): the stub of a `bool` field reads as `true`, the contract of
+    /// the compiler's construction check, which reads its unbound `$pending` as "still pending" (#271); any
+    /// other stub fails the program. A field no stub reaches stays a bare load. Returns the value read.
+    fn bound_field(&mut self, pc: usize, descriptor: usize, field: u32, value: Value) -> Value {
+        if !self.loaded.may_hold_stub(descriptor, field as usize) {
+            return value;
+        }
+        okkama_devtrace::count!("jit", "stub-checked field reads");
+        let program = &self.loaded.program;
+        let declared = &program.objects[descriptor];
+        let (name, ty) = &declared.fields[field as usize];
+        let stub = crate::word::unbound(Kind::of(program, *ty).repr());
+        let unbound = self.builder.ins().icmp_imm_s(IntCC::Equal, value, stub as i64);
+        if matches!(program.ty(*ty), Some(Type::Bool)) {
+            let yes = self.iconst(1);
+            return self.builder.ins().select(unbound, yes, value);
+        }
+        let message = format!(
+            "Field `{name}` of `{}` is read before it is bound",
+            okkama_runtime_core::testing::display_name(&declared.name)
+        );
+        let bound = self.builder.create_block();
+        let stubbed = self.builder.create_block();
+        self.builder.set_cold_block(stubbed);
+        self.builder.ins().brif(unbound, stubbed, &[], bound, &[]);
+        self.builder.switch_to_block(stubbed);
+        let ctx = self.ctx();
+        let message = self.constant_text(&message);
+        self.helper(|h| h.trap, &[ctx, message]);
+        self.check(pc);
+        self.builder.ins().jump(bound, &[]);
+        self.builder.switch_to_block(bound);
+        value
+    }
+
+    /// Is the field an accessor `callee` returns, of its parameter `param`, one a stub may reach (#1076)?
+    fn stub_field(&self, callee: &okkama_sparrow::Function, param: usize, field: u32) -> bool {
+        let ty = callee.registers[callee.params[param].0 as usize];
+        matches!(self.loaded.program.ty(ty), Some(Type::Object(declared)) if self.loaded.may_hold_stub(declared.0 as usize, field as usize))
+    }
+
     fn constant_text(&mut self, text: &str) -> Value {
         let word = self.heap.allocate_text(text);
         self.constants.push((word, Repr::Ref));
@@ -2033,7 +2075,11 @@ impl Emitter<'_, '_> {
             }
             I::ObjGet { dst, object, field } => {
                 let pointer = self.get(object);
-                let value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                let mut value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                if let Some(Type::Object(declared)) = self.register_type(object) {
+                    let declared = declared.0 as usize;
+                    value = self.bound_field(pc, declared, *field, value);
+                }
                 self.set_word(&dst.0, value);
             }
             I::ObjInit { object, field, value } => {
@@ -2117,6 +2163,7 @@ impl Emitter<'_, '_> {
                 self.builder.ins().jump(load, &[]);
                 self.builder.switch_to_block(load);
                 let value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                let value = self.bound_field(pc, object as usize, *field, value);
                 self.set_word(&dst.0, value);
             }
             I::VariantOf { dst, source, .. } => {
@@ -2188,10 +2235,12 @@ impl Emitter<'_, '_> {
                     .expect("result");
                     self.check(pc);
                     result
-                } else if let Some((param, field)) = accessor(callee).filter(|_| !self.plain) {
+                } else if let Some((param, field)) = accessor(callee).filter(|&(param, field)| !self.plain && !self.stub_field(callee, param, field)) {
                     // #541: a field accessor is its load. Its entry stays a
                     // step, and it cannot fail, allocate or reach a safepoint,
-                    // so no failure, trace or root differs from the call.
+                    // so no failure, trace or root differs from the call. A
+                    // field a stub may reach is checked, so it can fail: that
+                    // accessor stays a call (#1076).
                     if self.polled {
                         self.poll();
                     }
@@ -3484,6 +3533,8 @@ mod closure_call_tests;
 mod unreachable_tests;
 #[cfg(test)]
 mod wide_closure_tests;
+#[cfg(test)]
+mod stub_field_tests;
 
 #[cfg(test)]
 mod placement_tests;

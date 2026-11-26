@@ -72,6 +72,12 @@ pub struct Loaded {
     /// Native process launches can leave descendants outside VM ownership.
     /// Keep spawn's per-item process-group teardown for such programs.
     pub(crate) worker_reuse_safe: bool,
+    /// Per descriptor, the fields a stub of `undef` may reach (#1076, `Program::stub_fields`): the JIT
+    /// checks every read of such a field and only those.
+    stub_fields: Vec<Vec<bool>>,
+    /// A session runtime checks every field (#1076): code compiled for one program must stay sound when
+    /// a later extension stores a stub into a published field.
+    every_field_checked: bool,
 }
 
 /// Intrinsic name of the synthetic async functions whose frames are the
@@ -180,7 +186,20 @@ impl Loaded {
             function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve),
             Some(okkama_runtime_abi::Native::ProcessProcessStateStart | okkama_runtime_abi::Native::ProcessPipelineStateCapture)
         ));
-        Self { program, functions, events, workers, worker_reuse_safe }
+        let stub_fields = program.stub_fields();
+        Self { program, functions, events, workers, worker_reuse_safe, stub_fields, every_field_checked: false }
+    }
+
+    /// May field `field` of an object of `descriptor` hold a stub of `undef`, so that a read must check it
+    /// (#1076)?
+    pub fn may_hold_stub(&self, descriptor: usize, field: usize) -> bool {
+        self.every_field_checked || self.stub_fields.get(descriptor).and_then(|fields| fields.get(field)).copied().unwrap_or(false)
+    }
+
+    /// Check every field read (#1076): a session's later extensions may store a stub into a field this
+    /// program never does.
+    pub(crate) fn check_every_field(&mut self) {
+        self.every_field_checked = true;
     }
 
     /// The worker Future function for results of type `result`.

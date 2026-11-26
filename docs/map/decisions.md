@@ -606,3 +606,21 @@ every declaration is open (#1005, owner decision).
   Cranelift adapter per arity that loads the words and calls the code. It holds no value across the call and
   is not in `ranges`, so the collector passes over its frame as over a Rust one. Machine code calls a wide
   closure directly, as a narrow one (the `args + captures > 8` cut is gone).
+
+## A stub in an object field is checked where it is read (#1076, 2026-11-27)
+
+- The verifier keeps letting `obj.new`/`obj.init` store an `undef` stub (early `self`, #271); Sparrow checks
+  the reads instead. `Program::stub_fields` (okkama-sparrow/src/verify.rs) lists per object type the fields
+  some `obj.new`/`obj.init` may store a stub in: flow-insensitive over `undef`, `move`, edge and handler moves,
+  so a superset of what the initialization analysis lets through; per type, since `obj.next` copies fields
+  within one type and `variant.of` keeps the descriptor. `Loaded::new` computes it once (functions without
+  `undef` are skipped: 10 ms over 1245 corpus programs, 0.7% of their verification).
+- Only reads of those fields pay: `obj.get`, `variant.get`, and a #541 accessor of such a field stays a call.
+  A session runtime checks every field (`Loaded::check_every_field`), since an extension may store a stub in
+  a published field whose readers are compiled already.
+- The stub of a `bool` field reads as `true`; any other stub fails the program ("Field `x` of `T` is read
+  before it is bound", catchable). The compiler's construction check (`ObjPending`, #271) reads an unbound
+  `$pending` as "still under construction" and relies on that; it is the one compiled read of a stub.
+- Rust helpers that walk fields take a stub (`word::unbound(repr)`) as unbound: equality refuses it (as
+  before), test output prints `null` (as before), the collector and ownership walks skip non-pointers (as
+  before); map keys refuse it, `data_items` refuses to box it, `data_kind`/`data_dump` read it as undefined.

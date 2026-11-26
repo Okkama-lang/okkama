@@ -216,8 +216,9 @@ impl Runtime {
     /// #588: a runtime that later programs may extend (`extend`), within `capacities`. Machine code embeds the
     /// invocation table's base and each role dispatch table's base, so both are allocated at their capacity now
     /// and never relocated.
-    pub fn session(loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
+    pub fn session(mut loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        loaded.check_every_field();
         let functions = loaded.program.functions.len();
         if functions > capacities.functions || loaded.program.objects.len() > capacities.objects {
             return Err(Error("the program exceeds the session's capacities".into()));
@@ -302,7 +303,8 @@ impl Runtime {
         }
         // ---- prepare: nothing live changes ----
         program.verify().map_err(|error| Error(error.to_string()))?;
-        let loaded = Loaded::new(program);
+        let mut loaded = Loaded::new(program);
+        loaded.check_every_field();
         crate::contracts::check(&loaded)?;
         let (old, new) = (&self.loaded.program, &loaded.program);
         let prefix = |what: &str, same: bool| if same { Ok(()) } else {

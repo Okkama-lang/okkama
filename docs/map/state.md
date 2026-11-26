@@ -23,6 +23,14 @@
   parameters or a `call.fn` with 7+ arguments, so no emitted code changes; the closure helper's path for
   async and 3+ captures runs as before: std `run -t` 395 modules, examples 75, bench/micro check 773, t/ 142
   files (50972 checks) identical to release/065 (0269ef0e7) in the cage.
+- [x] #1076 (feature/1076): `Program::stub_fields` (okkama-sparrow/src/verify.rs), `Loaded::may_hold_stub`
+  (sparrow-core/src/program.rs), `Emitter::bound_field` for `obj.get`/`variant.get` (a #541 accessor of such a
+  field stays a call); a `bool` stub reads `true` (`$pending`, #271), any other stub fails the program; map keys
+  and the debug natives refuse or read the stub as unbound; a session runtime checks every field. Checked
+  reads: 55 of 180696 field reads in bench/micro (2 of 774 programs), 407/58854 in examples, 203/97604 in std
+  tests; load cost 10 ms over 1245 programs (0.7% of their verification). Blast radius vs release/065
+  (0269ef0e7): conformance full-release 1075/1075 on both; std `run -t` 395 modules, examples 75 identical
+  (cage and Docker); Bible examples, bench/micro check, t/ identical.
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets
