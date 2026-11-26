@@ -2,6 +2,12 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] Release commit 0.6.5 (2026-11-27): version 0.6.5, CHANGELOG [0.6.5] with summary and compare links, Bible
+  rebuilt (md/HTML/PDF, EN/RU), micro report `okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`
+  (rc1 fa572a909 vs v0.6.4, −1.0% over 75, both built by toolchain.sh at seeds 1 and 2; the final A/B on
+  026f0ea13 was cancelled by the owner so the performance audit could use the machine). First release through
+  the trunk-based flow: release/065 → develop (nightly gate) → pull request into main → tag on the merge commit.
+  Performance audit (Fable) in `okkama-docs/runtime/perf-audit-2026-11-27/` — ten tickets proposed for after 0.6.5.
 - [x] #1102 (feature/1099 rebased on release/065 6e13e1d1e, not committed): a discarded Future of an ordinary async
   call runs nothing (lazy, Bible §20.1) and its scope releases the fresh arguments it owns (#587). A bound async
   action's (`call.fn`) Future was never tracked, so its argument leaked (`destroy 12`/`13` never ran). `emit`

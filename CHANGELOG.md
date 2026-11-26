@@ -6,6 +6,36 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-11-27
+
+0.6.5 closes the findings of the three internals books (Codex Gigas, Malleus, Clavicula) and of fuzzing, moves
+the project to trunk-based branches, and makes the micro A/B trustworthy. Nothing in the language or the public
+std changes.
+- **Crashes and wrong results fixed in Sparrow.** A verified program could read the stub of `undef`, from a
+  register (#1069) or from an object field (#1076); a closure over more than 8 parameters died at `call.fn`
+  (#1074); a function holding `unreachable` could not be compiled (#1072); crafted SPB could raise an intrinsic
+  error with its payload mixed up (#1090).
+- **Leaks fixed in lowering.** A resource returned through nested scopes could be lost by a failing outer cleanup
+  (#1073); a discarded closure or cap-field result that is a new resource was never destroyed (#1099); a
+  discarded Future of a bound async action never released its argument (#1102).
+- **The compiler refuses earlier and says why.** A damaged runtime intrinsic (#1088) and a native declaration
+  unlike the runtime's table (#1098) are diagnostics instead of internal errors or codegen failures; the IR
+  verifier checks caps, `worker.bind` and `worker.spawn` (#1071); codegen is deterministic for nested anonymous
+  actions (#1077); the ownership check agrees with lowering's model in debug builds (#1093).
+- **Blade.** `blade run` rebuilds when the sources, the toolchain, its std, the import directories or the
+  compiler switches change (#1040, #1080, #1087); `blade new` no longer overwrites a project (#1039); a lock
+  change is reported (#1096); `blade install` is gone (#1040).
+- **Format.** SPB 18 (#1061); the IR text header is `oir 2 high` (#1043).
+- **Tooling and CI.** One environment-switch rule and implementation (#1067, #1095); fuzz coverage for every
+  target and fuzzing of programs importing std (#1050, #1091); debug tests and the tooling's Python tests in
+  CI and the Wave (#1100, #1092); micro toolchains built as the packages are, with the runtime binary's own
+  layout measured (#1025, #1085, #1086, #933).
+- **Branches.** `main` is the source of releases and changes only through pull requests; a merge into `develop`
+  publishes the nightly `okkama-nightly-YYYY-MM-DD`.
+- **Speed.** Micro A/B against 0.6.4 (`okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`): −1.0% over
+  all 75 programs, every reliable pair within the noise band; the async "slowdown" of 0.6.4's report was devtrace
+  in its candidate toolchain (#1025).
+
 ### Fixed
 - **A discarded Future of a bound async action's call never released the fresh argument it owned (#1102).** A
   Future is lazy, so a discarded one runs nothing (Bible §20.1), but it owns the fresh arguments of its call
@@ -8963,7 +8993,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/Okkama-lang/okkama/compare/v0.6.1...v0.6.2
