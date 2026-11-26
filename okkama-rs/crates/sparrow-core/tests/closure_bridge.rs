@@ -45,11 +45,13 @@ fn closure_bridge_zero_one_two_and_eight_words_first_and_warm() {
 }
 
 #[test]
-fn closure_bridge_verified_over_limit_is_refused() {
-    // SPB permits this signature; the bridge must fail before copying nine words.
-    for captures in [0, 1, 9] {
-        let error = run(&sum(9, captures)).unwrap_err();
-        assert!(error.0.contains("closure with more than 8 parameters"), "{}", error.0);
+fn closure_bridge_wider_than_eight_words_runs_first_and_warm() {
+    // SPB permits any width; a closure over more than 8 words runs like a narrow one (#1074).
+    for params in [9, 12] {
+        for captures in [0, 1, 3, params] {
+            assert_eq!(run(&sum(params, captures)).unwrap(), (params * (params + 1)) as i64,
+                "params={params}, captures={captures}");
+        }
     }
 }
 
