@@ -11,12 +11,14 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - TLS suite names: `CHACHA20_POLY1305_SHA256`, `CHACHA20_POLY1305_SHA384`, `SSL_NULL_WITH_NULL_NULL`.
 - SQLite provider failure codes (`SQLITE_*`): runtime diagnostics, not compiler/verifier rules.
 
-## Tags in more than one ownership layer (0)
+## Tags in more than one ownership layer (2)
 
 | tag | layers | files |
 |---|---|---|
+| OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
+| OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (116)
+## Tags in one layer (114)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -43,7 +45,6 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - NO_COLOR — cli: `man.rs`
 - NUMBER_OF_PROCESSORS — other: `native/host.rs`
 - OKKAMA_ARRAYS — other: `heap.rs`
-- OKKAMA_CHECK_REGISTERS — codegen: `codegen/sparrow/mod.rs`
 - OKKAMA_DEV — devtrace: `lib.rs`
 - OKKAMA_DEV_OUT — devtrace: `lib.rs`
 - OKKAMA_DUMP_INVALID_IR — lower: `lowering/mod.rs`
@@ -53,7 +54,6 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - OKKAMA_MAPS — other: `heap.rs`
 - OKKAMA_OWNERSHIP_PROTOTYPE — lower: `lowering/mod.rs`
 - OKKAMA_OWNERSHIP_REPORT — lower: `lowering/mod.rs`
-- OKKAMA_PROFILE_REGISTERS — codegen: `codegen/sparrow/registers.rs`
 - OKKAMA_STDLIB_DIR — cli: `main.rs`
 - OKKAMA_STRINGS — sparrow: `ops.rs`
 - OKKAMA_TEST_CPU_CHILD — other: `native/host.rs`

@@ -811,6 +811,13 @@ fn verify_ownership() -> bool {
     cfg!(debug_assertions) || crate::env_switch::enabled("OKKAMA_VERIFY_OWNERSHIP")
 }
 
+/// The environment that changes what a build produces (#1087): `okkama env` names each one that is set, and
+/// Blade's build stamp records it, so changing one builds again. A variable the compiler reads only to check,
+/// report, profile or dump (`OKKAMA_VERIFY_OWNERSHIP`, `OKKAMA_CHECK_REGISTERS`, `OKKAMA_PROFILE_REGISTERS`,
+/// `OKKAMA_OWNERSHIP_REPORT`, `OKKAMA_DUMP_INVALID_IR`) leaves the output as it is and is not here;
+/// `build_environment_tests` keeps every variable the compiler reads in one of the two lists.
+pub const BUILD_ENVIRONMENT: [&str; 2] = ["OKKAMA_IR_PASSES", "OKKAMA_OWNERSHIP_PROTOTYPE"];
+
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
 /// default), `none` or a comma list of `statics`, `regions`, `tail-calls`, `fold`, `hoist`,
 /// `dce`, `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
@@ -1063,5 +1070,52 @@ mod internal_error_tests {
         assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
         assert!(error.message().contains("may still be open"), "{error}");
         assert!(std::panic::catch_unwind(|| crate::fuzz_lowering_policy::accepted(Err(error))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod build_environment_tests {
+    use super::*;
+
+    /// Variables the compiler reads that never change its output: checks, reports, profiles, dumps.
+    const NOT_BUILD: [&str; 5] = [
+        "OKKAMA_VERIFY_OWNERSHIP",
+        "OKKAMA_CHECK_REGISTERS",
+        "OKKAMA_PROFILE_REGISTERS",
+        "OKKAMA_OWNERSHIP_REPORT",
+        "OKKAMA_DUMP_INVALID_IR",
+    ];
+
+    /// Every `"OKKAMA_…"` literal in the files under `dir`.
+    fn read_variables(dir: &std::path::Path, found: &mut std::collections::BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                read_variables(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices("\"OKKAMA_") {
+                    let name: String = text[at + 1..].chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+                    // The needle above is itself such a literal, with no name after the prefix.
+                    if name.len() > "OKKAMA_".len() && text[at + 1 + name.len()..].starts_with('"') {
+                        found.insert(name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// #1087: a variable the compiler reads is either part of the build (Blade rebuilds when it changes) or
+    /// named here as one that leaves the output as it is; a new one must be put in one list or the other.
+    #[test]
+    fn every_variable_the_compiler_reads_is_classified() {
+        let mut found = std::collections::BTreeSet::new();
+        read_variables(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut found);
+        assert!(found.contains("OKKAMA_IR_PASSES"), "{found:?}");
+        for name in &found {
+            let build = BUILD_ENVIRONMENT.contains(&name.as_str());
+            let not_build = NOT_BUILD.contains(&name.as_str());
+            assert!(build != not_build, "{name}: in {} of BUILD_ENVIRONMENT and NOT_BUILD", if build { "both" } else { "neither" });
+        }
     }
 }

@@ -108,7 +108,16 @@
   Per-file digest cache `OUTPUT.blade-cache` (size, mtime, dev, inode, ctime; entries younger than 2 s not
   remembered). No-op `blade run` 8.4 → 12.3 ms (gate build, ~/.local okkama 0.6.4, 22.6 MB binary + 499 std
   files), ~3.7 ms of it `okkama env` start; uncached 41 ms. Not covered: `OKKAMA_IMPORT_DIRS` trees and
-  compile-affecting environment (`OKKAMA_IR_PASSES` …).
+  compile-affecting environment (`OKKAMA_IR_PASSES` …) — covered since #1087.
+- [x] #1087 (feature/1087, not committed): `okkama env` names `import    DIR` (okkama-cli `import_dirs`, shared
+  with `FileLoader::from_env`) and `build     NAME="VALUE"` for set `lowering::BUILD_ENVIRONMENT`
+  (`OKKAMA_IR_PASSES`, `OKKAMA_OWNERSHIP_PROTOTYPE`); guard `build_environment_tests` classifies every
+  `"OKKAMA_…"` literal of okkama-compiler (build vs `NOT_BUILD`). Blade toolchain.rs: `Toolchain.imports/build`
+  (stamp lines `import sha256:…`, `build …` after `std`), `Located`, `parse_env`, `Probe::start(okkama, root,
+  cache)` (env runs in the root; relative paths joined to it), cache `blade-cache 2` with `tree` lines (every
+  tree listed speculatively). No-op `blade run` without imports unchanged (14.4 vs 14.4 ms under load 10); with a
+  499-file import tree +1.6 ms. Not covered (runtime-only, by decision): `OKKAMA_ARRAYS`, `OKKAMA_MAPS`,
+  `OKKAMA_ICU_LIBDIR`, `OKKAMA_TRACE`, devtrace.
 - [x] #1032 (feature/1032): `Name<` trial parse rejects a type closed by the first half of a shift
   (`Parser::at_split_shift`) and undoes its token splits on backtracking (`splits`, `unsplit_since`). Compile
   sweep over std, t/, examples, conformance, Bible examples, bench/micro (3170 files): SPB byte-identical to

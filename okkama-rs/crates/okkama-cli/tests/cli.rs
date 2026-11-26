@@ -2903,3 +2903,50 @@ fn entry_result_report_is_independent_of_integer_magnitude() {
         }
     }
 }
+
+/// #1087: `okkama env` names what else a build depends on, so Blade can
+/// fingerprint it: each `OKKAMA_IMPORT_DIRS` directory in search order (empty
+/// parts skipped, a missing one marked), and each set variable that changes
+/// what `okkama build` produces, its value quoted; a check, a trace or an
+/// unrelated variable is not named.
+#[test]
+fn env_names_the_import_dirs_and_the_build_environment() {
+    let dir = std::env::temp_dir().join(format!("okkama-env-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = dir.join("missing");
+    let output = okkama()
+        .arg("env")
+        .env("OKKAMA_IMPORT_DIRS", format!("{}::{}", missing.display(), dir.display()))
+        .env("OKKAMA_IR_PASSES", "fold,\"x\"\nnone")
+        .env("OKKAMA_OWNERSHIP_PROTOTYPE", "1")
+        .env("OKKAMA_VERIFY_OWNERSHIP", "1")
+        .env("OKKAMA_TRACE", "0")
+        .env("OKKAMA_UNRELATED", "1")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let extra: Vec<&str> = text.lines().filter(|line| line.starts_with("import ") || line.starts_with("build ")).collect();
+    assert_eq!(
+        extra,
+        [
+            format!("import    {} (missing)", missing.display()),
+            format!("import    {}", dir.display()),
+            "build     OKKAMA_IR_PASSES=\"fold,\\\"x\\\"\\nnone\"".to_string(),
+            "build     OKKAMA_OWNERSHIP_PROTOTYPE=\"1\"".to_string(),
+        ],
+        "{text}"
+    );
+
+    let plain = okkama()
+        .arg("env")
+        .env_remove("OKKAMA_IMPORT_DIRS")
+        .env_remove("OKKAMA_IR_PASSES")
+        .env_remove("OKKAMA_OWNERSHIP_PROTOTYPE")
+        .output()
+        .unwrap();
+    let text = stdout(&plain);
+    assert!(!text.lines().any(|line| line.starts_with("import ") || line.starts_with("build ")), "{text}");
+    assert!(text.starts_with("okkama ") && text.contains("\nstd       "), "{text}");
+}

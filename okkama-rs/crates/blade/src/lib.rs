@@ -32,8 +32,9 @@ USAGE:
     blade run [-- ARGS...]           build if the sources differ from the last
                                      build's (contents, files added or removed)
                                      or okkama does (its version, its binary,
-                                     its std), then run it as [run] says; ARGS
-                                     follow [run] args
+                                     its std, OKKAMA_IMPORT_DIRS, the variables
+                                     that change a build: okkama env), then run
+                                     it as [run] says; ARGS follow [run] args
     blade --help                     (also -h, help)
     blade --version                  (also -V, -v, version)
 

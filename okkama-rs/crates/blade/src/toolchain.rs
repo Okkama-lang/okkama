@@ -1,8 +1,10 @@
-//! The toolchain behind a build (#1080): the `okkama` Blade runs, its version
-//! and the std it compiles against, as that `okkama` itself names them in
-//! `okkama env`. A build's stamp records the version and a SHA-256 of the
-//! binary and of the std tree, so a new `okkama` or an edited std builds
-//! again even when nothing in the project changed.
+//! The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
+//! version, the std it compiles against, the system import directories
+//! (`OKKAMA_IMPORT_DIRS`) and the environment that changes what it builds, as
+//! that `okkama` itself names them in `okkama env`. A build's stamp records
+//! the version, a SHA-256 of the binary and of each tree, and the build
+//! variables, so a new `okkama`, an edited std or import directory, or another
+//! `OKKAMA_IR_PASSES` builds again even when nothing in the project changed.
 //!
 //! Reading a 20 MB binary and a 7 MB std on every `blade run` would cost more
 //! than the rest of a run that builds nothing, so the digest of each file is
@@ -13,7 +15,7 @@
 //!
 //! `okkama env` takes a few milliseconds to start, as long as listing std, so
 //! the two overlap: while it runs, Blade fingerprints the project and lists
-//! the std the cache last saw on another thread, and uses that listing only if
+//! the trees the cache last saw on another thread, and uses a listing only if
 //! `okkama env` names the same directory.
 
 use std::collections::HashMap;
@@ -35,78 +37,115 @@ pub(crate) struct Toolchain {
     /// The digest of the std tree (which files, and the bytes of each), or
     /// `missing`.
     pub std: String,
+    /// The digest of each import directory in search order, or `missing`.
+    pub imports: Vec<String>,
+    /// The build variables `okkama env` names, as it spells them:
+    /// `OKKAMA_IR_PASSES="none"`.
+    pub build: Vec<String>,
 }
 
 impl std::fmt::Display for Toolchain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}\nbinary {}\nstd {}\n", self.version, self.binary, self.std)
+        // With no import directory and no build variable set, the stamp is
+        // the one of #1080: nothing it did not record has changed.
+        write!(f, "{}\nbinary {}\nstd {}\n", self.version, self.binary, self.std)?;
+        for import in &self.imports {
+            writeln!(f, "import {import}")?;
+        }
+        for variable in &self.build {
+            writeln!(f, "build {variable}")?;
+        }
+        Ok(())
     }
 }
 
-/// Where the toolchain is, as `okkama env` says.
+/// Where the toolchain is, as `okkama env` says. A path is `None` when
+/// `okkama env` reports it missing.
 #[derive(Debug, PartialEq, Eq)]
 struct Located {
     version: String,
     binary: PathBuf,
-    /// `None` when `okkama env` reports it missing.
     std: Option<PathBuf>,
+    imports: Vec<Option<PathBuf>>,
+    build: Vec<String>,
 }
+
+/// Listings of trees, under way on another thread.
+type Listings = JoinHandle<Vec<(PathBuf, Result<Vec<Listed>, String>)>>;
 
 /// The fingerprint of the toolchain `okkama` builds with, under way:
 /// [`Probe::start`] it, do other work, then [`Probe::finish`] it.
 pub(crate) struct Probe {
     okkama: PathBuf,
+    /// Where `okkama env` runs, as the build does: a relative path it names
+    /// is relative to it.
+    root: PathBuf,
     cache: PathBuf,
     /// `okkama env`, running.
     env: std::io::Result<Child>,
     digests: Digests,
-    /// The std the cache last saw and its listing, under way.
-    listing: Option<(PathBuf, JoinHandle<Result<Vec<Listed>, String>>)>,
+    /// The trees the cache last saw, being listed.
+    listings: Option<Listings>,
 }
 
 impl Probe {
-    /// Start `okkama env` and the listing of the std the cache at `cache`
-    /// last saw.
-    pub(crate) fn start(okkama: &Path, cache: &Path) -> Probe {
+    /// Start `okkama env` in `root` (where the build runs) and the listing of
+    /// the trees the cache at `cache` last saw.
+    pub(crate) fn start(okkama: &Path, root: &Path, cache: &Path) -> Probe {
         // Asking `okkama` where its parts are keeps one place that resolves
-        // its std (`OKKAMA_STDLIB_DIR`, the installation's, the repository's).
+        // its std (`OKKAMA_STDLIB_DIR`, the installation's, the repository's),
+        // its import directories and the variables that change a build.
         let env = Command::new(okkama)
             .arg("env")
+            .current_dir(root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
         let digests = Digests::load(cache);
-        let listing = digests.std.clone().map(|dir| {
-            let guess = dir.clone();
-            (dir, std::thread::spawn(move || list(&guess)))
+        let guesses = digests.trees.clone();
+        let listings = (!guesses.is_empty()).then(|| {
+            std::thread::spawn(move || {
+                guesses
+                    .into_iter()
+                    .map(|dir| {
+                        let files = list(&dir);
+                        (dir, files)
+                    })
+                    .collect()
+            })
         });
-        Probe { okkama: okkama.to_path_buf(), cache: cache.to_path_buf(), env, digests, listing }
+        let (okkama, root, cache) = (okkama.to_path_buf(), root.to_path_buf(), cache.to_path_buf());
+        Probe { okkama, root, cache, env, digests, listings }
     }
 
     /// The toolchain, now. The digests come from the cache where the files
     /// are as they were; the cache is written back when it changed (best
     /// effort: a cache that cannot be written is read again next time).
     pub(crate) fn finish(self) -> Result<Toolchain, String> {
-        let Probe { okkama, cache, env, mut digests, listing } = self;
+        let Probe { okkama, root, cache, env, mut digests, listings } = self;
         let output =
             env.and_then(Child::wait_with_output).map_err(|error| format!("cannot run {}: {error}", okkama.display()));
-        let guessed = listing.map(|(dir, listing)| (dir, listing.join()));
+        let mut guessed: HashMap<PathBuf, Result<Vec<Listed>, String>> =
+            listings.and_then(|listings| listings.join().ok()).unwrap_or_default().into_iter().collect();
         let located = located(&okkama, output?)?;
-        let binary = digests.file(&located.binary)?;
-        let std = match &located.std {
-            None => "missing".to_string(),
-            Some(dir) => {
-                let files = match guessed {
-                    Some((guess, Ok(listed))) if guess == *dir => listed?,
-                    _ => list(dir)?,
-                };
-                digests.tree(files)?
-            }
+        let binary = digests.file(&root.join(&located.binary))?;
+        let mut trees = Vec::new();
+        let mut tree = |dir: &Option<PathBuf>| -> Result<String, String> {
+            let Some(dir) = dir else { return Ok("missing".to_string()) };
+            let dir = root.join(dir);
+            let files = match guessed.remove(&dir) {
+                Some(listed) => listed?,
+                None => list(&dir)?,
+            };
+            trees.push(dir);
+            digests.tree(files)
         };
-        digests.std = located.std;
+        let std = tree(&located.std)?;
+        let imports = located.imports.iter().map(&mut tree).collect::<Result<Vec<_>, _>>()?;
+        digests.trees = trees;
         digests.save(&cache);
-        Ok(Toolchain { version: located.version, binary, std })
+        Ok(Toolchain { version: located.version, binary, std, imports, build: located.build })
     }
 }
 
@@ -120,12 +159,13 @@ fn located(okkama: &Path, output: Output) -> Result<Located, String> {
         .ok_or_else(|| format!("`{} env` did not name its version, binary and std", okkama.display()))
 }
 
-/// `okkama 0.6.5`, then `key  value` lines, of which `binary` and `std` count;
-/// a path `okkama` cannot find ends in ` (missing)` or is `(not found)`.
+/// `okkama 0.6.5`, then `key  value` lines, of which `binary`, `std`, each
+/// `import` and each `build` count; a path `okkama` cannot find ends in
+/// ` (missing)` or is `(not found)`. A `build` value is kept as written.
 fn parse_env(text: &str) -> Option<Located> {
     let mut lines = text.lines();
     let version = lines.next().filter(|line| line.starts_with("okkama "))?.trim_end().to_string();
-    let (mut binary, mut std) = (None, None);
+    let (mut binary, mut std, mut imports, mut build) = (None, None, Vec::new(), Vec::new());
     for line in lines {
         let Some((key, value)) = line.split_once(' ') else { continue };
         let value = value.trim_start();
@@ -133,10 +173,12 @@ fn parse_env(text: &str) -> Option<Located> {
         match key {
             "binary" => binary = Some(path),
             "std" => std = Some(path),
+            "import" => imports.push(path),
+            "build" => build.push(value.to_string()),
             _ => {}
         }
     }
-    Some(Located { version, binary: binary??, std: std? })
+    Some(Located { version, binary: binary??, std: std?, imports, build })
 }
 
 /// What the file system says of a file: when all of it is the same, the
@@ -193,33 +235,35 @@ fn since_epoch(time: SystemTime) -> i128 {
 }
 
 /// The first line of the cache file; another first line is no cache.
-const CACHE_FORMAT: &str = "blade-cache 1";
+const CACHE_FORMAT: &str = "blade-cache 2";
 
 /// File digests by absolute path: those the cache file had, and those this
-/// run used (the only ones written back), with the std directory.
+/// run used (the only ones written back), with the trees (std, then the
+/// import directories) the run listed.
 struct Digests {
-    known_std: Option<PathBuf>,
+    known_trees: Vec<PathBuf>,
     known: HashMap<PathBuf, (Key, String)>,
-    std: Option<PathBuf>,
+    trees: Vec<PathBuf>,
     used: HashMap<PathBuf, (Key, String)>,
     now: i128,
 }
 
 impl Digests {
     fn load(cache: &Path) -> Digests {
-        let (std, known) = std::fs::read_to_string(cache).ok().map(|text| parse_cache(&text)).unwrap_or_default();
-        Digests { known_std: std.clone(), known, std, used: HashMap::new(), now: since_epoch(SystemTime::now()) }
+        let (trees, known) = std::fs::read_to_string(cache).ok().map(|text| parse_cache(&text)).unwrap_or_default();
+        let now = since_epoch(SystemTime::now());
+        Digests { known_trees: trees.clone(), known, trees, used: HashMap::new(), now }
     }
 
     fn save(&self, cache: &Path) {
         let remembered: HashMap<_, _> =
             self.used.iter().filter(|(_, (key, _))| !key.racy(self.now)).map(|(p, v)| (p.clone(), v.clone())).collect();
-        if remembered == self.known && self.std == self.known_std {
+        if remembered == self.known && self.trees == self.known_trees {
             return;
         }
         let mut text = format!("{CACHE_FORMAT}\n");
-        if let Some(std) = self.std.as_ref().and_then(|std| std.to_str()).filter(|std| !std.contains('\n')) {
-            text.push_str(&format!("std {std}\n"));
+        for tree in self.trees.iter().filter_map(|tree| tree.to_str()).filter(|tree| !tree.contains('\n')) {
+            text.push_str(&format!("tree {tree}\n"));
         }
         let mut entries: Vec<_> = remembered.iter().collect();
         entries.sort_unstable_by_key(|(path, _)| *path);
@@ -316,15 +360,17 @@ fn list(root: &Path) -> Result<Vec<Listed>, String> {
     Ok(files)
 }
 
-/// The cache file: the std it last saw, and the digests by path; a line that
-/// does not parse is dropped.
-fn parse_cache(text: &str) -> (Option<PathBuf>, HashMap<PathBuf, (Key, String)>) {
+/// The cache file: the trees it last saw, and the digests by path; a line
+/// that does not parse is dropped.
+fn parse_cache(text: &str) -> (Vec<PathBuf>, HashMap<PathBuf, (Key, String)>) {
     let mut lines = text.lines().peekable();
     if lines.next() != Some(CACHE_FORMAT) {
-        return (None, HashMap::new());
+        return (Vec::new(), HashMap::new());
     }
-    let std = lines.next_if(|line| line.starts_with("std ")).and_then(|line| line.strip_prefix("std "));
-    let std = std.map(PathBuf::from);
+    let mut trees = Vec::new();
+    while let Some(tree) = lines.next_if(|line| line.starts_with("tree ")).and_then(|line| line.strip_prefix("tree ")) {
+        trees.push(PathBuf::from(tree));
+    }
     let entry = |line: &str| -> Option<(PathBuf, (Key, String))> {
         let mut fields = line.splitn(7, ' ');
         let mut next = || fields.next();
@@ -338,7 +384,7 @@ fn parse_cache(text: &str) -> (Option<PathBuf>, HashMap<PathBuf, (Key, String)>)
         let well_formed = digest.strip_prefix("sha256:").is_some_and(|hex| hex.len() == 64);
         well_formed.then(|| (PathBuf::from(path), (Key { size, modified, changed, inode, device }, digest)))
     };
-    (std, lines.filter_map(entry).collect())
+    (trees, lines.filter_map(entry).collect())
 }
 
 fn hex(digest: &[u8]) -> String {
@@ -392,8 +438,17 @@ mod tests {
         assert_eq!(located.binary, Path::new("/opt/ok ka/bin/okkama"));
         assert_eq!(located.std.as_deref(), Some(Path::new("/opt/ok ka/lib/okkama/std")));
 
+        assert!(located.imports.is_empty() && located.build.is_empty());
+
         let missing = parse_env("okkama 0.6.5\nbinary    /b/okkama\nstd       /nowhere/std (missing)\n").unwrap();
         assert_eq!(missing.std, None);
+
+        // #1087: import directories in search order, build variables as written.
+        let more = "okkama 0.6.5\nbinary    /b/okkama\nstd       /s\nimport    /i/one\nimport    lib two (missing)\n\
+                    import    lib\nbuild     OKKAMA_IR_PASSES=\"fold, dce\"\nbuild     OKKAMA_OWNERSHIP_PROTOTYPE=\"1\"\n";
+        let located = parse_env(more).unwrap();
+        assert_eq!(located.imports, [Some(PathBuf::from("/i/one")), None, Some(PathBuf::from("lib"))]);
+        assert_eq!(located.build, ["OKKAMA_IR_PASSES=\"fold, dce\"", "OKKAMA_OWNERSHIP_PROTOTYPE=\"1\""]);
         for text in [
             "",
             "usage: okkama\n",
@@ -452,10 +507,12 @@ mod tests {
         let mut digests = settled(&cache);
         let real = digests.file(&file).unwrap();
         assert_eq!(real, hex(&Sha256::digest(b"binary one")));
-        digests.std = Some(temp.0.join("std"));
+        digests.trees = vec![temp.0.join("std"), temp.0.join("lib")];
         digests.save(&cache);
         let text = std::fs::read_to_string(&cache).unwrap();
-        assert!(text.starts_with(&format!("{CACHE_FORMAT}\nstd {}\n", temp.0.join("std").display())), "{text}");
+        let trees = format!("tree {}\ntree {}\n", temp.0.join("std").display(), temp.0.join("lib").display());
+        assert!(text.starts_with(&format!("{CACHE_FORMAT}\n{trees}")), "{text}");
+        assert_eq!(Digests::load(&cache).trees, [temp.0.join("std"), temp.0.join("lib")]);
 
         // A remembered digest is used as long as the key holds: a planted one
         // shows that the file is not read.
@@ -483,6 +540,8 @@ mod tests {
         assert!(remembered.is_empty(), "{remembered:?}");
 
         // A damaged cache is no cache.
+        std::fs::write(&cache, format!("blade-cache 1\nstd /s\n10 1 2 3 4 {real} {}\n", file.display())).unwrap();
+        assert!(Digests::load(&cache).known.is_empty(), "a cache of #1080");
         std::fs::write(&cache, "blade-cache 0\n").unwrap();
         assert!(Digests::load(&cache).known.is_empty());
         std::fs::write(&cache, format!("{CACHE_FORMAT}\n10 1 2 3 4 sha256:short {}\n", file.display())).unwrap();
@@ -514,7 +573,7 @@ mod tests {
         temp.write("other/io/stdout.ok", "module io/stdout; // other\n");
         temp.write("std-dir", &temp.0.join("std").display().to_string());
         let cache = temp.0.join("target/app.spb.blade-cache");
-        let probe = || Probe::start(&okkama, &cache).finish().unwrap();
+        let probe = || Probe::start(&okkama, &temp.0, &cache).finish().unwrap();
 
         let first = probe();
         assert_eq!(first.version, "okkama 0.6.5");
@@ -544,10 +603,67 @@ mod tests {
         assert_eq!(moved.std, Digests::load(&temp.0.join("none")).tree(list(&temp.0.join("other")).unwrap()).unwrap());
 
         temp.write("std-dir", &temp.0.join("gone").display().to_string());
-        assert!(Probe::start(&okkama, &cache).finish().is_err(), "a std that cannot be listed");
+        assert!(Probe::start(&okkama, &temp.0, &cache).finish().is_err(), "a std that cannot be listed");
         let failing = temp.write("failing", "#!/bin/sh\necho broken >&2\nexit 3\n");
         std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let error = Probe::start(&failing, &cache).finish().unwrap_err();
+        let error = Probe::start(&failing, &temp.0, &cache).finish().unwrap_err();
         assert!(error.contains("env` failed") && error.contains("broken"), "{error}");
+    }
+
+    /// #1087: the import directories through a stand-in `okkama`: each is a
+    /// tree by content in search order (an edit, a new directory, another
+    /// order, a missing one), a relative one is found from where the build
+    /// runs, and a build variable counts as written; nothing changed, nothing
+    /// differs.
+    #[cfg(unix)]
+    #[test]
+    fn import_directories_and_build_variables_are_part_of_the_toolchain() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = Temp::new("imports");
+        let okkama = temp.write(
+            "bin/okkama",
+            "#!/bin/sh\nhere=\"$(dirname \"$0\")\"\necho \"okkama 0.6.5\"\necho \"binary    $0\"\n\
+             echo \"std       $here/../std\"\ncat \"$here/../extra\"\n",
+        );
+        std::fs::set_permissions(&okkama, std::fs::Permissions::from_mode(0o755)).unwrap();
+        temp.write("std/io/stdout.ok", "module io/stdout;\n");
+        temp.write("lib/util.ok", "module util;\n");
+        temp.write("vendor/json.ok", "module json;\n");
+        let project = temp.0.join("project");
+        std::fs::create_dir_all(project.join("lib")).unwrap();
+        std::fs::write(project.join("lib/local.ok"), "module local;\n").unwrap();
+        let cache = temp.0.join("project/target/app.spb.blade-cache");
+        let (lib, vendor) = (temp.0.join("lib").display().to_string(), temp.0.join("vendor").display().to_string());
+        let probe = |extra: &str| {
+            std::fs::write(temp.0.join("extra"), extra).unwrap();
+            Probe::start(&okkama, &project, &cache).finish().unwrap()
+        };
+
+        let none = probe("");
+        assert!(none.imports.is_empty() && none.build.is_empty());
+        let one = probe(&format!("import    {lib}\n"));
+        assert_eq!(one.imports.len(), 1);
+        assert_eq!(probe(&format!("import    {lib}\n")), one, "nothing changed");
+        assert_eq!(Digests::load(&cache).trees, [temp.0.join("bin/../std"), temp.0.join("lib")]);
+        temp.write("lib/util.ok", "module util; // edited\n");
+        let edited = probe(&format!("import    {lib}\n"));
+        assert_ne!(edited.imports, one.imports, "an import directory edited");
+        let both = probe(&format!("import    {lib}\nimport    {vendor}\n"));
+        let swapped = probe(&format!("import    {vendor}\nimport    {lib}\n"));
+        assert_eq!(both.imports.len(), 2);
+        assert_eq!(both.imports[0], edited.imports[0]);
+        assert_eq!(swapped.imports, [both.imports[1].clone(), both.imports[0].clone()], "the order counts");
+        let missing = probe(&format!("import    {lib}\nimport    /nowhere (missing)\n"));
+        assert_eq!(missing.imports, [edited.imports[0].clone(), "missing".to_string()]);
+
+        // `lib` is the project's lib/, where `okkama build` runs, not ../lib.
+        let relative = probe("import    lib\n");
+        let local = Digests::load(&temp.0.join("none")).tree(list(&project.join("lib")).unwrap()).unwrap();
+        assert_eq!(relative.imports, [local]);
+
+        let passes = probe("build     OKKAMA_IR_PASSES=\"none\"\n");
+        assert_eq!(passes.build, ["OKKAMA_IR_PASSES=\"none\""]);
+        assert_eq!(Toolchain { build: Vec::new(), ..passes.clone() }, none);
+        assert_ne!(probe("build     OKKAMA_IR_PASSES=\"fold\"\n"), passes);
     }
 }

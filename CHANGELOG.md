@@ -115,6 +115,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   only if its bytes differ. `okkama env` starts while Blade fingerprints the project. A run that builds nothing
   costs about 4 ms more (8.4 → 12.3 ms on an M-series Mac, nearly all of it starting `okkama env`); the first
   run after a toolchain change reads it whole (about 30 ms for a 22 MB binary and a 7 MB std). Bible §19.7.
+- **`blade run` reused an output built with other import directories or compiler switches (#1087).** The #1080
+  stamp left out two things that change what `okkama build` makes: the trees of `OKKAMA_IMPORT_DIRS` (sources
+  imported from outside the project) and the environment that changes compilation (`OKKAMA_IR_PASSES`,
+  `OKKAMA_OWNERSHIP_PROTOTYPE`). `okkama env` now names them, after its other lines: `import    DIR` per
+  directory in search order (empty parts skipped, ` (missing)` for one that is not there) and
+  `build     NAME="VALUE"` per such variable that is set; the list lives beside the passes that read it
+  (`lowering::BUILD_ENVIRONMENT`), and a test fails when the compiler reads a variable that is in neither it nor
+  the list of checks, reports and dumps (`OKKAMA_VERIFY_OWNERSHIP`, `OKKAMA_CHECK_REGISTERS`, …), which change no
+  output and so build nothing. Blade records each import directory by content (with the digest cache of #1080)
+  and each build variable as written; a relative import directory is taken from the project root, where the
+  build runs, and `okkama env` runs there too. A file of an import directory edited or added, a directory added,
+  removed or reordered, a build variable set, changed or unset builds again; with neither in use the stamp is the
+  one #1080 wrote. A no-op run costs the same without import directories, and about 1.6 ms more per 500 imported
+  files. The digest cache format is `blade-cache 2` (one of #1080 is read again once). Bible §19.7.
 - **Blade and local packages (#1040).** `blade.lock` recorded a `path` dependency by its absolute directory
   (`path+/home/me/proj/util`), so a project moved or checked out elsewhere with its packages could not
   `blade sync`; it records the path from the project now (`path+../util`; a lock of 0.6.4 or older asks for

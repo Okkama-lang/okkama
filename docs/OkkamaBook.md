@@ -3742,7 +3742,8 @@ env = {}                   # extra environment variables
 
 `blade run` builds first unless the output was built from the sources as
 they are (which `.ok` files, the bytes of each, `blade.toml`, `blade.lock`)
-by the same `okkama` (its version, its binary and its std), as recorded in
+by the same `okkama` (its version, its binary and its std) with the same
+`OKKAMA_IMPORT_DIRS` files and build variables (`OKKAMA_IR_PASSES`), as recorded in
 `OUTPUT.blade-stamp`, then runs the `.spb` (`okkama exec`); the program's exit status is Blade's. Both commands refuse a
 project whose dependencies are not installed. Blade uses the `okkama` next to
 it, else the one on `PATH` (`BLADE_OKKAMA` names another).

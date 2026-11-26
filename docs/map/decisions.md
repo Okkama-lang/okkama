@@ -645,6 +645,22 @@ every declaration is open (#1005, owner decision).
   is listed on a thread meanwhile, used only if `okkama env` names the same directory. The remaining +~4 ms
   per no-op run is the price of asking `okkama` itself; caching its answer would duplicate std resolution.
 
+## Blade's stamp covers import directories and build variables (#1087, 2026-11-27, own design)
+
+- `okkama env` stays the one place: it names each `OKKAMA_IMPORT_DIRS` directory (`import`, search order, the
+  same split as the loader through `import_dirs`) and each set variable of `lowering::BUILD_ENVIRONMENT`
+  (`build NAME="VALUE"`, the raw value Debug-quoted so it is one line). Blade does not know the variable names.
+- Build variables are those that change the SPB: `OKKAMA_IR_PASSES`, `OKKAMA_OWNERSHIP_PROTOTYPE`. Checks,
+  reports, profiles and dumps (`OKKAMA_VERIFY_OWNERSHIP`, `OKKAMA_CHECK_REGISTERS`, `OKKAMA_PROFILE_REGISTERS`,
+  `OKKAMA_OWNERSHIP_REPORT`, `OKKAMA_DUMP_INVALID_IR`) and runtime or diagnostic switches outside the compiler
+  (`OKKAMA_TRACE`, `OKKAMA_DEV*`, `OKKAMA_ARRAYS`, `OKKAMA_MAPS`, `OKKAMA_ICU_LIBDIR`) are not: a check may fail a
+  build but never changes what a passing one writes. `build_environment_tests` fails on an unclassified literal.
+- An import directory counts by content and position (`import` lines in order, `missing` for an absent one);
+  with no import directory and no build variable the stamp text is #1080's, so outputs stamped by #1080 stay
+  valid. `okkama env` runs in the project root, where `okkama build` runs, and Blade joins relative paths to it.
+- Cache format `blade-cache 2`: `tree` lines for every tree listed (std, then imports), all listed on one thread
+  while `okkama env` starts.
+
 ## `unreachable` compiles as a trap (#1072, 2026-11-27)
 
 - `unreachable` stays in SPB (opcode 145, verifier and codegen unchanged): Sparrow compiles it as

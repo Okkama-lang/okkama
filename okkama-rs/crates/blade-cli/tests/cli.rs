@@ -15,8 +15,9 @@ impl Tree {
         std::fs::create_dir_all(&root).unwrap();
         let tree = Tree(std::fs::canonicalize(&root).unwrap());
         // Stand-in okkama: `env` names its version (the file `version`),
-        // itself and its std (`OKKAMA_STDLIB_DIR` or `std/` beside it), and
-        // is not logged; other calls log their arguments; `build … -o OUT`
+        // itself, its std (`OKKAMA_STDLIB_DIR` or `std/` beside it), each
+        // `OKKAMA_IMPORT_DIRS` directory and `OKKAMA_IR_PASSES` when set, as
+        // okkama does, and is not logged; other calls log their arguments; `build … -o OUT`
         // writes OUT (fails when the entry says FAIL); `exec` prints and
         // exits 7.
         let fake = tree.0.join("okkama");
@@ -29,6 +30,11 @@ if [ "$1" = env ]; then
     echo "platform  test"
     echo "binary    $0"
     echo "std       ${OKKAMA_STDLIB_DIR:-$here/std}"
+    IFS=:
+    for dir in $OKKAMA_IMPORT_DIRS; do
+        [ -n "$dir" ] && echo "import    $dir"
+    done
+    [ -n "${OKKAMA_IR_PASSES+set}" ] && echo "build     OKKAMA_IR_PASSES=\"$OKKAMA_IR_PASSES\""
     exit 0
 fi
 echo "$@" >> "$here/okkama.log"
@@ -248,6 +254,60 @@ fn run_builds_again_for_another_toolchain() {
     std::fs::write(&stamp, old).unwrap();
     assert_eq!(run(), [build, exec], "a stamp from before #1080");
     assert_eq!(run(), [exec]);
+}
+
+/// #1087: `blade run` builds again when what `okkama build` would import from
+/// `OKKAMA_IMPORT_DIRS` changed (a file edited or added, a directory added or
+/// reordered) or a build variable did (`OKKAMA_IR_PASSES` set, changed,
+/// unset); an unrelated variable, or nothing changed, builds nothing.
+#[test]
+fn run_builds_again_for_other_imports_or_build_variables() {
+    let tree = Tree::new("imports");
+    assert!(tree.blade(".", &["new", "app"]).status.success());
+    tree.write("lib/util.ok", "module util;\n");
+    tree.write("vendor/json.ok", "module json;\n");
+    let (lib, vendor) = (tree.0.join("lib"), tree.0.join("vendor"));
+    let dirs = |dirs: &[&Path]| {
+        std::env::join_paths(dirs).unwrap()
+    };
+    let run_with = |env: &[(&str, &std::ffi::OsStr)]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_blade"));
+        command
+            .arg("run")
+            .current_dir(tree.0.join("app"))
+            .env("BLADE_OKKAMA", tree.0.join("okkama"))
+            .env_remove("OKKAMA_STDLIB_DIR")
+            .env_remove("OKKAMA_IMPORT_DIRS")
+            .env_remove("OKKAMA_IR_PASSES");
+        let ran = command.envs(env.iter().copied()).output().unwrap();
+        assert_eq!(ran.status.code(), Some(7), "{}", text(&ran.stderr));
+        tree.calls()
+    };
+    let (build, exec) = ("build src/main.ok -o target/app.spb", "exec app/target/app.spb");
+    assert_eq!(run_with(&[]), [build, exec]);
+    assert_eq!(run_with(&[("OKKAMA_UNRELATED", "1".as_ref())]), [exec], "an unrelated variable");
+
+    let one = dirs(&[&lib]);
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &one)]), [build, exec], "an import directory");
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &one)]), [exec]);
+    tree.write("lib/util.ok", "module util; // edited\n");
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &one)]), [build, exec], "an imported file edited");
+    tree.write("lib/more.ok", "module more;\n");
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &one)]), [build, exec], "an imported file added");
+    age(&tree.0.join("lib/more.ok"));
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &one)]), [exec], "a time alone builds nothing");
+    let both = dirs(&[&lib, &vendor]);
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &both)]), [build, exec], "a second import directory");
+    let swapped = dirs(&[&vendor, &lib]);
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &swapped)]), [build, exec], "another search order");
+    assert_eq!(run_with(&[("OKKAMA_IMPORT_DIRS", &swapped)]), [exec]);
+    assert_eq!(run_with(&[]), [build, exec], "no import directory again");
+
+    assert_eq!(run_with(&[("OKKAMA_IR_PASSES", "none".as_ref())]), [build, exec], "OKKAMA_IR_PASSES set");
+    assert_eq!(run_with(&[("OKKAMA_IR_PASSES", "none".as_ref())]), [exec]);
+    assert_eq!(run_with(&[("OKKAMA_IR_PASSES", "fold".as_ref())]), [build, exec], "OKKAMA_IR_PASSES changed");
+    assert_eq!(run_with(&[]), [build, exec], "OKKAMA_IR_PASSES unset");
+    assert_eq!(run_with(&[]), [exec]);
 }
 
 /// #1040: a project and its local packages move together: `blade.lock`

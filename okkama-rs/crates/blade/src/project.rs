@@ -236,7 +236,7 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
     }
     // Taken before the build: a source or the toolchain changed while it runs
     // makes the next run build again.
-    let probe = toolchain::Probe::start(&okkama(), &project.cache_path());
+    let probe = toolchain::Probe::start(&okkama(), &project.root, &project.cache_path());
     let inputs = fingerprint(project)?;
     let toolchain = probe.finish()?;
     if !force && up_to_date(project, &toolchain, &inputs)? {
@@ -425,6 +425,8 @@ mod tests {
             version: "okkama 0.6.5".to_string(),
             binary: format!("sha256:{}", "b".repeat(64)),
             std: format!("sha256:{}", "5".repeat(64)),
+            imports: Vec::new(),
+            build: Vec::new(),
         }
     }
 
@@ -450,6 +452,10 @@ mod tests {
             ("version", other(|t| t.version = "okkama 0.6.6".to_string())),
             ("binary", other(|t| t.binary = format!("sha256:{}", "c".repeat(64)))),
             ("std", other(|t| t.std = "missing".to_string())),
+            // #1087: the import directories, by content and order, and the build variables.
+            ("import directory", other(|t| t.imports = vec![format!("sha256:{}", "1".repeat(64))])),
+            ("missing import directory", other(|t| t.imports = vec!["missing".to_string()])),
+            ("build variable", other(|t| t.build = vec!["OKKAMA_IR_PASSES=\"none\"".to_string()])),
         ] {
             assert!(!up_to_date(&project, &now, &inputs).unwrap(), "another {what}");
         }
@@ -461,5 +467,37 @@ mod tests {
         let current = stamp(&project, &built, &inputs).unwrap();
         assert!(current.starts_with("blade-stamp 2\nokkama 0.6.5\nbinary sha256:"), "{current}");
         assert!(current.ends_with(&format!("inputs {inputs}\noutput {output}\n")), "{current}");
+    }
+
+    /// #1087: with no import directory and no build variable, the stamp is the
+    /// one #1080 wrote, so an output it stamped is not built again for
+    /// nothing; each import directory and build variable is a line of its own,
+    /// in the order `okkama env` gives.
+    #[test]
+    fn a_stamp_names_import_directories_and_build_variables_in_order() {
+        let temp = Temp::new("imports");
+        temp.write("src/main.ok", "module app;\n");
+        temp.write("target/app.spb", "built");
+        let project = Project::parse(&temp.0, "[module]\nname = \"app\"\n").unwrap();
+        let inputs = fingerprint(&project).unwrap();
+        let output = crate::install::checksum_of(&temp.0, std::slice::from_ref(&project.output)).unwrap();
+        let plain = toolchain();
+        let b = "b".repeat(64);
+        let five = "5".repeat(64);
+        assert_eq!(
+            stamp(&project, &plain, &inputs).unwrap(),
+            format!("blade-stamp 2\nokkama 0.6.5\nbinary sha256:{b}\nstd sha256:{five}\ninputs {inputs}\noutput {output}\n")
+        );
+        let (one, two) = (format!("sha256:{}", "1".repeat(64)), format!("sha256:{}", "2".repeat(64)));
+        let mut ordered = toolchain();
+        ordered.imports = vec![one.clone(), two.clone()];
+        ordered.build = vec!["OKKAMA_IR_PASSES=\"none\"".to_string()];
+        let text = stamp(&project, &ordered, &inputs).unwrap();
+        assert!(text.contains(&format!("std sha256:{five}\nimport {one}\nimport {two}\nbuild OKKAMA_IR_PASSES=\"none\"\ninputs ")), "{text}");
+        let mut swapped = ordered.clone();
+        swapped.imports.reverse();
+        std::fs::write(project.stamp_path(), text).unwrap();
+        assert!(up_to_date(&project, &ordered, &inputs).unwrap());
+        assert!(!up_to_date(&project, &swapped, &inputs).unwrap(), "the search order counts");
     }
 }

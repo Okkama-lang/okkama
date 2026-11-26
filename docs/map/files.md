@@ -41,13 +41,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11881 lines
+## lower — 14 files, 11920 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 247 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1588 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 194 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 354 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 882 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
+- `okkama-compiler/src/lowering/mod.rs` 921 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
@@ -190,28 +190,28 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `okkama-devtrace/src/lib.rs` 320 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 11 files, 5335 lines
+## cli — 11 files, 5350 lines
 
 - `okkama-cli/src/core.rs` 81 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/env_switch.rs` 46 — Shared boolean environment-switch policy (#1067).
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 935 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1749 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1764 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 414 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 630 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 71 files, 22187 lines
+## other — 71 files, 22309 lines
 
 - `blade/src/install.rs` 1391 — Installing the dependencies of a project into its `pkg/`.
-- `blade/src/lib.rs` 314 — Core library for the Blade command-line tool.
+- `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
 - `blade/src/lock.rs` 131 — `blade.lock` — the exact versions a project was installed with.
 - `blade/src/manifest.rs` 300 — `blade.toml` — the manifest of a Blade project or package, and the project
-- `blade/src/project.rs` 368 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
-- `blade/src/toolchain.rs` 425 — The toolchain behind a build (#1080): the `okkama` Blade runs, its version
+- `blade/src/project.rs` 400 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
+- `blade/src/toolchain.rs` 514 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 7
 - `okkama-native/src/lib.rs` 5 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc

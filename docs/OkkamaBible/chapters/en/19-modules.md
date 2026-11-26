@@ -515,11 +515,15 @@ blade's. "The sources as they are" means which `.ok` files there are (the
 dependencies' in `pkg/` included), the bytes of each, `blade.toml` and
 `blade.lock`, and the compiler that builds them: the `okkama` version, the
 bytes of the `okkama` binary and of the std it compiles against
-(`OKKAMA_STDLIB_DIR` or the one it was installed with, as `okkama env`
-names it). All of it is recorded beside the output in
-`target/demo.spb.blade-stamp`. Times play no part: a deleted module, or one
-replaced by an older copy (`cp -p`, an unpacked archive), builds again
-exactly as an edit does, and so does a new `okkama` or an edited std, so
+(`OKKAMA_STDLIB_DIR` or the one it was installed with), the files of each
+directory in `OKKAMA_IMPORT_DIRS`, in search order, and the variables that
+change what it builds (`OKKAMA_IR_PASSES`), all as `okkama env` names them.
+All of it is recorded beside the output in `target/demo.spb.blade-stamp`.
+Times play no part: a deleted module, or one replaced by an older copy
+(`cp -p`, an unpacked archive), builds again exactly as an edit does, and so
+does a new `okkama`, an edited std or import directory or another
+`OKKAMA_IR_PASSES`, while a variable that changes nothing in the build does
+not, so
 `blade run` never runs a program that `blade build` would no longer make.
 
 ### A package is a repository

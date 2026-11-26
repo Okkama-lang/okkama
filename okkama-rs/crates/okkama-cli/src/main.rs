@@ -1294,16 +1294,8 @@ impl FileLoader {
     }
 
     fn from_env() -> Self {
-        let import_dirs = std::env::var("OKKAMA_IMPORT_DIRS")
-            .map(|dirs| {
-                dirs.split(':')
-                    .filter(|dir| !dir.is_empty())
-                    .map(PathBuf::from)
-                    .collect()
-            })
-            .unwrap_or_default();
         Self {
-            import_dirs,
+            import_dirs: import_dirs(),
             stdlib: stdlib_dir(),
             test_mode: false,
             overlay: std::collections::HashMap::new(),
@@ -1849,6 +1841,19 @@ fn run_command(args: &[String]) -> Outcome {
     with_trace(outcome, trace, |sites| trace::render_trace(&module, sites))
 }
 
+/// The system import directories, in search order: `OKKAMA_IMPORT_DIRS`
+/// split at `:`, empty parts skipped (`okkama env` names them, #1087).
+fn import_dirs() -> Vec<PathBuf> {
+    std::env::var("OKKAMA_IMPORT_DIRS")
+        .map(|dirs| {
+            dirs.split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// `<prefix>/lib/okkama` установки, в которой лежит этот `okkama`
 /// (`<prefix>/bin/okkama`); ссылки на исполняемый файл разрешаются.
 fn install_root() -> Option<PathBuf> {
@@ -1892,6 +1897,12 @@ Prints the version, the executable, the std directory and the pinned ICU
 used by locale/collation. Host cryptography is built into Sparrow.
 OKKAMA_STDLIB_DIR and
 OKKAMA_ICU_LIBDIR override the installed locations.
+
+Then what else a build depends on: an `import` line per directory of
+OKKAMA_IMPORT_DIRS, in search order, and a `build NAME=\"VALUE\"` line per
+variable that is set and changes what `okkama build` produces
+(OKKAMA_IR_PASSES, OKKAMA_OWNERSHIP_PROTOTYPE). Blade fingerprints all of
+it, so a change builds again.
 ";
 
 fn env_command(args: &[String]) -> Outcome {
@@ -1914,13 +1925,21 @@ fn env_command(args: &[String]) -> Outcome {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|exe| std::fs::canonicalize(exe).ok());
-    let text = format!(
+    let mut text = format!(
         "okkama {}\nplatform  {platform}\nbinary    {}\nstd       {}\nicu       {}\n",
         env!("CARGO_PKG_VERSION"),
         found(exe),
         found(Some(stdlib)),
         found(icu),
     );
+    for dir in import_dirs() {
+        text.push_str(&format!("import    {}\n", found(Some(dir))));
+    }
+    for name in okkama_compiler::lowering::BUILD_ENVIRONMENT {
+        if let Some(value) = std::env::var_os(name) {
+            text.push_str(&format!("build     {name}={value:?}\n"));
+        }
+    }
     Outcome::success(text)
 }
 
