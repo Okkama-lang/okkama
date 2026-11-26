@@ -2191,6 +2191,15 @@ impl Emitter<'_, '_> {
                 self.exit_fail();
                 return Ok(true);
             }
+            // #1072: the producer claims control never gets here; if it does, the program fails as at
+            // `trap unreachable`, so a verified function with it compiles and runs.
+            I::Unreachable {} => {
+                let message = self.constant_text(UNREACHABLE);
+                self.helper(|h| h.trap, &[ctx, message]);
+                self.check(pc);
+                self.exit_fail();
+                return Ok(true);
+            }
             I::Jump { target } => {
                 self.jump(target);
                 return Ok(true);
@@ -3154,6 +3163,9 @@ fn frame_resident(is_async: bool, suspensions: usize, registers: usize, plain: b
     is_async && !plain && suspensions.saturating_mul(registers) > RESIDENT_LIMIT
 }
 
+/// The program error of a reached `unreachable` (#1072).
+pub(crate) const UNREACHABLE: &str = "Unreachable code reached";
+
 #[cfg(test)]
 mod frame_resident_tests {
     /// The fixture of #552 (300 awaits, about 600 registers) goes to the frame; a usual async action does not,
@@ -3414,6 +3426,8 @@ mod frame_roots_tests;
 mod inline_tests;
 #[cfg(test)]
 mod closure_call_tests;
+#[cfg(test)]
+mod unreachable_tests;
 
 #[cfg(test)]
 mod placement_tests;

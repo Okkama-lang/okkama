@@ -14,6 +14,9 @@
   layout. `NO_INLINE=main` adds ~1.4 ms of lazy compile (`Measurement.finish`) to the timed interval. No PMU
   in the Docker VM. Proposed tickets: harness pre-compile of the finish path; link-order perturbation
   (lld `--shuffle-sections`) for the AOT layout lottery.
+- [x] #1072 (feature/1072): `Emitter::instruction` (sparrow-core/src/jit.rs) compiles `unreachable` as a trap
+  (`jit::UNREACHABLE`, "Unreachable code reached", a program error a handler catches); SparrowBook table text.
+  No corpus SPB holds opcode 145 (1245 programs of std -t, examples, bench/micro; 552 of t/ and conformance).
 - [x] #1064 (feature/1064): `ir::Role::slot_name` returns `Option`; the printer prints `<invalid>` for a slot
   the role lacks (`call.role`, `does`), the verifier's messages fall back to `#N`.
 - [x] #1063 (feature/1063): `ir::verify` `check_target_with` relaxes `^C`/`C` only on `unwind` targets

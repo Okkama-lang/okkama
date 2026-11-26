@@ -934,7 +934,7 @@ edge moves; `[…]` a list.
 | 142 | `ret rX/_` | return (`_` from a void function) |
 | 143 | `panic rX` | fail with a str message |
 | 144 | `trap CODE, "…"` | program error: `confirm`, `range`, `empty`, `unbound`, `unreachable`, `pending` (an action on an object under construction) with a message |
-| 145 | `unreachable` | control never gets here |
+| 145 | `unreachable` | control never gets here; if it does, the program error `Unreachable code reached`, as `trap` |
 | 146 | `throw rX` | throw an object that does the builtin Error role |
 | 147 | `raise rX` | send a failure on |
 | 148 | `catch rX, object/role/variant, N, rD, @T, @T` | match a failure against `object N` or `role N`: the value on the edge to the first target, else the second |

@@ -7,6 +7,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Sparrow: a verified function holding `unreachable` could not be compiled (#1072).** `unreachable` (opcode
+  145) assembles, verifies and is what codegen maps `TermKind::Unreachable` to, but the JIT had no arm for it,
+  so any function containing it failed with "unreachable is not supported by sparrow-core yet", reached or not.
+  It now compiles as a trap: if control does get there, the program fails with "Unreachable code reached", a
+  program error as `trap` makes, which a handler catches. The compiler does not emit it (`ir/cfg.rs` removes
+  unreachable blocks): no SPB of std, t/, examples, conformance or bench/micro contains it.
 - **IR verifier: a successor passed to a plain parameter on a `catch` handler or lookup `found` edge lost its
   obligation (#1063).** The `^C`/`C` relaxation of cleanup paths applied to every edge that fills an implicit
   last parameter, so `^C` could reach a `C` parameter of the handler of `catch` or the `found` block of

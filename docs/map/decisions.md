@@ -590,3 +590,9 @@ every declaration is open (#1005, owner decision).
 - A `path` dependency is `path+<dir relative to the project root>` in `blade.lock` (canonical directories, `/`
   separators); an absolute lock is not translated (pre-beta, no shims): `blade update NAME` rewrites it.
 - `blade install` is removed (pre-beta); local directories are declared by hand in `[dependencies]`.
+
+## `unreachable` compiles as a trap (#1072, 2026-11-27)
+
+- `unreachable` stays in SPB (opcode 145, verifier and codegen unchanged): Sparrow compiles it as
+  `trap unreachable` would, a program error "Unreachable code reached" that a handler catches, so a verified
+  function holding it runs. Dropping it from the instruction set would be an SPB version bump for nothing.

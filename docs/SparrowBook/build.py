@@ -158,7 +158,7 @@ DESCRIPTIONS = {
     "ret": ("return (`_` from a void function)", "возврат (`_` из void-функции)"),
     "panic": ("fail with a str message", "отказ с сообщением str"),
     "trap": ("program error: `confirm`, `range`, `empty`, `unbound`, `unreachable`, `pending` (an action on an object under construction) with a message", "программная ошибка: `confirm`, `range`, `empty`, `unbound`, `unreachable`, `pending` (действие у недостроенного объекта) с сообщением"),
-    "unreachable": ("control never gets here", "управление сюда не приходит"),
+    "unreachable": ("control never gets here; if it does, the program error `Unreachable code reached`, as `trap`", "управление сюда не приходит; если пришло — программная ошибка `Unreachable code reached`, как у `trap`"),
     "throw": ("throw an object that does the builtin Error role", "бросить объект, делающий встроенную роль Error"),
     "raise": ("send a failure on", "передать отказ дальше"),
     "catch": ("match a failure against `object N` or `role N`: the value on the edge to the first target, else the second", "сопоставить отказ с `object N` или `role N`: значение на ребре к первой цели, иначе вторая"),
