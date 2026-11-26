@@ -102,6 +102,15 @@ jobs:
           path: conformance/reports/runs/
           if-no-files-found: ignore
 
+  # Every tracked test_*.py of the tooling (fuzz orchestration, t/ generator,
+  # ownership oracle, micro harness, conformance runner): dry, no toolchain (#1092).
+  tools:
+    name: Tool tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash tools/test-python.sh
+
   # The declared MSRV (workspace rust-version) builds every target (#41).
   msrv:
     name: MSRV

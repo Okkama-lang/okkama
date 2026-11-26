@@ -258,39 +258,12 @@ fn related(runtime: &Runtime, function: usize, index: usize) -> u32 {
     runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[index].0
 }
 
-/// A thrown instance of the `index`th related object.
+/// A thrown instance of the `index`th related object: an error enum's case
+/// is an object of its payload (#290), and `contracts` checked that its fields
+/// are exactly `fields` (#1090).
 pub(crate) fn thrown(runtime: &mut Runtime, function: usize, index: usize, fields: &[Word]) -> FailureKind {
-    let object = raised(runtime, related(runtime, function, index), fields);
-    FailureKind::Thrown(object)
-}
-
-/// An error object the runtime raises, from its payload `values`. An error
-/// enum lowers to `[$tag, $<case>_<name>: array…]`; the runtime raises its
-/// first case, whose payload values go into one-element arrays.
-fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
-    // An Error enum is the object of its first case: its case number, then its payload (#601 Q1).
-    let program = &runtime.loaded.program;
-    let fields = &program.objects[descriptor as usize].fields;
-    if fields.first().is_none_or(|(name, _)| name != "$tag") {
-        return runtime.heap.object_new(descriptor, values);
-    }
-    let shapes: Vec<(bool, Repr)> = fields[1..]
-        .iter()
-        .map(|(name, ty)| {
-            let element = match program.ty(*ty) {
-                Some(Type::Array(element)) => Kind::of(program, *element).repr(),
-                _ => Repr::Ref,
-            };
-            (name.starts_with("$0_"), element)
-        })
-        .collect();
-    let mut payload = values.iter();
-    let mut words = vec![runtime.heap.int(0)];
-    for (first, element) in shapes {
-        let elements: Vec<Word> = if first { payload.next().copied().into_iter().collect() } else { Vec::new() };
-        words.push(runtime.heap.allocate_array(element, &elements));
-    }
-    runtime.heap.object_new(descriptor, &words)
+    let descriptor = related(runtime, function, index);
+    FailureKind::Thrown(runtime.heap.object_new(descriptor, fields))
 }
 
 /// A float result of #192, or the failure of a result that is not finite.

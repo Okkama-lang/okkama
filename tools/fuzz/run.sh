@@ -6,8 +6,8 @@
 # Runs every target of okkama-rs/fuzz for SECONDS (default 300) each:
 # lex, parse (drops the AST, re-parses formatted source), analyze (lowering
 # verifies), ir_verify (mutated OIR), spb (decode, verify, intrinsic
-# contracts), exec (programs linked with no module to import, on the Sparrow
-# core under budgets, no host natives). Needs nightly Rust and cargo-fuzz; mass
+# contracts), exec (programs linked against the repository's std, on the
+# Sparrow core under budgets, no host natives). Needs nightly Rust and cargo-fuzz; mass
 # runs belong in a container or on CI (.github/workflows/fuzz.yml). Corpora grow in
 # okkama-rs/fuzz/corpus/<target> (seeded from std, conformance, examples and
 # compiled SPB; past findings from okkama-rs/fuzz/regressions/<target>),

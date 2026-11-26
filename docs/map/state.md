@@ -2,6 +2,14 @@
 
 ## Release 0.6.5 (release/065)
 
+- [x] #1090 + #1091 + #1092 (feature/fuzz2, not committed): `contracts.rs::thrown` checks that an error case's
+  fields are exactly the raised payload (the legacy `$tag` layout, unemitted since #290, used to load; a
+  crafted one read `x` as the tag, 0); an intrinsic's contract errors name the intrinsic; `intrinsics::raised`
+  and runtime-core `raised_fields` removed. Fuzz `exec` links against the repository's std
+  (`support/linking.rs`, `StdTree`, one parse per module and process, plain names only) and shares `run`
+  with `tests/fuzz_lowering.rs`. `tools/test-python.sh` (9 test_*.py, ~17 s) in CI job "Tool tests" and the
+  Wave's maps job. Tests: okkama-cli `--test intrinsic_contracts`, okkama-compiler `--test fuzz_lowering`.
+  Not yet seen on Linux: the Python tests and the exec target with std (Fuzz dispatch).
 - [x] #1088 + #1089 + #1050 (feature/fuzz, not committed; fuzz run 45890980218 on 08a63b30b):
   `lowering/intrinsics.rs` `Site::refuse` makes every shape the runtime needs a semantic error at the intrinsic
   (error enum and its first case, result object with the receiver's type-parameter count, helper field, cap field

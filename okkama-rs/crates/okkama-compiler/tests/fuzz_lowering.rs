@@ -4,7 +4,12 @@ mod lowering;
 #[path = "../../../fuzz/fuzz_targets/support/linking.rs"]
 mod linking;
 use lowering as support;
-use okkama_compiler::{SourceFile, codegen, lowering::{self as compiler, LoweringError}, syntax::{self, ParseOptions, prune}};
+use okkama_compiler::{SourceFile, lowering::{self as compiler, LoweringError}, syntax::{self, ParseOptions, prune}};
+use sparrow_core::budget::{Counted, counted_bytes, set_memory_probe};
+
+// The exec target's memory budget reads this allocator, as in the target.
+#[global_allocator]
+static ALLOCATOR: Counted<std::alloc::System> = Counted(std::alloc::System);
 
 #[test]
 fn valid_seed_and_language_errors_are_distinguished() {
@@ -43,12 +48,15 @@ fn analyze(data: &[u8]) -> Result<okkama_compiler::ir::Module, LoweringError> {
     result
 }
 
-/// The `exec` target up to the run: whatever linking accepts, codegen generates.
+/// The `exec` target on one input: `None` when it is not a program, else the run.
+fn run(data: &[u8]) -> Option<Result<i64, sparrow_core::Error>> {
+    set_memory_probe(counted_bytes);
+    linking::run(data)
+}
+
+/// Whether the `exec` target runs the input: linking accepted it, codegen generated it.
 fn exec(data: &[u8]) -> bool {
-    let Some(module) = linking::linked(&program(data)) else { return false };
-    let program = codegen::sparrow::generate(&module).expect("codegen of linked OIR");
-    okkama_sparrow::encode(&program).expect("encoding generated SPB");
-    true
+    run(data).is_some()
 }
 
 /// #1088 (fuzz analyze): std/async/barrier.ok with its BrokenBarrier enum turned
@@ -80,4 +88,31 @@ fn an_import_is_refused_before_codegen() {
     let text = std::str::from_utf8(data).unwrap().replace("import \"b\";", "");
     assert!(exec(text.as_bytes()));
     assert!(exec(include_bytes!("../../../fuzz/seeds/sum.ok")));
+}
+
+/// #1091: the exec target links against the repository's std tree, so std's
+/// async intrinsics run under the target's budgets; a host native stays refused.
+#[test]
+fn a_program_importing_std_runs_under_the_exec_budgets() {
+    let atomic = "module app;\nimport \"async/atomic\" take Atomic, AtomicClosed;\n\
+        main() is int { let cell = Atomic(41); cell.replace(cell.value() + 1); let seen = cell.value(); cell.close();\n\
+        let after = try { cell.value(); } catch error is AtomicClosed { -1; }; seen + after + 1; }";
+    assert_eq!(run(atomic.as_bytes()).map(|outcome| outcome.map_err(|error| error.0)), Some(Ok(42)));
+    let channel = "module app;\nimport \"async/channel\" take Channel, ChannelClosed;\n\
+        async main() is int { let channel is Channel<int> = Channel(capacity: 2); let sending = channel.sending();\n\
+        await sending.send(20); await sending.send(22); sending.close(); let receiving = channel.receiving();\n\
+        let sum = await receiving.item() + await receiving.item();\n\
+        let after = try { await receiving.item(); } catch error is ChannelClosed { 0; }; sum + after; }";
+    assert_eq!(run(channel.as_bytes()).map(|outcome| outcome.map_err(|error| error.0)), Some(Ok(42)));
+    let host = "module app;\nimport \"os/environment\" take Environment;\nmain() is int { Environment(); 0; }";
+    assert!(run(host.as_bytes()).is_some_and(|outcome| outcome.is_err()), "the environment is a host native");
+    // Only std: a module path outside it, or out of the tree, is not found.
+    for path in ["b", "../std/async/atomic", "/etc/hosts", "async//atomic", "async/./atomic"] {
+        assert!(run(format!("module app;\nimport \"{path}\";\nmain() is int {{ 0; }}").as_bytes()).is_none(), "{path}");
+    }
+    // The same program with a std module it does not use runs.
+    for path in ["async/atomic", "async/atomic.ok"] {
+        let text = format!("module app;\nimport \"{path}\";\nmain() is int {{ 0; }}");
+        assert_eq!(run(text.as_bytes()).map(|outcome| outcome.map_err(|error| error.0)), Some(Ok(0)), "{path}");
+    }
 }

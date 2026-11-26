@@ -707,5 +707,12 @@ every declaration is open (#1005, owner decision).
 - The fuzz coverage replay runs with the same ASan options as `cargo fuzz run` (`detect_odr_violation=0`).
   The SQLite `aiOff` report is a false positive: two identical internal-linkage tables at one address. It is
   not a duplicate link.
+- The exec target links against the repository's std tree (#1091, 2026-11-27): one parse per module and
+  process, plain std names only, budgets unchanged, no host natives (`Limits.natives = Some([])`).
+- An intrinsic's thrown error is the object of its case's own payload (#290), and its fields are exactly
+  what the runtime raises, in count and kinds (#1090, 2026-11-27). The `[$tag, payload arrays]` layout is
+  not a thrown error any more.
+- Every tracked `test_*.py` runs in CI through `tools/test-python.sh` (#1092, 2026-11-27). A tool test
+  needs no toolchain, Docker or network.
 - A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
   and a test replays the target's logic on it.

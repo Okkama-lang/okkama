@@ -117,15 +117,15 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2353 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 65 files, 35056 lines
+## sparrow — 65 files, 35037 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
-- `sparrow-core/src/contracts.rs` 494 — Load-time contracts of intrinsics: what the core assumes about the SPB
+- `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/env_switch.rs` 67 — Shared environment-switch policy: booleans (#1067) and byte counts (#933).
 - `sparrow-core/src/heap.rs` 2320 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/intrinsics.rs` 1093 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/intrinsics.rs` 1069 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 3073 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 607 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
@@ -204,7 +204,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 71 files, 22309 lines
+## other — 71 files, 22295 lines
 
 - `blade/src/install.rs` 1391 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -236,7 +236,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/env_switch.rs` 43 — Shared boolean environment-switch policy (#1067).
 - `okkama-runtime-core/src/failure.rs` 238 — Engine-independent failure records carried on exceptional control-flow edges. A record's kind and
 - `okkama-runtime-core/src/float.rs` 394 — `float` (OIR-1 §16.2): конечное binary64. Неконечный результат и делитель 0 —
-- `okkama-runtime-core/src/heap.rs` 1627 — Values used by the Sparrow native bridge and its providers.
+- `okkama-runtime-core/src/heap.rs` 1613 — Values used by the Sparrow native bridge and its providers.
 - `okkama-runtime-core/src/host.rs` 298 — Состояние хоста для providers: текущий каталог
 - `okkama-runtime-core/src/integer.rs` 225 — Exact integer arithmetic shared by Sparrow, natives and compiler constants.
 - `okkama-runtime-core/src/lib.rs` 132 — Shared runtime values; no source syntax, IR, or execution-engine dependency.

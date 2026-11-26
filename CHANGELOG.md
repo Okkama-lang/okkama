@@ -7,6 +7,30 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Fixed
+- **Sparrow: an intrinsic's error case in the layout before #290 loaded and was raised with its fields mixed up
+  (#1090).** The load-time contract still accepted an error enum written as one `[$tag, $0_x: array…]` object.
+  The runtime raised such an object by filling the payload arrays, and with a payload the runtime does not have,
+  the arrays stayed empty. The compiler has not emitted that layout since #290, so only crafted SPB had it. A
+  crafted `Atomic.value` whose `AtomicClosed.closed` declares `x is int` loaded, and the program then read `x` as
+  0: the tag, not a payload. The verifier still types every field read, so the run read the tag word and no
+  foreign memory. An error case is now only the object of its own
+  payload, with exactly the fields the runtime raises it with, in count and kinds. Anything else is refused at
+  load with the intrinsic and both payloads named: `Sparrow @Atomic<int>.value (okkama.atomic.Atomic.value):
+  intrinsic contract: related object 0 throws AtomicClosed with payload [], but it declares [x I]`. The legacy
+  raise paths are gone (`intrinsics::raised`, runtime-core's unused `raised_fields`). Compiled programs load as
+  before: source with such a case was already refused, with a vaguer message.
+- **Fuzz `exec` ran no program that imports std (#1091).** The target now links against the repository's std
+  tree. Each module is read and parsed once per process (`support/linking.rs`, `StdTree`), and only plain std
+  module names resolve: no `..`, absolute or empty segments. std's async intrinsics (Atomic, Channel, Barrier …)
+  now run under the unchanged budgets: 1M steps, 64 MiB, 4 KiB of output, no host natives. A program that reaches
+  the environment, files, the network, processes or the clocks fails at that native. The target's whole logic
+  (`linking::run`) is shared with `tests/fuzz_lowering.rs`, which runs an Atomic and a Channel program to 42 and
+  checks that the environment stays refused.
+- **CI: the tooling's Python tests ran in no workflow (#1092).** `tools/test-python.sh` runs every tracked
+  `test_*.py` as a script from the repository root: the fuzz orchestration, the t/ generator, the ownership
+  oracle, the micro harness and the conformance runner (9 files, about 17 s, no toolchain). It runs in the CI job
+  "Tool tests" on every push and pull request, and in the Wave's maps job. A new `test_*.py` needs no workflow
+  edit.
 - **Compiler: a module whose runtime intrinsic it could not lower ended in an internal compiler error (#1088).**
   The module of a runtime intrinsic (`async/barrier`, `async/channel`, `async/timeout` …) is source like any
   other, and the fuzzer found `std/async/barrier.ok` with its `BrokenBarrier` enum commented out. Lowering assumed

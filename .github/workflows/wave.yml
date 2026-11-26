@@ -165,3 +165,5 @@ jobs:
       - run: python3 okkama-rs/tools/engines/gen-abi.py --check
       # Every native of std/runtime has a caller in std or the runtime crates (#1022).
       - run: python3 okkama-rs/tools/engines/native-callers.py
+      # Every tracked test_*.py of the tooling, dry (#1092).
+      - run: bash tools/test-python.sh
