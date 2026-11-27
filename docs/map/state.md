@@ -1,5 +1,22 @@
 # State (update at the end of every task)
 
+## Release 0.6.7 (release/067, from main 418da2b86): performance
+
+Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladder report
+(okkama-docs/benchmarks/reports/2026-11-27-v0.6.6/); per-ticket micro A/B against the v0.6.6 toolchains
+(okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
+(#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
+
+- [x] #1105 Perf 1 float fast paths (feature/1105; worktree okkama-work/p-1105, target t-1105; toolchains
+  micro-tc/f1105-s{1,2}): `rt_scalar_safepoint` removed, float `+ − × ÷` finiteness by `x − x`, cold diverging slow
+  path with `trap(user 1)` after `check`, cold `check` blocks inside slow paths (`Emit::cold`), `fcvt_to_sint_sat`
+  after the range proof (Fable's review); test `float_arithmetic_fails_on_non_finite_results_and_handlers_take_
+  the_failure`. Micro float 9.09 → 3.40 ns (−63%); full suite before the review fixes −1.9% (56 cells), short A/B
+  after them (10 cells) within ±1.7%; 03-float steady 13.6 → 10.6 ms in Docker (−22%). Bench.run: 2016 → 1800 code
+  bytes, stack-map words 31 → 16. rat cells move ±5% between the two seeds of one binary: the rat "+5%" of the
+  0.6.6 A/B is layout. Fable's side question (a loop of caught float failures with no safepoint under
+  --max-memory) has no source form: `catch error is Error` does not catch the RuntimeError (same on 0.6.6).
+
 ## Release 0.6.6 (release/066)
 
 - [x] Release commit 0.6.6 (2026-11-27): version 0.6.6, CHANGELOG [0.6.6], fuzz/Cargo.lock brought up to the wasm

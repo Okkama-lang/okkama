@@ -1182,3 +1182,18 @@ every declaration is open (#1005, owner decision).
   from both neighbours.
 - `docs/OkkamaBible/build.py --check` no longer rewrites `examples/` out of the output: since #1119 the CLI names
   imported files relative to the current directory (249 examples, unchanged).
+
+## Float fast paths without safepoints (#1105, 2026-11-27; owner approved lifting #537's caution for these conversions; audit Fable)
+
+- The inline int→float and float→int conversions call no safepoint. A conversion adds nothing to the collection
+  counter (`Heap::needs_collection`), so its safepoint only collected for its neighbours' work, and the same code
+  without a conversion never had one (Fable's review: not every allocation path is a safepoint, e.g.
+  `charge_external`, map-node growth and `[Allocates]`-only helpers, so "the allocation slow path is a safepoint"
+  is not the argument). #537's "do not remove required safepoints" stays for anything that allocates or polls.
+- Inside a cold slow path the emitter marks `check`'s failure blocks cold too (`Emit::cold`): cold is not
+  inherited, and they sat in the hot layout between the fast path and its continuation. Global cold checks are
+  #1107's (audit item B). After the range proof float→int uses `fcvt_to_sint_sat` (a bare `fcvtzs`).
+- Float `+ − × ÷` on finite operands: a non-finite result always fails (`scalar::float_binary`), so the JIT's slow
+  path never returns. After its `check` the continuation is `trap(user 1)` (`FLOAT_SLOW_PATH_RETURNED`): reaching it
+  is a broken invariant, not a program failure. Finiteness is `fcmp ord (x − x), (x − x)` (`Ordered`: one condition on x86-64).
+

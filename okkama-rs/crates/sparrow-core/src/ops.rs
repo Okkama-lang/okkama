@@ -1183,18 +1183,6 @@ pub extern "C" fn rt_map_len(ctx: *mut Ctx, map: Word) -> Word {
     word
 }
 
-/// Successful inline conversions still offer the collection opportunity that
-/// rt_exec offered. Their result is proven pointer-free (raw f64 or tagged int),
-/// so only the caller's unchanged root maps are needed here.
-#[inline(never)]
-pub extern "C" fn rt_scalar_safepoint(ctx: *mut Ctx, conversion: u64) {
-    let frame = crate::runtime::frame_pointer!();
-    let ctx = unsafe { &mut *ctx };
-    let runtime = unsafe { &mut *ctx.runtime };
-    runtime.count(|_| if conversion == 0 { "fast cvt int.float" } else { "fast cvt float.int" }.into());
-    runtime.safepoint(frame, ctx, &[]);
-}
-
 pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
     let spare = runtime.heap.allocate_spare(|payload| {
         match payload.as_any_mut().downcast_mut::<Builder>() {

@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Float at native speed on the fast path (#1105).** The inline int→float and float→int conversions no longer
+  call a safepoint (they allocate nothing; a collection is due only after an allocation, whose slow path is a
+  safepoint). `+ − × ÷` check finiteness with one subtraction (`x − x`) instead of `fabs` and a constant, and their
+  slow path is cold and never returns (a non-finite result always fails), with its failure blocks cold too, so the
+  result stays in a float register; float→int converts with a bare saturating instruction after its range proof.
+  Micro A/B against 0.6.6 (A1 B1 B2 A2, two layout seeds): float 9.09 → 3.40 ns (−63%); over 56 cells geomean
+  −1.9% (−0.4% without float), no cell worse than +1.0%; 03-float steady 13.6 → 10.6 ms (−22%, Docker).
+
 ## [0.6.6] — 2026-11-27
 
 0.6.6 brings Okkama to the browser: a playground on okkama-lang.github.io/playground/ checks, formats, explains

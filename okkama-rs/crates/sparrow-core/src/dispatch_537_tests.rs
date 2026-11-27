@@ -38,8 +38,6 @@ fn dispatch_537_helper_effects() {
         assert_eq!(effects.contains(&Effect::Fails), matches!(name, "rat_new" | "builder_finish"), "{name}");
         assert!(!effects.contains(&Effect::Reenters), "{name}");
     }
-    let effects = HELPERS.iter().find(|(key, _)| *key == "scalar_safepoint").expect("scalar safepoint").1;
-    assert_eq!(effects, &[Effect::Collects]);
 }
 
 #[test]
@@ -68,9 +66,7 @@ fn dispatch_537_int_float_rounding_and_big_fallback() {
             assert_eq!(event(&rt, "exec cvt"), if plain { values.len() as u64 } else { misses });
             assert_eq!(event(&rt, "generic cvt int.float"), if plain { values.len() as u64 } else { misses });
             assert_eq!(misses, 6);
-            if !plain {
-                assert_eq!(event(&rt, "fast cvt int.float"), values.len() as u64 - misses);
-            }
+            // The other values took the inline path: it counts nothing and calls no helper (#1105).
             let huge = rt.heap.big(num_bigint::BigInt::from(1) << 2048usize);
             let error = rt.run_function_with(0, &[huge], 1 << 24).unwrap_err();
             assert!(error.0.contains("finite"), "{}", error.0);
@@ -136,8 +132,58 @@ fn dispatch_537_float_int_limits_nonfinite_and_representation() {
             assert_eq!(event(&rt, "exec cvt"), if plain { cases.len() as u64 } else { misses });
             assert_eq!(event(&rt, "generic cvt float.int"), if plain { cases.len() as u64 } else { misses });
             assert_eq!(misses, 11);
-            if !plain {
-                assert_eq!(event(&rt, "fast cvt float.int"), cases.len() as u64 - misses);
+            // The other values took the inline path: it counts nothing and calls no helper (#1105).
+        }
+        Ok(())
+    }).unwrap();
+}
+
+/// #1105: `+ - * /` on floats check finiteness inline (`x - x`) and leave on a non-finite result without coming
+/// back: the result is exact on the inline path, the failure names the operation, and a handler covering the
+/// instruction takes it. Expected values come from Rust's f64 arithmetic, not from the runtime.
+#[test]
+fn float_arithmetic_fails_on_non_finite_results_and_handlers_take_the_failure() {
+    crate::on_vm_thread(|| {
+        let finite = [(6.0, 3.0), (-0.0, 1.0), (5e-324, 0.5), (1e308, 0.1), (f64::MAX, 1.0), (-2.5, -0.0)];
+        for (op, apply) in [
+            ("float.add", (|l: f64, r: f64| l + r) as fn(f64, f64) -> f64),
+            ("float.sub", |l, r| l - r),
+            ("float.mul", |l, r| l * r),
+            ("float.div", |l, r| l / r),
+        ] {
+            let plain_text = source("type t0 float", "t0, t0, t0", "r0, r1", "t0", &[format!("{op} r2, r0, r1"), "ret r2".into()]);
+            let handled_text = plain_text
+                .replace("type t0 float", "type t0 float\ntype t1 failure")
+                .replace("registers [t0, t0, t0]", "registers [t0, t0, t0, t1]")
+                .replace(" result t0\n", " result t0\n handler 0 1 @2 r3\n")
+                .replace(" 1: ret r2\n", " 1: ret r2\n 2: const r2, float 0xbff0000000000000\n 3: ret r2\n");
+            for plain in [false, true] {
+                let mut rt = runtime(&plain_text, plain, false);
+                for (left, right) in finite {
+                    let expected = apply(left, right);
+                    if !expected.is_finite() {
+                        continue;
+                    }
+                    let result = rt.run_function_with(0, &[left.to_bits(), right.to_bits()], 1 << 24).unwrap();
+                    assert_eq!(result, expected.to_bits(), "{op} {left} {right}, plain={plain}");
+                }
+                let failing = [(f64::MAX, f64::MAX), (-f64::MAX, f64::MAX), (1.0, 0.0), (0.0, 0.0)];
+                for (left, right) in failing {
+                    if apply(left, right).is_finite() {
+                        continue;
+                    }
+                    let error = rt.run_function_with(0, &[left.to_bits(), right.to_bits()], 1 << 24).unwrap_err();
+                    let message = if op == "float.div" && right == 0.0 { "Division by zero" } else { "Float value must contain a finite number" };
+                    assert!(error.0.contains(message), "{op} {left} {right}, plain={plain}: {}", error.0);
+                    let failure = rt.uncaught.as_ref().unwrap();
+                    assert_eq!(failure.trace, vec![crate::Site { function: 0, pc: 0 }]);
+                }
+                let mut rt = runtime(&handled_text, plain, false);
+                let caught = rt.run_function_with(0, &[f64::MAX.to_bits(), f64::MAX.to_bits()], 1 << 24);
+                let expected = apply(f64::MAX, f64::MAX);
+                let expected = if expected.is_finite() { expected } else { -1.0 };
+                assert_eq!(caught.unwrap(), expected.to_bits(), "{op} handled, plain={plain}");
+                assert_eq!(rt.run_function_with(0, &[1.5f64.to_bits(), 2.0f64.to_bits()], 1 << 24).unwrap(), apply(1.5, 2.0).to_bits());
             }
         }
         Ok(())
@@ -163,8 +209,6 @@ fn dispatch_537_async_roots_and_scalar_safepoints() {
                 let result = rt.run_function(0, 1 << 24).unwrap();
                 assert_eq!(rt.heap.text(result), "ab9223372036854775809");
                 assert!(event(&rt, "gc collection") > 0);
-                assert_eq!(event(&rt, "fast cvt int.float"), u64::from(!plain));
-                assert_eq!(event(&rt, "fast cvt float.int"), u64::from(!plain));
                 assert_eq!(event(&rt, "generic cvt int.float"), if plain { 2 } else { 1 });
             }
         }

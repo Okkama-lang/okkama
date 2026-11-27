@@ -132,11 +132,11 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/interp.rs` 1103 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2952 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/jit.rs` 2960 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 848 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
-- `sparrow-core/src/ops.rs` 1953 — Exact semantics of value instructions, where machine code has no inline
+- `sparrow-core/src/ops.rs` 1945 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 400 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 403 — Static facts about a loaded SPB program: the machine representation of every

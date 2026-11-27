@@ -18,7 +18,7 @@ use crate::program::{Kind, dispatch_table, failure_or_region, generic, suspends}
 use crate::runtime::{self, Ctx, FAILED, OK, Runtime};
 use crate::word::{self, Repr, Word};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind, Value, types};
+use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind, TrapCode, Value, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -130,7 +130,6 @@ helpers! {
     builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects, Fails];
     rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
-    scalar_safepoint = crate::ops::rt_scalar_safepoint as (ctx, conversion: u64); [Collects];
     trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
     int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects, Fails];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
@@ -681,6 +680,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             inline: None,
             inlined: 0,
             no_inline,
+            cold: false,
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -886,6 +886,9 @@ struct Emitter<'a, 'b> {
     inlined: usize,
     /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
     no_inline: bool,
+    /// Emitting inside a cold slow path (#1105): `check` marks its failure blocks cold too, since cold is not
+    /// inherited and they would otherwise sit in the hot layout between the fast path and its continuation.
+    cold: bool,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -913,6 +916,10 @@ fn has_loop(source: &okkama_sparrow::Function) -> bool {
     }
     backwards
 }
+
+/// The user trap after the float slow path's `check` (#1105): that helper always fails, so reaching the trap is a
+/// broken invariant of `scalar::float_binary`, never a program's failure.
+const FLOAT_SLOW_PATH_RETURNED: u8 = 1;
 
 /// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
 const INLINE_CALLEE: usize = 24;
@@ -1108,6 +1115,11 @@ impl Emitter<'_, '_> {
         let is_failure = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
         let recorded = self.builder.create_block();
         let fatal = self.builder.create_block();
+        if self.cold {
+            for block in [failed, recorded, fatal] {
+                self.builder.set_cold_block(block);
+            }
+        }
         self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
         self.builder.switch_to_block(fatal);
         self.exit_fail();
@@ -1961,23 +1973,28 @@ impl Emitter<'_, '_> {
                     I::FloatMul { .. } => (self.builder.ins().fmul(l, r), crate::scalar::FLOAT_MUL),
                     _ => (self.builder.ins().fdiv(l, r), crate::scalar::FLOAT_DIV),
                 };
-                let magnitude = self.builder.ins().fabs(value);
-                let maximum = self.builder.ins().f64const(f64::MAX);
-                let finite = self.builder.ins().fcmp(FloatCC::LessThanOrEqual, magnitude, maximum);
+                // #1105: `x - x` is 0 for a finite x and NaN for an infinity or NaN, so one subtraction and an
+                // ordered self-comparison check finiteness (no `fabs`, no constant load). `Ordered` is one
+                // condition on x86-64, where `Equal` is two (Z and NP).
+                let difference = self.builder.ins().fsub(value, value);
+                let finite = self.builder.ins().fcmp(FloatCC::Ordered, difference, difference);
                 let slow = self.builder.create_block();
                 let done = self.builder.create_block();
-                self.builder.append_block_param(done, types::F64);
-                self.builder.ins().brif(finite, done, &[value.into()], slow, &[]);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(finite, done, &[], slow, &[]);
+                // The operands are finite floats, so a non-finite result of + - * / always fails
+                // (`scalar::float_binary`): the slow path never comes back, and `done` has the fast path as its only
+                // predecessor, so the result stays in a float register.
                 self.builder.switch_to_block(slow);
                 let op = self.iconst(op as i64);
                 let lw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), l);
                 let rw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), r);
-                let bits = self.helper(|h| h.float, &[ctx, op, lw, rw]).expect("result");
+                self.helper(|h| h.float, &[ctx, op, lw, rw]).expect("result");
+                self.cold = true;
                 self.check(pc);
-                let value = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), bits);
-                self.builder.ins().jump(done, &[value.into()]);
+                self.cold = false;
+                self.builder.ins().trap(TrapCode::unwrap_user(FLOAT_SLOW_PATH_RETURNED));
                 self.builder.switch_to_block(done);
-                let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
             }
             I::FloatNeg { dst, operand } | I::FloatAbs { dst, operand } => {
@@ -2816,15 +2833,19 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band_imm_u(value, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
                 self.builder.append_block_param(done, types::F64);
+                // #1105: no safepoint on the fast conversions (#537 had kept rt_exec's opportunity). A conversion adds
+                // nothing to the collection counter, so its safepoint only ever collected for its neighbours' work;
+                // the same code without a conversion never had that safepoint either.
+                self.builder.set_cold_block(slow);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
                 let integer = self.builder.ins().sshr_imm_u(value, 1);
                 let result = self.builder.ins().fcvt_from_sint(types::F64, integer);
-                let conversion = self.iconst(0);
-                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
+                self.cold = true;
                 let bits = self.exec_generic(pc, instruction);
+                self.cold = false;
                 let result = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), bits);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
@@ -2846,18 +2867,20 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band(above, below);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
                 self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
-                // The trapping conversion is reached only after the range
-                // proof; tagging cannot overflow the tagged-small domain.
-                let integer = self.builder.ins().fcvt_to_sint(types::I64, truncated);
+                // The conversion is reached only after the range proof, so the
+                // saturating form (a bare `fcvtzs` on aarch64, no trap checks)
+                // converts exactly; tagging cannot overflow the tagged-small domain.
+                let integer = self.builder.ins().fcvt_to_sint_sat(types::I64, truncated);
                 let doubled = self.builder.ins().ishl_imm_u(integer, 1);
                 let result = self.builder.ins().bor_imm_u(doubled, 1);
-                let conversion = self.iconst(1);
-                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
+                self.cold = true;
                 let result = self.exec_generic(pc, instruction);
+                self.cold = false;
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
                 let result = self.builder.block_params(done)[0];
