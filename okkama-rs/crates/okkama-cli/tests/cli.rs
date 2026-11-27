@@ -1992,6 +1992,46 @@ fn lsp_copies_of_imported_errors_go_on_the_first_import() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #1119: the copy of an imported file's error on the importer names the file as diagnostics name a found file,
+/// relative to where the importer is when the file is under it (`sub/lib.ok`, not `lib.ok`), and by its path
+/// otherwise.
+#[test]
+fn lsp_copies_of_imported_errors_name_the_file_as_diagnostics_do() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-imported-name-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module sub/lib;\n// A thing.\nobject Thing {\n    // A thing.\n    Thing() {}\n    // Broken.\n    bad() is int { missing; }\n}\n";
+    std::fs::write(dir.join("sub/lib.ok"), library).unwrap();
+    let elsewhere = std::env::temp_dir().join(format!("okkama-lsp-imported-elsewhere-{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = elsewhere.canonicalize().unwrap();
+    std::fs::write(elsewhere.join("far.ok"), library.replace("module sub/lib", "module far")).unwrap();
+    let mut client = DocLsp::with_stdlib(&std_dir());
+    let copies = |client: &mut DocLsp, name: &str, text: &str| -> Vec<String> {
+        let uri = format!("file://{}", dir.join(name).display());
+        std::fs::write(dir.join(name), text).unwrap();
+        client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "version": 1, "text": text}}));
+        let seen = client.request_seeing("textDocument/documentSymbol", serde_json::json!({"textDocument": {"uri": uri}}));
+        let published = seen.iter().rev()
+            .find(|message| message["method"] == "textDocument/publishDiagnostics" && message["params"]["uri"] == uri.as_str())
+            .expect("the importer's diagnostics");
+        published["params"]["diagnostics"].as_array().unwrap().iter()
+            .filter_map(|diagnostic| diagnostic["message"].as_str())
+            .filter(|message| message.contains(".ok:"))
+            .map(str::to_string)
+            .collect()
+    };
+    let near = copies(&mut client, "app.ok", "module app;\nimport \"sub/lib\" take Thing;\nmain() is int { 0; }\n");
+    assert!(!near.is_empty() && near.iter().all(|message| message.starts_with("sub/lib.ok:7: ")), "{near:?}");
+    let import = format!("module other;\nimport \"{}\" take Thing;\nmain() is int {{ 0; }}\n", elsewhere.join("far").display());
+    let far = copies(&mut client, "other.ok", &import);
+    let expected = format!("{}:7: ", elsewhere.join("far.ok").display());
+    assert!(!far.is_empty() && far.iter().all(|message| message.starts_with(&expected)), "{far:?}");
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(elsewhere).unwrap();
+}
+
 /// #1017: `exit` without `shutdown` ends the server with code 1; after
 /// `shutdown`, with 0.
 #[test]

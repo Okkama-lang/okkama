@@ -5,14 +5,47 @@
 //! текущего уровня, а если путь уже назвал модуль (`std.io.stdout.`) — его
 //! объявления. Целые пути (`io.stdout`, а с первой набранной буквой и
 //! `io.stdout.Stdout`) ищутся по всей std. После enum (`std.compare.Order.`)
-//! предлагаются его варианты. Каталог читается при каждом запросе, разбор
-//! модулей для целых путей кэшируется на время работы сервера.
+//! предлагаются его варианты.
+//!
+//! The std is a [`StdTree`] (#1115): the std directory on disk for the language server
+//! ([`super::DiskStd`], native only), the std bundled into the playground (okkama-wasm). The levels are listed
+//! at every request; the parse of every module for whole paths is cached by the tree's [`Stamp`], and modules
+//! the editor holds unsaved are parsed again on top of the cache.
 use crate::source::SourceFile;
 use crate::syntax::{self, ParseMode, ParseOptions, ast};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::rc::Rc;
+
+/// The std as completion reads it (#1115). A module is named by its path under the std root, segments joined
+/// by `/` without `.ok` (`io/stdout`); only modules whose every segment is a module segment (lowercase ASCII,
+/// digits, `_`) count.
+pub trait StdTree {
+    /// The tree's name in the index cache: its directory, or the bundle's root.
+    fn key(&self) -> String;
+
+    /// Every module of the tree, in any order.
+    fn modules(&self) -> Vec<String>;
+
+    /// What the texts of `modules` were read from: an index built under an equal stamp is reused. `None`
+    /// when the tree cannot tell (a file without a modification time), and nothing is cached.
+    fn stamp(&self, modules: &[String]) -> Option<Stamp>;
+
+    /// The folders and modules directly in `folder` (its segments; empty: the root): a name and whether it is
+    /// a folder.
+    fn entries(&self, folder: &[String]) -> Vec<(String, bool)>;
+
+    /// The stored text of `module`, which the stamp describes, under the name its diagnostics would use.
+    fn source(&self, module: &str) -> Option<SourceFile>;
+
+    /// The editor's unsaved text of `module`, when it holds one; it comes before the stored text and is never
+    /// cached.
+    fn unsaved(&self, module: &str) -> Option<SourceFile>;
+}
+
+/// What a std index was built from, compared whole: each module with its length and modification time
+/// (nanoseconds since the epoch; a bundled tree, which never changes, gives zero).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Stamp(pub Vec<(String, u64, u128)>);
 
 /// Вид предложения пути std.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,21 +73,13 @@ pub struct StdCompletion {
     pub documentation_source: Option<(String, Option<String>)>,
 }
 
-/// Предложения для курсора `offset`; `None` — курсор не в пути `std.…`.
-pub fn std_completions(text: &str, offset: u32, stdlib: &Path) -> Option<Vec<StdCompletion>> {
-    std_completions_with_overlay(text, offset, stdlib, &HashMap::new())
-}
-
-/// Completion inventory with the editor's current source texts. Unchanged
-/// files share the disk index; an overlay replaces the whole public inventory.
-pub fn std_completions_with_overlay(
-    text: &str, offset: u32, stdlib: &Path, overlay: &HashMap<PathBuf, Rc<str>>,
-) -> Option<Vec<StdCompletion>> {
+/// Предложения для курсора `offset` по std `tree`; `None` — курсор не в пути `std.…`.
+pub fn std_completions(text: &str, offset: u32, tree: &dyn StdTree) -> Option<Vec<StdCompletion>> {
     let (segments, partial) = path_at(text, offset as usize)?;
     if let Some(last) = segments.last().filter(|segment| segment.starts_with(char::is_uppercase)) {
         // `std.module.Enum.`: варианты enum.
         let module = segments[..segments.len() - 1].join("/");
-        let declarations = declarations(&stdlib.join(format!("{module}.ok")), overlay);
+        let declarations = declarations(tree, &module);
         let cases = declarations
             .into_iter()
             .find(|decl| decl.name == *last)
@@ -74,67 +99,50 @@ pub fn std_completions_with_overlay(
                 .collect(),
         );
     }
-    let directory = segments.iter().fold(stdlib.to_path_buf(), |dir, segment| dir.join(segment));
     let mut items = Vec::new();
     // Папки и модули текущего уровня.
-    if let Ok(entries) = std::fs::read_dir(&directory) {
-        let mut entries: Vec<(String, bool)> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let folder = entry.file_type().ok()?.is_dir();
-                if folder {
-                    is_segment(&name).then_some((name, true))
-                } else {
-                    let stem = name.strip_suffix(".ok")?;
-                    is_segment(stem).then(|| (stem.to_string(), false))
-                }
-            })
-            .collect();
-        entries.sort();
-        entries.dedup();
-        for (name, folder) in entries {
-            let path = segments.iter().cloned().chain([name.clone()]).collect::<Vec<_>>();
-            if folder {
-                items.push(StdCompletion {
-                    detail: format!("std.{} (folder)", path.join(".")),
-                    label: name,
-                    kind: StdKind::Folder,
-                    documentation: String::new(),
-                    deep: false,
-                    documentation_source: None,
-                });
-            } else {
-                let module = path.join("/");
-                items.push(StdCompletion {
-                    detail: format!("module {module}"),
-                    documentation: module_doc(&stdlib.join(format!("{module}.ok")), overlay),
-                    label: name,
-                    kind: StdKind::Module,
-                    documentation_source: Some((module.clone(), None)),
-                    deep: false,
-                });
-            }
+    let mut entries: Vec<(String, bool)> =
+        tree.entries(&segments).into_iter().filter(|(name, _)| is_segment(name)).collect();
+    entries.sort();
+    entries.dedup();
+    for (name, folder) in entries {
+        let path = segments.iter().cloned().chain([name.clone()]).collect::<Vec<_>>();
+        if folder {
+            items.push(StdCompletion {
+                detail: format!("std.{} (folder)", path.join(".")),
+                label: name,
+                kind: StdKind::Folder,
+                documentation: String::new(),
+                deep: false,
+                documentation_source: None,
+            });
+        } else {
+            let module = path.join("/");
+            items.push(StdCompletion {
+                detail: format!("module {module}"),
+                documentation: module_doc(tree, &module),
+                label: name,
+                kind: StdKind::Module,
+                documentation_source: Some((module.clone(), None)),
+                deep: false,
+            });
         }
     }
     // Путь уже назвал модуль: его объявления.
     if !segments.is_empty() {
         let module = segments.join("/");
-        for decl in declarations(&stdlib.join(format!("{module}.ok")), overlay) {
+        for decl in declarations(tree, &module) {
             items.push(decl.completion(decl.name.clone(), false));
         }
     }
     // Целые пути из глубины: модули, а с набранной буквой — и объявления.
     let prefix = segments.join("/");
-    let base = deep_index(stdlib);
+    let base = deep_index(tree);
     let mut index = Arc::clone(&base);
-    if !overlay.is_empty() {
-        for (position, module) in base.iter().enumerate() {
-            let file = stdlib.join(format!("{}.ok", module.path));
-            if overlay.contains_key(&file.canonicalize().unwrap_or_else(|_| file.clone())) {
-                let module = &mut Arc::make_mut(&mut index)[position];
-                (module.doc, module.declarations) = module_contents(&file, overlay);
-            }
+    for (position, module) in base.iter().enumerate() {
+        if let Some(source) = tree.unsaved(&module.path) {
+            let module = &mut Arc::make_mut(&mut index)[position];
+            (module.doc, module.declarations) = contents(parsed(source));
         }
     }
     let lower = partial.to_lowercase();
@@ -196,7 +204,7 @@ fn path_at(text: &str, offset: usize) -> Option<(Vec<String>, String)> {
 }
 
 /// Сегмент пути модуля: имя каталога или файла std со строчной буквы.
-fn is_segment(name: &str) -> bool {
+pub(crate) fn is_segment(name: &str) -> bool {
     name.starts_with(|ch: char| ch.is_ascii_lowercase())
         && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
@@ -240,57 +248,46 @@ struct Module {
     declarations: Vec<Declaration>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct FileStamp {
-    path: String,
-    length: u64,
-    modified: Option<std::time::SystemTime>,
-}
-
 #[derive(Debug)]
 struct CachedIndex {
-    stamps: Vec<FileStamp>,
+    stamp: Stamp,
     modules: Arc<Vec<Module>>,
 }
 
-/// Cache disk declarations until the source inventory or file metadata changes.
-/// Editor overlays are applied after this cache and never stored in it.
-fn deep_index(stdlib: &Path) -> Arc<Vec<Module>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedIndex>>> = OnceLock::new();
+/// The parse of every module of `tree`, cached until its stamp changes. Unsaved editor texts are applied after
+/// this cache and never stored in it.
+fn deep_index(tree: &dyn StdTree) -> Arc<Vec<Module>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CachedIndex>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
-    let mut files = Vec::new();
-    collect(stdlib, stdlib, &mut files);
-    files.sort();
-    let stamps: Vec<_> = files.iter().map(|path| {
-        let metadata = std::fs::metadata(stdlib.join(format!("{path}.ok"))).ok();
-        FileStamp {
-            path: path.clone(),
-            length: metadata.as_ref().map_or(0, std::fs::Metadata::len),
-            modified: metadata.and_then(|metadata| metadata.modified().ok()),
-        }
-    }).collect();
-    if stamps.iter().all(|stamp| stamp.modified.is_some())
+    let key = tree.key();
+    let mut modules = tree.modules();
+    modules.retain(|module| module.split('/').all(is_segment));
+    modules.sort();
+    modules.dedup();
+    let stamp = tree.stamp(&modules);
+    if let Some(stamp) = &stamp
         && let Some(found) = cache.lock().ok().and_then(|cache| {
-            cache.get(stdlib).filter(|found| found.stamps == stamps).map(|found| Arc::clone(&found.modules))
+            cache.get(&key).filter(|found| found.stamp == *stamp).map(|found| Arc::clone(&found.modules))
         })
     {
         return found;
     }
-    let modules = Arc::new(files.into_iter().map(|path| {
-        // One read and parse per file for both (#1008).
-        let file = stdlib.join(format!("{path}.ok"));
-        let (doc, declarations) = module_contents(&file, &HashMap::new());
+    let index = Arc::new(modules.into_iter().map(|path| {
+        // One read and parse per file for both (#1008), of the stored text only.
+        let (doc, declarations) = contents(tree.source(&path).and_then(parsed));
         Module { doc, declarations, path }
     }).collect::<Vec<_>>());
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(stdlib.to_path_buf(), CachedIndex { stamps, modules: Arc::clone(&modules) });
+    if let Some(stamp) = stamp
+        && let Ok(mut cache) = cache.lock()
+    {
+        cache.insert(key, CachedIndex { stamp, modules: Arc::clone(&index) });
     }
-    modules
+    index
 }
 
-/// Read and parse once for an overview and the declarations beside it.
-fn module_contents(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> (String, Vec<Declaration>) {
-    match file_doc(file, overlay) {
+/// The overview and the declarations of one parse.
+fn contents(parsed: Option<(crate::doc::ModuleDoc, ast::Program)>) -> (String, Vec<Declaration>) {
+    match parsed {
         Some((doc, program)) => {
             let declarations = declarations_of(&doc, &program);
             let overview = doc.overview.map(|doc| doc.markdown()).unwrap_or_default();
@@ -300,32 +297,9 @@ fn module_contents(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> (String,
     }
 }
 
-/// Пути модулей (`io/stdout`) каталога `dir` и вложенных.
-fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if path.is_dir() {
-            if is_segment(&name) {
-                collect(root, &path, out);
-            }
-        } else if let Some(stem) = name.strip_suffix(".ok")
-            && is_segment(stem)
-            && let Ok(relative) = path.with_extension("").strip_prefix(root)
-        {
-            let parts: Vec<String> =
-                relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
-            out.push(parts.join("/"));
-        }
-    }
-}
-
 /// Public declarations and documentation come from the canonical model.
-fn declarations(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> Vec<Declaration> {
-    let Some((doc, program)) = file_doc(file, overlay) else { return Vec::new(); };
+fn declarations(tree: &dyn StdTree, module: &str) -> Vec<Declaration> {
+    let Some((doc, program)) = file_doc(tree, module) else { return Vec::new(); };
     declarations_of(&doc, &program)
 }
 
@@ -349,22 +323,28 @@ fn declarations_of(doc: &crate::doc::ModuleDoc, program: &ast::Program) -> Vec<D
     }).collect()
 }
 
-fn file_doc(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> Option<(crate::doc::ModuleDoc, ast::Program)> {
-    let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-    let text = overlay.get(&canonical).map(|text| text.to_string()).or_else(|| std::fs::read_to_string(file).ok())?;
-    let source = SourceFile::new(file.display().to_string(), text).ok()?;
+/// The current text of `module` (unsaved first), documented.
+fn file_doc(tree: &dyn StdTree, module: &str) -> Option<(crate::doc::ModuleDoc, ast::Program)> {
+    if module.is_empty() {
+        return None;
+    }
+    parsed(tree.unsaved(module).or_else(|| tree.source(module))?)
+}
+
+fn parsed(source: SourceFile) -> Option<(crate::doc::ModuleDoc, ast::Program)> {
     let options = ParseOptions { mode: ParseMode::Production, ..ParseOptions::default() };
     let program = syntax::parse(&source, &options).ok()?;
     Some((crate::doc::ModuleDoc::of(&source, &program), program))
 }
 
-fn module_doc(file: &Path, overlay: &HashMap<PathBuf, Rc<str>>) -> String {
-    file_doc(file, overlay).and_then(|(doc, _)| doc.overview).map(|doc| doc.markdown()).unwrap_or_default()
+fn module_doc(tree: &dyn StdTree, module: &str) -> String {
+    file_doc(tree, module).and_then(|(doc, _)| doc.overview).map(|doc| doc.markdown()).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{StdKind, std_completions};
+    use crate::ide::DiskStd;
     use std::path::PathBuf;
 
     fn stdlib() -> PathBuf {
@@ -372,7 +352,7 @@ mod tests {
     }
 
     fn labels(text: &str) -> Option<Vec<(String, StdKind, bool)>> {
-        std_completions(text, text.len() as u32, &stdlib())
+        std_completions(text, text.len() as u32, &DiskStd::new(&stdlib()))
             .map(|items| items.into_iter().map(|item| (item.label, item.kind, item.deep)).collect())
     }
 
@@ -415,21 +395,93 @@ mod tests {
         let text = "module demo;\n\n// Module overview.\n\n// A public object.\nobject First {\n    // Member description.\n    send(x is int = 2) is void {}\n}\n// Private description.\nhidden object Secret {}\n";
         std::fs::write(&file, text).unwrap();
         let query = "std.demo.";
-        let found = std_completions(query, query.len() as u32, &dir).unwrap();
+        let found = std_completions(query, query.len() as u32, &DiskStd::new(&dir)).unwrap();
         assert!(!found.iter().any(|item| item.label == "Secret"));
         let first = found.iter().find(|item| item.label == "First").unwrap();
         assert!(first.documentation.contains("Member description"));
         assert!(first.documentation.contains("x is int = 2"));
         let overlay = std::collections::HashMap::from([(file.canonicalize().unwrap(), std::rc::Rc::from(text.replace("Member description", "Unsaved description")))]);
-        let found = super::std_completions_with_overlay(query, query.len() as u32, &dir, &overlay).unwrap();
+        let found = std_completions(query, query.len() as u32, &DiskStd::with_overlay(&dir, &overlay)).unwrap();
         assert!(found.iter().find(|item| item.label == "First").unwrap().documentation.contains("Unsaved description"));
         let deep = "std.Fir";
-        let found = super::std_completions_with_overlay(deep, deep.len() as u32, &dir, &overlay).unwrap();
+        let found = std_completions(deep, deep.len() as u32, &DiskStd::with_overlay(&dir, &overlay)).unwrap();
         assert!(found.iter().find(|item| item.label == "demo.First").unwrap().documentation.contains("Unsaved description"));
         std::fs::write(&file, text.replace("First", "Renamed").replace("Member description", "Saved description")).unwrap();
         let deep = "std.Ren";
-        let found = std_completions(deep, deep.len() as u32, &dir).unwrap();
+        let found = std_completions(deep, deep.len() as u32, &DiskStd::new(&dir)).unwrap();
         assert!(found.iter().find(|item| item.label == "demo.Renamed").unwrap().documentation.contains("Saved description"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A std in memory: modules, a stamp the test sets, unsaved texts.
+    struct Memory {
+        key: String,
+        texts: std::cell::RefCell<Vec<(String, String)>>,
+        stamp: std::cell::Cell<Option<u128>>,
+        unsaved: Vec<(String, String)>,
+    }
+
+    impl super::StdTree for Memory {
+        fn key(&self) -> String {
+            self.key.clone()
+        }
+        fn modules(&self) -> Vec<String> {
+            self.texts.borrow().iter().map(|(module, _)| module.clone()).collect()
+        }
+        fn stamp(&self, modules: &[String]) -> Option<super::Stamp> {
+            let at = self.stamp.get()?;
+            Some(super::Stamp(modules.iter().map(|module| (module.clone(), 0, at)).collect()))
+        }
+        fn entries(&self, folder: &[String]) -> Vec<(String, bool)> {
+            assert!(folder.is_empty());
+            self.modules().into_iter().map(|module| (module, false)).collect()
+        }
+        fn source(&self, module: &str) -> Option<crate::source::SourceFile> {
+            let text = self.texts.borrow().iter().find(|(name, _)| name == module)?.1.clone();
+            crate::source::SourceFile::new(format!("{module}.ok"), text).ok()
+        }
+        fn unsaved(&self, module: &str) -> Option<crate::source::SourceFile> {
+            let text = self.unsaved.iter().find(|(name, _)| name == module)?.1.clone();
+            crate::source::SourceFile::new(format!("{module}.ok"), text).ok()
+        }
+    }
+
+    fn deep(tree: &Memory, typed: &str) -> Vec<String> {
+        let text = format!("std.{typed}");
+        let found = std_completions(&text, text.len() as u32, tree).unwrap();
+        found.into_iter().filter(|item| item.deep).map(|item| item.label).collect()
+    }
+
+    /// #1115: the index of whole paths is the tree's, reused while its stamp is equal, rebuilt when it
+    /// changes, never kept without a stamp; unsaved texts apply on top of it and never enter it.
+    #[test]
+    fn the_index_follows_the_trees_stamp() {
+        let tree = Memory {
+            key: format!("memory-{}", std::process::id()),
+            texts: std::cell::RefCell::new(vec![("shapes".into(), "module shapes;\nobject Circle {}\n".into())]),
+            stamp: std::cell::Cell::new(Some(1)),
+            unsaved: Vec::new(),
+        };
+        assert_eq!(deep(&tree, "Cir"), ["shapes.Circle"]);
+        // A new text under the same stamp: the index is the cached one.
+        tree.texts.borrow_mut()[0].1 = "module shapes;\nobject Square {}\n".into();
+        assert_eq!(deep(&tree, "Cir"), ["shapes.Circle"]);
+        assert!(deep(&tree, "Squ").is_empty());
+        // A new stamp: built again.
+        tree.stamp.set(Some(2));
+        assert_eq!(deep(&tree, "Squ"), ["shapes.Square"]);
+        // No stamp: read every time.
+        tree.stamp.set(None);
+        tree.texts.borrow_mut()[0].1 = "module shapes;\nobject Oval {}\n".into();
+        assert_eq!(deep(&tree, "Ova"), ["shapes.Oval"]);
+        tree.texts.borrow_mut()[0].1 = "module shapes;\nobject Cone {}\n".into();
+        assert_eq!(deep(&tree, "Con"), ["shapes.Cone"]);
+        // Unsaved text on top of a cached index, which keeps the stored one.
+        tree.stamp.set(Some(3));
+        let edited = Memory { unsaved: vec![("shapes".into(), "module shapes;\nobject Star {}\n".into())], ..tree };
+        assert_eq!(deep(&edited, "Sta"), ["shapes.Star"]);
+        assert!(deep(&edited, "Con").is_empty());
+        let saved = Memory { unsaved: Vec::new(), ..edited };
+        assert_eq!(deep(&saved, "Con"), ["shapes.Cone"]);
     }
 }

@@ -404,6 +404,10 @@ fn missing_docs_counts_real_declarations_overloads_cases_caps_and_hidden() {
     assert!(!super::coverage::completed_wave("http/client"));
 }
 
+fn load(path: &std::path::Path) -> Result<ModuleDoc, String> {
+    ModuleDoc::parse(path.display().to_string(), std::fs::read_to_string(path).map_err(|error| error.to_string())?)
+}
+
 #[test]
 fn std_documentation_coverage_and_completed_waves() {
     fn visit(path: &std::path::Path, totals: &mut (usize, usize, usize), missing: &mut Vec<String>) {
@@ -412,7 +416,7 @@ fn std_documentation_coverage_and_completed_waves() {
         for path in paths {
             if path.is_dir() { visit(&path, totals, missing); }
             else if path.extension().is_some_and(|e| e == "ok") {
-                let module = ModuleDoc::load(&path).unwrap();
+                let module = load(&path).unwrap();
                 let coverage = module.coverage();
                 totals.0 += 1;
                 totals.1 += coverage.documented;
@@ -431,7 +435,7 @@ fn std_documentation_coverage_and_completed_waves() {
     for module in super::coverage::COMPLETED_WAVES.lines().filter(|s| !s.is_empty() && !s.starts_with('#')) {
         let path = root.join(format!("{module}.ok"));
         assert!(path.is_file(), "completed module disappeared: {module}");
-        assert_eq!(ModuleDoc::load(&path).unwrap().path, module, "completed module identity changed");
+        assert_eq!(load(&path).unwrap().path, module, "completed module identity changed");
     }
     println!("std documentation baseline: {} modules, {}/{} public declarations documented", totals.0, totals.1, totals.2);
     assert!(missing.is_empty(), "undocumented completed wave declarations: {missing:?}");
@@ -633,4 +637,35 @@ fn a_runnable_example_is_not_the_synopsis() {
     let page = module_text(&doc(text), &Style::default());
     assert!(page.contains("SYNOPSIS\n    Stdout().writeln(\"x\");\n"), "{page}");
     assert!(!page.contains("SYNOPSIS\n    main() is int"), "{page}");
+}
+
+/// A std as a loader sees it: `resolve_std` names `/std/<module>.ok`; `aliases` are other names of files.
+struct NamedStd {
+    aliases: Vec<(&'static str, &'static str)>,
+}
+
+impl crate::lowering::ModuleLoader for NamedStd {
+    fn load(&mut self, _path: &str, _importer: &str) -> Result<Option<crate::lowering::LoadedModule>, String> {
+        Ok(None)
+    }
+    fn resolve_std(&mut self, path: &str, _importer: &str) -> Result<Option<String>, String> {
+        Ok(Some(format!("/std/{path}.ok")))
+    }
+    fn identity(&mut self, file: &str) -> String {
+        self.aliases.iter().find(|(alias, _)| *alias == file).map_or(file, |(_, file)| file).to_string()
+    }
+}
+
+/// #1116: a completed wave's file is recognised by the loader's file identity, not by the file system: another
+/// name of the file counts, a lookalike elsewhere does not.
+#[test]
+fn completed_waves_are_enforced_by_the_loaders_file_identity() {
+    use super::coverage::enforced_file;
+    let mut loader = NamedStd { aliases: vec![("io/stdout.ok", "/std/io/stdout.ok")] };
+    assert!(enforced_file("/std/io/stdout.ok", &mut loader));
+    assert!(enforced_file("io/stdout.ok", &mut loader), "another name of the std file");
+    assert!(!enforced_file("app/io/stdout.ok", &mut loader), "a user file that declares the name");
+    assert!(!enforced_file("/std/regex.ok", &mut loader), "a std module outside the completed waves");
+    let mut plain = NamedStd { aliases: Vec::new() };
+    assert!(!enforced_file("io/stdout.ok", &mut plain), "without the loader's identity, names differ");
 }

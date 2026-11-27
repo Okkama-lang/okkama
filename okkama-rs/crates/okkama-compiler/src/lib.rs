@@ -9,6 +9,7 @@
 //! * [`codegen`] — Sparrow bytecode generation;
 //! * [`ide`] and [`doc`] — the language server's index and `okkama man`;
 //! * [`commands`] — what the read-only commands report (check, fmt, tokens, ast, ir, build), as values;
+//! * [`host`] — the clock and development outputs, the only calls to the machine (none on wasm32, #1116);
 //! * [`jit`] — an empty boundary: machine code is Sparrow's business.
 //!
 //! The library never reads command-line arguments and never terminates the process; it prints only
@@ -25,6 +26,7 @@ pub mod codegen;
 pub mod commands;
 pub mod diagnostics;
 pub mod doc;
+pub mod host;
 pub mod ide;
 pub mod ir;
 pub mod jit;

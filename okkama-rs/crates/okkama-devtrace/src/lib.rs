@@ -2,8 +2,9 @@
 //! compiler and the runtimes, to see who decided what, how many times, and what it cost.
 //!
 //! It is working code, not released code. A release build passes `--cfg okkama_release`; then [`Gate::on`] is a
-//! constant `false` and every macro body below is removed by the optimizer at its call site. Every other build
-//! (development, tests, CI) has it compiled in, and off at run time until `OKKAMA_DEV` names a category.
+//! constant `false` and every macro body below is removed by the optimizer at its call site. A wasm32 build (the
+//! playground's compiler, #1116), which has no environment, files or clock, is compiled the same way. Every other
+//! build (development, tests, CI) has it compiled in, and off at run time until `OKKAMA_DEV` names a category.
 //!
 //! ```text
 //! OKKAMA_DEV=all                       every category
@@ -50,7 +51,7 @@ struct Config {
 }
 
 // A release build reads no configuration.
-#[cfg_attr(okkama_release, allow(dead_code))]
+#[cfg_attr(any(okkama_release, target_arch = "wasm32"), allow(dead_code))]
 impl Config {
     fn parse(spec: &str, out: Option<PathBuf>) -> Self {
         let mut config = Config { all: false, categories: BTreeMap::new(), dumps: false,
@@ -114,17 +115,17 @@ struct State {
 }
 
 // A release build reads no configuration.
-#[cfg_attr(okkama_release, allow(dead_code))]
+#[cfg_attr(any(okkama_release, target_arch = "wasm32"), allow(dead_code))]
 static CONFIG: OnceLock<Option<Config>> = OnceLock::new();
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 static START: OnceLock<Instant> = OnceLock::new();
 
 fn config() -> Option<&'static Config> {
-    #[cfg(okkama_release)]
+    #[cfg(any(okkama_release, target_arch = "wasm32"))]
     {
         None
     }
-    #[cfg(not(okkama_release))]
+    #[cfg(not(any(okkama_release, target_arch = "wasm32")))]
     {
         CONFIG.get_or_init(|| {
             let value = std::env::var_os("OKKAMA_DEV");
@@ -142,7 +143,7 @@ fn config() -> Option<&'static Config> {
 /// of [`env_switch`] and none when no category is left after trimming (a blank value, as in 0.6.4, #1094); a value
 /// that is not UTF-8 names nothing.
 // A release build reads no configuration.
-#[cfg_attr(okkama_release, allow(dead_code))]
+#[cfg_attr(any(okkama_release, target_arch = "wasm32"), allow(dead_code))]
 fn requested(value: Option<&std::ffi::OsStr>) -> Option<&str> {
     if !env_switch::value_enabled(value) {
         return None;
@@ -171,7 +172,7 @@ impl Gate {
     /// Whether the category is on. A constant `false` in a release build.
     #[inline(always)]
     pub fn on(&self) -> bool {
-        if cfg!(okkama_release) {
+        if cfg!(any(okkama_release, target_arch = "wasm32")) {
             return false;
         }
         match self.state.load(Ordering::Relaxed) {

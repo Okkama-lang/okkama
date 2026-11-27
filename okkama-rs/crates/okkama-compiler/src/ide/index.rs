@@ -239,11 +239,8 @@ impl<'r, 'a> Builder<'r, 'a> {
         let info = &self.registry.objects[object.0];
         let found = &info.methods[method];
         let params = self.params(&found.params, found.variadic);
-        let result = if found.successor {
-            format!("^{}", self.result_name(&found.result))
-        } else {
-            self.result_name(&found.result)
-        };
+        // A successor's result is `Ty::Successor`, which prints its own `^` (#1117).
+        let result = self.result_name(&found.result);
         let doc = found
             .decl
             .map(|decl| self.doc(info.module, decl.span))
@@ -972,11 +969,8 @@ impl<'r, 'a> Builder<'r, 'a> {
         let info = &self.registry.objects[object.0];
         let found = &info.methods[method];
         let params = self.params(&found.params, found.variadic);
-        let result = if found.successor {
-            format!("^{}", self.result_name(&found.result))
-        } else {
-            self.result_name(&found.result)
-        };
+        // A successor's result is `Ty::Successor`, which prints its own `^` (#1117).
+        let result = self.result_name(&found.result);
         let signature = format!(
             "{}{}{}.{}({}) is {result}",
             if found.hidden { "hidden " } else { "" },

@@ -16,7 +16,11 @@ mod index;
 mod lint;
 pub(crate) mod outline;
 mod std_paths;
-pub use std_paths::{StdCompletion, StdKind, std_completions, std_completions_with_overlay};
+pub use std_paths::{Stamp, StdCompletion, StdKind, StdTree, std_completions};
+#[cfg(not(target_arch = "wasm32"))]
+mod std_disk;
+#[cfg(not(target_arch = "wasm32"))]
+pub use std_disk::{DiskStd, Overlay};
 
 pub use complete::{Context, builtin_members, keywords, renamable_to};
 pub use index::build;

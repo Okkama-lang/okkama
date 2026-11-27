@@ -1103,6 +1103,10 @@ struct FileLoader {
     /// Несохранённые тексты открытых в редакторе файлов (`okkama lsp`), по
     /// каноническому пути.
     overlay: std::collections::HashMap<PathBuf, std::rc::Rc<str>>,
+    /// The directory diagnostics name found files relative to (#1119): the current one, canonical. `None`
+    /// names them by their canonical path: the language server, whose names are files' URIs, and
+    /// `okkama man`, whose export records them.
+    base: Option<String>,
 }
 
 impl FileLoader {
@@ -1120,6 +1124,7 @@ impl FileLoader {
             stdlib: stdlib_dir(),
             test_mode: false,
             overlay: std::collections::HashMap::new(),
+            base: current_dir(),
         }
     }
 
@@ -1178,6 +1183,17 @@ impl ModuleLoader for FileLoader {
         let stdlib = self.stdlib.clone();
         self.load_from(&format!("{path}.ok"), &[stdlib])
     }
+
+    /// A file is the file system's: `std/json.ok` typed from the repository and the found std file are one.
+    fn identity(&mut self, file: &str) -> String {
+        std::fs::canonicalize(file).map_or_else(|_| file.to_string(), |path| path.display().to_string())
+    }
+}
+
+/// The current directory, canonical, as found files are named (#1119).
+fn current_dir() -> Option<String> {
+    let dir = std::env::current_dir().ok()?;
+    Some(std::fs::canonicalize(&dir).unwrap_or(dir).display().to_string())
 }
 
 /// Путь импортирующего файла; у виртуальных (`<stdin>`, `<repl>`) — в текущем каталоге.
@@ -1253,13 +1269,14 @@ impl FileLoader {
     /// Первый файл `file` из каталогов `dirs`, разобранный как модуль.
     fn load_from(&mut self, file: &str, dirs: &[PathBuf]) -> Result<Option<LoadedModule>, String> {
         if let Some(canonical) = locate(file, dirs) {
-            let name = canonical.display().to_string();
+            let id = canonical.display().to_string();
+            let name = self.base.as_deref().map_or_else(|| id.clone(), |base| okkama_compiler::source::display_name(&id, base));
             let text = match self.overlay.get(&canonical) {
                 Some(text) => text.to_string(),
                 None => std::fs::read_to_string(&canonical)
                     .map_err(|error| format!("okkama: cannot read import `{name}`: {error}\n"))?,
             };
-            return commands::module(name, text, self.test_mode).map(Some);
+            return commands::module(id, name, text, self.test_mode).map(Some);
         }
         Ok(None)
     }

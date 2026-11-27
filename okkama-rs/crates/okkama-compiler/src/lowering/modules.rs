@@ -61,6 +61,13 @@ pub trait ModuleLoader {
     fn in_project(&mut self, _file: &str) -> bool {
         false
     }
+
+    /// The identity of file `file`: two names of one file give the same, so the name a caller typed and the
+    /// loader's own name for that file compare equal (#1116). The default is the name itself, for loaders
+    /// whose names are already unique (the playground's, in-memory ones); the CLI's resolves the file system's.
+    fn identity(&mut self, file: &str) -> String {
+        file.to_string()
+    }
 }
 
 /// Загруженный граф: модули в порядке зависимостей и импорты каждого

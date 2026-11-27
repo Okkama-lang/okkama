@@ -792,9 +792,37 @@ every declaration is open (#1005, owner decision).
   `passes`/`after` (ir), `format` (tokens: text|json; ast: tree|json), `mode`, `spans`, `pruneTests` (ast);
   `{source, path, line, character, trigger?}` for hover → `{hover: {markdown, range} | null}`, definition →
   `{definition: {path, range} | null}`, signature → `{signature: {label, parameters, active} | null}`,
-  complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}`. The IDE calls answer from
-  the last inspection of the file that parsed, as the language server does. `std.…` path completion is not in
-  the playground (ide::std_paths reads the std directory from disk; a follow-up of #1078).
+  complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}` (kind: method, field,
+  variable, object, role, enum, enumMember, function, keyword, module, argument, folder), in the order to show
+  them. The IDE calls answer from the last inspection of the file that parsed, as the language server does
+  (recorded by each IDE call; the server records one per change). `version()` → `{version, stdModules,
+  stdBytes, passes}`, `passes` the IR passes in order (`lowering::PASSES`, #1118). `lastPanic()` → `{panic:
+  {message, location: "file:line:column" | null} | null}`: the last call's panic (each call clears it; the
+  hook is installed by the first call), read from the trapped instance before the page starts a new one.
+- **`std.…` completion reads a `StdTree`** (#1115, 2026-11-27): `key`, `modules`, `stamp`, `entries`, `source`
+  (the stored text the stamp describes) and `unsaved` (an editor's text, applied on top of the cached index and
+  never cached). `ide::DiskStd` is the language server's std directory (stamp: each file's length and mtime;
+  native only); okkama-wasm's `BundledStd` is the embedded std, a constant stamp, with the page's files under
+  `std/` as unsaved texts. The wasm sorts the items as the editor shows the server's (`sortText` = deep, label).
+  The parity test compares them with `okkama lsp`'s, item by item.
+- **The compiler's only host calls are in `host.rs`** (#1116, 2026-11-27): `host::Clock` (the
+  `OKKAMA_PROFILE_REGISTERS` timings; zero on wasm32) and `host::dev_output` (`OKKAMA_DUMP_INVALID_IR`,
+  `OKKAMA_OWNERSHIP_REPORT`; dropped on wasm32). `ide/std_disk.rs` is native only. File identity is the
+  loader's (`ModuleLoader::identity`, default the name; the CLI canonicalizes). okkama-devtrace treats wasm32
+  like `okkama_release`. `host::tests` greps every other source file (comments and the trailing test module
+  excluded) for file-system, clock and process calls.
+- **How diagnostics name files** (#1119, 2026-11-27): a file the user named keeps the user's spelling; a file
+  found through an import is named relative to the current directory when it is under it, and by its canonical
+  path otherwise (`source::display_name(found, base)`, lexical). The CLI's `FileLoader` names loaded modules so
+  (`LoadedModule::id` stays canonical; `commands::module(id, name, …)`), and run-time traces use the same
+  function. The language server keeps whole names (they are URIs) and names a relayed import error from the
+  checked file's directory. `okkama man` keeps whole names in its loader (the export records them) and names
+  its warnings by the rule. The playground's names are the page's, relative to its root, its current directory.
+  The parity test runs the CLI in the repository root on relative paths against a page-like workspace (`std/`,
+  root-relative names), unnormalized, with imported files' diagnostics in the sample.
+- **The playground page is published with the release** (2026-11-27), like the /man/ reference: the site repo
+  (okkama-site, `playground/`) is rebuilt per release by `playground/tools/build.sh CHECKOUT [WASM_BINDGEN]`
+  (wasm, wasm-bindgen of Cargo.lock's version, `pkg/manifest.json`, `examples.json`).
 - **Parity is a test of the CLI binary** (`okkama-cli/tests/playground.rs`): `okkama check`, `fmt` and `ir`
   against `Workspace::check`/`fmt`/`ir`, and `spa` against the disassembly of `okkama build`'s SPB, on t/, the Bible's rejected examples, six std modules and the fixtures of
   `tests/playground/` (a warning, a module shadowing std, an imported fake), byte for byte with the exit code.

@@ -19,6 +19,36 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   gzip, 1.7 MB brotli. `okkama-cli/tests/playground.rs` compares `okkama check` and `okkama fmt` with the
   playground on t/, the Bible's rejected examples and std modules, byte for byte. The CLI's output and the SPB
   it builds are unchanged (2220 corpus files; 1549 SPB byte-identical).
+- **The playground completes `std.…` paths like the language server (#1115).** Completion of std paths reads a
+  std tree (`okkama_compiler::ide::StdTree`): the std directory for `okkama lsp` (`DiskStd`, with the editor's
+  unsaved texts) and the bundled std for the playground, whose page files under `std/` come first. The index of
+  whole paths is cached by the tree's stamp. `okkama-cli/tests/playground.rs` compares the playground's
+  completion with `okkama lsp`'s, item for item and in the editor's order.
+- **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
+  location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
+  passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+
+### Changed
+- **Diagnostics name an imported file relative to the current directory (#1119).** `okkama check`, `build`,
+  `run`, `ir` and every other command that loads imports named a file they found through an import by its absolute path, while the
+  file given on the command line kept its spelling: `okkama check 19-cycle-rejected.ok` in the Bible's examples
+  printed `/…/examples/cycle/customers.ok:3:1: …`. A found file is now named relative to the current directory
+  when it is under it, and by its path otherwise (`cycle/customers.ok:3:1: …`), the rule run-time traces already
+  followed; one function, `okkama_compiler::source::display_name`, serves both. The language server's copy of an
+  imported file's error on the importer names the file the same way from the importer's directory
+  (`sub/lib.ok:7: …`; it printed the bare file name). The playground's names are already relative to its root.
+  No expected output changes: the Bible's build script, t/ and conformance did not compare absolute paths.
+- **No compiler path reaches a file system or a clock on wasm32 (#1116).** The standard-library documentation
+  gate takes file identity from the loader (`ModuleLoader::identity`; the CLI's resolves the file system's)
+  instead of canonicalizing, the development switches `OKKAMA_PROFILE_REGISTERS`, `OKKAMA_DUMP_INVALID_IR` and
+  `OKKAMA_OWNERSHIP_REPORT` use the clock and file writes of a new `okkama_compiler::host` module, which a wasm32
+  build compiles inert, `ModuleDoc::load` (a file read) moved into `okkama man`, and okkama-devtrace compiles out
+  on wasm32 as in a release build. A test holds every other source file of the compiler off file-system, clock
+  and process calls.
+
+### Fixed
+- **Completion showed a successor action's result with two carets (#1117).** After `bottle.`, `open` had the
+  detail `() is ^^Bottle` in the language server and the playground; it is `() is ^Bottle`, as declared.
 
 ## [0.6.5] — 2026-11-27
 

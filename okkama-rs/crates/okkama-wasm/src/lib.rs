@@ -7,14 +7,19 @@
 //! `okkama` report the same thing; imports resolve through [`Workspace`], a loader over the bundled std and the
 //! files the page adds, never a file system or the environment. The wasm build exports the same functions to
 //! JavaScript (`wasm-bindgen`); natively they are plain Rust, which is how `okkama-cli/tests/playground.rs`
-//! compares them with the CLI.
+//! compares them with the CLI and the language server.
+//!
+//! A compiler panic is a trap on wasm32 (`RuntimeError: unreachable`), which carries no message: the panic
+//! hook keeps the message and location of the last one for [`last_panic`] (#1118).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use okkama_compiler::commands::{self, Finding, Report};
-use okkama_compiler::ide::{self, Completion, CompletionKind, Inspection, LineIndex, Position, Severity};
+use okkama_compiler::ide::{
+    self, Completion, CompletionKind, Inspection, LineIndex, Position, Severity, Stamp, StdCompletion, StdKind, StdTree,
+};
 use okkama_compiler::lowering::{self, LoadedModule, ModuleLoader};
 use okkama_compiler::source::SourceFile;
 use okkama_compiler::syntax::ParseMode;
@@ -235,12 +240,16 @@ impl Workspace {
     }
 
     /// Completion at `{source, path, line, character, trigger?}`: `{items: [{label, kind, detail,
-    /// documentation, insert, snippet}]}`. After `(` and `,` only argument names; `"` and `/` open completion
-    /// for import paths only, which the playground does not offer yet.
+    /// documentation, insert, snippet}]}`, in the order to show them, as the language server answers: a
+    /// `std.…` path completes from the std (#1115), current level first; after `(` and `,` only argument names;
+    /// `"` and `/` open completion for import paths only, which the playground does not offer (no packages).
     pub fn complete(&self, request: &Value) -> Value {
         let trigger = text_field(request, "trigger");
         if matches!(trigger, Some("\"" | "/")) {
             return json!({"ok": true, "items": []});
+        }
+        if let Some(found) = self.std_path(request) {
+            return json!({"ok": true, "items": found});
         }
         let Some((source, offset, text, inspection)) = self.at(request) else { return json!({"ok": true, "items": []}) };
         let found = if matches!(trigger, Some("(" | ",")) {
@@ -249,6 +258,19 @@ impl Workspace {
             inspection.complete(&text, source.text(), offset)
         };
         json!({"ok": true, "items": found.iter().map(completion).collect::<Vec<_>>()})
+    }
+
+    /// The completion of a `std.…` path at the request's position, from the text as it is (it need not parse):
+    /// `None` when the position is not in one.
+    fn std_path(&self, request: &Value) -> Option<Vec<Value>> {
+        let source = self.source(request).ok()?;
+        let line = request.get("line")?.as_u64()? as u32;
+        let character = request.get("character")?.as_u64()? as u32;
+        let offset = LineIndex::new(source.text()).offset(Position { line, character });
+        let mut found = ide::std_completions(source.text(), offset, &BundledStd { workspace: self })?;
+        // The language server's order: the current level, then whole paths, each by label.
+        found.sort_by(|a, b| a.deep.cmp(&b.deep).then_with(|| a.label.cmp(&b.label)));
+        Some(found.iter().map(std_completion).collect())
     }
 
     /// The request's file, its offset of `line`/`character`, and the last inspection of it that parsed, with
@@ -353,7 +375,8 @@ impl Loader<'_> {
     fn load_from(&self, file: &str, dirs: &[String]) -> Result<Option<LoadedModule>, String> {
         let Some(found) = self.locate(file, dirs) else { return Ok(None) };
         let text = self.workspace.text(&found).unwrap_or_default().to_string();
-        commands::module(found, text, self.test_mode).map(Some)
+        // The page's names are relative to its root, the playground's current directory (#1119).
+        commands::module(found.clone(), found, text, self.test_mode).map(Some)
     }
 }
 
@@ -374,6 +397,57 @@ impl ModuleLoader for Loader<'_> {
 
     fn load_std(&mut self, path: &str, _importer: &str) -> Result<Option<LoadedModule>, String> {
         self.load_from(&format!("{path}.ok"), std::slice::from_ref(&self.workspace.std_root))
+    }
+}
+
+/// The bundled std as `std.…` completion reads it (#1115); the page's files under the std root come in front of
+/// it, as imports see them, like the editor's unsaved texts. The bundle never changes, so its index is built once.
+#[derive(Debug)]
+struct BundledStd<'w> {
+    workspace: &'w Workspace,
+}
+
+impl BundledStd<'_> {
+    fn file(&self, module: &str) -> String {
+        join(&self.workspace.std_root, &format!("{module}.ok"))
+    }
+}
+
+impl StdTree for BundledStd<'_> {
+    fn key(&self) -> String {
+        format!("bundled:{}", self.workspace.std_root)
+    }
+
+    fn modules(&self) -> Vec<String> {
+        bundle::FILES.iter().filter_map(|(path, _)| path.strip_suffix(".ok")).map(str::to_string).collect()
+    }
+
+    fn stamp(&self, _modules: &[String]) -> Option<Stamp> {
+        Some(Stamp::default())
+    }
+
+    fn entries(&self, folder: &[String]) -> Vec<(String, bool)> {
+        let prefix = if folder.is_empty() { String::new() } else { format!("{}/", folder.join("/")) };
+        self.modules()
+            .iter()
+            .filter_map(|module| module.strip_prefix(prefix.as_str()))
+            .map(|rest| match rest.split_once('/') {
+                Some((folder, _)) => (folder.to_string(), true),
+                None => (rest.to_string(), false),
+            })
+            .collect()
+    }
+
+    fn source(&self, module: &str) -> Option<SourceFile> {
+        let file = self.file(module);
+        let text = self.workspace.std.get(&file)?.to_string();
+        SourceFile::new(file, text).ok()
+    }
+
+    fn unsaved(&self, module: &str) -> Option<SourceFile> {
+        let file = self.file(module);
+        let text = self.workspace.files.get(&file)?.clone();
+        SourceFile::new(file, text).ok()
     }
 }
 
@@ -430,6 +504,22 @@ fn range(range: ide::Range) -> Value {
     })
 }
 
+fn std_completion(found: &StdCompletion) -> Value {
+    let kind = match found.kind {
+        StdKind::Folder => "folder",
+        StdKind::Module => "module",
+        StdKind::Object => "object",
+        StdKind::Role => "role",
+        StdKind::Enum => "enum",
+        StdKind::EnumCase => "enumMember",
+        StdKind::Native => "function",
+    };
+    json!({
+        "label": found.label, "kind": kind, "detail": found.detail, "documentation": found.documentation,
+        "insert": found.label, "snippet": false,
+    })
+}
+
 fn completion(found: &Completion) -> Value {
     let kind = match found.kind {
         CompletionKind::Method => "method",
@@ -453,10 +543,52 @@ fn completion(found: &Completion) -> Value {
 thread_local! {
     /// The playground's one workspace: the bundled std under `std/` and the page's files.
     static WORKSPACE: RefCell<Workspace> = RefCell::new(Workspace::default());
+    /// The message and location of the last call's panic (#1118).
+    static LAST_PANIC: RefCell<Option<(String, Option<String>)>> = const { RefCell::new(None) };
+}
+
+/// Keep every panic's message and location for [`last_panic`], then run the hook that was there before (natively,
+/// the one that prints it). Installed once, by the first call.
+pub fn keep_panics() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|text| text.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic without a message".to_string());
+            let location = info.location().map(|at| format!("{}:{}:{}", at.file(), at.line(), at.column()));
+            // A panic inside the hook's own borrow is left alone rather than aborting twice.
+            let _ = LAST_PANIC.try_with(|last| {
+                if let Ok(mut last) = last.try_borrow_mut() {
+                    *last = Some((message, location));
+                }
+            });
+            previous(info);
+        }));
+    });
+}
+
+/// The last call's panic: `{panic: {message, location} | null}`; `location` is `file:line:column` or null. The
+/// page reads it from the trapped instance before it starts a new one (#1118).
+pub fn last_panic() -> String {
+    let panic = LAST_PANIC.with(|last| {
+        last.borrow().as_ref().map(|(message, location)| json!({"message": message, "location": location}))
+    });
+    json!({"panic": panic}).to_string()
+}
+
+fn forget_panic() {
+    keep_panics();
+    LAST_PANIC.with(|last| *last.borrow_mut() = None);
 }
 
 /// Parse `request`, run `command` on the playground's workspace, and print the response.
 pub fn handle(request: &str, command: fn(&Workspace, &Value) -> Value) -> String {
+    forget_panic();
     let response = match serde_json::from_str::<Value>(request) {
         Ok(request) => WORKSPACE.with(|workspace| command(&workspace.borrow(), &request)),
         Err(error) => usage(&format!("the request is not JSON: {error}")),
@@ -466,6 +598,7 @@ pub fn handle(request: &str, command: fn(&Workspace, &Value) -> Value) -> String
 
 /// The page's own files: request `{files: {path: text}, importDirs?: [dir]}`; replaces the previous set.
 pub fn set_files(request: &str) -> String {
+    forget_panic();
     let request: Value = match serde_json::from_str(request) {
         Ok(request) => request,
         Err(error) => return usage(&format!("the request is not JSON: {error}")).to_string(),
@@ -484,10 +617,16 @@ pub fn set_files(request: &str) -> String {
     json!({"ok": true}).to_string()
 }
 
-/// The compiler's version and the bundled std: `{version, stdModules, stdBytes}`.
+/// The compiler's version, the bundled std and the IR passes in their order (`okkama ir --passes`, #1118):
+/// `{version, stdModules, stdBytes, passes}`.
 pub fn version() -> String {
+    keep_panics();
     let bytes: usize = bundle::FILES.iter().map(|(_, text)| text.len()).sum();
-    json!({"version": env!("CARGO_PKG_VERSION"), "stdModules": bundle::FILES.len(), "stdBytes": bytes}).to_string()
+    json!({
+        "version": env!("CARGO_PKG_VERSION"), "stdModules": bundle::FILES.len(), "stdBytes": bytes,
+        "passes": lowering::PASSES,
+    })
+    .to_string()
 }
 
 /// The exports to JavaScript: each takes the request's JSON text and returns the response's.
@@ -505,6 +644,11 @@ mod bindings {
     #[wasm_bindgen(js_name = setFiles)]
     pub fn set_files(request: &str) -> String {
         super::set_files(request)
+    }
+
+    #[wasm_bindgen(js_name = lastPanic)]
+    pub fn last_panic() -> String {
+        super::last_panic()
     }
 
     #[wasm_bindgen]
@@ -627,5 +771,74 @@ mod tests {
         let complete = workspace.complete(&json!({"source": typing, "line": 4, "character": 18}));
         let labels: Vec<&str> = complete["items"].as_array().unwrap().iter().filter_map(|item| item["label"].as_str()).collect();
         assert!(labels.contains(&"total"), "{complete}");
+    }
+
+    fn labels(response: &Value) -> Vec<(String, String)> {
+        let items = response["items"].as_array().unwrap();
+        items.iter().map(|item| (item["label"].as_str().unwrap().to_string(), item["kind"].as_str().unwrap().to_string())).collect()
+    }
+
+    /// #1115: a `std.…` path completes from the bundled std as the language server's does from the directory:
+    /// folders and modules of the level first, by label, then whole paths; declarations of a named module; enum
+    /// cases; a page file under the std root in front of the bundled one.
+    #[test]
+    fn std_paths_complete_from_the_bundled_std() {
+        let mut workspace = Workspace::default();
+        let at = |workspace: &Workspace, text: &str| {
+            let line = text.lines().count() - 1;
+            let character = text.lines().last().unwrap().encode_utf16().count();
+            workspace.complete(&json!({"source": text, "line": line, "character": character, "trigger": "."}))
+        };
+        let root = labels(&at(&workspace, "module play;\nmain() is int { let x = std."));
+        assert!(root.contains(&("io".into(), "folder".into())), "{root:?}");
+        assert!(root.contains(&("compare".into(), "module".into())), "{root:?}");
+        // The level (`csv` is a folder and a module), by label, then whole paths from the depth, by label.
+        let deep = root.iter().position(|(label, _)| label.contains('.')).unwrap();
+        assert!(root.contains(&("io.stdout".into(), "module".into())), "{root:?}");
+        for part in [&root[..deep], &root[deep..]] {
+            let labels: Vec<&String> = part.iter().map(|(label, _)| label).collect();
+            let mut sorted = labels.clone();
+            sorted.sort();
+            assert_eq!(labels, sorted);
+        }
+        assert!(root[deep..].iter().all(|(label, _)| label.contains('.')), "{root:?}");
+        let stdout = labels(&at(&workspace, "module play;\nmain() is int { std.io.stdout."));
+        assert!(stdout.contains(&("Stdout".into(), "object".into())), "{stdout:?}");
+        let order = labels(&at(&workspace, "module play;\nmain() is int { std.compare.Order."));
+        assert!(order.contains(&("less".into(), "enumMember".into())), "{order:?}");
+        // Not a std path: ordinary completion.
+        let other = at(&workspace, "module play;\nmain() is int { let mystd = 1; mystd.");
+        assert!(!labels(&other).iter().any(|(_, kind)| kind == "folder"), "{other}");
+        // A page file under std/ is what imports and completion read.
+        workspace.set_files([("std/compare.ok".to_string(), "module compare;\n\n// A page enum.\nenum Page = (one, two);\n".to_string())]);
+        let page = labels(&at(&workspace, "module play;\nmain() is int { std.compare."));
+        assert!(page.contains(&("Page".into(), "enum".into())) && !page.iter().any(|(label, _)| label == "Order"), "{page:?}");
+        let deep = labels(&at(&workspace, "module play;\nmain() is int { std.Pag"));
+        assert!(deep.contains(&("compare.Page".into(), "enum".into())), "{deep:?}");
+    }
+
+    /// #1118: the version names the IR passes in their order, the one list `okkama ir --passes` takes.
+    #[test]
+    fn the_version_lists_the_ir_passes() {
+        let version: Value = serde_json::from_str(&version()).unwrap();
+        let passes: Vec<&str> = version["passes"].as_array().unwrap().iter().map(|pass| pass.as_str().unwrap()).collect();
+        assert_eq!(passes, lowering::PASSES);
+        let after = Workspace::default().ir(&json!({"source": "module play;\nmain() is int { 0; }\n", "after": passes[passes.len() - 1]}));
+        assert_eq!(after["ok"], true, "{after}");
+    }
+
+    /// #1118: a panic's message and location are kept for `lastPanic`, and the next call forgets them.
+    #[test]
+    fn a_panic_is_kept_until_the_next_call() {
+        keep_panics();
+        let caught = std::panic::catch_unwind(|| panic!("the compiler fell over at {}", 42));
+        assert!(caught.is_err());
+        let panic: Value = serde_json::from_str(&last_panic()).unwrap();
+        assert_eq!(panic["panic"]["message"], "the compiler fell over at 42", "{panic}");
+        assert!(panic["panic"]["location"].as_str().is_some_and(|at| at.contains("lib.rs:")), "{panic}");
+        let _ = std::panic::catch_unwind(|| std::panic::panic_any("static text"));
+        assert_eq!(serde_json::from_str::<Value>(&last_panic()).unwrap()["panic"]["message"], "static text");
+        handle("{\"source\": \"module play;\"}", Workspace::fmt);
+        assert_eq!(last_panic(), "{\"panic\":null}");
     }
 }

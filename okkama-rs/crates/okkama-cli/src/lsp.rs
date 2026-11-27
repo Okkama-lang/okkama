@@ -294,6 +294,8 @@ impl Server {
 
     fn loader(&self, test_mode: bool) -> FileLoader {
         let mut loader = FileLoader::from_env();
+        // A file is published by its URI: names stay whole (#1119).
+        loader.base = None;
         if let Some(stdlib) = &self.stdlib {
             loader.stdlib = stdlib.clone();
         }
@@ -319,6 +321,7 @@ impl Server {
             return;
         };
         let inspection = Rc::new(super::inspect_file(&source, |test_mode| self.loader(test_mode)));
+        let directory = Path::new(source.name()).parent().map(|dir| dir.display().to_string()).unwrap_or_default();
 
         // Диагностики по файлам; ошибки других файлов — ещё и на первом импорте корня.
         let mut by_path: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
@@ -338,11 +341,8 @@ impl Server {
             }
             if found.path != source.name()
                 && let Some(range) = import_range {
-                    let file = Path::new(&found.path)
-                        .file_name()
-                        .map_or(found.path.clone(), |name| {
-                            name.to_string_lossy().into_owned()
-                        });
+                    // Named as diagnostics name a found file (#1119), from where the checked file is.
+                    let file = okkama_compiler::source::display_name(&found.path, &directory);
                     by_path
                         .entry(source.name().to_string())
                         .or_default()
@@ -528,7 +528,7 @@ impl Server {
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
         let loader = self.loader(false);
-        let found = ide::std_completions_with_overlay(&document.text, offset, &loader.stdlib, &loader.overlay)?;
+        let found = ide::std_completions(&document.text, offset, &ide::DiskStd::with_overlay(&loader.stdlib, &loader.overlay))?;
         let items = found
             .into_iter()
             .map(|found| lsp_types::CompletionItem {

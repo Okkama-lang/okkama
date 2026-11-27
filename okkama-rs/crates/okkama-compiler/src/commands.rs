@@ -126,17 +126,18 @@ pub fn parse(sources: &[SourceFile], mode: ParseMode) -> Result<Vec<ast::Program
         .collect()
 }
 
-/// A found import as a module: `name` is its id, `text` its source. Production parses it without tests (§14);
-/// test mode parses it with its fakes and tests, desugared. `Err` is the text to print.
-pub fn module(name: String, text: String, test_mode: bool) -> Result<LoadedModule, String> {
-    let source = SourceFile::new(name.clone(), text).map_err(|error| format!("okkama: {error}\n"))?;
+/// A found import as a module: `id` is its identity, `name` the file's name in diagnostics
+/// ([`crate::source::display_name`], #1119), `text` its source. Production parses it without tests (§14); test
+/// mode parses it with its fakes and tests, desugared. `Err` is the text to print.
+pub fn module(id: String, name: String, text: String, test_mode: bool) -> Result<LoadedModule, String> {
+    let source = SourceFile::new(name, text).map_err(|error| format!("okkama: {error}\n"))?;
     let options = ParseOptions {
         mode: if test_mode { ParseMode::Full } else { ParseMode::Production },
         ..ParseOptions::default()
     };
     let program = syntax::parse(&source, &options).map_err(|diagnostics| render_all(&diagnostics, &source))?;
     let program = if test_mode { prune::desugar_test_items(program) } else { prune::strip_test_items(program) };
-    Ok(LoadedModule { id: name, program, source })
+    Ok(LoadedModule { id, program, source })
 }
 
 /// The program's profile: production (tests and fakes removed) or test mode, with tests desugared.

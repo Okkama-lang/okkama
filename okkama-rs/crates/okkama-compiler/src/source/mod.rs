@@ -198,9 +198,38 @@ impl SourceFile {
     }
 }
 
+/// How a diagnostic names a file the compiler found, an import (#1119): relative to `base`, the current
+/// directory, when the file is under it, and as found otherwise. A file the user named keeps the user's
+/// spelling and is never passed here. An empty base (the playground, whose names are its own, relative to its
+/// root) names every file as found. Lexical: both paths are compared as given, so the caller passes them in
+/// one form (the CLI: canonical).
+pub fn display_name(found: &str, base: &str) -> String {
+    if base.is_empty() {
+        return found.to_string();
+    }
+    match std::path::Path::new(found).strip_prefix(base) {
+        Ok(relative) if !relative.as_os_str().is_empty() => relative.display().to_string(),
+        _ => found.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_found_file_is_named_relative_to_the_base_when_under_it() {
+        assert_eq!(display_name("/work/app/cycle/customers.ok", "/work/app"), "cycle/customers.ok");
+        assert_eq!(display_name("/work/app/cycle/customers.ok", "/work/app/"), "cycle/customers.ok");
+        // Outside the base, and a sibling whose name only starts like it: as found.
+        assert_eq!(display_name("/usr/lib/okkama/std/json.ok", "/work/app"), "/usr/lib/okkama/std/json.ok");
+        assert_eq!(display_name("/work/application/x.ok", "/work/app"), "/work/application/x.ok");
+        assert_eq!(display_name("/work/app", "/work/app"), "/work/app");
+        // No base, or names that are already relative: as found.
+        assert_eq!(display_name("cycle/customers.ok", ""), "cycle/customers.ok");
+        assert_eq!(display_name("std/json.ok", "/work/app"), "std/json.ok");
+        assert_eq!(display_name("/x/y.ok", "/"), "x/y.ok");
+    }
 
     fn file(text: &str) -> SourceFile {
         SourceFile::new("test.ok", text).unwrap()

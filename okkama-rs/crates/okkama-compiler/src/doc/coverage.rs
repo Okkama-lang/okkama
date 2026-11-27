@@ -40,17 +40,15 @@ impl ModuleDoc {
 }
 
 /// A user module cannot opt into std errors merely by declaring a std name.
-/// Resolve identity through the existing loader, including editor overlays.
+/// File identity is the loader's (#1116): the compiler itself never asks the file system.
 pub fn enforced(doc: &ModuleDoc, loader: &mut dyn crate::lowering::ModuleLoader) -> bool {
     enforced_file(&doc.file, loader)
 }
 
 pub fn enforced_file(file: &str, loader: &mut dyn crate::lowering::ModuleLoader) -> bool {
-    let canonical = |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
-    let original = file;
-    let file = canonical(file);
+    let identity = loader.identity(file);
     COMPLETED_WAVES.lines().filter(|line| !line.is_empty() && !line.starts_with('#')).any(|module| {
-        let Ok(Some(path)) = loader.resolve_std(module, original) else { return false; };
-        canonical(&path) == file
+        let Ok(Some(path)) = loader.resolve_std(module, file) else { return false; };
+        loader.identity(&path) == identity
     })
 }

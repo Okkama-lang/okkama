@@ -256,14 +256,8 @@ impl ModuleDoc {
         }
     }
 
-    /// Reads and parses `path` and documents it. Test bodies are skipped, as
-    /// a production build skips them.
-    pub fn load(path: &std::path::Path) -> Result<ModuleDoc, String> {
-        let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        ModuleDoc::parse(path.display().to_string(), text)
-    }
-
-    /// Documents source `text` called `name`.
+    /// Documents source `text` called `name`. Test bodies are skipped, as a production build skips them; the
+    /// caller reads the file (#1116: the compiler never does).
     pub fn parse(name: String, text: String) -> Result<ModuleDoc, String> {
         let source = SourceFile::new(name.clone(), text).map_err(|_| format!("{name}: the file is too large"))?;
         let options = ParseOptions {

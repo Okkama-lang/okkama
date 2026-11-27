@@ -106,10 +106,10 @@ fn allocate_profiled<const PROFILE: bool>(function: &Function) -> Function {
             }
         }
         for inst in block.insts.iter().rev() {
-            let clone_start = PROFILE.then(std::time::Instant::now);
+            let clone_start = PROFILE.then(crate::host::Clock::now);
             let mut busy = live.clone();
             if let Some(start) = clone_start {
-                profile.busy_clone_ns += start.elapsed().as_nanos();
+                profile.busy_clone_ns += start.elapsed();
                 profile.busy_clones += 1;
                 profile.busy_clone_values += live.0.len();
             }
@@ -205,7 +205,7 @@ fn allocate_profiled<const PROFILE: bool>(function: &Function) -> Function {
 /// actual adjacency capacities and Vec headers, but not the liveness trees,
 /// input/output IR, allocator metadata or the rest of the process (use RSS).
 struct Profile<const ON: bool> {
-    last: Option<std::time::Instant>,
+    last: Option<crate::host::Clock>,
     ns: [u128; 6],
     busy_clone_ns: u128,
     busy_clones: usize,
@@ -218,7 +218,7 @@ struct Profile<const ON: bool> {
 impl<const ON: bool> Profile<ON> {
     fn new() -> Self {
         Self {
-            last: ON.then(std::time::Instant::now),
+            last: ON.then(crate::host::Clock::now),
             ns: [0; 6],
             busy_clone_ns: 0,
             busy_clones: 0,
@@ -231,15 +231,15 @@ impl<const ON: bool> Profile<ON> {
 
     fn phase(&mut self, phase: usize) {
         if ON {
-            let now = std::time::Instant::now();
-            self.ns[phase] = now.duration_since(self.last.expect("profiling clock")).as_nanos();
+            let now = crate::host::Clock::now();
+            self.ns[phase] = now.since(self.last.expect("profiling clock"));
             self.last = Some(now);
         }
     }
 
     fn restart(&mut self) {
         if ON {
-            self.last = Some(std::time::Instant::now());
+            self.last = Some(crate::host::Clock::now());
         }
     }
 

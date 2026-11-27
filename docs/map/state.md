@@ -2,6 +2,19 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] Playground follow-ups #1115–#1119 (feature/pg2 from release/066 342cc7322, not committed; worktree
+  okkama-work/hf-pg2, target t-pg2): `std.…` completion over `ide::StdTree` (DiskStd for the LSP, BundledStd in
+  okkama-wasm), parity with `okkama lsp` in tests/playground.rs (#1115); `compiler/src/host.rs` (Clock,
+  dev_output) and `ModuleLoader::identity`, devtrace inert on wasm32, grep test `host::tests` (#1116); one caret
+  in a successor's completion detail (#1117); `lastPanic()` and `version().passes` (#1118); imported files named
+  relative to the current directory (`source::display_name`), LSP relay from the importer's directory, parity
+  test on root-relative paths with imported diagnostics (#1119). No expected outputs changed (Bible, t/,
+  conformance); SPB unchanged by the naming (checked on 19-shop from two directories).
+- [ ] The playground page is built on the website (repo okkama-site, `playground/`), committed locally as
+  e913d3f, not yet published; rebuilt per release with `playground/tools/build.sh CHECKOUT` (wasm-bindgen
+  0.2.130 in okkama-work/tools-wasm). Uncommitted there: worker.js reads `lastPanic` after a trap, playground.js
+  takes the passes from `version().passes` and maps the `folder` kind; `pkg/` rebuilt from hf-pg2.
+
 - [x] #1078, Rust side (feature/1078, not committed; worktree okkama-work/hf-1078, target t-1078): the compiler
   builds for `wasm32-unknown-unknown` (`cargo check -p okkama-compiler --target wasm32-unknown-unknown`).
   okkama-runtime-core feature `native` (default) gates `native`, `host`, `data` and their dependencies; the
