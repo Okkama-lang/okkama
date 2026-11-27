@@ -18,7 +18,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (117)
+## Tags in one layer (118)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -78,6 +78,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - SPARROW_CORE_FS_FAULTS — sparrow: `host/native_fs.rs`
 - SPARROW_CORE_GC_AGES — sparrow: `heap.rs`
 - SPARROW_CORE_GC_STRESS — sparrow: `runtime.rs`
+- SPARROW_CORE_INTERPRET — sparrow: `runtime.rs`
 - SPARROW_CORE_INT_RANGE — sparrow: `program.rs`
 - SPARROW_CORE_NO_INLINE — sparrow: `jit.rs`
 - SPARROW_CORE_OLD_DISPATCH — sparrow: `jit.rs`

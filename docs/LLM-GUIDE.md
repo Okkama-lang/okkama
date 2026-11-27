@@ -276,6 +276,10 @@ Under `SPARROW_CORE_PROFILE_COMPILE`, `pointer-free analysis` lines separately
 report its load-time cost; `roots` lines under profiling or `SPARROW_CORE_DUMP`
 report traced/omitted registers and the sum of root words across stack maps.
 The same root counts appear under `--stats`.
+`SPARROW_CORE_INTERPRET=1` (#1120: Sparrow's interpreter instead of the JIT, chosen when a runtime is
+made, for `okkama run`/`exec` and `sparrow` alike; the same runtime, helpers and failure texts, roots read
+from its register stack; failure handlers and async bodies are refused with "… is not supported by the
+interpreter yet (#1121/#1122)" instead of run; see `sparrow-core/src/interp.rs`),
 `SPARROW_CORE_GC_STRESS=1` (collect at every
 safepoint and poison reclaimed cells: values kept alive by mistake fail at
 once), `OKKAMA_ARRAYS=flat|shared|trie`, `OKKAMA_MAPS=btree`,
@@ -567,7 +571,8 @@ not needed (#292).
 | `jit.rs` | whole-function Cranelift compilation on first call; stack maps (`maps`: frame-to-SP offset + live slots); safepoints; frames up to `MAX_FRAME` (a quarter of `runtime::STACK_HEADROOM`; one shared `spill` area per function); runtime helpers in one `helpers!` table: Rust signature checked at compile time, Cranelift signature derived from it, effects (`HELPERS`); a new helper needs a test reaching it (`okkama-cli/tests/helpers.rs`) |
 | `code_memory.rs` | JIT memory: one reservation per kind, no membarrier |
 | `heap.rs` | non-moving precise mark-sweep heap, size classes up to 128 words, object/array/closure/payload kinds |
-| `runtime.rs` | runtime state shared with machine code, helpers (`rt_*`), `run_function_with`, stats |
+| `runtime.rs` | runtime state shared with machine code, helpers (`rt_*`), `run_function_with`, stats; the engine seam (#1120): every entry from Rust into Okkama code (a synchronous entry, a closure's helper, an async body, an intrinsic's callback, a destroy, `Error.text`) goes through `Runtime::invoke`/`Runtime::resume`, which read the published code first and take a cold branch (the interpreter, or the JIT's compile) only without it; `safepoint` asks the same engine for its frames' roots |
+| `interp.rs` | the interpreter (#1120, `SPARROW_CORE_INTERPRET=1`): a `match` over decoded instructions, frames on a register stack of fixed chunks (a call of an Okkama body is a new activation, not a Rust call), a plan per function made at its first call; every instruction the JIT runs through a helper (`program::generic`, `program::failure_or_region`, natives, intrinsics, closures, Futures) calls that helper, the rest are its own branches with the JIT's texts (`texts.rs`); every register is a root by its kind. A new instruction gets a branch here too |
 | `tasks.rs`, `drivers.rs` | stackless async: an async call's heap frame is its Future; drivers are bodies of async natives/intrinsics |
 | `io.rs` | external waits: native I/O requests (Rust futures), timers; single-thread Tokio reactor polled while spinning (`wait_external`) |
 | `failures.rs` | failures, cleanup regions, resource identities and graph walks (`descriptor_flags`: closed-world reachability of `destroy`), failure reports |
@@ -672,7 +677,8 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
   `SPARROW_CORE_GC_STRESS=1` and compare with an ordinary Sparrow run
   (`okkama-cli/tests/handlers.rs`, `sparrow-cli/tests/handlers/*.spa`).
 - Bytecode: `sparrow --disassemble x.spb`.
-- A wrong result on Sparrow only (#44): run with `SPARROW_CORE_UNOPTIMIZED=*`
+- A wrong result on Sparrow only (#44): compare with `SPARROW_CORE_INTERPRET=1` (#1120; it shares the helpers,
+  not the emitter, the stack maps or the analyses), then run with `SPARROW_CORE_UNOPTIMIZED=*`
   (no Cranelift passes) and `SPARROW_CORE_PLAIN=*` (no inline fast paths:
   those instructions take the shared slow path). If either fixes it, bisect
   the symbol list (symbols as in `--disassemble`) down to one function, then

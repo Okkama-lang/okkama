@@ -27,6 +27,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
   location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
   passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+- **Sparrow runs synchronous programs without the JIT: `SPARROW_CORE_INTERPRET=1` (#1120, first part of #1079).**
+  The interpreter (`sparrow-core/src/interp.rs`) is a mode of the same runtime: heap, collector, `ops`, failures,
+  regions, natives, intrinsics and budgets are shared, and every instruction the JIT runs through a helper calls
+  that helper (the `SPARROW_CORE_PLAIN` path without Cranelift); 48 instructions have branches of their own
+  (scalars, objects, variants, arrays, calls of every kind, closures, roles, caps, control) with the emitter's
+  failure texts, now in one place (`texts.rs`). Frames live on a register stack, not the Rust stack, and the
+  collector roots every register by its kind. Every entry from Rust into Okkama code (a synchronous entry, a
+  closure's helper, an async body, an intrinsic's callback, a destroy, `Error.text`) goes through one seam,
+  `Runtime::invoke`/`Runtime::resume`, which reads the published code first as before. Steps, the stack limit
+  and traces follow the JIT's rules, so a budget stops both at the same point and a failure reports the same
+  sites. Failure handlers (#1121) and async bodies (#1122) are not run yet: a failure a handler would catch, or
+  an async body, stops the run with "… is not supported by the interpreter yet". Results: t/ 135 of 142 files
+  and examples 133 of 263 give the JIT's output and exit code (the rest refused, none different), under
+  `SPARROW_CORE_GC_STRESS=1` too; bench/micro `check.py` passes 560 of 773 programs on the interpreter (the others
+  refused, or failing in the cage on both). With the switch off, the output of every corpus is unchanged.
 
 ### Changed
 - **Diagnostics name an imported file relative to the current directory (#1119).** `okkama check`, `build`,

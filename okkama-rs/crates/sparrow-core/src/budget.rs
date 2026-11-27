@@ -300,6 +300,18 @@ impl Fuel {
         // SAFETY: a live allocation owned by `self`.
         unsafe { self.0.write_volatile(value) }
     }
+
+    /// One step, as machine code takes it at an entry or a back-edge (#1120: the interpreter): true when the
+    /// slice is used up and `rt_poll` must run.
+    #[inline]
+    pub(crate) fn step(&self) -> bool {
+        // SAFETY: a live allocation owned by `self`; machine code writes it only on this thread.
+        unsafe {
+            let left = self.0.read_volatile() - 1;
+            self.0.write_volatile(left);
+            left < 0
+        }
+    }
 }
 
 impl Drop for Fuel {

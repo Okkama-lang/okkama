@@ -2,6 +2,26 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1120 Interpreter 1 (feature/1120 from release/066 39a627b67, not committed; worktree okkama-work/hf-1120,
+  target t-1120): `sparrow-core/src/interp.rs` behind the seam `Runtime::invoke`/`Runtime::resume` (runtime.rs;
+  the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in
+  `Runtime::safepoint`; `SPARROW_CORE_INTERPRET` read in `Runtime::assemble` through `env_switch`; devtrace
+  category `interp`. 141 instructions: 74 `generic` → `rt_exec`, 12 `failure_or_region` → `rt_failure_op`, 48 own
+  branches, 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
+  dispatch_table, role_slot_is_async}`, `texts.rs`. Tests: `interp::tests` (19, in-process JIT/interpreter/GC
+  stress comparison `engines`), 21 mutations of interp.rs/runtime.rs each caught. Corpus (release build, cage):
+  t/ base+op+lang+gen 135 same / 7 refused / 0 differ, under GC stress the same (persistence/06 needs 105 s vs
+  31 s); examples 133 same / 130 refused / 0 differ; SparrowBook examples and sparrow-core/sparrow-cli .spa: all
+  without handlers/async identical; bench/micro check.py 560/773 pass on the interpreter (61 handler and 128
+  async refusals, 24 cage failures shared with the JIT). Switch off: t/ 142 and examples 263 byte-identical to
+  release/066, micro check failures the same set. Micro A/B, JIT path (okkama-dev, toolchain.sh builds of
+  release/066 39a627b67 and the candidate at seeds 1 and 2, n=10⁵, 5 runs, A B B A per seed, plus a 25k/100k
+  slope round on seed 1): 12 cells (map-index/-replace/-plus/-miss/-literal, string-concat/-length/-split,
+  byte, byte-search, closure-call, recursion), geomean −0.2%, every cell within ±4% (string-length +5.5% on
+  seed 1, +0.3% on seed 2: layout). Interpreter/JIT, marginal ns per iteration (slope 20k→100k, seed 1):
+  baseline ×8.4, int-small ×8.5, float ×6.2, recursion ×19.2, method-call ×16.9, closure-call ×12.7, role-call
+  ×16.4, array-index ×8.9, map-index ×2.0, string-concat ×2.1, string-length ×6.3; geomean ×7.9 (design target
+  ≤10×). Toolchains okkama-work/micro-tc/1120-{base,cand}{,2}, results okkama-work/micro-tc/1120-results.
 - [x] Playground follow-ups #1115–#1119 (feature/pg2 from release/066 342cc7322, not committed; worktree
   okkama-work/hf-pg2, target t-pg2): `std.…` completion over `ide::StdTree` (DiskStd for the LSP, BundledStd in
   okkama-wasm), parity with `okkama lsp` in tests/playground.rs (#1115); `compiler/src/host.rs` (Clock,

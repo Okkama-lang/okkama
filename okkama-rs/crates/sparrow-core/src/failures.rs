@@ -1680,20 +1680,17 @@ impl Runtime {
                 None => failure,
             }));
         }
-        let code = match crate::jit::compile(self, destroy.0 as usize) {
-            Ok(code) => code,
-            Err(error) => {
-                crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
-                return DestroyStep::Stop(primary);
-            }
-        };
         if let Some(primary) = primary {
             self.roots.push((primary, Repr::Ref));
         }
-        // SAFETY: a destroy body takes its receiver.
-        unsafe { crate::jit::invoke(code, ctx, &[object]) };
+        // A destroy body takes its receiver.
+        let invoked = self.invoke(ctx, destroy.0 as usize, &[object]);
         if primary.is_some() {
             self.roots.pop();
+        }
+        if let Err(error) = invoked {
+            crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
+            return DestroyStep::Stop(primary);
         }
         let ctx = unsafe { &mut *ctx };
         if ctx.status == FAILED {
@@ -2031,10 +2028,10 @@ impl Runtime {
         for &failure in &order {
             if let Some(FailureKind::Thrown(object)) = self.failure(failure).map(|f| &f.kind) {
                 let object = *object;
+                // Error.text takes its receiver and returns a string; one the JIT cannot compile leaves the
+                // default message.
                 if let Some(function) = self.error_text_method(object)
-                    && let Ok(code) = crate::jit::compile(self, function) {
-                        // SAFETY: Error.text takes its receiver and returns a string.
-                        let text = unsafe { crate::jit::invoke(code, ctx, &[object]) };
+                    && let Ok(text) = self.invoke(ctx, function, &[object]) {
                         let ctx = unsafe { &mut *ctx };
                         match ctx.status {
                             OK => {

@@ -115,31 +115,33 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1210 — Instruction operand and result types for bytecode lowered from OIR-2
 - `okkama-sparrow/src/verify.rs` 828 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 3140 lines
+## ownership-runtime — 2 files, 3134 lines
 
-- `sparrow-core/src/failures.rs` 2353 — Failures, resource regions and the text of a failure that reaches the top.
-- `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
+- `sparrow-core/src/failures.rs` 2349 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 34994 lines
+## sparrow — 66 files, 36062 lines
 
-- `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
+- `sparrow-core/src/budget.rs` 293 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/heap.rs` 2320 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/intrinsics.rs` 1069 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/interp.rs` 1005 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
+- `sparrow-core/src/intrinsics.rs` 1068 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 203 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 3073 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 610 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/jit.rs` 2948 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/lib.rs` 612 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — The natives the core serves itself, and the dispatch to the host's
 - `sparrow-core/src/ops.rs` 1805 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 395 — State of the async primitives (Atomic, Event and Cancellation, Lock and
-- `sparrow-core/src/program.rs` 271 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 1154 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/program.rs` 396 — Static facts about a loaded SPB program: the machine representation of every
+- `sparrow-core/src/runtime.rs` 1201 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
+- `sparrow-core/src/texts.rs` 7 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
 - `sparrow-core/src/word.rs` 75 — One machine word per value. The representation is chosen by the static SPB
 - `sparrow-core/src/worker.rs` 660 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
 - `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
@@ -187,10 +189,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
-## devtrace — 2 files, 412 lines
+## devtrace — 2 files, 413 lines
 
 - `okkama-devtrace/src/env_switch.rs` 84 — The environment-switch policy, one implementation for every crate (#1095): booleans (#1067), byte counts
-- `okkama-devtrace/src/lib.rs` 328 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
+- `okkama-devtrace/src/lib.rs` 329 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
 ## cli — 10 files, 5052 lines
 

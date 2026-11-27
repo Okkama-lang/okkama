@@ -170,6 +170,10 @@ pub struct Runtime {
     /// A native panicked: the runtime's state is unknown and it runs nothing more.
     pub poisoned: bool,
     pub(crate) budget: Budget,
+    /// #1120: the interpreter, when `SPARROW_CORE_INTERPRET` chose it at construction; then no function is ever
+    /// compiled, every code address stays 0, and the collector finds the roots of active frames in its register
+    /// stack instead of machine frames. One engine per runtime: stacks are never mixed.
+    pub(crate) interp: Option<Box<crate::interp::Interp>>,
 }
 
 /// Budget state of the current run.
@@ -359,6 +363,9 @@ impl Runtime {
         self.held = held_objects(&loaded.program);
         self.globals.resize(globals, None);
         self.jit.extend_dispatch(&loaded.program, objects_before);
+        if let Some(interp) = &mut self.interp {
+            interp.extend(functions);
+        }
         if let Some(host) = &mut self.host {
             host.extend(&loaded.program);
         }
@@ -411,6 +418,8 @@ impl Runtime {
             limits: crate::budget::Limits::default(),
             poisoned: false,
             budget: Budget::default(),
+            interp: crate::env_switch::enabled("SPARROW_CORE_INTERPRET")
+                .then(|| Box::new(crate::interp::Interp::new(loaded.program.functions.len()))),
             heap,
             jit: crate::jit::Jit::new()?,
             invocations,
@@ -437,6 +446,7 @@ impl Runtime {
         let started = self.heap.allocations.is_some().then(std::time::Instant::now);
         self.prune_spawned();
         let jit = &self.jit;
+        let interp = self.interp.as_deref();
         let constants = &self.constants;
         let roots = &self.roots;
         // The scheduler's roots are visited where they live, without a
@@ -458,9 +468,13 @@ impl Runtime {
                     state.trace(visit);
                 }
             }
-            // SAFETY: frame records above a helper called from machine code
-            // lead through JIT frames to the Rust entry.
-            unsafe { jit.frame_roots(frame, ctx.entry_frame, visit) };
+            match interp {
+                // #1120: the interpreter's active frames are its register stack; `frame` is a Rust frame.
+                Some(interp) => interp.roots(visit),
+                // SAFETY: frame records above a helper called from machine code
+                // lead through JIT frames to the Rust entry.
+                None => unsafe { jit.frame_roots(frame, ctx.entry_frame, visit) },
+            }
             for &(word, repr) in constants.iter().chain(roots).chain(extra) {
                 visit(word, repr);
             }
@@ -1060,12 +1074,17 @@ impl Runtime {
             self.drop_root(root);
             result
         } else {
-            let code = rt_compile(&mut ctx, entry as u64);
-            if ctx.status != OK {
-                return Err(Error(self.fatal.clone().unwrap_or_default()));
+            if let Some(interp) = &mut self.interp {
+                // #1120: the register stack is bounded as the machine stack is.
+                interp.limit(stack);
             }
-            // SAFETY: compiled functions take the context and their parameters.
-            unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
+            match self.invoke(&mut ctx, entry, arguments) {
+                Ok(result) => result,
+                Err(error) => {
+                    fatal(&mut ctx, self, error.0);
+                    return Err(Error(self.fatal.clone().unwrap_or_default()));
+                }
+            }
         };
         match ctx.status {
             OK => Ok(result),
@@ -1081,6 +1100,63 @@ impl Runtime {
 }
 
 pub(crate) use frame_pointer;
+
+// ---- the engine seam (#1120) ----
+//
+// Rust enters Okkama code in six places: a synchronous entry, a closure called by its helper, an async body
+// started or resumed, a function an intrinsic calls, a destroy, and `Error.text` of a failure report. All of them
+// go through these two methods, and the collector's one root walk (`safepoint`) asks the same engine for the
+// roots of its frames. The JIT's published code is read first, as before; only a function without code takes the
+// cold branch, where the interpreter (every function has no code there) or the JIT's compiler runs.
+
+impl Runtime {
+    /// Run synchronous `function` over `words` (its parameters) on this runtime's engine; its result word, with
+    /// a failure or a stop in `ctx.status`. `Err` only when the JIT could not compile the function: each caller
+    /// reports that as it did before the seam.
+    #[inline]
+    pub(crate) fn invoke(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        let code = match self.invocations[function].code {
+            0 => return self.invoke_cold(ctx, function, words),
+            code => code,
+        };
+        // SAFETY: compiled functions take the context and their parameters.
+        Ok(unsafe { crate::jit::invoke(code, ctx, words) })
+    }
+
+    /// Start or resume the async body of `frame` (a RUNNING frame of `function`): true while it is pending.
+    #[inline]
+    pub(crate) fn resume(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        let code = match self.invocations[function].code {
+            0 => return self.resume_cold(ctx, function, frame),
+            code => code,
+        };
+        // SAFETY: async bodies take their frame.
+        Ok(unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0)
+    }
+
+    /// A function without code: the interpreter runs it, or the JIT compiles it first.
+    #[cold]
+    #[inline(never)]
+    fn invoke_cold(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        if self.interp.is_some() {
+            return Ok(crate::interp::invoke(ctx, function, words));
+        }
+        let code = crate::jit::compile(self, function)?;
+        // SAFETY: compiled functions take the context and their parameters.
+        Ok(unsafe { crate::jit::invoke(code, ctx, words) })
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resume_cold(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        if self.interp.is_some() {
+            return Ok(crate::interp::resume(ctx, function, frame));
+        }
+        let code = crate::jit::compile(self, function)?;
+        // SAFETY: async bodies take their frame.
+        Ok(unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0)
+    }
+}
 
 /// Representation of an argument or result kind for root reporting.
 pub fn repr_of(kind: Option<Kind>) -> Repr {
@@ -1169,15 +1245,10 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
         // Calling an async action makes its cold Future.
         return runtime.future_new(function, &words[..params]);
     }
-    let code = match entry.code {
-        0 => match crate::jit::compile(runtime, function) {
-            Ok(code) => code,
-            Err(error) => return fatal(ctx_ref, runtime, error.0),
-        },
-        code => code,
-    };
-    // SAFETY: compiled functions take the context and `params` words.
-    unsafe { crate::jit::invoke(code, ctx, &words[..params]) }
+    match runtime.invoke(ctx, function, &words[..params]) {
+        Ok(result) => result,
+        Err(error) => fatal(ctx_ref, runtime, error.0),
+    }
 }
 
 /// Look a key up: 1 and the value in `scratch` when present, else 0.

@@ -826,3 +826,34 @@ every declaration is open (#1005, owner decision).
 - **Parity is a test of the CLI binary** (`okkama-cli/tests/playground.rs`): `okkama check`, `fmt` and `ir`
   against `Workspace::check`/`fmt`/`ir`, and `spa` against the disassembly of `okkama build`'s SPB, on t/, the Bible's rejected examples, six std modules and the fixtures of
   `tests/playground/` (a warning, a module shadowing std, an imported fake), byte for byte with the exit code.
+
+## Sparrow's interpreter, synchronous part (#1120, 2026-11-27; design Fable, `okkama-docs/runtime/sparrow-interpreter-1079.md`; implementer's choices where it leaves room)
+
+- **The helpers are called as they are; `rt_exec` is not split.** The interpreter calls the `extern "C"` helpers
+  (`ops::rt_exec`, `failures::rt_failure_op`, `rt_native`, `rt_intrinsic`, `rt_future_new`, …) directly, with the
+  instruction's uses gathered from its registers into a stack buffer in visit order (the plan keeps the use list
+  per instruction, as the JIT keeps `operands`). `execute` and `Operands` are untouched: no second access path,
+  no second monomorphisation, the JIT's `rt_exec` source byte for byte as before (the design's split was for a
+  generic register-file access; a copy of a few words per generic instruction costs less than the risk).
+- **The mode lives in `Runtime`, not in `Loaded`.** Synchronous roots read every register by kind and do not
+  depend on the pointer-free proofs; #1122 moves the choice to load time when async frame layouts need the
+  proofs off.
+- **Refusal at the moment of need.** A failure at an instruction an active handler covers, a `catch`, and an
+  async body (`Runtime::resume`, the suspending instructions) stop the run (status FATAL) with "`symbol:pc`: … is
+  not supported by the interpreter yet (#1121/#1122)". A program with handlers that never fails runs. No
+  refusal at load.
+- **Regions and resources already run.** The `failure_or_region` family (regions, `resource.unwind`,
+  `fail.*`, `raise`, `panic`, `role.narrow`) goes through `rt_failure_op`, `resource.pin`/`leave` through
+  their helpers: they need no handler, and a destroy is the seam's re-entry. #1121 keeps handlers, `catch`,
+  unwinding through them and the differential test.
+- **Own branches only where the JIT has no helper.** Every `program::generic` instruction runs `rt_exec`, also
+  where the JIT has an inline fast path (the PLAIN reference); the 48 own branches follow the emitter (small
+  integers inline, else `rt_int`/`rt_int_order`; a non-finite float through `rt_float`; allocation from the free
+  list, else `rt_allocate`; `rt_created` where the type can reach a destroy; the stub check of #1076). A call of
+  an accessor or of a small callee is an activation: the JIT's #541 and #926 shortcuts change no step, failure
+  or trace.
+- **Limits.** The register stack takes at most the run's stack bytes (1 GiB; under a memory budget the capped
+  stack, `stack_capped` making it "out of memory"); a re-entry from Rust checks the Rust stack against
+  `Ctx.stack_limit`, as the JIT's prologue checks SP. No re-entry counter yet: the design gives it to the async part (#1122).
+- **Shared code moved out of `jit.rs`.** `program.rs`: `generic`, `failure_or_region`, `suspends`,
+  `dispatch_table`, `role_slot_is_async`; `texts.rs`: the four emitter texts. Moves only, no change in the JIT.

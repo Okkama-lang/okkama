@@ -38,6 +38,7 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("cleanup-count", "cleanup helper calls (separate from timing)"),
     ("cleanup-time", "cleanup helper inclusive timings (diagnostic runs only)"),
     ("jit", "JIT compilation"),
+    ("interp", "the interpreter (SPARROW_CORE_INTERPRET): entries from Rust, functions planned, refusals"),
     ("gc", "collections"),
 ];
 

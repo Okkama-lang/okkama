@@ -951,15 +951,13 @@ pub(crate) fn call_function(ctx: *mut Ctx, runtime: &mut Runtime, function: usiz
     if runtime.loaded.program.functions[function].is_async {
         return Some(runtime.future_new(function, args));
     }
-    let code = match crate::jit::compile(runtime, function) {
-        Ok(code) => code,
+    let result = match runtime.invoke(ctx, function, args) {
+        Ok(result) => result,
         Err(error) => {
             crate::runtime::fatal(unsafe { &mut *ctx }, runtime, error.0);
             return None;
         }
     };
-    // SAFETY: compiled functions take the context and their parameters.
-    let result = unsafe { crate::jit::invoke(code, ctx, args) };
     (unsafe { (*ctx).status } == OK).then_some(result)
 }
 
