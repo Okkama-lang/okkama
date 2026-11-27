@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Objects that never leave a function are not made (#1112).** Two OIR passes: `inline` puts small callees that
+  cannot fail (constructors, successors, accessors; branched ones without loops up to 64 instructions) into their
+  callers, and `scalars` replaces plain objects (no destroy, no `once`, not in a region) that never leave the
+  function by their fields, loop-carried ones included. Failure reports are unchanged (only callees that cannot
+  fail are inlined); `--max-steps` counts an inlined callee's entry no more (owner's decision). Micro A/B against
+  the previous step: successor 10.0 → 2.46 ns (−76%), constructor −58%, for-loop 47.0 → 16.1 ns (−66%);
+  07-objects steady 8.4 → 5.4 ms (−36%); 10-app unchanged. examples/ and t/ give the same output with and without
+  the passes under the ownership verifier (364 programs).
 - **Cheaper int text and empty builders (#1111).** A small int becomes text through a stack buffer, without a Rust
   String per number; an empty builder (a filter that kept nothing) finishes as the shared empty array. Measured:
   10-app and 06-collections within noise (−2% to +0.5% over two seeds); the builder redesign that the audit's

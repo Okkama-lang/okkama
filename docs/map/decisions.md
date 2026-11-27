@@ -1298,3 +1298,16 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## OIR inlining and scalar replacement (#1112, 2026-11-27; owner revisited "inlining lives in the JIT"; design Fable)
+
+- `inline` takes direct callees that cannot fail: no loop in their blocks, no unwind, terminators br/cond/ret,
+  instructions from a fixed set (const, int add/sub/mul/neg, comparisons, bool not, obj.new/obj.next of plain
+  objects, obj.get, succ.take), at most 24 instructions in one block or 64 over several; callers stop past 400.
+  Failure traces stay identical (only FAILED records an activation). The JIT inliner stays.
+- Owner, 2026-11-27: `--max-steps` may count differently (an inlined callee's entry step is gone); no step opcode.
+- The verifier grants an inlined callee's rights (`obj.new` of a constructor, `obj.next` of a successor, `obj.get`
+  of its object) through `Attr::Inlined` on the caller; source encapsulation was checked by the analyser.
+- `scalars` replaces plain objects whose uses are field reads, receivers of candidate successors and branch
+  arguments of candidate block parameters; a parameter an edge fills itself, or of an unwind target, is never
+  split. No in-place reuse (a missed alias would corrupt silently; Fable: no gain after scalar replacement).
+

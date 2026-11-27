@@ -7,6 +7,15 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1112 OIR `inline` + `scalars` (feature/1110 line; design Fable; owner: accept the step-count shift):
+  `ir/inline.rs` (`inline_leaves`, `inline_branched`, `has_cycle`, `INLINE_INSTRUCTIONS` 24 /
+  `INLINE_BRANCHED` 64 / `CALLER_INSTRUCTIONS` 400, `Attr::Inlined` + verifier `grants`), `ir/scalars.rs`
+  (candidates incl. block parameters; never split parameters an edge fills itself or of unwind targets),
+  `cfg::renumber_values`; passes after tail-calls, PASSES has 10 names. Tests `tests/scalar_replacement.rs` (8,
+  mutation-checked; the unwind-target rule has no unit reproducer, the examples corpus covers it). Corpus sweep
+  script scratchpad sweep1112.py (examples+t/ with passes all vs without, verifier on): 364/364. Micro successor
+  −76%, constructor −58%, for-loop −66%; 07-objects 8.4 → 5.4 ms; 10-app unchanged. Not done: in-place reuse
+  (Fable: adds nothing after scalar replacement), materialisation of escaping candidates.
 - [x] #1111 closed with its cheap parts (owner, 2026-11-27: the full builder redesign is #1171, POSTPONED): fast
   small-int text (fa3bd1836, ebebaf4e8 the length limit), empty builder → shared empty array (test
   `an_empty_builder_finishes_as_the_shared_empty_array`). 10-app 53.5 → 52.5 / 53.6 → 53.6 ms (two seeds),
