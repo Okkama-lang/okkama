@@ -896,7 +896,13 @@ every declaration is open (#1005, owner decision).
   branch is unchanged: `SPARROW_CORE_INTERPRET` is empty there, which the switch rule reads as off.
 - **The interpreter's t/ run compares with the JIT in one invocation** (`--configs sparrow,sparrow-interp,
   sparrow-interp-gc-stress`): t/run.py already requires one TAP stream of all configurations. The GC-stress
-  interpreter gets four times the timeout (#1120's 105 s file).
+  interpreter gets four times the timeout (#1120's 105 s file); ten since #1122's follow-up: on the Wave's debug
+  adapter t/gen/persistence/04 needs 121 s locally (JIT under stress 57 s) and ran out of 240 s on CI at 520 of
+  618 checks; with slow runners (x1.86, #843) 600 s. Chosen over a subset: the branch is blocking and should
+  see the whole suite; only a hang waits the full timeout.
+- **An extension of an interpreter's session loads as the session did (#1122 follow-up).** `Runtime::extend`
+  drops the pointer-free proofs of the new `Loaded` when the runtime has an interpreter, before the prefix
+  checks: otherwise every published function's metadata and frame layout differ and every extension is refused.
 - **The seeded JIT defect needs no reference build.** The mutated build's interpreter does not run the emitter's
   code, so `okgen.py --engines sparrow,sparrow-interp` on that one build finds it; the existing shared-helper
   mutant keeps its unmutated reference.

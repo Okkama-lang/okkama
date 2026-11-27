@@ -180,3 +180,19 @@ fn only_a_session_runtime_can_be_extended() {
     let mut runtime = Box::new(Runtime::new(Loaded::new(program(&[BASE]))).unwrap());
     assert!(runtime.extend(program(&[BASE, SECOND])).unwrap_err().0.contains("only a session runtime"));
 }
+
+/// #1122: a session on the interpreter loads its extensions as it loaded itself (without the pointer-free proofs),
+/// so they extend it as they extend the JIT's; a changed prefix is still refused.
+#[test]
+fn a_session_on_the_interpreter_extends_as_on_the_jit() {
+    let mut runtime = session(&[BASE], CAPACITIES);
+    runtime.use_engine(crate::Engine::Interpreter);
+    let seven = keep(&mut runtime, 4);
+    runtime.extend(program(&[BASE, SECOND])).unwrap();
+    assert_eq!(number(&mut runtime, 1, &[seven]), 7);
+    assert_eq!(number(&mut runtime, 11, &[]), 42, "a new function calls an old one");
+    runtime.extend(program(&[BASE, SECOND, THIRD])).unwrap();
+    assert_eq!(number(&mut runtime, 12, &[]), 9);
+    let changed = (BASE.0, BASE.1, BASE.2, &*BASE.3.replace("const r0, int 41", "const r0, int 40"));
+    rejected(&mut runtime, program(&[changed, SECOND, THIRD]), "published functions");
+}

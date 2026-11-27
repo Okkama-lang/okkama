@@ -2,6 +2,11 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1122 follow-up (feature/1122b from release/066 9bbd43bce, not committed; worktree okkama-work/hf-1122b,
+  target t-1122b): release/066 red after #1122. `Runtime::extend` loads an interpreter session's extension
+  without the pointer-free proofs (3 session tests of the no-default suite; new
+  `session_tests::a_session_on_the_interpreter_extends_as_on_the_jit`, fails with the fix removed); t/run.py
+  `sparrow-interp-gc-stress` timeout ×10 (persistence/04 121 s locally on debug, CI ran out of 240 s).
 - [x] #1122 Interpreter 3 (feature/1122 from release/066 29d0bf49e, not committed; worktree okkama-work/hf-1122,
   target t-1122): `interp::resume` (registers in the Future's frame, `RESUME`, a step per resumption), await,
   await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +

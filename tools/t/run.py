@@ -10,7 +10,7 @@ Every file under t/ (or the ones given) runs on every configuration:
     sparrow-gc-stress  Sparrow with SPARROW_CORE_GC_STRESS=1 (a collection
                     at every safepoint, freed cells poisoned)
     sparrow-interp     Sparrow's interpreter (SPARROW_CORE_INTERPRET=1, #1123)
-    sparrow-interp-gc-stress  the interpreter under GC stress (four times the
+    sparrow-interp-gc-stress  the interpreter under GC stress (ten times the
                     timeout: it collects far more often)
 
 A run of an interpreter configuration that okkama-rs/tools/engines/interp-exceptions.txt
@@ -53,8 +53,11 @@ CONFIGS = {
     "sparrow-interp": ("sparrow", {"SPARROW_CORE_INTERPRET": "1"}, "okkama"),
     "sparrow-interp-gc-stress": ("sparrow", {"SPARROW_CORE_INTERPRET": "1", "SPARROW_CORE_GC_STRESS": "1"}, "okkama"),
 }
-# Timeout multiples: the interpreter under GC stress took 105 s on a file the JIT runs in 31 s (#1123).
-TIMEOUT_SCALE = {"sparrow-interp-gc-stress": 4}
+# Timeout multiples: the interpreter under GC stress took 105 s on a file the JIT runs in 31 s (#1123). On the
+# Wave's debug adapter t/gen/persistence/04 takes 121 s locally under it (the JIT under GC stress 57 s, either
+# engine without stress 16-19 s) and ran out of 240 s on CI at 520 of 618 checks; a slow runner adds up to x1.86
+# (#843), so ten times, 600 s: the whole suite stays in the Wave and the gate, and only a hang waits that long.
+TIMEOUT_SCALE = {"sparrow-interp-gc-stress": 10}
 
 
 def exceptions():

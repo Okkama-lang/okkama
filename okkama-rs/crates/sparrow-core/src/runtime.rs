@@ -348,6 +348,11 @@ impl Runtime {
         // ---- prepare: nothing live changes ----
         program.verify().map_err(|error| Error(error.to_string()))?;
         let mut loaded = Loaded::new(program);
+        // #1122: the interpreter's runtime loaded without the pointer-free proofs, and so does its extension, or
+        // its function metadata and frame layouts would differ from the published ones in every function.
+        if self.interp.is_some() {
+            loaded.without_pointer_free();
+        }
         loaded.check_every_field();
         crate::contracts::check(&loaded)?;
         let (old, new) = (&self.loaded.program, &loaded.program);

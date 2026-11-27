@@ -135,6 +135,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ### Fixed
 - **Completion showed a successor action's result with two carets (#1117).** After `bottle.`, `open` had the
   detail `() is ^^Bottle` in the language server and the playground; it is `() is ^Bottle`, as declared.
+- **A session on the interpreter refused every extension (#1122).** The interpreter's runtime loads without the
+  pointer-free proofs, its extension loaded with them, and the published-prefix check saw every function's
+  metadata changed ("the extension changes published function metadata"): the REPL with
+  `SPARROW_CORE_INTERPRET=1` and the session tests of the build without the JIT failed. An extension now loads as
+  its runtime did. The interpreter's t/ run under GC stress gets ten times the timeout instead of four:
+  t/gen/persistence/04–07 ran out of it on the Wave's debug adapter.
 
 ## [0.6.5] — 2026-11-27
 
