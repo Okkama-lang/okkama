@@ -961,3 +961,14 @@ every declaration is open (#1005, owner decision).
   `cfg_attr(not(feature = "jit"), ignore = "#1122 …"/"#1121, #1122 …")`; the JIT's own tests (`jit/`,
   `ready_callees`, compile limits) are `cfg(feature = "jit")`; `interp_tests::engines` compares the interpreter
   with itself under GC stress when there is no JIT.
+## The polling of a runtime is fixed at its first run (#1129, 2026-11-27, lead decision)
+
+- **Read at the same moment, not recompile.** Whether code polls the fuel cell is fixed when a runtime first runs
+  (`Budget::polled`, set in `start_budget`): the JIT compiles it into every function, the interpreter and the
+  sorting intrinsics read `Runtime::polled`. A later run whose budgets would turn polling on or off is refused
+  with a message; the values of the budgets may change. Recompiling was rejected: compiled code embeds published
+  addresses (ready callees, dispatch tables), and dropping every function between a session's cells would lose
+  what the session compiled for an embedding case no command line reaches. Before the first run `polled()`
+  answers from the budgets as they are (a session's destroys at close, direct compiles in tests).
+- **`toolchain.sh` fetches first.** A networked `cargo fetch --locked` on the registry volume runs before the
+  offline build; with every crate present it passes without network. A failure names its step.

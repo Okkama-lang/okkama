@@ -92,6 +92,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   names, and every corpus gives the same exit status, standard output and standard error byte for byte as before (t/ 142 programs, examples 333, std -t 125 modules, conformance 1075 cases, in the cage), with byte-identical SPB (2121 files, 1380 built).
 
 ### Changed
+- **The polling of a runtime is fixed at its first run, for both engines (#1129).** Whether code polls the fuel
+  cell (a step, memory or interrupt budget is set) was compiled into each function by the JIT when it compiled
+  it, and read at every step by the interpreter, so an embedder that set a budget on a runtime after its first run
+  (a session's later cell) got two answers. Now the runtime fixes it at its first run (`Budget::polled`), the
+  JIT compiles it and the interpreter and the sorting intrinsics read it, and a later run that would turn polling
+  on or off is refused ("… set the budgets before the first run"); other budget values may change. No command
+  line path changes budgets between runs. `bench/micro/toolchain.sh` fetches the lock's crates into the
+  `okkama-cargo-registry` volume (`cargo fetch --locked`) before its offline build, and names the step that
+  failed (exit 3 for the fetch, 4 for the build).
 - **Diagnostics name an imported file relative to the current directory (#1119).** `okkama check`, `build`,
   `run`, `ir` and every other command that loads imports named a file they found through an import by its absolute path, while the
   file given on the command line kept its spelling: `okkama check 19-cycle-rejected.ok` in the Bible's examples

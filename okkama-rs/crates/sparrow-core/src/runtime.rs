@@ -191,6 +191,9 @@ pub(crate) struct Budget {
     /// The memory budget caps the machine stack: overflowing it is running
     /// out of memory (#241).
     pub stack_capped: bool,
+    /// #1129: whether code polls the fuel cell (entries and back-edges), fixed at this runtime's first run. The
+    /// JIT compiles it into each function and the interpreter reads it at each step, so both take it from here.
+    pub polled: Option<bool>,
 }
 
 /// Frame pointer of the calling function's own frame record. The JIT's root walk
@@ -773,6 +776,13 @@ impl Runtime {
 
     /// Start the budgets of a run: the first slice of steps.
     fn start_budget(&mut self) -> Result<i64, Error> {
+        // #1129: a run whose budgets would poll where earlier runs compiled code that does not (or the other way)
+        // is refused: the code would keep the first runs' choice, and the engines must agree on it.
+        let polled = self.limits.polled();
+        match self.budget.polled {
+            Some(fixed) if fixed != polled => return Err(Error(polling_fixed(fixed))),
+            _ => self.budget.polled = Some(polled),
+        }
         if let Some(limit) = self.limits.memory {
             // A budget of the runtime reads its heap and needs no probe.
             let meter = match self.limits.memory_scope {
@@ -796,12 +806,29 @@ impl Runtime {
         })
     }
 
+    /// #1129: do this runtime's code and its interpreter poll the fuel cell? Fixed at the first run; before it,
+    /// what the budgets say now.
+    pub(crate) fn polled(&self) -> bool {
+        self.budget.polled.unwrap_or_else(|| self.limits.polled())
+    }
+
     /// The report of an exhausted run.
     pub(crate) fn exhausted_report(&mut self) -> Error {
         let message = self.budget.exhausted.unwrap_or(Exhausted::Interrupted).message();
         self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new(), trace_omitted: 0, trace_offset: 0, cause_traces: Vec::new() });
         Error(message.into())
     }
+}
+
+/// #1129: the refusal of a run whose step, memory or interrupt budgets differ, in being set at all, from the first
+/// run of the runtime.
+#[cold]
+fn polling_fixed(fixed: bool) -> String {
+    let (first, now) = if fixed { ("with", "without") } else { ("without", "with") };
+    format!(
+        "this runtime first ran {first} a step, memory or interrupt budget and now runs {now} one: \
+         its code keeps polling as it was compiled; set the budgets before the first run"
+    )
 }
 
 /// Compile a function on its first call; returns its code address.

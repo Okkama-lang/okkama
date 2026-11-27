@@ -1135,3 +1135,69 @@ fn an_entry_past_the_rust_stack_limit_is_a_stack_overflow() {
     assert_eq!(invoke(&mut ctx, 4, &[]), word::small(1).unwrap());
     assert_eq!(ctx.status, OK);
 }
+
+/// Two evaluations on one runtime (a session's cells), the second under other budgets: its outcome.
+fn evaluate_twice(source: &str, engine: Engine, first: Limits, second: Limits) -> (Outcome, Outcome) {
+    let source = source.to_owned();
+    std::thread::Builder::new()
+        .stack_size((STACK as usize) * 2)
+        .spawn(move || {
+            let program = okkama_sparrow::assemble(&source).unwrap();
+            let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
+            runtime.use_engine(match engine {
+                Engine::Jit => crate::Engine::Jit,
+                Engine::Interpreter => crate::Engine::Interpreter,
+            });
+            let mut evaluate = |limits: Limits| {
+                runtime.limits = limits;
+                let (result, output) = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
+                Outcome { result: result.map_err(|error| error.0), output: String::from_utf8(output).unwrap(), uncaught: runtime.uncaught.take() }
+            };
+            let first = evaluate(first);
+            (first, evaluate(second))
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// #1129: whether code polls the fuel cell is fixed at a runtime's first run, for the JIT (compiled into each
+/// function) and the interpreter (read at each step) alike. A later run with other step budgets polls as the first
+/// did; a run that would turn polling on or off is refused, with one text on both engines.
+#[test]
+fn the_polling_of_a_runtime_is_fixed_at_its_first_run_on_both_engines() {
+    let source = program("", "", r#"
+function f4 "main" {
+    registers [t0, t0, t4, t0]
+    params []
+    result t0
+    0: const r0, int 0
+    1: const r3, int 300
+    2: const r1, int 1
+    3: int.add r0, r0, r1
+    4: call _, f1, [r0]
+    5: int.cmp lt, r2, r0, r3
+    6: br r2, @2, @7
+    7: ret r0
+}
+entry f4
+"#);
+    let steps = |n| Limits { steps: Some(n), ..Limits::default() };
+    for (first, second) in [(Limits::default(), steps(100)), (steps(100_000), steps(100)), (steps(100), Limits::default())] {
+        let jit = evaluate_twice(&source, Engine::Jit, first.clone(), second.clone());
+        let interpreted = evaluate_twice(&source, Engine::Interpreter, first.clone(), second.clone());
+        assert_eq!(interpreted, jit, "budgets {:?} then {:?}", first.steps, second.steps);
+        match (first.polled(), second.polled()) {
+            (a, b) if a != b => {
+                let error = jit.1.result.as_ref().unwrap_err();
+                assert!(error.contains("set the budgets before the first run"), "{error}");
+                assert!(jit.1.output.is_empty(), "a refused run runs nothing");
+            }
+            _ => {
+                // The second run stops on its own budget: main's entry, then a print and a back-edge per line.
+                assert!(jit.1.result.as_ref().unwrap_err().contains("Execution budget exhausted: steps"), "{jit:?}");
+                assert_eq!(jit.1.output.lines().count(), 50);
+            }
+        }
+    }
+}

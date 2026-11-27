@@ -325,7 +325,7 @@ fn enter(ctx: *mut Ctx, interp: *mut Interp, function: usize, words: &[Word]) ->
 /// One budget step, when a budget is set: true when the run must stop.
 #[inline(always)]
 fn step(ctx: *mut Ctx, runtime: &Runtime) -> bool {
-    if !runtime.limits.polled() || !runtime.budget.fuel.step() {
+    if !runtime.polled() || !runtime.budget.fuel.step() {
         return false;
     }
     runtime::rt_poll(ctx);

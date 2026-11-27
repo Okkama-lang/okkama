@@ -1053,7 +1053,7 @@ pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: Natural
     sort_or_stop(items, |&a, &b| {
         compared = compared.wrapping_add(1);
         if compared.is_multiple_of(SORT_POLL)
-            && runtime.limits.polled()
+            && runtime.polled()
             && let Some(what) = runtime.over_budget()
         {
             return Err(what);

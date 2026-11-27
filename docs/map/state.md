@@ -2,6 +2,12 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1129 (feature/1129 from release/066 cd4548694, not committed; worktree okkama-work/hf-1129, target t-1129):
+  `Budget::polled` fixed in `start_budget`, `Runtime::polled()` read by `jit::compile`, `interp::step`,
+  `intrinsics::sort_natural`; refusal text `polling_fixed`; test `interp::tests::the_polling_of_a_runtime_is_fixed…`
+  (three budget pairs, JIT = interpreter; 2 mutations caught); sparrow-core `--test budget` and `runtime::` green.
+  JIT code unchanged when budgets do not change between runs (no A/B). `bench/micro/toolchain.sh`: fetch step
+  (exit 3) and build step (exit 4); end-to-end build checked.
 - [x] #1123 Interpreter 4 (feature/1123 from release/066 32f74e98b, not committed; worktree okkama-work/hf-1123,
   target t-1123): `okkama-rs/tools/engines/{differ.py, interp-exceptions.txt, test_differ.py}`; t/run.py configs
   `sparrow-interp`, `sparrow-interp-gc-stress` (×4 timeout, exceptions → "skipped" with reason); wave.yml

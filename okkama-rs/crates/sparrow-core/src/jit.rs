@@ -574,6 +574,8 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
     let closure_reference = runtime.closure_bridge_reference;
+    // #1129: the polling of this runtime's code, as the interpreter reads it.
+    let polled = runtime.polled();
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
     let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);
@@ -660,7 +662,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             blocks: Vec::new(),
             ctx: None,
             frame: None,
-            polled: limits.polled(),
+            polled,
             count_helpers: stats.is_some(),
             closure_reference,
             fuel: budget.fuel.address(),
