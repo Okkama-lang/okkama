@@ -2,6 +2,11 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] Release commit 0.6.6 (2026-11-27): version 0.6.6, CHANGELOG [0.6.6], fuzz/Cargo.lock brought up to the wasm
+  dependencies (it lacked js-sys since #1124), Bible rebuilt (md/HTML/PDF, EN/RU); the owner confirmed the design's
+  §9 answers («дада»). No release-wide micro A/B (per-change A/Bs in the CHANGELOG). Published with the release: the
+  playground on the website (okkama-site playground/, rebuilt from the release commit).
+
 - [x] #1127 workers (owner's decision 8; feature/1127w from release/066 9d42172fd, not committed; worktree
   okkama-work/hf-1127w, targets t-1127w and t-1127w-nd): `worker_emulated.rs` (replaces `worker_absent.rs`),
   `worker_wire.rs` (codec moved out of `worker.rs`), `Runtime::emulated_workers`, `State::WorkerBinding` without

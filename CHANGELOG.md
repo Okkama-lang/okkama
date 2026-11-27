@@ -6,6 +6,28 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-11-27
+
+0.6.6 brings Okkama to the browser: a playground on okkama-lang.github.io/playground/ checks, formats, explains
+and runs programs with no server, on the compiler and the Sparrow runtime built for WebAssembly. Sparrow gains a
+second executor, an interpreter, which also checks the JIT in every test run. Nothing in the language or the
+public std changes.
+- **The playground.** The compiler in wasm (`okkama-wasm`, #1078) answers `check`, `fmt`, tokens, AST, IR with
+  pass selection and Sparrow assembly exactly as the CLI prints them, with hover, completion (std paths included),
+  go to definition and signature help (#1115–#1119, #1128). The runtime in wasm (`sparrow-wasm`, #1125) runs
+  programs and module tests on the interpreter under a playground profile: no files, sockets, processes or
+  environment; clocks, randomness, digests and HMAC yes; workers emulated in the instance (#1127); output streamed
+  in batches with its moments on a virtual timeline (#1134, #1136); requirements by reachability (#1135). 170 of
+  the Bible's examples run there, giving the book's output.
+- **Sparrow's interpreter.** A second executor behind one engine seam (`SPARROW_CORE_INTERPRET=1`): synchronous
+  code (#1120), failure handlers (#1121), async bodies (#1122); conformance passes 1075/1075 on both engines.
+  It is an oracle in the Wave, the gate, t/, okgen and fuzz (#1123), and found a JIT trace defect (#1132).
+- **Sparrow without the JIT and the host.** Features `jit` and `host`, a clock module and a wasm32-clean build
+  (#1124); a 32-bit run on i686 (#1131); map keys walked without recursion (#1130); one rule for budget polling
+  across engines (#1129); pure natives classified as pure (#1133).
+- **Speed.** The JIT path is unchanged by the interpreter: per-change micro A/B −0.2% (#1120), +0.3% on async
+  cells (#1122), −0.6% on map cells (#1130); no release-wide A/B was run for this release.
+
 ### Added
 - **Workers run in the playground (#1127, the owner's decision).** Without the host (and so in sparrow-wasm),
   `spawn` of a synchronous action and std's `ParallelMapped` run the worker in the same instance, on a runtime of
@@ -9196,7 +9218,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...v0.6.3
