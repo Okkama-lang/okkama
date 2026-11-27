@@ -19,6 +19,10 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 - [~] #1147 first-run compile: step 1 done (A5 no-std frontend, A1 exits by handler target + shared cold return
   from the second exit, A4 no check after int add/sub/mul without budget/polling); reverted: A2 (no check after
   rt_compile: regalloc loss on 09-closures), A3 (direct branch edges: 07-objects +32%); A6 (context reuse) no gain.
+  Step 2 done: `emit_unit`/`codegen`/`install` split (2a, same code), `jit/background.rs` Pool (queue, steal,
+  wait), `compile_ordinary`, `speculate` (depth 2, 64 pending), `take_pending` (stale rule), `background_allowed`;
+  default threads min(2, cores − 1). Tests: background_units_install_as_a_synchronous_run_compiles_them (stale
+  mutation caught), a_runtime_with_units_in_flight_drops_cleanly; corpus identical 0/2 threads, also GC stress.
   Tests: ready_callees_tests::handlers_with_one_target_share_one_failure_exit,
   budgets SQUARE (mutations caught). Step 2 (background codegen, Fable's design on the ticket) next.
 - [x] #1175 safepoint not-due check: `Runtime::safepoint` inline + `collect_at_safepoint` cold; `Heap.node_counters`

@@ -17,6 +17,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   inlined into the field loops, and objects with nothing to trace (plain strings, big integers, arrays of raw words)
   are marked without being queued. bench/gc marking: burst −33%, deep −30%, payload −16%, ownership −8%; steady
   burst −9%, 11-ownership −4%, 08-roles −2%.
+- **Compiling in the background (#1147, step 2).** A function's first compile also emits the static callees it
+  calls lazily (two levels deep, at most 64 waiting) and hands their Cranelift codegen to worker threads
+  (`min(2, cores − 1)`, `SPARROW_CORE_COMPILE_THREADS` sets the number, 0 turns it off); a callee's first call
+  installs its finished code, so definitions keep the order a synchronous run gives them, and a unit whose lazy
+  callee was compiled in between is compiled again (the call is then direct). Statistics, profiles, dumps, memory
+  budgets, polling and sessions compile on the VM thread. Cold runs −3…−13% (11-ownership 24.9 → 21.8 ms), first
+  repetition 11-ownership −22%, 06-collections −10%; steady unchanged.
 - **Less to compile on the first run (#1147, step 1).** cranelift-frontend builds without std (its safepoint
   spiller's sets in hashbrown); handlers with the same target share one failure exit and a function's later failure
   exits one cold return; int add, subtract and multiply check no status without a memory budget or polling.

@@ -1306,7 +1306,10 @@ every declaration is open (#1005, owner decision).
   add/sub/mul without budget/polling. Not kept: dropping the check after rt_compile (regalloc loss on a hot closure),
   direct branch edges (07-objects +32%: block layout), compile-context reuse (no gain). Lesson: measure the whole
   ladder, not only the programs a change aims at.
-- Step 2: background codegen with demand-driven speculation of static callees (deterministic publication order).
+- Step 2 (done): background codegen with demand-driven speculation of static callees: emission stays on the VM
+  thread, workers only run Context::compile, installation (definition order) only at a demand; a unit is stale when
+  a lazy callee was published after its emission (then recompiled synchronously, keeping the synchronous code).
+  Default on (min(2, cores − 1) threads); synchronous under stats, profile, dump, memory budget, polling, sessions.
 
 ## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
 

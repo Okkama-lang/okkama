@@ -158,8 +158,8 @@ pub struct Jit {
     /// Compiled at the first restart (0 until then): a call that stays small never compiles it.
     general: BTreeMap<usize, Box<u64>>,
     general_ids: BTreeMap<usize, FuncId>,
-    /// #1147 (step 2): background codegen. `SPARROW_CORE_COMPILE_THREADS` workers (0: none, every compile on the
-    /// VM thread); the pool starts with the first speculation. `pending`: the functions emitted ahead of their first
+    /// #1147 (step 2): background codegen. `SPARROW_CORE_COMPILE_THREADS` workers (default min(2, cores − 1); 0: none,
+    /// every compile on the VM thread); the pool starts with the first speculation. `pending`: the functions emitted ahead of their first
     /// call and submitted, with the static callees they left lazy (a unit is stale once one of them is published).
     compile_threads: usize,
     isa: cranelift_codegen::isa::OwnedTargetIsa,
@@ -357,7 +357,10 @@ impl Jit {
             closure_requests: Vec::new(),
             general: BTreeMap::new(),
             general_ids: BTreeMap::new(),
-            compile_threads: std::env::var("SPARROW_CORE_COMPILE_THREADS").ok().and_then(|n| n.trim().parse().ok()).unwrap_or(0),
+            // #1147: min(2, cores − 1) by default; `SPARROW_CORE_COMPILE_THREADS=0` compiles everything on the VM thread.
+            compile_threads: std::env::var("SPARROW_CORE_COMPILE_THREADS").ok().and_then(|n| n.trim().parse().ok()).unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(0, |cores| cores.get().saturating_sub(1).min(2))
+            }),
             isa: jit_isa,
             pool: None,
             pending: BTreeMap::new(),
