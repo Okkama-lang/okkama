@@ -7,6 +7,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Added
+- **The playground runs a module's tests (#1127).** sparrow-wasm's `test` runs an SPB built with tests as `okkama run
+  -t` does, on the interpreter under the playground's profile, the report streamed a line at a time through the
+  same output sink, with the CLI's exit status (0, 1, or 4 when the tests cannot run). The Bible's 13 test examples
+  and 25 std modules' tests give `okkama run -t`'s report byte for byte (its documentation-example lines aside).
+  Digests, HMAC, HKDF, named UUIDs and checksums are checked in the profile, against the CLI and in wasm (Node
+  smoke test). CLDR on demand was done in #1125; workers and the resumable scheduler await the owner.
 - **The playground streams a run's output, and warns only about what a run can reach (#1134, #1135).**
   sparrow-wasm's `run` takes an optional output sink: every write reaches it as a chunk `{stream, text, t}` while
   the program runs, so the page shows output as it comes and keeps what a run it stops had printed (a Node smoke

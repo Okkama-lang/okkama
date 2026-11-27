@@ -581,6 +581,19 @@ mod tests {
         assert_eq!(limits.memory_scope, MemoryScope::Runtime);
     }
 
+    /// #1127 (design §9 #6, awaiting the owner): every native of the digests, HMAC and HKDF (`crypto`,
+    /// `host_crypto`), UUIDs and checksums is in the playground's profile.
+    #[test]
+    fn the_playground_offers_digests_macs_uuids_and_checksums() {
+        let modules = ["runtime/crypto@", "runtime/host_crypto@", "runtime/uuid@", "runtime/checksum@"];
+        let natives: Vec<Native> =
+            Native::ALL.iter().copied().filter(|native| modules.iter().any(|module| native.symbol().starts_with(module))).collect();
+        assert!(natives.len() >= 8, "{natives:?}");
+        for native in natives {
+            assert!(PLAYGROUND.offers(native), "{}", native.symbol());
+        }
+    }
+
     /// #1079 §5.2: built as the playground is (no `jit`, no `host`), the profile offers a native exactly when the
     /// build has its provider, so the profile's refusal is the only one a playground program meets.
     #[cfg(not(feature = "host"))]

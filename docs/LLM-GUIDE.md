@@ -234,8 +234,9 @@ wasm-bindgen --target web --remove-name-section --remove-producers-section \
 
 The playground's runtime (#1125) is a second module, built alone (with okkama-wasm in one invocation the features
 of okkama-runtime-core unify): `cargo build -p sparrow-wasm --release --target wasm32-unknown-unknown`, then the
-same `wasm-bindgen`. It exports `run(spb, request, sink?)`, `requirements(spb)`, `provide(name, bytes)`, `version`
-and `lastPanic` (JSON shapes in decisions.md, #1125 section). A run: `okkama_wasm.build({source, path})` →
+same `wasm-bindgen`. It exports `run(spb, request, sink?)`, `test(spb, request, sink?)` (a build with `tests: true`
+reported as `okkama run -t` reports it, #1127), `requirements(spb)`, `provide(name, bytes)`, `version` and
+`lastPanic` (JSON shapes in decisions.md, #1125 section). A run: `okkama_wasm.build({source, path})` →
 `builtSpb()` → `sparrow_wasm.requirements` (refused natives a run can reach, CLDR files to `provide`) →
 `sparrow_wasm.run(spb, {stdin}, sink)` (each write to `sink` as a chunk `{stream, text, t}` while it runs, #1134)
 → `{exit, report, uncaught}` → for a failure `okkama_wasm.failureText({report, uncaught})`, the text `okkama run`

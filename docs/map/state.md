@@ -2,6 +2,14 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1127 (parts without owner decisions; feature/1127 from release/066 acea75ebb, not committed; worktree
+  okkama-work/hf-1127, targets t-1127 and t-1127-nd): `sparrow_core::run_tests_embedded`, `EmbeddedTests`,
+  `TestSetup` (engine, stdin) threaded through `test_profile`, `piece_sink`; sparrow-wasm `test`/`test_streaming`
+  (+ wasm `test(spb, request, sink?)`); `budget::tests::the_playground_offers_digests_macs_uuids_and_checksums`;
+  playground_run: `the_playground_runs_tests_as_okkama_run_t` (38 suites: 13 Bible + 25 std, all equal),
+  `the_playground_hashes_as_the_cli_does` (`tests/playground/digests/main.ok`); smoke.mjs: tests and digests in
+  wasm. sparrow_wasm_bg.wasm 3,826,377 bytes, 1,879,943 gzip (+16.7 KB). CLDR on demand: done in #1125. Workers
+  emulation (§9 #8) and the resumable scheduler (§9 #3) wait for the owner.
 - [x] #1133 and #1128 (feature/1133 from release/066 d7e6c5d79, not committed; worktree okkama-work/hf-1133,
   target t-1133). #1133: `budget.rs` (`Reach::classify`, `PURE`, `SYSTEM_CONSTANTS`, PLAYGROUND `allowed` = stdin
   only) and `okkama-runtime-abi/src/catalogue.rs` (PURE/HOST lists, `effect`, counts 275/3/264); five family tests

@@ -26,13 +26,24 @@ use sparrow_core::{Embedding, Piece, ProgramNatives};
 /// Run `spb` as the playground does: request `{stdin?: text, arguments?: [text]}`; the output comes back in the
 /// answer's `output` (a stream's writes at one moment joined).
 pub fn run(spb: &[u8], request: &str) -> String {
-    let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-    let into = collected.clone();
-    let mut answer = run_streaming(spb, request, move |chunk| {
+    collected(|emit| run_streaming(spb, request, emit))
+}
+
+/// Run the tests of `spb` (built with tests) as `okkama run -t` does, on the playground's interpreter (#1127):
+/// request `{stdin?: text, seed?: int}`; the human report and the tests' output in `output`.
+pub fn test(spb: &[u8], request: &str) -> String {
+    collected(|emit| test_streaming(spb, request, emit))
+}
+
+/// The answer of `body` with the chunks it emitted in its `output`.
+fn collected(body: impl FnOnce(Box<dyn FnMut(Value) + Send>) -> Value) -> String {
+    let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let into = chunks.clone();
+    let mut answer = body(Box::new(move |chunk| {
         collect(&mut into.lock().unwrap_or_else(std::sync::PoisonError::into_inner), chunk);
-    });
+    }));
     if let Some(output) = answer.get_mut("output") {
-        *output = json!(std::mem::take(&mut *collected.lock().unwrap_or_else(std::sync::PoisonError::into_inner)));
+        *output = json!(std::mem::take(&mut *chunks.lock().unwrap_or_else(std::sync::PoisonError::into_inner)));
     }
     answer.to_string()
 }
@@ -58,29 +69,15 @@ pub fn run_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send +
         Ok(request) => request,
         Err(error) => return json!({"error": format!("the request is not JSON: {error}")}),
     };
-    let stdin = request.get("stdin").and_then(Value::as_str).map(|text| text.as_bytes().to_vec());
     let arguments = request
         .get("arguments")
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(Value::as_str).map(|text| text.as_bytes().to_vec()).collect())
         .unwrap_or_default();
-    let decoder = std::sync::Arc::new(std::sync::Mutex::new((Decoder::default(), emit)));
-    let streaming = decoder.clone();
-    let pieces: sparrow_core::PieceSink = Box::new(move |piece| {
-        let mut guard = streaming.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (decoder, emit) = &mut *guard;
-        if let Some(chunk) = decoder.push(&piece) {
-            emit(chunk);
-        }
+    let run = streamed(emit, |pieces| {
+        let embedding = Embedding { arguments, stdin: Some(stdin(&request)), limits: Limits::playground(), pieces: Some(pieces) };
+        sparrow_core::run_embedded(spb.to_vec(), embedding)
     });
-    let embedding =
-        Embedding { arguments, stdin: Some(stdin.unwrap_or_default()), limits: Limits::playground(), pieces: Some(pieces) };
-    let run = sparrow_core::run_embedded(spb.to_vec(), embedding);
-    {
-        let mut guard = decoder.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (decoder, emit) = &mut *guard;
-        decoder.finish().into_iter().for_each(emit);
-    }
     let run = match run {
         Ok(run) => run,
         // A program that does not load, with the prefix `okkama run` gives it.
@@ -100,6 +97,60 @@ pub fn run_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send +
         "report": if report.is_empty() { Value::Null } else { json!(report) },
         "uncaught": uncaught.map(uncaught_json),
     })
+}
+
+/// [`test`], handing each write (the report's lines and the tests' output) to `emit` as it happens: `{exit, output:
+/// [], report}`. `exit` is `okkama run -t`'s: 0 when every test passed, 1 when one failed, 4 with `report` (`okkama:
+/// …`) when the tests could not run (an SPB without tests, one that does not load).
+pub fn test_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send + 'static) -> Value {
+    begin();
+    let request: Value = match serde_json::from_str(request) {
+        Ok(request) => request,
+        Err(error) => return json!({"error": format!("the request is not JSON: {error}")}),
+    };
+    let seed = match request.get("seed") {
+        None | Some(Value::Null) => None,
+        Some(seed) => match seed.as_u64().filter(|seed| *seed <= sparrow_core::test_report::MAX_SEED) {
+            Some(seed) => Some(seed),
+            None => {
+                let message = format!("`seed` must be a whole number from 0 to {}", sparrow_core::test_report::MAX_SEED);
+                return json!({"error": message});
+            }
+        },
+    };
+    let plan = sparrow_core::test_report::TestPlan { seed, ..Default::default() };
+    let ran = streamed(emit, |pieces| {
+        let embedding = Embedding { stdin: Some(stdin(&request)), limits: Limits::playground(), pieces: Some(pieces), ..Embedding::default() };
+        sparrow_core::run_tests_embedded(spb.to_vec(), embedding, plan)
+    });
+    match ran {
+        Ok(ran) => json!({"exit": u8::from(!ran.passed), "output": [], "report": null}),
+        Err(error) => json!({"exit": 4, "output": [], "report": format!("okkama: {}\n", error.0)}),
+    }
+}
+
+/// The request's standard input; empty without one (the playground never reads the process's).
+fn stdin(request: &Value) -> Vec<u8> {
+    request.get("stdin").and_then(Value::as_str).map(|text| text.as_bytes().to_vec()).unwrap_or_default()
+}
+
+/// Run `body` with a piece receiver that turns each write into a chunk for `emit`, and hand over what is left of
+/// an unfinished character when it ends.
+fn streamed<T>(emit: impl FnMut(Value) + Send + 'static, body: impl FnOnce(sparrow_core::PieceSink) -> T) -> T {
+    let decoder = std::sync::Arc::new(std::sync::Mutex::new((Decoder::default(), emit)));
+    let streaming = decoder.clone();
+    let pieces: sparrow_core::PieceSink = Box::new(move |piece| {
+        let mut guard = streaming.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (decoder, emit) = &mut *guard;
+        if let Some(chunk) = decoder.push(&piece) {
+            emit(chunk);
+        }
+    });
+    let result = body(pieces);
+    let mut guard = decoder.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (decoder, emit) = &mut *guard;
+    decoder.finish().into_iter().for_each(emit);
+    result
 }
 
 /// What `spb` needs: `{refused: [symbol], declared: [symbol], files: [name]}`. `refused` are the natives the
@@ -312,17 +363,30 @@ mod bindings {
     #[wasm_bindgen]
     pub fn run(spb: &[u8], request: &str, sink: Option<OutputSink>) -> String {
         let Some(sink) = sink else { return super::run(spb, request) };
-        let previous = SINK.with(|current| current.replace(Some(sink)));
-        let answer = super::run_streaming(spb, request, |chunk| {
+        with_sink(sink, |emit| super::run_streaming(spb, request, emit))
+    }
+
+    /// `body` with an `emit` that hands each chunk's JSON text to `sink`, kept in [`SINK`] for the call.
+    fn with_sink(sink: OutputSink, body: impl FnOnce(fn(serde_json::Value)) -> serde_json::Value) -> String {
+        fn emit(chunk: serde_json::Value) {
             let text = chunk.to_string();
             SINK.with(|current| {
                 if let Some(sink) = current.borrow().as_ref() {
                     let _ = sink.call_with(&wasm_bindgen::JsValue::NULL, &text);
                 }
             });
-        });
+        }
+        let previous = SINK.with(|current| current.replace(Some(sink)));
+        let answer = body(emit);
         SINK.with(|current| *current.borrow_mut() = previous);
         answer.to_string()
+    }
+
+    /// The tests of an SPB built with tests (#1127), as `run`: with `sink` the report streams to it.
+    #[wasm_bindgen]
+    pub fn test(spb: &[u8], request: &str, sink: Option<OutputSink>) -> String {
+        let Some(sink) = sink else { return super::test(spb, request) };
+        with_sink(sink, |emit| super::test_streaming(spb, request, emit))
     }
 
     #[wasm_bindgen]
@@ -541,6 +605,37 @@ function f2 "host" native "runtime/system@1::system_host_name/0" {
         let collected = ran(&half, "{}");
         let joined: String = collected["output"].as_array().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap()).collect();
         assert_eq!(joined, "a\u{fffd}");
+    }
+
+
+    /// #1127: a test build's tests run as `okkama run -t` runs them: the human report and the tests' output streamed
+    /// in order, a line at a time, each test with the request's standard input, exit 1 when one failed (here on a
+    /// native the profile refuses), 4 without tests.
+    #[test]
+    fn the_tests_of_a_test_build_report_as_okkama_run_t() {
+        let body = "    0: const r1, int 0\n    1: ret r1\n";
+        let tests = "function f5 \"writes\" {\n    registers [t1, t3]\n    params []\n    result void\n    0: const r0, str \"hi\\n\"\n    1: str.utf8 r1, r0\n    2: call _, f0, [r1]\n    3: ret _\n}\n\
+                     function f6 \"refused\" {\n    registers [t1]\n    params []\n    result void\n    0: call r0, f2, []\n    1: ret _\n}\n\
+                     function f7 \"reads\" {\n    registers [t3]\n    params []\n    result void\n    0: call r0, f1, []\n    1: call _, f0, [r0]\n    2: ret _\n}\n";
+        let source = format!("{HEAD}{NO_CLDR}function f4 \"main\" {{\n    registers [t3, t0, t1, t0]\n    params []\n    result t0\n{body}}}\n{tests}entry f4\ntests {{\n    test \"writes\" f5\n    test \"refused\" f6\n    test \"reads\" f7\n}}\n");
+        let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        let spb = okkama_sparrow::encode(&program).unwrap();
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = chunks.clone();
+        let answer = test_streaming(&spb, r#"{"stdin": "in\n"}"#, move |chunk| into.lock().unwrap().push(chunk));
+        assert_eq!((&answer["exit"], &answer["output"], &answer["report"]), (&json!(1), &json!([]), &Value::Null));
+        let text: String = chunks.lock().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap().to_string()).collect();
+        assert!(text.starts_with("=== RUN   writes\nhi\n--- PASS: writes\n=== RUN   refused\n"), "{text}");
+        assert!(text.contains("is not available in the playground"), "{text}");
+        // Each test reads the request's standard input afresh.
+        assert!(text.contains("=== RUN   reads\nin\n--- PASS: reads\n"), "{text}");
+        assert!(text.ends_with("FAIL\n"), "{text}");
+        let collected: Value = serde_json::from_str(&test(&spb, r#"{"seed": 1}"#)).unwrap();
+        assert_eq!(collected["output"][0]["text"], "=== SEED  1\n", "a line at a time: {collected}");
+        let bad: Value = serde_json::from_str(&test(&spb, r#"{"seed": -1}"#)).unwrap();
+        assert!(bad["error"].as_str().unwrap().starts_with("`seed` must be"));
+        let plain: Value = serde_json::from_str(&test(&spb_with(NO_CLDR, body), "{}")).unwrap();
+        assert_eq!((&plain["exit"], &plain["report"]), (&json!(4), &json!("okkama: module has no tests\n")));
     }
 
 }

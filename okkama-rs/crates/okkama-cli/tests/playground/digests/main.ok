@@ -1,0 +1,28 @@
+module digests v1.0.0;
+
+// The digests, MACs, key derivation, named UUIDs and checksums the playground offers (#1127, design §9 #6): a
+// run in the playground prints what `okkama run` prints (tests/playground_run.rs, tools/playground/smoke.mjs).
+
+import "io/stdout" take Stdout;
+import "digest/sha2" take Sha256;
+import "crypto/hmac" take Hmac, HmacHash;
+import "crypto/kdf" take HkdfSecret, KdfHash;
+import "crypto/secret" take SecretBytes;
+import "uuid/value" take UuidText;
+import "uuid/generation" take Uuid5;
+import "checksum/crc" take Crc32;
+import "checksum/adler32" take Adler32;
+import "encoding/hex" take HexEncoded;
+
+main() is int {
+    let out = Stdout();
+    out.writeln("sha256 " + Sha256("abc").hex());
+    out.writeln("hmac " + Hmac(hash: HmacHash.sha256, key: SecretBytes("key"), origin: [97.byte(), 98.byte(), 99.byte()]).hex());
+    let derived = HkdfSecret(KdfHash.sha256, SecretBytes("shared"), [115.byte()], [105.byte()], 16).secret();
+    out.writeln("hkdf " + HexEncoded(derived.export_bytes()).string());
+    let dns = UuidText(origin: "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    out.writeln("uuid5 " + Uuid5(namespace: dns, name: "example.com").string());
+    out.writeln("crc32 " + Crc32([49.byte(), 50.byte(), 51.byte()]).checksum().string());
+    out.writeln("adler32 " + Adler32([49.byte(), 50.byte(), 51.byte()]).checksum().string());
+    0;
+}

@@ -1050,7 +1050,25 @@ every declaration is open (#1005, owner decision).
   examples 8→4, 16→12, 23→22 refused natives (others equal), the smoke test's file program 8→4; over examples/
   (315 programs) every run that stopped at a refusal (47) stopped at a named native.
 
-### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135)
+- **Module tests in the playground (#1127).** `test(spb, request, sink?)` runs an SPB built with `tests: true` as
+  `okkama run -t` does (`sparrow_core::run_tests_embedded`: the same `test_profile`, each test on its own runtime,
+  here on the interpreter with `Limits::playground()` and the request's standard input given afresh to each test).
+  The human report goes through the same receiver as the tests' output, through a `LineWriter` (the report is
+  written in fragments; one chunk per line, not per fragment). Exit as the CLI's: 0 all passed, 1 a test failed, 4
+  with `report` `okkama: …` when the tests cannot run. Not done in the playground: `okkama run -t`'s
+  documentation examples (`ok - doctest …`, each a program of its own), name filters (the CLI filters the module
+  before codegen), workers (`-j`). Parity: the Bible's 13 `-tests` examples and 25 std modules' tests (json, csv,
+  diff, toml, plist, strings, crypto/hmac, crypto/kdf, digests, uuid, checksums …) byte for byte, doctest lines
+  left out of the CLI's side.
+- **Hashes, HMAC, HKDF, UUIDs, checksums (#1127, owner's §9 #6 still provisional).** Already in the profile since
+  #1125 (`crypto`, `host_crypto`, `uuid`, `checksum` are pure, RustCrypto in wasm); now checked: a test that every
+  native of those modules is offered, their std modules' tests in the parity test, a digests program
+  (`okkama-cli/tests/playground/digests/main.ok`) compared with the CLI and run in wasm by the Node smoke test with
+  the known values (SHA-256 "abc", HMAC-SHA256, HKDF, UUID 5 of example.com, CRC-32, Adler-32).
+- **CLDR on demand** (design §8 item 8, first point) was done in #1125 (`provide`, `files`).
+- **Left for the owner:** workers' emulation (§9 #8) and the resumable scheduler (§9 #3).
+
+### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135, #1127)
 
 - `run(spb, request, sink?)` → request `{stdin?: text, arguments?: [text]}`; answer
   `{exit: 0..255, output: [chunk], report: text | null, uncaught: Uncaught | null}`, or `{error}` for a request
@@ -1062,6 +1080,9 @@ every declaration is open (#1005, owner decision).
   trace: [[function, pc, count]], traceOmitted, traceOffset, causeTraces: [[offset, [[function, pc, count]],
   omitted]]}`: stacks as runs of equal consecutive sites. okkama-wasm `failureText({report, uncaught, cwd?})` →
   `{ok: true, text}`.
+- `test(spb, request, sink?)` → request `{stdin?: text, seed?: 0..2^53-1}`; answer `{exit: 0 | 1 | 4, output:
+  [chunk], report: text | null}` (`report` only with exit 4), or `{error}` for a request that is not JSON or a bad
+  seed. With a sink, `output` is `[]`.
 - `requirements(spb)` → `{refused: [symbol], declared: [symbol], files: [name]}` (symbols sorted), or `{error}`.
 - `provide(name, gzipBytes)` → `{ok: true}` or `{error}`.
 - `version()` → `{version, profile: {name, groups: [name], steps, memory, output, interrupted, exhausted: {steps,

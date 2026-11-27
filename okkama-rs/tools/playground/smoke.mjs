@@ -5,12 +5,16 @@
 // runs, and the CLDR tables are named as files to fetch. With an output sink (#1134) every write reaches the page while
 // the program runs: a run in a worker that prints and then spins is stopped, and what it printed has arrived; the
 // interruption text comes from version(). requirements names what a run can reach, and what is declared (#1135).
+// A test build's tests run as `okkama run -t` runs them, the report streamed (#1127); digests, HMAC, HKDF, a named
+// UUID and checksums give what the CLI gives.
 //
 //     wasm-bindgen --target nodejs --out-dir DIR okkama_wasm.wasm sparrow_wasm.wasm (one call each)
 //     node okkama-rs/tools/playground/smoke.mjs DIR
 import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 const dir = resolve(process.argv[2] ?? "playground-node");
@@ -18,8 +22,8 @@ const require = createRequire(import.meta.url);
 const compiler = require(join(dir, "okkama_wasm.js"));
 const runtime = require(join(dir, "sparrow_wasm.js"));
 
-function build(source) {
-    const built = JSON.parse(compiler.build(JSON.stringify({ source, path: "main.ok" })));
+function build(source, tests = false) {
+    const built = JSON.parse(compiler.build(JSON.stringify({ source, path: "main.ok", tests })));
     assert.equal(built.ok, true, built.stderr);
     return compiler.builtSpb();
 }
@@ -146,4 +150,41 @@ const stopped = await new Promise((resolve, reject) => {
 assert.ok(stopped.every((chunk) => chunk.stream === "stdout"), JSON.stringify(stopped));
 const shown = stopped.map((chunk) => chunk.text).join("") + profile.interrupted;
 assert.equal(shown, "started\nExecution interrupted\n");
+// Tests: the report a line at a time, as `okkama run -t` prints it, exit 1 for a failed test.
+const tested = `module smoke v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    0;
+}
+
+test "adds" {
+    Stdout().writeln("adding");
+    test.is(1 + 1, 2);
+}
+
+test "fails" {
+    test.is(1 + 1, 3);
+}
+`;
+const report = [];
+const verdict = JSON.parse(runtime.test(build(tested, true), "{}", (chunk) => report.push(JSON.parse(chunk))));
+assert.equal(verdict.exit, 1, JSON.stringify(verdict));
+assert.equal(report.map((chunk) => chunk.text).join(""),
+    "=== RUN   adds\nadding\n--- PASS: adds\n=== RUN   fails\n--- FAIL: fails\n    expected 3, got 2\nFAIL\n");
+assert.equal(JSON.parse(runtime.test(build(hello), "{}")).exit, 4, "a build without tests");
+
+// Digests, HMAC, HKDF, a named UUID and checksums in wasm (RustCrypto, the design's #6).
+const digests = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../crates/okkama-cli/tests/playground/digests/main.ok"), "utf8");
+const hashed = JSON.parse(runtime.run(build(digests), "{}"));
+assert.equal(hashed.exit, 0, JSON.stringify(hashed));
+assert.equal(hashed.output.map((chunk) => chunk.text).join(""), `sha256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+hkdf eab314a8ddb1ef18ba219b262f6e604b
+uuid5 cfbff0d1-9375-5685-968c-48ce8b15ae17
+crc32 2286445522
+adler32 19726487
+`);
+
 console.log(`playground smoke: ok (run ${elapsed.toFixed(0)} ms, ${needs.refused.length} of ${needs.declared.length} declared refused natives reachable, a stopped run kept its output)`);

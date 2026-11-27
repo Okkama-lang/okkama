@@ -220,30 +220,13 @@ pub struct Embedded {
 pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let Embedding { arguments, stdin, limits, pieces: mut streamed } = embedding;
+        let Embedding { arguments, stdin, limits, pieces: streamed } = embedding;
         let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
         runtime.use_engine(Engine::Interpreter);
         if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
             host.set_stdin(bytes);
         }
-        let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Piece>::new()));
-        let into = pieces.clone();
-        let start = clock::Instant::now();
-        let sink: stdout::Sink = Box::new(move |stream, bytes| {
-            if bytes.is_empty() {
-                return;
-            }
-            let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            if let Some(streamed) = streamed.as_mut() {
-                streamed(Piece { stream, bytes: bytes.to_vec(), nanos });
-                return;
-            }
-            let mut pieces = into.borrow_mut();
-            match pieces.last_mut() {
-                Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
-                _ => pieces.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
-            }
-        });
+        let (sink, pieces) = piece_sink(streamed);
         let result = stdout::with_sink(sink, || execute(&mut runtime)).map_err(|failure| {
             let (error, uncaught) = *failure;
             (error.0, uncaught)
@@ -251,6 +234,64 @@ pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Er
         let output = std::mem::take(&mut *pieces.borrow_mut());
         Ok(Embedded { result, output })
     })
+}
+
+/// The receiver of an embedded run's writes: each to `streamed` as it happens, or collected (a stream's writes at one
+/// moment joined) into the returned list. Moments are nanoseconds since this call on Sparrow's clock.
+fn piece_sink(mut streamed: Option<PieceSink>) -> (stdout::Sink, std::rc::Rc<std::cell::RefCell<Vec<Piece>>>) {
+    let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Piece>::new()));
+    let into = pieces.clone();
+    let start = clock::Instant::now();
+    let sink: stdout::Sink = Box::new(move |stream, bytes| {
+        if bytes.is_empty() {
+            return;
+        }
+        let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        if let Some(streamed) = streamed.as_mut() {
+            streamed(Piece { stream, bytes: bytes.to_vec(), nanos });
+            return;
+        }
+        let mut pieces = into.borrow_mut();
+        match pieces.last_mut() {
+            Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
+            _ => pieces.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
+        }
+    });
+    (sink, pieces)
+}
+
+/// What an embedded test run shows (#1127): whether every test passed, and the human report (`okkama run -t`'s) with
+/// the tests' own writes, in order (empty when [`Embedding::pieces`] took them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTests {
+    pub passed: bool,
+    pub output: Vec<Piece>,
+}
+
+/// The test profile of an SPB built with tests, as `okkama run -t` runs it, but on the interpreter and as the
+/// playground does (#1127): each test on a runtime of its own under `embedding`'s limits, with its standard input;
+/// the report streams through the same receiver as the tests' output. `Err` for a program that does not load or has
+/// no tests (the CLI's `okkama: …`, exit 4).
+pub fn run_tests_embedded(bytes: Vec<u8>, embedding: Embedding, plan: test_report::TestPlan) -> Result<EmbeddedTests, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let Embedding { arguments: _, stdin, limits, pieces: streamed } = embedding;
+        let setup = TestSetup { engine: Some(Engine::Interpreter), stdin };
+        let (sink, pieces) = piece_sink(streamed);
+        let report = stdout::with_sink(sink, || {
+            // A line at a time: the report is written in fragments, and each write is a piece the page receives.
+            test_profile(program, plan, Some(Box::new(std::io::LineWriter::new(stdout::Buffered))), Vec::new(), &limits, &setup)
+        })?;
+        let output = std::mem::take(&mut *pieces.borrow_mut());
+        Ok(EmbeddedTests { passed: report.passed(), output })
+    })
+}
+
+/// How each test's runtime is set up beyond its budgets (#1127: the playground's engine and standard input).
+#[derive(Debug, Default)]
+struct TestSetup {
+    engine: Option<Engine>,
+    stdin: Option<Vec<u8>>,
 }
 
 /// The natives of an SPB program, each once, in the ABI's order (#1125, #1135).
@@ -358,7 +399,7 @@ pub fn run_executable(
         if program.has_tests() && let Some(out) = tests
         {
             // The budgets bound each test as they bound main (#1017).
-            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
+            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits, &TestSetup::default()).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         // A runtime that cannot be built (an intrinsic's contract, a malformed `SPARROW_CORE_CODE_SHIFT`) is a
@@ -516,8 +557,10 @@ pub fn run_test_report_limited(
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         match progress {
-            Some(out) => test_profile(program, plan, Some(out), worker_command, &limits),
-            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, worker_command, &limits)),
+            Some(out) => test_profile(program, plan, Some(out), worker_command, &limits, &TestSetup::default()),
+            None => okkama_runtime_core::stdout::to_stderr(|| {
+                test_profile(program, plan, None, worker_command, &limits, &TestSetup::default())
+            }),
         }
     })
 }
@@ -530,9 +573,10 @@ fn test_profile(
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
     limits: &budget::Limits,
+    setup: &TestSetup,
 ) -> Result<test_report::TestReport, Error> {
     match program {
-        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command, limits),
+        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command, limits, setup),
     }
 }
 
@@ -542,6 +586,7 @@ fn test_program(
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
     limits: &budget::Limits,
+    setup: &TestSetup,
 ) -> Result<test_report::TestReport, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
@@ -563,6 +608,12 @@ fn test_program(
         let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
         runtime.worker_command = worker_command.clone();
         runtime.limits = limits.clone();
+        if let Some(engine) = setup.engine {
+            runtime.use_engine(engine);
+        }
+        if let (Some(bytes), Some(host)) = (&setup.stdin, runtime.host.as_mut()) {
+            host.set_stdin(bytes.clone());
+        }
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
             host.test_cases = test_report::SubCaseState::new(only);

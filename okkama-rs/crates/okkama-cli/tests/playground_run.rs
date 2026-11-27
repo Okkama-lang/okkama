@@ -48,12 +48,18 @@ struct Shown {
 }
 
 fn cli(case: &Case) -> Shown {
+    cli_with(case, &["run"])
+}
+
+/// `okkama ARGS NAME` in the case's directory.
+fn cli_with(case: &Case, args: &[&str]) -> Shown {
     let output = tree::okkama()
         .env_remove("OKKAMA_IMPORT_DIRS")
         .env_remove("OKKAMA_TRACE")
         .env_remove("SPARROW_CORE_INTERPRET")
         .current_dir(&case.dir)
-        .args(["run", &case.name])
+        .args(args)
+        .arg(&case.name)
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
@@ -245,4 +251,99 @@ fn requirements_name_every_refused_native_a_run_calls() {
         programs.len()
     );
     assert!(stopped >= 20, "only {stopped} runs met the profile");
+}
+
+/// The playground's test run of `case` (#1127), as the page runs it (streamed): `None` when the profile refuses a
+/// native its tests can reach. `std_root` names std as the CLI in `case.dir` names it.
+fn playground_tests(case: &Case, std_root: &str) -> Option<Shown> {
+    let mut workspace = Workspace::new(std_root);
+    let mut files = Vec::new();
+    ok_files(&case.dir.join(Path::new(&case.name).parent().unwrap()), Path::new(""), &mut files);
+    let source = std::fs::read_to_string(case.dir.join(&case.name)).unwrap();
+    let file = Path::new(&case.name).file_name().unwrap().to_string_lossy().into_owned();
+    if !case.name.starts_with("std/") {
+        workspace.set_files(files.into_iter().filter(|(name, _)| *name != file));
+    }
+    let built = workspace.build(&json!({"source": source, "path": case.name, "tests": true}));
+    let mut stderr = built["stderr"].as_str().unwrap().to_string();
+    if built["ok"] != true {
+        return Some(Shown { stdout: String::new(), stderr, code: built["code"].as_i64().unwrap() });
+    }
+    let spb = workspace.built_spb();
+    let needs: Value = serde_json::from_str(&sparrow_wasm::requirements(&spb)).unwrap();
+    if !needs["refused"].as_array().unwrap().is_empty() {
+        return None;
+    }
+    let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = chunks.clone();
+    let ran = sparrow_wasm::test_streaming(&spb, r#"{"stdin": ""}"#, move |chunk| into.lock().unwrap().push(chunk));
+    let mut stdout = String::new();
+    for piece in chunks.lock().unwrap().iter() {
+        let text = piece["text"].as_str().unwrap();
+        if piece["stream"] == "stdout" { stdout.push_str(text) } else { stderr.push_str(text) }
+    }
+    if let Some(report) = ran["report"].as_str() {
+        stderr.push_str(report);
+    }
+    Some(Shown { stdout, stderr, code: ran["exit"].as_i64().unwrap() })
+}
+
+/// #1127: the tests of the Bible's `-tests` examples and of std modules that the profile admits report as `okkama run
+/// -t` reports them, byte for byte: the human report, the tests' output and the exit status. `okkama run -t` also
+/// checks the file's documentation examples (`ok - doctest …` after the report), each a program of its own; the
+/// playground does not, so those lines are left out of the CLI's side.
+#[test]
+fn the_playground_runs_tests_as_okkama_run_t() {
+    let examples = canonical(&tree::root().join("docs/OkkamaBible/examples"));
+    let mut names: Vec<String> = std::fs::read_dir(&examples)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with("-tests.ok"))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 10, "the Bible's test examples: {}", names.len());
+    let std_dir = canonical(&tree::std_dir()).display().to_string();
+    let mut cases: Vec<(Case, String)> = names.into_iter().map(|name| (Case { dir: examples.clone(), name }, std_dir.clone())).collect();
+    let root = canonical(&tree::root());
+    let modules = [
+        "json", "csv", "diff", "statistics", "calendar", "cell", "strings/join", "strings/format", "strings/buffer", "toml/parse",
+        "toml/value", "plist/parse", "crypto/hmac", "crypto/kdf", "crypto/constant_time", "digest/sha2", "digest/sha3",
+        "digest/blake2", "digest/legacy", "digest/host", "uuid/value", "uuid/generation", "checksum/crc", "checksum/adler32",
+        "checksum/state",
+    ];
+    for module in modules {
+        cases.push((Case { dir: root.clone(), name: format!("std/{module}.ok") }, "std".to_string()));
+    }
+    let (mut compared, mut failing, mut refused) = (0, 0, Vec::new());
+    let mut differences = Vec::new();
+    for (case, std_root) in &cases {
+        let Some(played) = playground_tests(case, std_root) else {
+            refused.push(case.name.clone());
+            continue;
+        };
+        compared += 1;
+        failing += usize::from(played.code != 0);
+        let mut shown = cli_with(case, &["run", "-t"]);
+        shown.stdout = shown.stdout.lines().filter(|line| !line.starts_with("ok - doctest ") && !line.starts_with("not ok - doctest ")).map(|line| format!("{line}\n")).collect();
+        if played != shown {
+            differences.push(format!("{}:\n  cli:        {shown:?}\n  playground: {played:?}", case.name));
+        }
+    }
+    eprintln!("playground tests: {compared} compared ({failing} failing), {} refused: {refused:?}", refused.len());
+    assert!(differences.is_empty(), "{} of {compared} differ:\n{}", differences.len(), differences.join("\n"));
+    assert!(compared >= 35, "only {compared} test suites ran in the playground");
+}
+
+
+/// #1127 (design §9 #6, awaiting the owner): digests, HMAC, HKDF, named UUIDs and checksums are in the profile and
+/// give the CLI's output; their std modules' own tests run in `the_playground_runs_tests_as_okkama_run_t`.
+#[test]
+fn the_playground_hashes_as_the_cli_does() {
+    let std_dir = canonical(&tree::std_dir()).display().to_string();
+    let case = Case { dir: canonical(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/playground/digests")), name: "main.ok".into() };
+    let played = playground(&case, &std_dir).expect("the profile admits digests, MACs, HKDF, UUIDs and checksums");
+    assert_eq!(played, cli(&case));
+    assert_eq!(played.code, 0, "{}", played.stderr);
+    assert!(played.stdout.starts_with("sha256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"), "{}", played.stdout);
 }
