@@ -289,7 +289,8 @@ fn lazy_compilation_failure_propagates_and_never_publishes_a_zero_entry() {
         assert!(error.0.starts_with("identity: compiling it would take more than 0 bytes"), "{}", error.0);
         assert_eq!(runtime.invocations[0].code, 0);
         assert_eq!(compiles(&runtime, 1), 1);
-        runtime.limits.memory = None;
+        // A budget large enough to compile under, not none: the runtime's polling is fixed at its first run (#1129).
+        runtime.limits.memory = Some(1 << 40);
         assert_eq!(runtime.run_function_with(1, &[word::small(31).unwrap()], 2 << 20).unwrap(), word::small(31).unwrap());
         assert_ne!(runtime.invocations[0].code, 0);
     }

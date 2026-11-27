@@ -87,7 +87,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Rust
-        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown --component clippy && rustup default stable
+        # The pinned release toolchain, as the Wave's clippy: a newer stable brings lints the rest of CI does not run.
+        run: |
+          toolchain="$(cat tools/release-toolchain.txt)"
+          rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown --component clippy && rustup default "$toolchain"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: okkama-rs -> target
