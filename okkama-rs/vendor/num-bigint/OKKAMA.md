@@ -15,4 +15,4 @@ version reached 104 ms, but it was not taken: upstream prefers Rust-native code 
 including all-ones carry chains, and subtracts back.
 
 **Removal:** drop this copy and the `[patch.crates-io]` entry in `okkama-rs/Cargo.toml` once upstream num-bigint
-ships the same change (PR pending).
+ships the same change (rust-num/num-bigint#365, opened 2026-11-28; its four-digit add step is ours only).
