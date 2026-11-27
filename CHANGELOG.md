@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Faster marking (#1174).** The collector's object tracing is generic over its visitor, so marking's visitor is
+  inlined into the field loops, and objects with nothing to trace (plain strings, big integers, arrays of raw words)
+  are marked without being queued. bench/gc marking: burst −33%, deep −30%, payload −16%, ownership −8%; steady
+  burst −9%, 11-ownership −4%, 08-roles −2%.
 - **Less to compile on the first run (#1147, step 1).** cranelift-frontend builds without std (its safepoint
   spiller's sets in hashbrown); handlers with the same target share one failure exit and a function's later failure
   exits one cold return; branch edges that move nothing go straight to their blocks; int add, subtract and multiply

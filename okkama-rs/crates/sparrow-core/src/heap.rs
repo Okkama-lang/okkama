@@ -1923,12 +1923,14 @@ impl Heap {
     }
 
     /// The traced fields of one live object, as the collector reads them.
-    fn trace_object(&self, object: Word, push: &mut dyn FnMut(Word, Repr)) {
+    /// #1174: generic over the visitor, so marking's visitor is inlined into the field loops; only a payload's own
+    /// `trace` takes it as `dyn`.
+    #[inline]
+    fn trace_object<P: FnMut(Word, Repr) + ?Sized>(&self, object: Word, push: &mut P) {
         {
             // SAFETY: `object` is a live object pointer; the mark bit is masked out.
             let header = unsafe { *(object as *const u64) } & !MARK;
-            let mut push = |word: Word, repr: Repr| push(word, repr);
-            let fields = |layout: &[TraceSlot], push: &mut dyn FnMut(Word, Repr)| {
+            let fields = |layout: &[TraceSlot], push: &mut P| {
                 for &TraceSlot { index, repr } in layout {
                     push(
                         // SAFETY: the index comes from this object's full layout.
@@ -1938,9 +1940,9 @@ impl Heap {
                 }
             };
             match kind(header) {
-                OBJECT => fields(&self.trace_layouts.objects[payload(header) as usize], &mut push),
-                CLOSURE => fields(&self.trace_layouts.closures[payload(header) as usize], &mut push),
-                FRAME => fields(&self.trace_layouts.frames[payload(header) as usize], &mut push),
+                OBJECT => fields(&self.trace_layouts.objects[payload(header) as usize], push),
+                CLOSURE => fields(&self.trace_layouts.closures[payload(header) as usize], push),
+                FRAME => fields(&self.trace_layouts.frames[payload(header) as usize], push),
                 // A shared version keeps its buffer alive; the buffer traces
                 // the slots below its frontier like any array.
                 ARRAY if header & SHARED != 0 => push(unsafe { *((object + 16) as *const u64) }, Repr::Ref),
@@ -1965,7 +1967,7 @@ impl Heap {
                 PAYLOAD => {
                     // SAFETY: every marked PAYLOAD has an initialized owner.
                     if let Some(payload) = unsafe { &(*(object as *const PayloadCell)).owner } {
-                        payload.trace(&mut push);
+                        payload.trace(&mut |word, repr| push(word, repr));
                     }
                 }
                 _ => {}
@@ -2217,11 +2219,20 @@ unsafe fn mark_and_queue(object: Word, marker: &mut Marker<'_>) {
     let header = unsafe { *(object as *const u64) };
     if header & MARK == 0 {
         unsafe { *(object as *mut u64) = header | MARK };
+        // #1174: an object with nothing to trace is marked and not queued.
+        let leaf = match kind(header) {
+            STRING => header & SHARED == 0,
+            BIGINT => true,
+            ARRAY => header & (SHARED | TRIE) == 0 && element_repr(header) == Repr::Raw,
+            _ => false,
+        };
         // #1114: its granule holds a live cell (an address outside the span, a large object, sets nothing).
         if let Some(granule) = marker.map.get_mut((object.wrapping_sub(marker.lo) >> GRANULE_SHIFT) as usize) {
             *granule = 1;
         }
-        marker.worklist.push(object);
+        if !leaf {
+            marker.worklist.push(object);
+        }
     }
 }
 
@@ -3056,6 +3067,30 @@ mod tests {
             let mut before = objects.clone();
             before.sort_unstable();
             assert_eq!(again, before, "the same cells, each once");
+        }
+    }
+
+    /// #1174: objects with nothing to trace (a plain string, a big integer, an array of raw words) are marked
+    /// without being queued and survive; an array of references is still traced, so what it holds survives too.
+    #[test]
+    fn leaves_are_marked_without_tracing_and_containers_still_trace_1174() {
+        let mut heap = Heap::new(layouts());
+        let text = heap.allocate_text("a leaf");
+        let big = heap.big(BigInt::from(1) << 200);
+        let raw = heap.allocate_array(Repr::Raw, &[1, 2, 3]);
+        let held = heap.allocate_text("held by a reference array");
+        let refs = heap.allocate_array(Repr::Ref, &[held, text]);
+        let root = heap.allocate_array(Repr::Ref, &[refs, big, raw]);
+        heap.collect(|visit| visit(root, Repr::Ref));
+        for object in [text, big, raw, held, refs, root] {
+            assert!(!heap.is_reclaimed(object), "{object:#x} was reclaimed");
+            // SAFETY: a live object's header.
+            assert_eq!(unsafe { *(object as *const u64) } & MARK, 0);
+        }
+        assert_eq!(heap.text(held), "held by a reference array");
+        heap.collect(|_| {});
+        for object in [text, big, raw, held, refs, root] {
+            assert!(heap.is_reclaimed(object));
         }
     }
 
