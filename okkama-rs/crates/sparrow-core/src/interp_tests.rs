@@ -1600,3 +1600,42 @@ entry f6
     #[cfg(feature = "jit")]
     assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
 }
+
+/// #1110: a closure without captures records its function's code as its entry and is then called through it with
+/// itself as a trailing argument; ten parameters put arguments on the stack on both arm64 and x86-64, and the
+/// trailing closure must not disturb them. Called three times (resolve, record, direct), with GC stress on the JIT.
+#[test]
+fn closure_entries_call_with_a_trailing_closure_past_the_register_arguments() {
+    let params: Vec<String> = (0..10).map(|i| format!("r{i}")).collect();
+    let mut body = Vec::new();
+    // r10 = r0*1 + r1*2 + … + r9*10
+    body.push("const r10, int 0".to_string());
+    for i in 0..10 {
+        body.push(format!("const r11, int {}", i + 1));
+        body.push(format!("int.mul r11, r{i}, r11"));
+        body.push("int.add r10, r10, r11".to_string());
+    }
+    body.push("ret r10".to_string());
+    let weigh: String = body.iter().enumerate().map(|(pc, line)| format!("    {pc}: {line}\n")).collect();
+    let mut main = vec!["fn.closure r0, f4, []".to_string()];
+    for i in 0..10 {
+        main.push(format!("const r{}, int {}", i + 1, (i as i64 + 1) * 1000));
+    }
+    let args: Vec<String> = (1..=10).map(|i| format!("r{i}")).collect();
+    for _ in 0..3 {
+        main.push(format!("call.fn r11, r0, [{}]", args.join(", ")));
+        main.push("call _, f1, [r11]".to_string());
+    }
+    main.push("const r11, int 0".to_string());
+    main.push("ret r11".to_string());
+    let main_body: String = main.iter().enumerate().map(|(pc, line)| format!("    {pc}: {line}\n")).collect();
+    let source = program("type t5 fn [t0, t0, t0, t0, t0, t0, t0, t0, t0, t0] -> t0", "", &format!(
+        "function f4 \"weigh\" {{\n    registers [{}]\n    params [{}]\n    result t0\n{weigh}}}\nfunction f5 \"main\" {{\n    registers [t5, {}]\n    params []\n    result t0\n{main_body}}}\nentry f5\n",
+        vec!["t0"; 12].join(", "), params.join(", "), vec!["t0"; 11].join(", ")
+    ));
+    let expected: i64 = (1..=10).map(|i| i * i * 1000).sum();
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&[&expected.to_string(), &expected.to_string(), &expected.to_string()]));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}

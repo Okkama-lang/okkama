@@ -25,6 +25,10 @@ pub const ARRAY: u8 = 3;
 pub const BIGINT: u8 = 4;
 pub const PAYLOAD: u8 = 5;
 pub const CLOSURE: u8 = 6;
+/// #1110: the byte offset of a closure's entry word (the code a call jumps to with the closure last, or 0) and of
+/// its first capture.
+pub const CLOSURE_ENTRY: i32 = 8;
+pub const CLOSURE_CAPTURES: i32 = 16;
 pub const FRAME: u8 = 7;
 
 const MARK: u64 = 1 << 8;
@@ -1602,26 +1606,31 @@ impl Heap {
 
     // ---- closures and async frames ----
 
-    /// A closure has one word per parameter of its function (its layout);
-    /// captures fill a prefix and the remaining words are unbound.
-    /// The words a closure of `function` holds after its header (#1167: the JIT allocates closures inline).
+    /// A closure has its entry word (#1110), then one word per parameter of its function (its layout); captures
+    /// fill a prefix of those and the remaining words are unbound.
+    /// The parameter words of a closure of `function` (#1167: the JIT allocates closures inline).
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(crate) fn closure_words(&self, function: u32) -> usize {
-        self.layouts.closures[function as usize].len().max(1)
+        self.layouts.closures[function as usize].len() - 1
+    }
+
+    /// Capture `index` of a closure (#1110: after its entry word).
+    pub fn capture(&self, closure: Word, index: usize) -> Word {
+        self.field(closure, index + 1)
     }
 
     pub fn closure_new(&mut self, function: u32, captures: &[Word]) -> Word {
         let words = self.layouts.closures[function as usize].len();
-        debug_assert!(captures.len() <= words);
-        self.counted("closure", 0, words.max(1) + 1);
-        let closure = self.allocate(words.max(1) + 1);
-        // SAFETY: room for the header and `words` words.
+        debug_assert!(captures.len() < words);
+        self.counted("closure", 0, words + 1);
+        let closure = self.allocate(words + 1);
+        // SAFETY: room for the header and `words` words: the entry word (0: no entry yet), then the parameters.
         unsafe {
             *(closure as *mut u64) = header(CLOSURE, Repr::Raw, function);
-            std::ptr::write_bytes((closure + 8) as *mut u64, 0, words.max(1));
+            std::ptr::write_bytes((closure + 8) as *mut u64, 0, words);
             std::ptr::copy_nonoverlapping(
                 captures.as_ptr(),
-                (closure + 8) as *mut u64,
+                (closure + CLOSURE_CAPTURES as Word) as *mut u64,
                 captures.len(),
             );
         }
@@ -2877,7 +2886,7 @@ mod tests {
             visit(closure, Repr::Ref);
             visit(raw, Repr::Ref);
         });
-        let array = heap.field(closure, 0);
+        let array = heap.capture(closure, 0);
         assert_eq!(heap.text(heap.elements(array)[999]), "999");
         assert_eq!(heap.integer(heap.elements(raw)[500]), Integer::Small(500));
         assert_eq!(heap.stats().large, 2);

@@ -253,16 +253,15 @@ impl Loaded {
                     None => o.fields.iter().map(|(_, t)| Kind::of(p, *t).repr()).collect(),
                 })
                 .collect(),
-            // A closure object has one word per parameter of its function:
-            // captures fill a prefix, the rest stay unbound.
+            // A closure object has its entry word (#1110: the code a call jumps to, or 0), then one word per
+            // parameter of its function: captures fill a prefix, the rest stay unbound.
             closures: p
                 .functions
                 .iter()
                 .zip(&self.functions)
                 .map(|(f, info)| {
-                    f.params
-                        .iter()
-                        .map(|r| info.kinds[r.0 as usize].repr())
+                    std::iter::once(Repr::Raw)
+                        .chain(f.params.iter().map(|r| info.kinds[r.0 as usize].repr()))
                         .collect()
                 })
                 .collect(),

@@ -988,6 +988,8 @@ const MEMORY: MemFlagsData = MemFlagsData::trusted();
 enum CallTarget {
     Static(usize),
     Dynamic(Value),
+    /// #1110: compiled code already known (a closure's entry word).
+    Code(Value),
 }
 
 impl Emitter<'_, '_> {
@@ -1539,19 +1541,22 @@ impl Emitter<'_, '_> {
         let ctx = self.ctx();
         let address = match target {
             CallTarget::Static(function) => self.ready_static(function, args.len()),
-            CallTarget::Dynamic(_) => None,
+            CallTarget::Dynamic(_) | CallTarget::Code(_) => None,
         };
         let kind = match target {
             CallTarget::Static(_) => usize::from(address.is_none()),
-            CallTarget::Dynamic(_) => 2,
+            CallTarget::Dynamic(_) | CallTarget::Code(_) => 2,
         };
         self.call_sites[kind] += 1;
         let code = if let Some(address) = address {
             self.iconst(address as i64)
+        } else if let CallTarget::Code(code) = target {
+            code
         } else {
             let function = match target {
                 CallTarget::Static(function) => self.iconst(function as i64),
                 CallTarget::Dynamic(function) => function,
+                CallTarget::Code(_) => unreachable!("handled above"),
             };
             let base = self.iconst(self.invocations.as_ptr() as i64);
             let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
@@ -1599,17 +1604,28 @@ impl Emitter<'_, '_> {
     fn closure_call(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
         const CLOSURE_DIRECT_CAPTURES: usize = 2;
         let closure = self.get(callee);
+        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        // #1110: a closure with an entry is called straight through it, the closure last (code compiled for the
+        // arguments alone ignores a trailing argument under the C calling conventions).
+        let entry = self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_ENTRY);
+        let (direct, resolve) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(entry, direct, &[], resolve, &[]);
+        self.builder.switch_to_block(direct);
+        let mut values = words.clone();
+        values.push(closure);
+        let result = self.call(pc, CallTarget::Code(entry), &values);
+        self.builder.ins().jump(merge, &[result.into()]);
+        self.builder.switch_to_block(resolve);
         let header = self.builder.ins().load(types::I64, MEMORY, closure, 0);
         let function = self.builder.ins().ushr_imm_u(header, 32);
         let base = self.iconst(self.invocations.as_ptr() as i64);
         let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
-        let entry = self.builder.ins().iadd(base, offset);
+        let invocation = self.builder.ins().iadd(base, offset);
         // uload32/uload8 zero-extend into an i64 themselves.
-        let params = self.builder.ins().uload32(MEMORY, entry, std::mem::offset_of!(runtime::Invocation, params) as i32);
-        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
-        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
-        let merge = self.builder.create_block();
-        self.builder.append_block_param(merge, types::I64);
+        let params = self.builder.ins().uload32(MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, params) as i32);
+        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
         for captured in 0..=CLOSURE_DIRECT_CAPTURES {
             let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
             let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
@@ -1620,7 +1636,13 @@ impl Emitter<'_, '_> {
             self.builder.switch_to_block(call);
             let mut values = Vec::with_capacity(captured + words.len());
             for index in 0..captured {
-                values.push(self.builder.ins().load(types::I64, MEMORY, closure, (8 + index * 8) as i32));
+                values.push(self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_CAPTURES + (index * 8) as i32));
+            }
+            if captured == 0 {
+                // #1110: a synchronous function that takes the arguments alone is its own closure entry: once it is
+                // compiled, record its code in the closure for the next call.
+                let code = self.builder.ins().load(types::I64, MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, code) as i32);
+                self.builder.ins().store(MEMORY, code, closure, heap::CLOSURE_ENTRY);
             }
             values.extend_from_slice(&words);
             let result = self.call(pc, CallTarget::Dynamic(function), &values);
@@ -2568,18 +2590,18 @@ impl Emitter<'_, '_> {
                 if words < captures.len() || captures.len() > self.loaded.program.functions[function.0 as usize].params.len() {
                     return Err(Error(format!("{}:{pc}: closure capture count exceeds parameter count", source.symbol)));
                 }
-                let pointer = self.allocate(words + 1);
+                let pointer = self.allocate(words + 2);
                 let header = self.iconst(heap::header(heap::CLOSURE, Repr::Raw, function.0) as i64);
                 self.builder.ins().store(MEMORY, header, pointer, 0);
+                // #1110: no entry yet; the first direct call through the closure records one.
+                let unbound = self.iconst(0);
+                self.builder.ins().store(MEMORY, unbound, pointer, heap::CLOSURE_ENTRY);
                 for (i, capture) in captures.iter().enumerate() {
                     let value = self.word(capture);
-                    self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
+                    self.builder.ins().store(MEMORY, value, pointer, heap::CLOSURE_CAPTURES + (i * 8) as i32);
                 }
-                if words > captures.len() {
-                    let unbound = self.iconst(0);
-                    for i in captures.len()..words {
-                        self.builder.ins().store(MEMORY, unbound, pointer, ((i + 1) * 8) as i32);
-                    }
+                for i in captures.len()..words {
+                    self.builder.ins().store(MEMORY, unbound, pointer, heap::CLOSURE_CAPTURES + (i * 8) as i32);
                 }
                 self.set(&dst.0, pointer);
             }

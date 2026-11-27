@@ -34,8 +34,8 @@ fn stack_maps_and_suspended_layouts_omit_only_proven_slots() {
         assert_eq!(layouts.frames[0][crate::tasks::FIXED_WORDS], Repr::Int);
         assert_eq!(layouts.frames[0][crate::tasks::FIXED_WORDS + 1], if enabled { Repr::Raw } else { Repr::Int });
         // Captured parameters retain their declared layout, even if the body
-        // later overwrites them with a small constant.
-        assert_eq!(layouts.closures[1], vec![Repr::Int]);
+        // later overwrites them with a small constant; the entry word comes first (#1110).
+        assert_eq!(layouts.closures[1], vec![Repr::Raw, Repr::Int]);
         compile(&mut runtime, 0).unwrap();
         counts.push(runtime.jit.maps.iter().map(|(_, _, words)| words.len()).sum::<usize>());
     }

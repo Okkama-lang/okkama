@@ -54,8 +54,9 @@ fn closures_with_up_to_two_captures_are_called_directly_and_answer_the_same() {
             let expected = 5 + (1..=captures as i64).map(|i| 10 * i).sum::<i64>();
             assert_eq!(result, word::small(expected).unwrap(), "{captures} captures, plain {plain}");
             assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.call_closure), 1, "the helper is always the fallback");
-            // one direct call per capture count 0..=2 the site can take; none when plain
-            assert_eq!(indirect_calls(&runtime, 1), if plain { 0 } else { 3 }, "{captures} captures, plain {plain}");
+            // one direct call per capture count 0..=2 the site can take, and one through the closure's entry
+            // word (#1110); none when plain
+            assert_eq!(indirect_calls(&runtime, 1), if plain { 0 } else { 4 }, "{captures} captures, plain {plain}");
         }
     }
 }

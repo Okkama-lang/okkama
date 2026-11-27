@@ -275,8 +275,8 @@ impl Runtime {
     /// A new closure of `closure`'s function over the same captures (`worker.bind`).
     pub(crate) fn closure_copy(&mut self, closure: Word) -> Word {
         let function = heap::payload(self.heap.header_of(closure));
-        let words = self.heap.layouts().closures[function as usize].len();
-        let captures: Vec<Word> = (0..words).map(|i| self.heap.field(closure, i)).collect();
+        let words = self.heap.layouts().closures[function as usize].len() - 1;
+        let captures: Vec<Word> = (0..words).map(|i| self.heap.capture(closure, i)).collect();
         self.heap.closure_new(function, &captures)
     }
 
@@ -1352,7 +1352,7 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
         &mut long
     };
     for (i, word) in words.iter_mut().enumerate().take(captured) {
-        *word = runtime.heap.field(closure, i);
+        *word = runtime.heap.capture(closure, i);
     }
     if runtime.closure_bridge_reference || params > 8 {
         words[captured..params].copy_from_slice(unsafe { std::slice::from_raw_parts(arguments, count as usize) });

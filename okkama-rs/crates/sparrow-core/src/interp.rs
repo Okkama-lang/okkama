@@ -1126,7 +1126,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
                     fail!();
                 };
                 long.clear();
-                long.extend((0..captured).map(|i| rt!().heap.field(closure, i)));
+                long.extend((0..captured).map(|i| rt!().heap.capture(closure, i)));
                 long.extend(args.iter().map(|arg| get!(arg)));
                 if entry.is_async {
                     // Calling an async action makes its cold Future.
