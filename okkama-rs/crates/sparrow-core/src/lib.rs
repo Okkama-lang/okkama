@@ -1075,6 +1075,8 @@ mod feature_tests {
             Native::TimeWallClock,
             Native::TimeMonotonicClock,
             Native::TimeSleepNanoseconds,
+            // One processor without the host, where workers are emulated in the instance (#1127).
+            Native::SystemSystemCpuCount,
         ] {
             assert!(crate::natives::supported(native), "{}", native.symbol());
         }
@@ -1083,7 +1085,6 @@ mod feature_tests {
             Native::FsPathJoin,
             Native::EnvironmentEnvironmentSnapshot,
             Native::ProcessProcessStateStart,
-            Native::SystemSystemCpuCount,
             Native::AccountAccountCurrentUser,
             Native::X509SystemCertificates,
         ] {
