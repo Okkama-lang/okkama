@@ -59,7 +59,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3121 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 387 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 14 files, 8222 lines
+## ir — 14 files, 8220 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 527 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
@@ -72,7 +72,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/print.rs` 917 — Канонический текст OIR-2 (форма — §18 спецификации OIR-1).
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 263 — Регионы, которые никогда не владеют идентичностями, — убираются.
-- `okkama-compiler/src/ir/scalars.rs` 236 — #1112 (stage 2): scalar replacement. A plain object made in a function (`obj.new`, or `obj.next` of another su
+- `okkama-compiler/src/ir/scalars.rs` 234 — #1112 (stage 2): scalar replacement. A plain object made in a function (`obj.new`, or `obj.next` of another su
 - `okkama-compiler/src/ir/statics.rs` 434 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
 - `okkama-compiler/src/ir/verify.rs` 1994 — Верификатор OIR-2 (основа — §17 спецификации OIR-1).
 

@@ -59,14 +59,14 @@ const DEEP: &str = "module app v1.0.0;\nobject Calc {\n    Calc();\n    down(n i
 const CAUGHT: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nobject Spin {\n    Spin();\n    run() is int { loop { } 0; }\n}\nmain() is int {\n    let out = Stdout();\n    defer out.writeln(\"defer ran\");\n    let result = try { Spin().run(); } catch e is Error { out.writeln(\"caught\"); 7; };\n    result;\n}\n";
 
 /// A step is a function entry or a branch back to the same or an earlier
-/// block. DEEP takes exactly 336 steps (main,
-/// the constructor, 334 calls of `down`); running out is not an error the
+/// block. DEEP takes exactly 335 steps (main and 334 calls of `down`; the
+/// constructor is inlined into main, #1112); running out is not an error the
 /// program can catch, and its cleanup does not run.
 #[test]
 fn steps_are_counted_exactly_and_running_out_cannot_be_caught() {
-    let enough = run(DEEP, &["--max-steps", "336", "--timeout", "60"]);
+    let enough = run(DEEP, &["--max-steps", "335", "--timeout", "60"]);
     assert_eq!(enough.status.code(), Some(0), "{}", String::from_utf8_lossy(&enough.stderr));
-    let short = run(DEEP, &["--max-steps", "335", "--timeout", "60"]);
+    let short = run(DEEP, &["--max-steps", "334", "--timeout", "60"]);
     assert_eq!(String::from_utf8_lossy(&short.stderr).trim_end(), "Execution budget exhausted: steps");
     let caught = run(CAUGHT, &["--max-steps", "5000", "--timeout", "60"]);
     assert_eq!(caught.status.code(), Some(1));

@@ -3,10 +3,13 @@ use okkama_compiler::{SourceFile, codegen, ir, lowering::lower_program, syntax};
 use ir::{Block, BlockId, Constant, Function, Inst, InstKind as K, IntBinaryOp as B,
     IntUnaryOp, Target, TermKind as T, Terminator, Type, ValueId as V};
 
+/// The passes without inlining and scalar replacement (#1112): these tests look at the calls lowering makes
+/// (inlining has its own tests in scalar_replacement.rs).
+const NO_INLINE: &str = "statics,regions,tail-calls,fold,hoist,dce,undef,jumps";
 fn module(source: &str) -> ir::Module {
     let source = SourceFile::new("colouring.ok", source).unwrap();
     let ast = syntax::parse(&source, &syntax::ParseOptions::default()).unwrap();
-    lower_program(&ast).unwrap()
+    okkama_compiler::lowering::with_passes(NO_INLINE, || lower_program(&ast)).unwrap()
 }
 
 fn template() -> ir::Module {

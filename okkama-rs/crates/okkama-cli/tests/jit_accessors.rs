@@ -37,6 +37,8 @@ fn run(plain: bool, steps: Option<u64>) -> (bool, String) {
         command.args(["--max-steps", &steps.to_string()]);
     }
     command.arg(&file);
+    // The accessors' calls stay in the program: the IR's inlining (#1112) would take them out before Sparrow sees them.
+    command.env("OKKAMA_IR_PASSES", "statics,regions,tail-calls,fold,hoist,dce,undef,jumps");
     if plain {
         command.env("SPARROW_CORE_PLAIN", "*");
     } else {

@@ -317,10 +317,10 @@ fn single_succ_take(function: &Function, value: ValueId) -> Option<(usize, usize
                 continue;
             }
             uses += reads;
-            if let (InstKind::SuccTake(taken), Some(result)) = (&inst.kind, inst.result) {
-                if *taken == value {
-                    found = Some((b, i, result));
-                }
+            if let (InstKind::SuccTake(taken), Some(result)) = (&inst.kind, inst.result)
+                && *taken == value
+            {
+                found = Some((b, i, result));
             }
         }
         uses += block.term.kind.operands().iter().filter(|operand| **operand == value).count();

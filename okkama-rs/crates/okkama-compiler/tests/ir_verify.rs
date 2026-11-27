@@ -225,13 +225,16 @@ fn results_and_entry_signature_are_checked() {
     rejects(&module, "%3 has type int, expected str");
 }
 
+/// The passes without inlining and scalar replacement (#1112): these tests look at the calls lowering makes
+/// (inlining has its own tests in scalar_replacement.rs).
+const NO_INLINE: &str = "statics,regions,tail-calls,fold,hoist,dce,undef,jumps";
 fn lowered(text: &str) -> Module {
     use okkama_compiler::SourceFile;
     use okkama_compiler::lowering::lower_program;
     use okkama_compiler::syntax::{self, ParseOptions};
     let source = SourceFile::new("test.ok", text).unwrap();
     let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
-    lower_program(&program).unwrap()
+    okkama_compiler::lowering::with_passes(NO_INLINE, || lower_program(&program)).unwrap()
 }
 
 const OBJECTS: &str = "module app v1.0.0;

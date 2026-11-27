@@ -52,10 +52,8 @@ fn replace_in(function: &mut Function, eligible: &[Option<Vec<Type>>]) {
                 InstKind::ObjNew { object, fields } if eligible.get(object.0).is_some_and(Option::is_some) => {
                     made[result.0] = Some(Made::New(fields.clone()));
                 }
-                InstKind::ObjNext { object, updates } => {
-                    if eligible_type(function.values.get(object.0)).is_some() {
-                        made[result.0] = Some(Made::Next(*object, updates.clone()));
-                    }
+                InstKind::ObjNext { object, updates } if eligible_type(function.values.get(object.0)).is_some() => {
+                    made[result.0] = Some(Made::Next(*object, updates.clone()));
                 }
                 _ => {}
             }
