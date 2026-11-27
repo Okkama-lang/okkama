@@ -307,6 +307,7 @@ fn a_worker_spawned_by_a_worker_is_emulated_too() {
 /// #1141: a worker's runtime failure is the awaiting parent's runtime failure with one prefix, the text the parent
 /// reports for the same failure of its own ("RuntimeError: confirm failed", not "RuntimeError: RuntimeError: …").
 #[test]
+#[allow(clippy::result_large_err)] // the closure returns run_embedded's outcome as it is
 fn a_worker_failure_is_reported_with_one_prefix() {
     let confirms = "function f9 \"confirms\" {\n    registers [t0]\n    params [r0]\n    result t0\n    \
                     0: trap confirm, \"confirm failed\"\n}\n";

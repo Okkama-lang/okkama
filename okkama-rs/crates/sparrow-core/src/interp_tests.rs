@@ -1673,7 +1673,7 @@ fn closure_entries_call_with_a_trailing_closure_past_the_register_arguments() {
     let main_body: String = main.iter().enumerate().map(|(pc, line)| format!("    {pc}: {line}\n")).collect();
     let source = program("type t5 fn [t0, t0, t0, t0, t0, t0, t0, t0, t0, t0] -> t0", "", &format!(
         "function f4 \"weigh\" {{\n    registers [{}]\n    params [{}]\n    result t0\n{weigh}}}\nfunction f5 \"main\" {{\n    registers [t5, {}]\n    params []\n    result t0\n{main_body}}}\nentry f5\n",
-        vec!["t0"; 12].join(", "), params.join(", "), vec!["t0"; 11].join(", ")
+        ["t0"; 12].join(", "), params.join(", "), ["t0"; 11].join(", ")
     ));
     let expected: i64 = (1..=10).map(|i| i * i * 1000).sum();
     let outcome = engines(&source);
