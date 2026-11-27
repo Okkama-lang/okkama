@@ -142,7 +142,7 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +
   `Heap::relayout` for the interpreter; `Interp::depth`/`reentries` (`REENTRIES` 200 on wasm32); the #1122
   `#[ignore]`s of #1124 removed (26 tests; all pass on the no-default-features build); `tests/mnemonics/async.spa`,
-  coverage test now all 141 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
+  coverage test now all 142 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
   `region.settle_unwind`; fixed (`Emitter::check` passes the heap frame), ticket #1132. Also fixed: #1129 broke
   `jit::ready_callees_tests::lazy_compilation_failure…` (it dropped a memory budget between runs; now a large
   one). Tests: `interp::tests` 28, 9 mutations caught. Corpus (release, cage): t/ 142 identical on the JIT and
@@ -206,7 +206,7 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in
   `Runtime::safepoint`; `SPARROW_CORE_INTERPRET` read in `Runtime::assemble` through `env_switch`; devtrace
   category `interp`. 141 instructions: 74 `generic` → `rt_exec`, 12 `failure_or_region` → `rt_failure_op`, 48 own
-  branches, 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
+  branches (142 / 75 / 55 since #1122, #1145), 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
   dispatch_table, role_slot_is_async}`, `texts.rs`. Tests: `interp::tests` (19, in-process JIT/interpreter/GC
   stress comparison `engines`), 21 mutations of interp.rs/runtime.rs each caught. Corpus (release build, cage):
   t/ base+op+lang+gen 135 same / 7 refused / 0 differ, under GC stress the same (persistence/06 needs 105 s vs

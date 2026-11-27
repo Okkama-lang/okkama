@@ -90,7 +90,32 @@ mod tests {
             .windows(2)
             .position(|pair| pair[0].trim() == "#[cfg(test)]" && pair[1].trim_start().starts_with("mod "))
             .unwrap_or(lines.len());
-        lines[..end].iter().map(|line| line.split("//").next().unwrap_or_default()).collect::<Vec<_>>().join("\n")
+        lines[..end].iter().map(|line| without_comment(line)).collect::<Vec<_>>().join("\n")
+    }
+
+    /// `line` up to a `//` comment; a `//` inside a string literal is code (#1145).
+    fn without_comment(line: &str) -> &str {
+        let (mut quoted, mut escaped) = (false, false);
+        let bytes = line.as_bytes();
+        for (at, &byte) in bytes.iter().enumerate() {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' if quoted => escaped = true,
+                b'"' => quoted = !quoted,
+                b'/' if !quoted && bytes.get(at + 1) == Some(&b'/') => return &line[..at],
+                _ => {}
+            }
+        }
+        line
+    }
+
+    /// #1145: the scanner keeps a `//` inside a string literal and cuts a comment after one.
+    #[test]
+    fn a_comment_ends_a_line_but_a_string_does_not() {
+        assert_eq!(without_comment("let a = 1; // note"), "let a = 1; ");
+        assert_eq!(without_comment(r#"let url = "http://x"; // note"#), r#"let url = "http://x"; "#);
+        assert_eq!(without_comment(r#"let q = "a \" // b"; // c"#), r#"let q = "a \" // b"; "#);
+        assert_eq!(without_comment("no comment"), "no comment");
     }
 
     /// #1116: nothing in the compiler outside [`NATIVE`] reaches a file system, clock or process call, so the

@@ -794,7 +794,8 @@ every declaration is open (#1005, owner decision).
   `{definition: {path, range} | null}`, signature → `{signature: {label, parameters, active} | null}`,
   complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}` (kind: method, field,
   variable, object, role, enum, enumMember, function, keyword, module, argument, folder), in the order to show
-  them. The IDE calls answer from the last inspection of the file that parsed, as the language server does
+  them. The IDE calls answer from the last inspection of the file that parsed (since #1128: the last analysed one,
+  `ide::Answering`), as the language server does
   (recorded by each IDE call; the server records one per change). `version()` → `{version, stdModules,
   stdBytes, passes}`, `passes` the IR passes in order (`lowering::PASSES`, #1118). `lastPanic()` → `{panic:
   {message, location: "file:line:column" | null} | null}`: the last call's panic (each call clears it; the

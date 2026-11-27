@@ -142,7 +142,7 @@ public std changes.
   pointer-free proofs, so a suspended frame traces every register of a traced kind, and entries from Rust nest
   at most 200 deep on wasm32 (a stack overflow, not a trap). The tests that waited for it (tasks, async destroys,
   selection, all_futures, future inputs, timers, payloads) run on the interpreter in the build without the JIT,
-  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 141 mnemonics. The design's §6.4
+  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 142 mnemonics. The design's §6.4
   hypothesis was confirmed: the JIT recorded an async body twice in a trace when a failure unwound through a
   suspended `region.settle_unwind`, because it keyed the activation by its machine frame pointer, which differs
   after a resumption; it now keys an async body by its heap frame, as the interpreter does. With nothing left

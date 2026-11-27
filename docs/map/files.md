@@ -81,10 +81,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/codegen/sparrow/mod.rs` 734 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 20 files, 6897 lines
+## compiler — 20 files, 6918 lines
 
 - `okkama-compiler/src/commands.rs` 346 — What the read-only commands report, as values (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir` and
-- `okkama-compiler/src/host.rs` 104 — What the compiler asks of the machine it runs on besides the sources and the loader its caller hands it
+- `okkama-compiler/src/host.rs` 125 — What the compiler asks of the machine it runs on besides the sources and the loader its caller hands it
 - `okkama-compiler/src/lib.rs` 21 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/commands/trace.rs` 77 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
@@ -211,7 +211,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 73 files, 23958 lines
+## other — 73 files, 23955 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -259,7 +259,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/application.rs` 1205 — `runtime/application` (POSIX terminal) and `runtime/account`, which Sparrow
 - `okkama-runtime-core/src/native/cldr.rs` 185 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 - `okkama-runtime-core/src/native/collation.rs` 286 — `runtime/collation` и `runtime/locale` — перенос `CollationNatives` и
-- `okkama-runtime-core/src/native/compression.rs` 819 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
+- `okkama-runtime-core/src/native/compression.rs` 816 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
 - `okkama-runtime-core/src/native/formats.rs` 352 — Data format natives Sparrow routes here (`host/native_origin.rs`):
 - `okkama-runtime-core/src/native/fs.rs` 127 — File operations Sparrow's `runtime/fs` provider (`host/native_directory.rs`)
 - `okkama-runtime-core/src/native/host.rs` 163 — Host natives Sparrow routes here (`host/native_origin.rs`): `runtime/system`
