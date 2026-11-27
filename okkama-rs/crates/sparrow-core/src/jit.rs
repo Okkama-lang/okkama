@@ -679,6 +679,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             inline: None,
             inlined: 0,
             no_inline,
+            exits: BTreeMap::new(),
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -772,12 +773,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     }
     let address = jit.module.get_finalized_function(id) as u64;
     okkama_devtrace::event!("jit", "code placed", fn = symbol, address = format!("{address:#x}"), bytes = size);
-    for (ret, slots) in maps {
-        jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
-    }
-    jit.maps.sort_by_key(|(address, _, _)| *address);
-    jit.ranges.push((address, address + u64::from(size)));
-    jit.ranges.sort_unstable();
+    register_code(&mut jit.maps, &mut jit.ranges, address, size, fp_to_sp, maps);
     // Publish only after finalization and registration of maps/ranges. All
     // static/role/async/closure users read this same stable record.
     invocations[function].code = address;
@@ -818,6 +814,29 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         }
     }
     Ok(address)
+}
+
+/// Register a compiled function's stack maps and code range (#1108). A function's code is one range that no other
+/// function's overlaps, so its maps go in as one sorted batch at their place in the address order (a binary search
+/// and a splice), without sorting every map of the runtime again; code addresses need not grow from one function
+/// to the next.
+fn register_code(
+    maps: &mut Vec<(u64, u32, Vec<u32>)>,
+    ranges: &mut Vec<(u64, u64)>,
+    address: u64,
+    size: u32,
+    fp_to_sp: u32,
+    batch: Vec<(u32, Vec<u32>)>,
+) {
+    let end = address + u64::from(size);
+    let mut batch: Vec<(u64, u32, Vec<u32>)> =
+        batch.into_iter().map(|(ret, slots)| (address + u64::from(ret), fp_to_sp, slots)).collect();
+    batch.sort_unstable_by_key(|(at, _, _)| *at);
+    let at = maps.partition_point(|(entry, _, _)| *entry < address);
+    debug_assert!(maps.get(at).is_none_or(|(entry, _, _)| *entry >= end), "code ranges overlap");
+    maps.splice(at..at, batch);
+    let at = ranges.partition_point(|range| range.0 < address);
+    ranges.insert(at, (address, end));
 }
 
 fn report_compile(report: std::fmt::Arguments<'_>) {
@@ -884,6 +903,8 @@ struct Emitter<'a, 'b> {
     inlined: usize,
     /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
     no_inline: bool,
+    /// #1108: the shared failure exit of each (function, inlined activation, handler), entered with the pc.
+    exits: BTreeMap<(usize, Option<Block>, Option<usize>), Block>,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -1115,6 +1136,43 @@ impl Emitter<'_, '_> {
     /// After anything that can fail: on a pending failure go to the handler
     /// covering `pc`, otherwise record this activation and return.
     fn check(&mut self, pc: usize) {
+        // #1108: one shared exit per function, inlined activation and handler, entered with the pc from a two-
+        // instruction cold trampoline; the hot path is the same load and branch. An async body with explicit roots
+        // reports different words at each call, so it keeps an exit per call.
+        if self.roots.is_none() {
+            let handler = self.loaded.program.functions[self.function]
+                .handlers
+                .iter()
+                .position(|h| (h.start as usize..h.end as usize).contains(&pc));
+            let ctx = self.ctx();
+            let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
+            let trampoline = self.builder.create_block();
+            let next = self.builder.create_block();
+            self.builder.set_cold_block(trampoline);
+            self.builder.ins().brif(status, trampoline, &[], next, &[]);
+            self.builder.switch_to_block(trampoline);
+            let key = (self.function, self.inline.map(|inline| inline.fail), handler);
+            let (exit, fresh) = match self.exits.get(&key) {
+                Some(exit) => (*exit, false),
+                None => {
+                    let exit = self.builder.create_block();
+                    self.builder.append_block_param(exit, types::I64);
+                    self.builder.set_cold_block(exit);
+                    self.exits.insert(key, exit);
+                    (exit, true)
+                }
+            };
+            let at = self.iconst(pc as i64);
+            self.builder.ins().jump(exit, &[at.into()]);
+            if fresh {
+                self.builder.switch_to_block(exit);
+                let at = self.builder.block_params(exit)[0];
+                let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
+                self.failure_exit(status, at, handler);
+            }
+            self.builder.switch_to_block(next);
+            return;
+        }
         let ctx = self.ctx();
         let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
         let failed = self.builder.create_block();
@@ -1132,8 +1190,35 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(fatal);
         self.exit_fail();
         self.builder.switch_to_block(recorded);
-        let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
+        let handler = self.loaded.program.functions[self.function]
+            .handlers
+            .iter()
+            .position(|h| (h.start as usize..h.end as usize).contains(&pc));
+        self.record_and_handle(at, handler);
+        self.builder.switch_to_block(next);
+    }
+
+    /// A pending status at `at` (#1108's shared exit): a failure is recorded and goes to `handler` or out of this
+    /// activation; a fatal status or a stop leaves at once.
+    fn failure_exit(&mut self, status: Value, at: Value, handler: Option<usize>) {
+        let is_failure = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+        let recorded = self.builder.create_block();
+        let fatal = self.builder.create_block();
+        self.builder.set_cold_block(recorded);
+        self.builder.set_cold_block(fatal);
+        self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
+        self.builder.switch_to_block(fatal);
+        self.exit_fail();
+        self.builder.switch_to_block(recorded);
+        self.record_and_handle(at, handler);
+    }
+
+    /// Record this activation of the failure at `at`, then go to `handler` (its index in the function's handlers)
+    /// with the failure, or out of this activation.
+    fn record_and_handle(&mut self, at: Value, handler: Option<usize>) {
+        let ctx = self.ctx();
+        let function = self.iconst(self.function as i64);
         // #1122 (design #1079 §6.4): an async body is keyed by its heap frame, which stays where it is while the
         // body suspends and resumes on another stack depth; its machine frame pointer does not, and a failure that
         // unwound through a suspended settle recorded the body twice.
@@ -1148,11 +1233,7 @@ impl Emitter<'_, '_> {
             frame = self.builder.ins().iadd_imm_s(frame, -i64::from(depth));
         }
         self.helper(|h| h.trace, &[ctx, function, at, frame]);
-        let handler = self.loaded.program.functions[self.function]
-            .handlers
-            .iter()
-            .find(|h| (h.start as usize..h.end as usize).contains(&pc))
-            .cloned();
+        let handler = handler.map(|index| self.loaded.program.functions[self.function].handlers[index].clone());
         match handler {
             Some(handler) => {
                 let failure = self.builder.ins().load(
@@ -1170,7 +1251,6 @@ impl Emitter<'_, '_> {
                 self.exit_fail();
             }
         }
-        self.builder.switch_to_block(next);
     }
 
     /// One budget step (`budget`): below zero fuel calls `rt_poll`, and a
@@ -3809,3 +3889,37 @@ mod stub_field_tests;
 
 #[cfg(test)]
 mod placement_tests;
+
+/// #1108: registering functions' maps by splicing gives what the old full sort gave, whatever the order in which
+/// code addresses come, and the code ranges stay ordered for `in_code`.
+#[cfg(test)]
+mod register_code_tests {
+    use super::register_code;
+
+    #[test]
+    fn spliced_maps_equal_a_full_sort_for_any_address_order() {
+        // (address, size, return offsets in the order the compiler reports them)
+        let functions: [(u64, u32, &[u32]); 6] = [
+            (0x5000, 0x100, &[0x10, 0x40, 0x80]),
+            (0x1000, 0x80, &[0x8, 0x20]),
+            (0x9000, 0x40, &[]),
+            (0x3000, 0x200, &[0x1f0, 0x30, 0x100]),
+            (0x2000, 0x10, &[0x4]),
+            (0x7000, 0x300, &[0x2, 0x2fe]),
+        ];
+        let (mut maps, mut ranges) = (Vec::new(), Vec::new());
+        let (mut reference, mut reference_ranges) = (Vec::new(), Vec::new());
+        for (index, (address, size, rets)) in functions.iter().enumerate() {
+            let batch: Vec<(u32, Vec<u32>)> = rets.iter().map(|&ret| (ret, vec![index as u32, ret])).collect();
+            for (ret, slots) in &batch {
+                reference.push((address + u64::from(*ret), index as u32, slots.clone()));
+            }
+            reference.sort_by_key(|(at, _, _)| *at);
+            reference_ranges.push((*address, address + u64::from(*size)));
+            reference_ranges.sort_unstable();
+            register_code(&mut maps, &mut ranges, *address, *size, index as u32, batch);
+            assert_eq!(maps, reference, "after function {index}");
+            assert_eq!(ranges, reference_ranges, "after function {index}");
+        }
+    }
+}

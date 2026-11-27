@@ -1241,3 +1241,13 @@ every declaration is open (#1005, owner decision).
   synchronous functions keep Cranelift's stack maps. The patch is kept in
   okkama-docs/runtime/perf-audit-2026-11-27/1107-sync-roots-prototype.patch.
 
+## Shared failure exits; stack maps spliced, not sorted (#1108, 2026-11-27; lead, owner approved the direction)
+
+- `check` keeps its hot path (status load and branch); a failure goes through a two-instruction cold trampoline that
+  passes the pc to one exit per (function, inlined activation, handler). The exit reloads the status, records the
+  activation at that pc (`trace`), then goes to the handler or out. Handlers are chosen at compile time by pc, so
+  pcs share an exit only when their handler (or its absence) is the same.
+- Async bodies with explicit roots keep an exit per call: their stack maps report different words at each call.
+- A function's code range overlaps no other's, so its maps are one sorted batch spliced in at their place; code
+  addresses need not grow from function to function (`register_code`, tested with addresses in random order).
+

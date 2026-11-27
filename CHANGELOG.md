@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Smaller machine code: one failure exit per function (#1108).** The calls of a function share one cold exit per
+  inlined activation and handler, entered with the instruction's position from a two-instruction trampoline,
+  instead of a copy of the trace-and-exit code after every call; failure reports are unchanged. Stack maps of a
+  newly compiled function are spliced in at their place instead of sorting every map again. On 10-app: machine
+  code 58 676 → 45 624 bytes (−22%), CLIF −14%, compile time ~14.9 → ~13.4 ms (−10%); micro A/B within noise
+  (+0.3%).
 - **Rare paths out of the hot layout (#1107, stage 2).** The failure blocks after every call, the allocation's
   refill, the first call of a callee not yet compiled, an array index out of bounds and the BigInt paths of integer
   operations are cold blocks now, placed after the hot code. Micro A/B against the previous step: recursion −11.9%,

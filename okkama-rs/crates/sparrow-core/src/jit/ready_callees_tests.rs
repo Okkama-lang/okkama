@@ -71,7 +71,9 @@ fn ready_static_target_elides_dispatch_but_keeps_the_call_and_status_check() {
     // Table/status loads and frontend root reloads belong to the fallback;
     // count branches exactly, but leave reload placement to Cranelift.
     assert!(opcodes(&old, 1, Opcode::Load) >= opcodes(&fast, 1, Opcode::Load) + 2);
-    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 3);
+    // The fallback adds the table check and its compile helper's status check; since #1108 that check enters the
+    // same shared failure exit as the call's, so the exit's own branch is not repeated.
+    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 2);
     assert!(opcodes(&fast, 1, Opcode::Brif) > 0);
     assert_eq!(fast.run_function_with(1, &[word::small(42).unwrap()], 2 << 20).unwrap(), word::small(42).unwrap());
 }
@@ -482,4 +484,37 @@ fn float_bits_use_the_same_word_entry_abi() {
         }
         assert_eq!(compiles(&runtime, 1), usize::from(old));
     }
+}
+/// #1108: the calls of a function share one failure exit per handler context: three calls and no handler leave
+/// one `trace` call in the caller, and a failure after each still reports its own pc (the interpreter
+/// comparison in `interp::tests` checks the sites).
+#[test]
+fn calls_share_one_failure_exit() {
+    let text = r#"
+sparrow 18
+module "shared-exit" "1.0.0"
+type t0 int
+function f0 "identity" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "caller" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: call r1, f0, [r1]
+ 2: call r1, f0, [r1]
+ 3: ret r1
+}
+"#;
+    let mut runtime = runtime(text, true);
+    compile(&mut runtime, 0).unwrap();
+    compile(&mut runtime, 1).unwrap();
+    // Late-bound calls: three call sites, each with its compile-on-first-call path, all checked.
+    assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
+    assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
+    assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
 }

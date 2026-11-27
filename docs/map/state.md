@@ -7,6 +7,14 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1108 shared failure exits + map registration (feature/1108; worktree okkama-work/p-1108, target t-1108;
+  toolchains micro-tc/f1108m-s1 maps only, f1108x-s{1,2} both): `Emit::exits` keyed (function, inline fail block,
+  handler index), `failure_exit`, `record_and_handle`; async bodies with explicit roots keep an exit per call.
+  `register_code` (sorted splice of a function's maps, ordered insert of its range). Tests
+  `register_code_tests`, `ready_callees_tests::calls_share_one_failure_exit` (one `trace` per handler context);
+  `ready_static_target…` expects +2 branches (the compile path shares the call's exit). 10-app: code −22%, CLIF
+  −14%, compile −10% (target −25% not reached); map registration not measurable at 34 functions; micro +0.3%.
+  Compile profile script: scratchpad compile-profile.sh (SPARROW_CORE_PROFILE_COMPILE, sums of the marks).
 - [x] #1107 stage 2 cold blocks (feature/1107; worktree okkama-work/p-1107, target t-1107; toolchains
   micro-tc/f1107c-s{1,2}): `check`'s failure blocks always cold (the `Emit::cold` flag of #1105 removed), cold
   allocation refill, compile-on-first-call, array index outside, int arith/compare/bitwise/not-neg slow paths,
