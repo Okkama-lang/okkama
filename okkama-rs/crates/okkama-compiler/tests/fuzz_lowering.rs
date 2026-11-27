@@ -157,7 +157,9 @@ fn the_differential_mode_compares_the_engines_and_passes_the_known_divergences()
     }
     let deep = "module app;\nobject Down {\n    Down();\n    go(n is int) is int { if n < 0 { 0; } else { 1 + self.go(n + 1); } }\n}\nmain() is int { Down().go(0); }\n";
     let found = linking::differ(deep.as_bytes());
-    assert!(matches!(found, Some(linking::Difference::Excepted(reason)) if reason.contains("6.3")), "{found:?}");
+    // The reason is a line of the one exceptions list differ.py reads too (#1144).
+    let list = include_str!("../../../tools/engines/interp-exceptions.txt");
+    assert!(matches!(found, Some(linking::Difference::Excepted(reason)) if reason.contains("6.3") && list.contains(reason)), "{found:?}");
     let not_a_program = b"module app; main() is int { unknown; }";
     assert_eq!(linking::differ(not_a_program), None);
 }

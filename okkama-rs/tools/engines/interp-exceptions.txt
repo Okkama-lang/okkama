@@ -1,12 +1,12 @@
 # Where Sparrow's interpreter may differ from the JIT (#1123; design okkama-docs/runtime/sparrow-interpreter-1079.md,
-# §6.3). Read by okkama-rs/tools/engines/differ.py, tools/t/run.py and the Wave. One exception per line:
+# §6.3). The one list (#1144): read by okkama-rs/tools/engines/differ.py, tools/t/run.py, the Wave and the fuzz
+# exec target's differential mode (okkama-rs/fuzz/fuzz_targets/support/linking.rs, at build time). One exception
+# per line:
 #
 #     SELECTOR    REASON
 #
 # separated by a tab or two or more spaces. REASON names its ticket (#NNNN) or the design's section (6.3).
 # SELECTOR is one of
-#     refusal:TEXT   the interpreter refused the program ("… is not supported by the interpreter yet") and its
-#                    report contains TEXT
 #     both:TEXT      both engines' output contains TEXT: only the exit status is compared
 #     either:TEXT    either engine's output contains TEXT: the runs are not compared
 #     jit:TEXT       the JIT's output contains TEXT: the interpreter's run is not compared

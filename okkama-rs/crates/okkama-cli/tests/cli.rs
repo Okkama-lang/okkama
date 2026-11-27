@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 const HELLO: &str = "module app v1.0.0;\n\nmain() is int {\n    0;\n}\n";
 
-use tree::okkama;
+use tree::{okkama, std_dir};
 
 fn run(args: &[&str]) -> Output {
     okkama().args(args).output().expect("run okkama")
@@ -2114,10 +2114,6 @@ fn man_broken_links_are_lint_warnings_with_the_original_location() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stdout(&output).contains(":3:8: warning[unresolved-doc-link]: unresolved documentation link [Missing]"), "{}", stdout(&output));
     assert!(!stdout(&output).contains("error:"));
-}
-
-fn std_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std")
 }
 
 fn man(args: &[&str]) -> Output {

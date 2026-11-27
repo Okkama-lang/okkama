@@ -2,16 +2,13 @@
 //! the interpreter (`sparrow_core::observe`). Both must show the same thing: `main`'s result, or the report and
 //! the uncaught failure compared as a structure (category, type, message, sites, cause traces), and each output
 //! stream byte for byte. The samples are t/, examples of the Book and the Bible, and conformance's cases that
-//! expect a run to fail; step parity runs a few of them under five step budgets. A program the interpreter does not
-//! run yet (none since #1122) is counted apart, never compared.
+//! expect a run to fail; step parity runs a few of them under five step budgets. The interpreter runs every
+//! program (#1122), so each one that builds is compared.
 mod tree;
 
 use sparrow_core::budget::Limits;
 use sparrow_core::{Engine, Observed};
 use std::path::{Path, PathBuf};
-
-/// The interpreter's refusal of what it does not run yet.
-const NOT_YET: &str = "is not supported by the interpreter yet";
 
 /// Build `path` (with `imports` as an import directory) into a fresh SPB; `None` when it does not build.
 fn build(path: &Path, imports: Option<&Path>) -> Option<Vec<u8>> {
@@ -32,45 +29,30 @@ fn build(path: &Path, imports: Option<&Path>) -> Option<Vec<u8>> {
     bytes
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Verdict {
-    Same,
-    NotYet,
-}
-
-/// Run `bytes` on both engines under `limits`: the same observation, or a refusal of the interpreter.
-fn compare(name: &str, bytes: &[u8], limits: &Limits) -> Verdict {
+/// Run `bytes` on both engines under `limits`: the two must observe the same.
+fn compare(name: &str, bytes: &[u8], limits: &Limits) {
     let observe = |engine| sparrow_core::observe(engine, bytes.to_vec(), Vec::new(), limits.clone()).expect("the SPB loads");
     let jit: Observed = observe(Engine::Jit);
     let interpreted: Observed = observe(Engine::Interpreter);
-    if let Err((report, _)) = &interpreted.result
-        && report.contains(NOT_YET)
-    {
-        return Verdict::NotYet;
-    }
     assert_eq!(interpreted, jit, "{name}: the interpreter differs from the JIT");
-    Verdict::Same
 }
 
-/// Build and compare every program of `paths`, a few at a time; how many were compared and refused.
-fn sample(paths: &[PathBuf], imports: Option<&Path>, limits: &Limits) -> (usize, usize) {
-    let (mut same, mut not_yet) = (0, 0);
+/// Build and compare every program of `paths`, a few at a time; how many built and were compared.
+fn sample(paths: &[PathBuf], imports: Option<&Path>, limits: &Limits) -> usize {
+    let mut same = 0;
     for chunk in paths.chunks(6) {
-        let verdicts: Vec<Option<Verdict>> = std::thread::scope(|scope| {
+        let built: Vec<bool> = std::thread::scope(|scope| {
             let runs: Vec<_> = chunk
                 .iter()
-                .map(|path| scope.spawn(move || build(path, imports).map(|bytes| compare(&path.display().to_string(), &bytes, limits))))
+                .map(|path| {
+                    scope.spawn(move || build(path, imports).map(|bytes| compare(&path.display().to_string(), &bytes, limits)).is_some())
+                })
                 .collect();
             runs.into_iter().map(|run| run.join().unwrap()).collect()
         });
-        for verdict in verdicts.into_iter().flatten() {
-            match verdict {
-                Verdict::Same => same += 1,
-                Verdict::NotYet => not_yet += 1,
-            }
-        }
+        same += built.into_iter().filter(|&built| built).count();
     }
-    (same, not_yet)
+    same
 }
 
 /// The `.ok` files of a directory of this tree, sorted.
@@ -89,9 +71,9 @@ fn t_runs_alike_on_both_engines() {
     let mut paths = programs("t/base");
     paths.extend(programs("t/op"));
     paths.extend(programs("t/lang"));
-    let (same, not_yet) = sample(&paths, Some(&tree::root().join("t/support")), &Limits::default());
+    let same = sample(&paths, Some(&tree::root().join("t/support")), &Limits::default());
     // Every file builds and runs alike, async ones too (#1122).
-    assert_eq!((same, not_yet), (paths.len(), 0));
+    assert_eq!(same, paths.len());
 }
 
 /// Examples whose output depends on nothing but the program: failures and their causes, cleanups that fail,
@@ -117,8 +99,8 @@ fn examples_run_alike_on_both_engines() {
         "text/layout.ok",
     ];
     let paths: Vec<PathBuf> = examples.iter().map(|example| tree::root().join("examples").join(example)).collect();
-    let (same, not_yet) = sample(&paths, None, &Limits::default());
-    assert_eq!((same, not_yet), (paths.len(), 0));
+    let same = sample(&paths, None, &Limits::default());
+    assert_eq!(same, paths.len());
 }
 
 /// Conformance's single-file cases that expect a run to fail (`error`, `failure`): the uncaught report is the
@@ -138,8 +120,8 @@ fn conformance_failures_report_alike_on_both_engines() {
         }
     }
     cases.sort();
-    let (same, not_yet) = sample(&cases, None, &Limits::default());
-    assert!(same >= MIN_CONFORMANCE_RUNS, "{same} of {} compared, {not_yet} refused", cases.len());
+    let same = sample(&cases, None, &Limits::default());
+    assert!(same >= MIN_CONFORMANCE_RUNS, "{same} of {} compared", cases.len());
 }
 
 /// The cases of `conformance_failures_report_alike_on_both_engines` that build and fail at run time (#1121).
@@ -154,7 +136,7 @@ fn step_budgets_stop_both_engines_at_the_same_point() {
         let bytes = build(path, Some(&imports)).expect("it builds");
         for steps in [1, 10, 100, 1_000, 10_000] {
             let limits = Limits { steps: Some(steps), ..Limits::default() };
-            assert_eq!(compare(&format!("{} --max-steps {steps}", path.display()), &bytes, &limits), Verdict::Same);
+            compare(&format!("{} --max-steps {steps}", path.display()), &bytes, &limits);
         }
     }
 }

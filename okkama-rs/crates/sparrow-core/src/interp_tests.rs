@@ -42,6 +42,8 @@ fn run(source: &str, engine: Engine, stress: bool, limits: Limits) -> Outcome {
             }
             runtime.heap.set_stress(stress);
             runtime.limits = limits;
+            // Workers run in this instance (#1127), as without the host: no process starts (#1144).
+            runtime.emulated_workers = true;
             let (result, output) = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
             if engine == Engine::Interpreter {
                 // One engine per runtime: every entry from Rust went through the seam to the interpreter.
@@ -1034,6 +1036,7 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
             let program = okkama_sparrow::assemble(&source).unwrap();
             let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
             runtime.use_engine(crate::Engine::Interpreter);
+            runtime.emulated_workers = true;
             EXECUTED.with(|executed| executed.borrow_mut().clear());
             let _ = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
             EXECUTED.with(|executed| executed.take())
@@ -1041,6 +1044,16 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
         .unwrap()
         .join()
         .unwrap()
+}
+
+/// #1144: workers on both engines, emulated in the instance (`tests/mnemonics/workers.spa`): a bound action's spawn
+/// passes its field ahead of the argument (20 + 22), a direct spawn doubles 20, a failing worker's failure is
+/// caught at the await, and the panic at the end is the uncaught report; every `worker.spawn` succeeds.
+#[test]
+fn workers_spawn_and_report_alike() {
+    let outcome = engines(include_str!("../tests/mnemonics/workers.spa"));
+    assert_eq!(outcome.output, lines(&["42", "40", "worker failed"]));
+    assert!(outcome.result.as_ref().unwrap_err().contains("the end"), "{outcome:?}");
 }
 
 /// #1122: async bodies on both engines (`tests/mnemonics/async.spa`): awaits, a spawned task, async destroys
