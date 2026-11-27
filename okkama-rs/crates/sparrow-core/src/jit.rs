@@ -147,6 +147,12 @@ pub struct Jit {
     module: JITModule,
     helpers: Helpers,
     ids: BTreeMap<usize, FuncId>,
+    /// #1110: the closure entry of each (function, captures): a second compilation of the body whose prologue reads
+    /// the captures from the closure, its trailing argument; its slot holds the code once published (0 before).
+    closure_ids: BTreeMap<(usize, usize), FuncId>,
+    closure_entries: BTreeMap<(usize, usize), Box<u64>>,
+    /// Closure entries a compiled function's `fn.closure` asked for, compiled after it.
+    closure_requests: Vec<(usize, usize)>,
     /// Stack map of each call site: return address, the frame's FP-to-SP
     /// distance, and the SP offsets of its live words.
     maps: Vec<(u64, u32, Vec<u32>)>,
@@ -328,6 +334,9 @@ impl Jit {
             module,
             helpers,
             ids: BTreeMap::new(),
+            closure_ids: BTreeMap::new(),
+            closure_entries: BTreeMap::new(),
+            closure_requests: Vec::new(),
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
@@ -566,8 +575,30 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
 
 
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
-    if runtime.invocations[function].code != 0 {
-        return Ok(runtime.invocations[function].code);
+    let address = compile_entry(runtime, function, None)?;
+    // #1110: the closure entries its closures will be called through. One that cannot be compiled stays 0, and
+    // those closures keep the general path.
+    while let Some((callee, captures)) = runtime.jit.closure_requests.pop() {
+        if runtime.jit.closure_entries.get(&(callee, captures)).is_some_and(|slot| **slot == 0) {
+            let _ = compile_entry(runtime, callee, Some(captures));
+        }
+    }
+    Ok(address)
+}
+
+/// The largest function, in instructions, that gets a closure entry of its own (#1110): a second compilation of
+/// its body.
+const CLOSURE_ENTRY_INSTRUCTIONS: usize = 400;
+
+/// Compile `function`: its ordinary entry, or with `captures` its closure entry for closures holding that many
+/// captures (#1110), which takes the remaining arguments and then the closure.
+fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>) -> Result<u64, Error> {
+    let published = match captures {
+        None => runtime.invocations[function].code,
+        Some(captures) => runtime.jit.closure_entries.get(&(function, captures)).map_or(0, |slot| **slot),
+    };
+    if published != 0 {
+        return Ok(published);
     }
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
@@ -594,17 +625,33 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     if source.is_async && (source.native.is_some() || source.intrinsic.is_some()) {
         return Err(Error(format!("{}: async natives and intrinsics are driven, not compiled", source.symbol)));
     }
-    // An async body takes its frame (see `tasks`).
-    let params = if source.is_async { 1 } else { source.params.len() };
-    let id = match jit.ids.get(&function) {
-        Some(id) => *id,
+    // An async body takes its frame (see `tasks`); a closure entry the arguments after its captures, then the
+    // closure (#1110).
+    let params = match captures {
+        Some(captures) => source.params.len() - captures + 1,
+        None if source.is_async => 1,
+        None => source.params.len(),
+    };
+    let known = match captures {
+        None => jit.ids.get(&function).copied(),
+        Some(captures) => jit.closure_ids.get(&(function, captures)).copied(),
+    };
+    let id = match known {
+        Some(id) => id,
         None => {
             let signature = jit.signature(params);
+            let name = match captures {
+                None => format!("f{function}"),
+                Some(captures) => format!("f{function}c{captures}"),
+            };
             let id = jit
                 .module
-                .declare_function(&format!("f{function}"), Linkage::Local, &signature)
+                .declare_function(&name, Linkage::Local, &signature)
                 .map_err(|e| Error(format!("JIT declare: {e}")))?;
-            jit.ids.insert(function, id);
+            match captures {
+                None => jit.ids.insert(function, id),
+                Some(captures) => jit.closure_ids.insert((function, captures), id),
+            };
             id
         }
     };
@@ -680,6 +727,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             inlined: 0,
             no_inline,
             exits: BTreeMap::new(),
+            closure_captures: captures,
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -695,7 +743,9 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         (context.func.layout.blocks().count(), context.func.dfg.num_insts())
     });
     #[cfg(test)]
-    jit.emitted.insert(function, context.func.clone());
+    if captures.is_none() {
+        jit.emitted.insert(function, context.func.clone());
+    }
     let dump = jit.dump.has(symbol);
     if dump {
         // Callees by their CLIF names: the runtime's helpers and the program's functions.
@@ -775,8 +825,11 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     okkama_devtrace::event!("jit", "code placed", fn = symbol, address = format!("{address:#x}"), bytes = size);
     register_code(&mut jit.maps, &mut jit.ranges, address, size, fp_to_sp, maps);
     // Publish only after finalization and registration of maps/ranges. All
-    // static/role/async/closure users read this same stable record.
-    invocations[function].code = address;
+    // static/role/async/closure users read this same stable record; a closure entry its own slot (#1110).
+    match captures {
+        None => invocations[function].code = address,
+        Some(captures) => **jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0)) = address,
+    }
     mark!();
     if let Some(passes) = jit.profile.as_mut() {
         let clif = clif.expect("profiling sampled CLIF before codegen");
@@ -905,6 +958,8 @@ struct Emitter<'a, 'b> {
     no_inline: bool,
     /// #1108: the shared failure exit of each (function, inlined activation, handler), entered with the pc.
     exits: BTreeMap<(usize, Option<Block>, Option<usize>), Block>,
+    /// #1110: compiling the closure entry for this many captures: they come from the trailing closure argument.
+    closure_captures: Option<usize>,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -1774,8 +1829,16 @@ impl Emitter<'_, '_> {
             self.builder.def_var(frame, value);
             self.frame = Some(frame);
         } else {
+            let captured = self.closure_captures.unwrap_or(0);
+            let closure = self.closure_captures.map(|_| self.builder.block_params(entry)[1 + source.params.len() - captured]);
             for (i, register) in source.params.iter().enumerate() {
-                let value = self.builder.block_params(entry)[i + 1];
+                // #1110: a closure entry reads its captures from the closure, the remaining parameters as arguments.
+                let value = match closure {
+                    Some(closure) if i < captured => {
+                        self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_CAPTURES + (i * 8) as i32)
+                    }
+                    _ => self.builder.block_params(entry)[i + 1 - captured],
+                };
                 self.set_word(register, value);
             }
             // The prologue's calls find the parameters.
@@ -2593,9 +2656,11 @@ impl Emitter<'_, '_> {
                 let pointer = self.allocate(words + 2);
                 let header = self.iconst(heap::header(heap::CLOSURE, Repr::Raw, function.0) as i64);
                 self.builder.ins().store(MEMORY, header, pointer, 0);
-                // #1110: no entry yet; the first direct call through the closure records one.
+                // #1110: the closure's entry: its function's code when it takes the arguments alone, its closure entry
+                // for this many captures otherwise (compiled after this function), or 0 (the general path).
                 let unbound = self.iconst(0);
-                self.builder.ins().store(MEMORY, unbound, pointer, heap::CLOSURE_ENTRY);
+                let entry = self.closure_entry(function.0 as usize, captures.len());
+                self.builder.ins().store(MEMORY, entry, pointer, heap::CLOSURE_ENTRY);
                 for (i, capture) in captures.iter().enumerate() {
                     let value = self.word(capture);
                     self.builder.ins().store(MEMORY, value, pointer, heap::CLOSURE_CAPTURES + (i * 8) as i32);
@@ -3353,6 +3418,34 @@ impl Emitter<'_, '_> {
         }
     }
 
+
+    /// The entry word of a new closure of `function` with `captures` captures (#1110), read when the closure is made:
+    /// the ordinary code for none, the closure entry's slot otherwise (requested for compilation after this
+    /// function); 0 for an async function, or one too large for a second compilation.
+    fn closure_entry(&mut self, function: usize, captures: usize) -> Value {
+        let source = &self.loaded.program.functions[function];
+        if source.is_async {
+            return self.iconst(0);
+        }
+        let cell = if captures == 0 {
+            let entry = &self.invocations[function] as *const runtime::Invocation as i64;
+            entry + std::mem::offset_of!(runtime::Invocation, code) as i64
+        } else {
+            if source.native.is_some() || source.intrinsic.is_some() || source.code.len() > CLOSURE_ENTRY_INSTRUCTIONS {
+                return self.iconst(0);
+            }
+            let slot = self.jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0));
+            if **slot != 0 {
+                let code = **slot;
+                return self.iconst(code as i64);
+            }
+            let cell = &**slot as *const u64 as i64;
+            self.jit.closure_requests.push((function, captures));
+            cell
+        };
+        let cell = self.iconst(cell);
+        self.builder.ins().load(types::I64, MEMORY, cell, 0)
+    }
 
     /// An array literal of at most [`INLINE_ARRAY_LITERAL`] elements, allocated inline in the layouts the
     /// `array` helper writes (#1167): a header and one word per element, or for a byte array the PACKED header and
