@@ -158,6 +158,13 @@ pub struct Jit {
     /// Compiled at the first restart (0 until then): a call that stays small never compiles it.
     general: BTreeMap<usize, Box<u64>>,
     general_ids: BTreeMap<usize, FuncId>,
+    /// #1147 (step 2): background codegen. `SPARROW_CORE_COMPILE_THREADS` workers (0: none, every compile on the
+    /// VM thread); the pool starts with the first speculation. `pending`: the functions emitted ahead of their first
+    /// call and submitted, with the static callees they left lazy (a unit is stale once one of them is published).
+    compile_threads: usize,
+    isa: cranelift_codegen::isa::OwnedTargetIsa,
+    pool: Option<background::Pool>,
+    pending: BTreeMap<usize, Vec<usize>>,
     /// `SPARROW_CORE_SMALL_INTS=0` compiles no small-int versions (A/B in one binary).
     small_ints: bool,
     /// Stack map of each call site: return address, the frame's FP-to-SP
@@ -262,6 +269,9 @@ impl Jit {
     }
 }
 
+#[path = "jit/background.rs"]
+mod background;
+
 /// The target for compiled code, at a Cranelift optimization level.
 fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, Error> {
     let mut flags = settings::builder();
@@ -332,6 +342,7 @@ impl Jit {
         let isa = target("speed")?;
         let unoptimized = Chosen::from_env("SPARROW_CORE_UNOPTIMIZED");
         let unoptimized_isa = if unoptimized.any() { Some(target("none")?) } else { None };
+        let jit_isa = isa.clone();
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
         builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new(shift)));
         declare_helpers(&mut builder);
@@ -346,6 +357,10 @@ impl Jit {
             closure_requests: Vec::new(),
             general: BTreeMap::new(),
             general_ids: BTreeMap::new(),
+            compile_threads: std::env::var("SPARROW_CORE_COMPILE_THREADS").ok().and_then(|n| n.trim().parse().ok()).unwrap_or(0),
+            isa: jit_isa,
+            pool: None,
+            pending: BTreeMap::new(),
             small_ints: crate::env_switch::enabled_or("SPARROW_CORE_SMALL_INTS", true),
             maps: Vec::new(),
             ranges: Vec::new(),
@@ -593,7 +608,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         runtime.jit.general.entry(function).or_insert_with(|| Box::new(0));
         compile_entry(runtime, function, None, Version::Small)?
     } else {
-        compile_entry(runtime, function, None, Version::Ordinary)?
+        compile_ordinary(runtime, function)?
     };
     // #1110: the closure entries its closures will be called through. One that cannot be compiled stays 0, and
     // those closures keep the general path.
@@ -657,6 +672,101 @@ fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
 /// Compile `function`: its ordinary entry, or with `captures` its closure entry for closures holding that many
 /// captures (#1110), which takes the remaining arguments and then the closure; `version` says which version of a
 /// function with a small-int one it is (#1113).
+/// #1147 (step 2): a function's first compile. With background codegen on, a unit emitted ahead (by a caller's
+/// speculation) is taken back and installed; otherwise it is emitted now, its own lazy static callees are emitted
+/// and submitted for later, and it is compiled here.
+fn compile_ordinary(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
+    let background = background_allowed(runtime);
+    if background && let Some(address) = take_pending(runtime, function)? {
+        return Ok(address);
+    }
+    let mut unit = match emit_unit(runtime, function, None, Version::Ordinary)? {
+        Emitted::Published(address) => return Ok(address),
+        Emitted::Unit(unit) => unit,
+    };
+    if background {
+        let lazy = unit.lazy.clone();
+        speculate(runtime, &lazy, 0);
+    }
+    let symbol = unit.symbol.clone();
+    codegen(&runtime.jit, &mut unit, &symbol)?;
+    install(runtime, unit)
+}
+
+/// Background codegen only where nothing measures or bounds the compile: no statistics, profile or dump, no memory
+/// budget, no polling, no session (a session's tables grow in place).
+fn background_allowed(runtime: &Runtime) -> bool {
+    let jit = &runtime.jit;
+    jit.compile_threads > 0
+        && runtime.stats.is_none()
+        && jit.profile.is_none()
+        && !jit.dump.any()
+        && runtime.limits.memory.is_none()
+        && !runtime.polled()
+        && jit.object_capacity == 0
+}
+
+/// The unit emitted ahead for `function`, compiled and installed; None when there is none, or it is stale (a
+/// static callee it left lazy has been published since: compiled now, that call would be direct), or its codegen
+/// failed (compiled now, the error comes again).
+fn take_pending(runtime: &mut Runtime, function: usize) -> Result<Option<u64>, Error> {
+    let Some(lazy) = runtime.jit.pending.remove(&function) else { return Ok(None) };
+    let taken = runtime.jit.pool.as_ref().and_then(|pool| pool.take(function));
+    let stale = lazy.iter().any(|&callee| runtime.invocations[callee].code != 0);
+    let unit = match taken {
+        None => return Ok(None),
+        Some(_) if stale => {
+            okkama_devtrace::count!("jit", "background units stale");
+            return Ok(None);
+        }
+        Some(background::Taken::Queued(mut unit)) => {
+            okkama_devtrace::count!("jit", "background units taken back");
+            let symbol = unit.symbol.clone();
+            codegen(&runtime.jit, &mut unit, &symbol)?;
+            unit
+        }
+        Some(background::Taken::Done(Ok(unit))) => {
+            okkama_devtrace::count!("jit", "background units compiled");
+            unit
+        }
+        Some(background::Taken::Done(Err(_))) => return Ok(None),
+    };
+    install(runtime, unit).map(Some)
+}
+
+/// Functions emitted ahead per level, and the most waiting at once.
+const SPECULATION_DEPTH: usize = 2;
+const SPECULATION_PENDING: usize = 64;
+
+/// Emit `callees` (static, synchronous, not compiled, not waiting yet) ahead of their first call and submit them,
+/// with their own lazy callees to `SPECULATION_DEPTH`.
+fn speculate(runtime: &mut Runtime, callees: &[usize], depth: usize) {
+    for &callee in callees {
+        if runtime.jit.pending.len() >= SPECULATION_PENDING {
+            return;
+        }
+        if runtime.jit.pending.contains_key(&callee) || runtime.invocations[callee].code != 0 {
+            continue;
+        }
+        let source = &runtime.loaded.program.functions[callee];
+        if source.is_async || source.native.is_some() || source.intrinsic.is_some() {
+            continue;
+        }
+        if runtime.jit.small_ints && small_eligible(&runtime.loaded, callee) {
+            continue;
+        }
+        let Ok(Emitted::Unit(unit)) = emit_unit(runtime, callee, None, Version::Ordinary) else { continue };
+        let lazy = unit.lazy.clone();
+        runtime.jit.pending.insert(callee, lazy.clone());
+        let jit = &mut runtime.jit;
+        let (threads, isa, unoptimized) = (jit.compile_threads, jit.isa.clone(), jit.unoptimized_isa.clone());
+        jit.pool.get_or_insert_with(|| background::Pool::new(threads, isa, unoptimized)).submit(callee, unit);
+        if depth + 1 < SPECULATION_DEPTH {
+            speculate(runtime, &lazy, depth + 1);
+        }
+    }
+}
+
 /// The code of `function` (or its closure entry for `captures`, or a version of it): emitted, compiled by Cranelift
 /// and installed (#1147: three steps, so the middle one can run elsewhere).
 fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<u64, Error> {
@@ -684,6 +794,9 @@ struct Unit {
     dump: bool,
     /// `SPARROW_CORE_UNOPTIMIZED` names it.
     unoptimized: bool,
+    symbol: String,
+    /// #1147: the static callees its calls left lazy (not compiled when it was emitted).
+    lazy: Vec<usize>,
 }
 
 enum Emitted {
@@ -699,6 +812,11 @@ fn codegen(jit: &Jit, unit: &mut Unit, symbol: &str) -> Result<(), Error> {
         Some(isa) if unit.unoptimized => &**isa,
         _ => jit.module.isa(),
     };
+    codegen_with(isa, unit, symbol)
+}
+
+/// Codegen with `isa`: what a compile worker runs (#1147).
+fn codegen_with(isa: &dyn cranelift_codegen::isa::TargetIsa, unit: &mut Unit, symbol: &str) -> Result<(), Error> {
     // The text `define_function` gave a Cranelift error.
     unit.context.compile(isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: Compilation({:?})", e.inner)))?;
     Ok(())
@@ -807,6 +925,7 @@ fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, ve
     context.func.signature = jit.signature(params);
     let mut frontend = FunctionBuilderContext::new();
     let call_sites;
+    let lazy;
     {
         let mut builder = FunctionBuilder::new(&mut context.func, &mut frontend);
         let mut emit = Emitter {
@@ -845,6 +964,7 @@ fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, ve
             no_inline,
             exits: BTreeMap::new(),
             fail_return: None,
+            lazy: Vec::new(),
             closure_captures: captures,
             small: general_code,
             entry_args: Vec::new(),
@@ -852,6 +972,7 @@ fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, ve
         };
         emit.body()?;
         call_sites = emit.call_sites;
+        lazy = std::mem::take(&mut emit.lazy);
         mark!();
         builder.seal_all_blocks();
         builder.finalize(config);
@@ -889,7 +1010,8 @@ fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, ve
         context.set_disasm(true);
     }
     let unoptimized = jit.unoptimized_isa.is_some() && jit.unoptimized.has(symbol);
-    Ok(Emitted::Unit(Unit { function, captures, version, id, context, call_sites, clif, started, marks, dump, unoptimized }))
+    let symbol = symbol.to_string();
+    Ok(Emitted::Unit(Unit { function, captures, version, id, context, call_sites, clif, started, marks, dump, unoptimized, symbol, lazy }))
 }
 
 /// #1147: the second half of a compile: the compiled unit's code defined, finalized, registered and published.
@@ -1098,6 +1220,8 @@ struct Emitter<'a, 'b> {
     /// handlers with the same target and failure register share one (the first of them stands for all), and under
     /// polling so do only sites on the same side of the target (its backward edge polls).
     exits: BTreeMap<(usize, Option<Block>, Option<usize>, bool), Block>,
+    /// #1147: the static callees whose calls stay lazy here (not compiled yet), for background compilation.
+    lazy: Vec<usize>,
     /// #1147: the cold `return 0` the second and later failure and stop exits of this function share (`None`: no
     /// exit yet; `Some(None)`: one, which returned in place).
     fail_return: Option<Option<Block>>,
@@ -1774,6 +1898,9 @@ impl Emitter<'_, '_> {
             CallTarget::Dynamic(_) | CallTarget::Code(_) => 2,
         };
         self.call_sites[kind] += 1;
+        if let (CallTarget::Static(function), None) = (&target, address) {
+            self.lazy.push(*function);
+        }
         let code = if let Some(address) = address {
             self.iconst(address as i64)
         } else if let CallTarget::Code(code) = target {

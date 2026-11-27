@@ -556,3 +556,61 @@ function f1 "caller" {
     assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
     assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
 }
+
+/// #1147 (step 2): `p` calls `g`, then `f`, and `f` calls `g`. With background codegen, compiling `p` emits `g` and
+/// `f` ahead; `f`'s unit left its call of `g` lazy, and `g` is published before `f` is first called, so that unit
+/// is stale and `f` is compiled again with a direct call, as a synchronous run compiles it.
+const STALE: &str = r#"
+sparrow 18
+module "background" "1.0.0"
+type t0 int
+function f0 "g" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "f" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: ret r1
+}
+function f2 "p" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: call r1, f1, [r1]
+ 2: ret r1
+}
+"#;
+
+#[test]
+fn background_units_install_as_a_synchronous_run_compiles_them() {
+    for threads in [0, 2] {
+        let mut runtime = runtime(STALE, false);
+        runtime.jit.compile_threads = threads;
+        compile(&mut runtime, 2).unwrap();
+        if threads > 0 {
+            assert_eq!(runtime.jit.pending.keys().copied().collect::<Vec<_>>(), vec![0, 1], "g and f emitted ahead");
+        }
+        assert_eq!(runtime.run_function_with(2, &[word::small(5).unwrap()], 2 << 20).unwrap(), word::small(5).unwrap());
+        assert!(runtime.jit.pending.is_empty());
+        assert!(runtime.invocations[0].code != 0 && runtime.invocations[1].code != 0);
+        // `f` calls the published `g` directly in both modes.
+        assert_eq!(compiles(&runtime, 1), 0, "threads {threads}");
+    }
+}
+
+/// A runtime dropped while its compile workers still hold units stops them and frees everything.
+#[test]
+fn a_runtime_with_units_in_flight_drops_cleanly() {
+    for _ in 0..50 {
+        let mut runtime = runtime(STALE, false);
+        runtime.jit.compile_threads = 2;
+        compile(&mut runtime, 2).unwrap();
+        drop(runtime);
+    }
+}

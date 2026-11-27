@@ -19,7 +19,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (119)
+## Tags in one layer (120)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -74,6 +74,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - SO_LISTENQLIMIT — sparrow: `host/native_network.rs`
 - SPARROW_CORE_CLOSURE_BRIDGE — sparrow: `runtime.rs`
 - SPARROW_CORE_CODE_SHIFT — sparrow: `jit.rs`
+- SPARROW_CORE_COMPILE_THREADS — sparrow: `jit.rs`
 - SPARROW_CORE_DUMP — sparrow: `jit.rs`
 - SPARROW_CORE_FRONTEND_MAPS — sparrow: `jit.rs`
 - SPARROW_CORE_FS_FAULTS — sparrow: `host/native_fs.rs`
