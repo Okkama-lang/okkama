@@ -1137,6 +1137,8 @@ fn an_entry_past_the_rust_stack_limit_is_a_stack_overflow() {
 }
 
 /// Two evaluations on one runtime (a session's cells), the second under other budgets: its outcome.
+/// It compares the engines, so it needs the JIT (#1124).
+#[cfg(feature = "jit")]
 fn evaluate_twice(source: &str, engine: Engine, first: Limits, second: Limits) -> (Outcome, Outcome) {
     let source = source.to_owned();
     std::thread::Builder::new()
@@ -1164,6 +1166,7 @@ fn evaluate_twice(source: &str, engine: Engine, first: Limits, second: Limits) -
 /// #1129: whether code polls the fuel cell is fixed at a runtime's first run, for the JIT (compiled into each
 /// function) and the interpreter (read at each step) alike. A later run with other step budgets polls as the first
 /// did; a run that would turn polling on or off is refused, with one text on both engines.
+#[cfg(feature = "jit")]
 #[test]
 fn the_polling_of_a_runtime_is_fixed_at_its_first_run_on_both_engines() {
     let source = program("", "", r#"
