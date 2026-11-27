@@ -13,7 +13,6 @@
 #     path:GLOB      a file, relative to the repository root (fnmatch)
 # A divergence outside this file is a defect: a fix, or a ticket and a line here.
 
-refusal:(#1122)                              async bodies: the interpreter's async part is #1122
 both:Stack overflow                          the depth a stack overflow is reached at is each engine's frame size, and so the activations a trace omits (design 6.3)
 either:Execution budget exhausted: memory    the moment a memory budget runs out: the interpreter roots every register and its register stack is allocated memory, the JIT's machine stack is apart, so one may run out where the other stops at another budget (design 6.3)
 jit:compiling it would take more than        the JIT's compile cost limit (#73); the interpreter compiles nothing (design 6.3)

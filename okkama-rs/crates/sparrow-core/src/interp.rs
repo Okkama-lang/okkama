@@ -23,7 +23,9 @@
 //!   `rt_catch`. Cleanups are the program's own code there (`region.unwind`, `resource.unwind`, `fail.*`), run
 //!   through `rt_failure_op` as any instruction.
 //!
-//! Not yet: async bodies (#1122).
+//! - **An async body's registers are its Future's heap frame** (#1122): a suspension writes the resume point and
+//!   leaves, a resumption executes the suspending instruction again, as the JIT's body does; such an activation
+//!   is always the base of its entry, and an await-like instruction calls the same helper as the JIT.
 //!
 //! Rule for this file: a heap word is not held in a Rust local across a call that may collect, unless it is still
 //! in a register (all registers are roots; the heap does not move objects). Operations follow the JIT's order: an
@@ -48,6 +50,9 @@ pub(crate) struct Interp {
     /// Role dispatch tables (`program::dispatch_table`), shared by the call sites of one (role, slot).
     tables: Vec<Box<[u64]>>,
     table_of: std::collections::HashMap<(u32, u32), u32>,
+    /// Entries from Rust ([`invoke`], [`resume`]) now nested, and how many may nest (#1122, [`REENTRIES`]).
+    depth: u32,
+    reentries: u32,
 }
 
 impl std::fmt::Debug for Interp {
@@ -70,6 +75,8 @@ struct Activation {
     count: u32,
     /// The register stack's top before this frame.
     mark: Mark,
+    /// #1122: the heap frame (the Future) of an async body, whose registers `regs` are; 0 for a synchronous call.
+    frame: Word,
 }
 
 /// What a function's execution needs that its code says statically, made at its first call.
@@ -179,6 +186,8 @@ impl Interp {
             stack: Stack { limit: crate::STACK_BYTES, ..Stack::default() },
             tables: Vec::new(),
             table_of: std::collections::HashMap::new(),
+            depth: 0,
+            reentries: REENTRIES,
         }
     }
 
@@ -234,12 +243,32 @@ unsafe fn parts<'a>(ctx: *mut Ctx) -> (&'a mut Runtime, *mut Interp) {
 /// in `ctx.status` and the trace of the activations it left recorded.
 pub(crate) fn invoke(ctx: *mut Ctx, function: usize, words: &[Word]) -> Word {
     okkama_devtrace::count!("interp", "entries from Rust");
-    // The runtime's own calls into Okkama code nest on the Rust stack: its limit is a stack overflow, as the
-    // machine stack's is for the JIT.
-    let marker = 0u8;
-    if (&marker as *const u8 as u64) < unsafe { (*ctx).stack_limit } {
+    if deep(ctx) {
         return runtime::rt_stack_overflow(ctx);
     }
+    let (_, interp) = unsafe { parts(ctx) };
+    unsafe { (*interp).depth += 1 };
+    let result = invoke_entered(ctx, function, words);
+    unsafe { (*interp).depth -= 1 };
+    result
+}
+
+/// The most entries from Rust that nest at once (#1122): each takes Rust stack (the loop, the helpers between),
+/// whose overflow on wasm32 is a trap, not a failure; natively the stack limit decides (`deep`).
+const REENTRIES: u32 = if cfg!(target_arch = "wasm32") { 200 } else { u32::MAX };
+
+/// Is the Rust stack too deep for one more entry: below the context's stack limit, as the JIT's prologue checks
+/// its SP, or past `REENTRIES` nested entries?
+fn deep(ctx: *mut Ctx) -> bool {
+    let marker = 0u8;
+    if (&marker as *const u8 as u64) < unsafe { (*ctx).stack_limit } {
+        return true;
+    }
+    let (_, interp) = unsafe { parts(ctx) };
+    unsafe { (*interp).depth >= (*interp).reentries }
+}
+
+fn invoke_entered(ctx: *mut Ctx, function: usize, words: &[Word]) -> Word {
     let (runtime, interp) = unsafe { parts(ctx) };
     let source = &runtime.loaded.program.functions[function];
     if source.native.is_some() {
@@ -249,7 +278,9 @@ pub(crate) fn invoke(ctx: *mut Ctx, function: usize, words: &[Word]) -> Word {
         return crate::intrinsics::rt_intrinsic(ctx, function as u64, words.as_ptr(), words.len() as u64);
     }
     if source.is_async {
-        return refuse(ctx, function, None, "an async body");
+        // Callers make an async function's Future (`Runtime::future_new`) and run it through `resume`.
+        let message = format!("{}: an async function is run as a Future, not called", source.symbol);
+        return runtime::fatal(unsafe { &mut *ctx }, runtime, message);
     }
     let base = unsafe { (*interp).activations.len() };
     match enter(ctx, interp, function, words) {
@@ -259,26 +290,40 @@ pub(crate) fn invoke(ctx: *mut Ctx, function: usize, words: &[Word]) -> Word {
             return 0;
         }
     }
-    run(ctx, interp, base)
+    run(ctx, interp, base, 0)
 }
 
-/// Start or resume an async body: not yet (#1122). The run stops with the refusal.
-pub(crate) fn resume(ctx: *mut Ctx, function: usize, _frame: Word) -> bool {
-    refuse(ctx, function, None, "an async body");
-    false
-}
-
-/// A construct the interpreter does not run yet: the run stops (status FATAL) with a text that says so, never with
-/// a result the JIT would not give.
-#[cold]
-#[inline(never)]
-fn refuse(ctx: *mut Ctx, function: usize, pc: Option<usize>, what: &str) -> Word {
-    let runtime = unsafe { &mut *(*ctx).runtime };
-    okkama_devtrace::count!("interp", format!("refused: {what}"));
-    let symbol = &runtime.loaded.program.functions[function].symbol;
-    let at = pc.map_or(String::new(), |pc| format!(":{pc}"));
-    let message = format!("{symbol}{at}: {what} is not supported by the interpreter yet (#1122)");
-    runtime::fatal(unsafe { &mut *ctx }, runtime, message)
+/// Start or resume the async body of `frame` (#1122): its registers are the frame's (`tasks::REGISTERS`), so a
+/// suspension writes the resume point and returns, and a resumption executes again the instruction that
+/// suspended, as the JIT's body does. Every entry is a step. True while the body is pending.
+pub(crate) fn resume(ctx: *mut Ctx, function: usize, frame: Word) -> bool {
+    okkama_devtrace::count!("interp", "async bodies resumed");
+    if deep(ctx) {
+        runtime::rt_stack_overflow(ctx);
+        return false;
+    }
+    let (runtime, interp) = unsafe { parts(ctx) };
+    if let Err(message) = plan(runtime, interp, function) {
+        runtime::fatal(unsafe { &mut *ctx }, runtime, message);
+        return false;
+    }
+    let interp_ref = unsafe { &mut *interp };
+    let base = interp_ref.activations.len();
+    let mark = Mark { chunk: interp_ref.stack.chunk, top: interp_ref.stack.top };
+    let regs = (frame + crate::tasks::REGISTERS) as *mut Word;
+    interp_ref.activations.push(Activation { function: function as u32, pc: 0, regs, count: 0, mark, frame });
+    if step(ctx, runtime) {
+        interp_ref.pop_to(base);
+        return false;
+    }
+    let start = match crate::tasks::get(frame, crate::tasks::RESUME) {
+        0 => 0,
+        resume => resume as usize - 1,
+    };
+    interp_ref.depth += 1;
+    let pending = run(ctx, interp, base, start) != 0;
+    unsafe { (*interp).depth -= 1 };
+    pending
 }
 
 enum Entered {
@@ -315,7 +360,7 @@ fn enter(ctx: *mut Ctx, interp: *mut Interp, function: usize, words: &[Word]) ->
             *regs.add(param.0 as usize) = word;
         }
     }
-    interp.activations.push(Activation { function: function as u32, pc: 0, regs, count: count as u32, mark });
+    interp.activations.push(Activation { function: function as u32, pc: 0, regs, count: count as u32, mark, frame: 0 });
     if step(ctx, runtime) {
         return Entered::Stopped;
     }
@@ -609,7 +654,7 @@ fn unwind(ctx: *mut Ctx, interp: *mut Interp, base: usize, pc: usize) -> bool {
 /// (0, the status set, every activation above `base` left).
 ///
 /// `ctx` and `interp` as for [`parts`]; the activation at `base` was just entered.
-fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
+fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
     let runtime: *mut Runtime = unsafe { (*ctx).runtime };
     macro_rules! rt {
         () => {
@@ -629,7 +674,9 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
     let mut code: &[I];
     let mut regs: *mut Word;
     let mut prep: &[Prep];
-    let mut pc: usize = 0;
+    let mut pc: usize = start;
+    // The heap frame of the activation when it is an async body's (#1122).
+    let mut this: Word;
     macro_rules! load {
         () => {{
             let activation = *it!().activations.last().expect("an activation");
@@ -640,6 +687,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
             let planned: *const [Prep] = it!().plans[function].as_ref().expect("a plan").prep.as_ref();
             prep = unsafe { &*planned };
             regs = activation.regs;
+            this = activation.frame;
         }};
     }
     load!();
@@ -672,6 +720,20 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 fail!();
             }
         };
+    }
+    // After an await-like helper: pending leaves the async body (the base) to resume at this instruction; ready
+    // defines `$dst` from `scratch`.
+    macro_rules! suspend_unless_ready {
+        ($outcome:expr, $dst:expr) => {{
+            if $outcome == crate::tasks::AWAIT_PENDING {
+                crate::tasks::set(this, crate::tasks::RESUME, pc as u64 + 1);
+                it!().pop_to(base);
+                return 1;
+            }
+            if let Some(dst) = $dst {
+                set!(dst.0, unsafe { (*ctx).scratch });
+            }
+        }};
     }
     // Take an edge, then define `$register` as `$word` (a found element, a caught payload).
     macro_rules! jump_then {
@@ -1066,6 +1128,12 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
             }
             I::Return { value } => {
                 let value = value.map_or(0, |register| get!(register));
+                if this != 0 {
+                    // An async body's outcome is reserved; `run_body` settles its Future (#587). It is the base.
+                    crate::tasks::rt_complete(ctx, this, value);
+                    it!().pop_to(base);
+                    return 0;
+                }
                 let activation = it!().activations.pop().expect("an activation");
                 it!().stack.pop(activation.mark, activation.count);
                 if it!().activations.len() == base {
@@ -1134,14 +1202,37 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 }
                 jump!(next);
             }
-            I::Await { .. }
-            | I::AwaitTake { .. }
-            | I::RegionSettle { .. }
-            | I::RegionSettleUnwind { .. }
-            | I::ResourceSettle { .. }
-            | I::ResourceSettleUnwind { .. } => {
-                refuse(ctx, function, Some(pc), "an async body");
-                fail!();
+            // #1122: an await-like helper of the async body `this`: ready (its value, if any, in `scratch`), failed
+            // (the status), or pending: the body records where to resume, this very instruction, and leaves.
+            I::Await { dst, future } | I::AwaitTake { dst, future } => {
+                let outcome = if matches!(instruction, I::AwaitTake { .. }) {
+                    crate::tasks::rt_await_take(ctx, this, get!(future))
+                } else {
+                    crate::tasks::rt_await(ctx, this, get!(future))
+                };
+                check!();
+                suspend_unless_ready!(outcome, *dst);
+            }
+            I::RegionSettle { region, keep } => {
+                let keep = keep.map_or(word::UNBOUND, |keep| get!(keep));
+                let outcome = crate::tasks::rt_region_settle(ctx, this, get!(region), keep, word::UNBOUND);
+                check!();
+                suspend_unless_ready!(outcome, None::<okkama_sparrow::Dst>);
+            }
+            I::RegionSettleUnwind { dst, region, failure } => {
+                let outcome = crate::tasks::rt_region_settle(ctx, this, get!(region), word::UNBOUND, get!(failure));
+                check!();
+                suspend_unless_ready!(outcome, Some(*dst));
+            }
+            I::ResourceSettle { value } => {
+                let outcome = crate::tasks::rt_resource_settle(ctx, this, get!(value), word::UNBOUND);
+                check!();
+                suspend_unless_ready!(outcome, None::<okkama_sparrow::Dst>);
+            }
+            I::ResourceSettleUnwind { dst, value, failure } => {
+                let outcome = crate::tasks::rt_resource_settle(ctx, this, get!(value), get!(failure));
+                check!();
+                suspend_unless_ready!(outcome, Some(*dst));
             }
             other => {
                 let Prep::Uses { uses, def, region } = &prep[pc] else {

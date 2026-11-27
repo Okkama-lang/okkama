@@ -125,7 +125,7 @@ fn spb(data: &[u8]) -> Option<Vec<u8>> {
 /// The exec target's differential mode (#1123, `OKKAMA_FUZZ_DIFFERENTIAL=1`): the program runs on Sparrow's JIT
 /// and on its interpreter under the same budgets, and the two must show the same result or uncaught report (as a
 /// structure) and the same output, or the input crashes the target. The design's known divergences
-/// (`okkama-rs/tools/engines/interp-exceptions.txt`) pass: the interpreter's refusal of an async body (#1122),
+/// (`okkama-rs/tools/engines/interp-exceptions.txt`) pass:
 /// a stack overflow reached on both (its depth is each engine's), a memory budget run out on either (its moment is
 /// each engine's: the interpreter's register stack is allocated memory), and the JIT's compile limits. Returns what was compared, `None` when the input is not a program.
 pub fn differ(data: &[u8]) -> Option<Difference> {
@@ -138,9 +138,6 @@ pub fn differ(data: &[u8]) -> Option<Difference> {
         Ok(_) => String::new(),
     };
     let (jit_report, interpreted_report) = (report(&jit), report(&interpreted));
-    if interpreted_report.contains("is not supported by the interpreter yet (#1122)") {
-        return Some(Difference::Excepted("an async body (#1122)"));
-    }
     if ["compiling it would take more than", "too large to compile", "KiB limit"].iter().any(|text| jit_report.contains(text)) {
         return Some(Difference::Excepted("the JIT's compile limits (design 6.3)"));
     }

@@ -1,0 +1,211 @@
+; Async bodies on both engines (#1122): await, await.take and fut.spawn; a region and a static resource that
+; settle async destroys, on the normal path and on the failure path, one of them suspended until a spawned task
+; opens its gate; at the end a failure that unwinds through a suspended settle (design #1079 §6.4).
+sparrow 18
+module "mnemonics-async" "1.0.0"
+type t0 int
+type t1 str
+type t2 byte
+type t3 array t2
+type t4 bool
+type t5 future t0
+type t6 object obj0
+type t7 future t6
+type t8 object obj1
+type t9 region
+type t10 failure
+type t11 object obj2
+role role0 "Error" builtin {
+    method "text" [] -> t1
+}
+object obj0 "Event" {}
+object obj1 "Gate" {
+    field "event" t6
+    destroy f8
+}
+object obj2 "Oops" {
+    field "code" t0
+    does role0 [f10]
+}
+function f0 "write" native "runtime/stdio@1::stdout_write/1" {
+    registers [t3]
+    params [r0]
+    result t0
+}
+function f1 "print" {
+    registers [t0, t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: cvt r1, r0
+    1: const r2, str "\n"
+    2: str.concat r3, r1, r2
+    3: str.utf8 r4, r3
+    4: call _, f0, [r4]
+    5: ret _
+}
+function f2 "say" {
+    registers [t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: const r1, str "\n"
+    1: str.concat r2, r0, r1
+    2: str.utf8 r3, r2
+    3: call _, f0, [r3]
+    4: ret _
+}
+function f3 "flag" {
+    registers [t4, t0]
+    params [r0]
+    result void
+    0: br r0, @1, @3
+    1: const r1, int 1
+    2: jmp @4
+    3: const r1, int 0
+    4: call _, f1, [r1]
+    5: ret _
+}
+
+function f4 "Event.new" intrinsic "okkama.event.Event.new_ready" [obj0] [] {
+    registers [t4]
+    params [r0]
+    result t6
+}
+function f5 "Event.set" intrinsic "okkama.event.Event.set" [] [] {
+    registers [t6]
+    params [r0]
+    result void
+}
+function f6 "Event.wait" async intrinsic "okkama.event.Event.wait" [] [] {
+    registers [t6]
+    params [r0]
+    result t6
+}
+function f7 "square" async {
+    registers [t0, t0]
+    params [r0]
+    result t0
+    0: int.mul r1, r0, r0
+    1: ret r1
+}
+function f8 "Gate.destroy" async {
+    registers [t8, t6, t7, t6, t1]
+    params [r0]
+    result void
+    0: obj.get r1, r0, 0
+    1: call r2, f6, [r1]
+    2: await r3, r2
+    3: const r4, str "gate closed"
+    4: call _, f2, [r4]
+    5: ret _
+}
+function f9 "opener" async {
+    registers [t6, t6, t7, t6, t0]
+    params [r0, r1]
+    result t0
+    0: call r2, f6, [r1]
+    1: await r3, r2
+    2: call _, f5, [r0]
+    3: const r4, int 0
+    4: ret r4
+}
+function f10 "Oops.text" {
+    registers [t11, t1]
+    params [r0]
+    result t1
+    0: const r1, str "oops"
+    1: ret r1
+}
+function f11 "thrower" {
+    registers [t0, t11]
+    params [r0]
+    result t0
+    0: obj.new r1, obj2, [r0]
+    1: throw r1
+}
+function f12 "resource on the failure path" async {
+    registers [t4, t6, t8, t0, t10, t10, t5]
+    params []
+    result t0
+    handler 5 6 @8 r4
+    0: const r0, bool true
+    1: call r1, f4, [r0]
+    2: obj.new r2, obj1, [r1]
+    3: resource.pin r2
+    4: const r3, int 3
+    5: call r3, f11, [r3]
+    6: resource.settle r2
+    7: ret r3
+    8: resource.settle_unwind r5, r2, r4
+    9: call r6, f15, []
+    10: await r3, r6
+    11: const r3, int 1
+    12: ret r3
+}
+function f13 "unwinding" async {
+    registers [t4, t6, t6, t5, t9, t8, t0, t10, t10]
+    params []
+    result t0
+    handler 11 12 @14 r7
+    0: const r0, bool false
+    1: call r1, f4, [r0]
+    2: call r2, f4, [r0]
+    3: call r3, f9, [r1, r2]
+    4: fut.spawn r3, r3
+    5: call _, f5, [r2]
+    6: region.enter r4
+    7: obj.new r5, obj1, [r1]
+    8: region.track r4, r5
+    9: region.adopt r4, r5
+    10: const r6, int 9
+    11: call r6, f11, [r6]
+    12: region.settle r4, _
+    13: ret r6
+    14: region.settle_unwind r8, r4, r7
+    15: raise r8
+}
+function f14 "main" async {
+    registers [t0, t5, t0, t6, t6, t5, t9, t8, t1, t4]
+    params []
+    result t0
+    0: const r0, int 5
+    1: call r1, f7, [r0]
+    2: await r2, r1
+    3: call _, f1, [r2]
+    4: const r0, int 6
+    5: call r1, f7, [r0]
+    6: fut.spawn r1, r1
+    7: await.take r2, r1
+    8: call _, f1, [r2]
+    9: const r9, bool false
+    10: call r3, f4, [r9]
+    11: call r4, f4, [r9]
+    12: call r5, f9, [r3, r4]
+    13: fut.spawn r5, r5
+    14: call _, f5, [r4]
+    15: region.enter r6
+    16: obj.new r7, obj1, [r3]
+    17: region.track r6, r7
+    18: region.adopt r6, r7
+    19: region.settle r6, _
+    20: const r8, str "settled"
+    21: call _, f2, [r8]
+    22: call r1, f12, []
+    23: await r2, r1
+    24: call _, f1, [r2]
+    25: call r1, f13, []
+    26: await r2, r1
+    27: ret r2
+}
+function f15 "resource on the normal path" async {
+    registers [t4, t6, t8, t0]
+    params []
+    result t0
+    0: const r0, bool true
+    1: call r1, f4, [r0]
+    2: obj.new r2, obj1, [r1]
+    3: resource.pin r2
+    4: resource.settle r2
+    5: const r3, int 0
+    6: ret r3
+}
+entry f14

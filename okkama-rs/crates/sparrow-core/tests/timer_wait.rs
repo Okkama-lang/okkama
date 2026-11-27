@@ -37,8 +37,6 @@ entry f0
     );
     okkama_sparrow::encode(&okkama_sparrow::assemble(&source).unwrap()).unwrap()
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn a_task_sleeping_on_a_timer_resumes_when_it_is_due() {
     let started = Instant::now();
@@ -47,8 +45,6 @@ fn a_task_sleeping_on_a_timer_resumes_when_it_is_due() {
     assert!(elapsed >= Duration::from_millis(30), "resumed before its timer: {elapsed:?}");
     assert!(elapsed < Duration::from_secs(10), "the wait outlived its timer: {elapsed:?}");
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn an_interrupt_stops_a_run_waiting_for_a_timer() {
     let flag = Arc::new(AtomicBool::new(false));

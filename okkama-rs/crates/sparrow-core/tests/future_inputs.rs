@@ -143,8 +143,6 @@ fn check(action: &str, result: &str, destroy: &str, destroy_async: bool, body: &
     let bytes = program(action, result, destroy, destroy_async, &main);
     assert!(sparrow_core::run_tests(bytes, Box::new(std::io::stdout())).unwrap());
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_complete_before_repeated_await_and_escape() {
     check(READ, "t1", DESTROY, false, r#"
@@ -168,8 +166,6 @@ fn future_inputs_complete_before_repeated_await_and_escape() {
         ret _
     "#);
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_creation_order_overrides_parameter_order_and_aliases() {
     for (arguments, value, early, final_log) in [
@@ -194,8 +190,6 @@ fn future_inputs_creation_order_overrides_parameter_order_and_aliases() {
         "#));
     }
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_never_started_and_cancelled_keep_owner_boundary() {
     for cancel in ["", "fut cancel, _, r7", "handler 15 16 @17 r13\nfut cancel, _, r7\nawait r9, r7\npanic r0"] {
@@ -214,8 +208,6 @@ fn future_inputs_never_started_and_cancelled_keep_owner_boundary() {
         "#));
     }
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_borrowed_inputs_stay_with_caller() {
     check(READ, "t1", DESTROY, false, r#"
@@ -234,8 +226,6 @@ fn future_inputs_borrowed_inputs_stay_with_caller() {
         ret _
     "#);
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_partial_outcome_and_duplicate_identity() {
     let identity = "    0: ret r1";
@@ -259,8 +249,6 @@ fn future_inputs_partial_outcome_and_duplicate_identity() {
         "#));
     }
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_outcome_retains_nested_cache_owners() {
     check("0: ret r1", "t6", DESTROY, false, r#"
@@ -284,8 +272,6 @@ fn future_inputs_outcome_retains_nested_cache_owners() {
         ret _
     "#);
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_suspended_action_and_async_destroy() {
     let action = r#"
@@ -316,8 +302,6 @@ fn future_inputs_suspended_action_and_async_destroy() {
         "#);
     }
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_cleanup_suspends_before_publication() {
     let body = r#"
@@ -353,8 +337,6 @@ impl std::io::Write for Report {
     }
     fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_driver_keeps_inputs_until_its_owner_closes() {
     // Owner's decision on #587: a driver is not an async body. Its fresh receiver stays in its INPUTS after it
@@ -389,8 +371,6 @@ fn future_inputs_driver_keeps_inputs_until_its_owner_closes() {
     assert_eq!(report.matches("RuntimeError: Invalid async event").count(), 1, "{report}");
     assert!(!report.contains("no task can make progress"), "{report}");
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn future_inputs_destroy_failures_are_cached_and_secondary() {
     let destroy = DESTROY.replace("5: ret _", "5: panic r1");

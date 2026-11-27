@@ -3,7 +3,7 @@
 //! the uncaught failure compared as a structure (category, type, message, sites, cause traces), and each output
 //! stream byte for byte. The samples are t/, examples of the Book and the Bible, and conformance's cases that
 //! expect a run to fail; step parity runs a few of them under five step budgets. A program the interpreter does not
-//! run yet (an async body, #1122) is counted apart, never compared.
+//! run yet (none since #1122) is counted apart, never compared.
 mod tree;
 
 use sparrow_core::budget::Limits;
@@ -90,9 +90,8 @@ fn t_runs_alike_on_both_engines() {
     paths.extend(programs("t/op"));
     paths.extend(programs("t/lang"));
     let (same, not_yet) = sample(&paths, Some(&tree::root().join("t/support")), &Limits::default());
-    // Every file builds; only async ones wait (#1122).
-    assert_eq!(same + not_yet, paths.len());
-    assert!(same >= paths.len() - 6, "{same} of {} compared, {not_yet} refused", paths.len());
+    // Every file builds and runs alike, async ones too (#1122).
+    assert_eq!((same, not_yet), (paths.len(), 0));
 }
 
 /// Examples whose output depends on nothing but the program: failures and their causes, cleanups that fail,

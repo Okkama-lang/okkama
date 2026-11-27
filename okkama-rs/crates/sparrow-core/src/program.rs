@@ -204,6 +204,14 @@ impl Loaded {
         self.every_field_checked = true;
     }
 
+    /// #1122: no register is proven pointer-free, so a suspended frame traces every register of a traced kind. The
+    /// interpreter runs so: an oracle must not depend on the analyses it checks (design #1079 §2.4).
+    pub(crate) fn without_pointer_free(&mut self) {
+        for function in &mut self.functions {
+            function.pointer_free.iter_mut().for_each(|free| *free = false);
+        }
+    }
+
     /// The worker Future function for results of type `result`.
     pub fn worker(&self, result: Option<TypeRef>) -> Option<usize> {
         self.workers.iter().find(|(r, _)| *r == result).map(|&(_, function)| function)

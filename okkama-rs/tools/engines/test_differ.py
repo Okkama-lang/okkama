@@ -18,14 +18,26 @@ class Exceptions(unittest.TestCase):
 
     def test_the_repository_file_parses_and_names_its_tickets(self):
         kinds = {kind for kind, _, _ in self.rules}
-        self.assertTrue({"refusal", "both", "jit"} <= kinds)
+        self.assertTrue({"both", "either", "jit"} <= kinds)
+        # #1122: the interpreter runs everything; no refusal is excused any more.
+        self.assertNotIn("refusal", kinds)
+        self.assertIsNone(differ.excepted(self.rules, None, (0, "ok"), (1, REFUSED)))
 
-    def test_an_async_refusal_is_explained_and_another_refusal_is_not(self):
-        self.assertIn("#1122", differ.excepted(self.rules, None, (0, "ok"), (1, REFUSED)))
+    def test_a_refusal_is_explained_by_its_text_and_another_refusal_is_not(self):
+        rules = self.load("refusal:(#1122)  async bodies (#1122)\n")
+        self.assertIn("#1122", differ.excepted(rules, None, (0, "ok"), (1, REFUSED)))
         other = "main:3: a widget is not supported by the interpreter yet (#9999)"
-        self.assertIsNone(differ.excepted(self.rules, None, (0, "ok"), (1, other)))
+        self.assertIsNone(differ.excepted(rules, None, (0, "ok"), (1, other)))
         # The ticket alone is not a refusal.
-        self.assertIsNone(differ.excepted(self.rules, None, (0, "ok"), (1, "RuntimeError: bad input (#1122)")))
+        self.assertIsNone(differ.excepted(rules, None, (0, "ok"), (1, "RuntimeError: bad input (#1122)")))
+
+    def load(self, text):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as out:
+            out.write(text)
+        try:
+            return differ.load(out.name)
+        finally:
+            os.unlink(out.name)
 
     def test_a_stack_overflow_explains_only_when_both_overflow_with_one_status(self):
         overflow = "RuntimeError: Stack overflow\n  ... 1234 activations omitted"
@@ -47,7 +59,8 @@ class Exceptions(unittest.TestCase):
     def test_without_the_jit_run_only_refusals_explain(self):
         overflow = "RuntimeError: Stack overflow"
         self.assertIsNone(differ.excepted(self.rules, None, None, (1, overflow)))
-        self.assertIsNotNone(differ.excepted(self.rules, None, None, (1, REFUSED)))
+        rules = self.load("refusal:(#1122)  async bodies (#1122)\n")
+        self.assertIsNotNone(differ.excepted(rules, None, None, (1, REFUSED)))
 
     def test_a_line_without_a_reason_or_a_ticket_is_refused(self):
         for line in ["refusal:(#1)", "refusal:x  no ticket here", "weird:x  (#1)", "both:  (#1)"]:

@@ -972,3 +972,20 @@ every declaration is open (#1005, owner decision).
   answers from the budgets as they are (a session's destroys at close, direct compiles in tests).
 - **`toolchain.sh` fetches first.** A networked `cargo fetch --locked` on the registry volume runs before the
   offline build; with every crate present it passes without network. A failure names its step.
+
+## Sparrow's interpreter: async bodies (#1122, 2026-11-27; design Fable §2.4, §6.4; implementer's choices)
+
+- **An async activation is the base of its entry.** `interp::resume` pushes an activation whose registers are the
+  frame's `REGISTERS` (no register-stack chunk); a suspension writes `RESUME = pc + 1`, leaves and answers
+  pending; a resumption starts at `RESUME - 1`. Await-like instructions occur only in the async function itself, so
+  no synchronous activation is ever above a suspension. Each resumption is a step (the JIT polls in every entry of
+  the body).
+- **Pointer-free off by mode.** `Loaded::without_pointer_free` runs when the runtime is assembled for the
+  interpreter, and `Runtime::use_engine(Interpreter)` re-lays the heap's descriptors before anything ran.
+- **Re-entry counter.** `Interp::depth` counts entries from Rust (`invoke`, `resume`); past `REENTRIES` (200 on
+  wasm32, unbounded natively, where `Ctx.stack_limit` decides) the entry is a stack overflow.
+- **§6.4 fixed in the JIT.** `rt_trace`'s rule is one record per activation; the JIT's `check` now passes an async
+  body's heap frame (stable across resumptions) instead of its frame pointer; synchronous and inlined code keep the
+  frame pointer (#926). Ticket filed for the record.
+- **The interpreter's branches block.** With async running and every difference explained, the Wave's
+  `sparrow-interp` matrix branch loses `continue-on-error` and the gate's interpreter step fails the gate.

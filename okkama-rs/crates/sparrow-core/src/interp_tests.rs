@@ -32,10 +32,14 @@ fn run(source: &str, engine: Engine, stress: bool, limits: Limits) -> Outcome {
         .spawn(move || {
             let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
             let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
-            runtime.interp = match engine {
-                Engine::Jit => None,
-                Engine::Interpreter => Some(Box::new(Interp::new(runtime.loaded.program.functions.len()))),
-            };
+            // #1122: `use_engine` loads the interpreter's way too (no pointer-free proofs in frame layouts).
+            match engine {
+                Engine::Interpreter => runtime.use_engine(crate::Engine::Interpreter),
+                #[cfg(feature = "jit")]
+                Engine::Jit => runtime.use_engine(crate::Engine::Jit),
+                #[cfg(not(feature = "jit"))]
+                Engine::Jit => unreachable!("a build without the JIT"),
+            }
             runtime.heap.set_stress(stress);
             runtime.limits = limits;
             let (result, output) = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
@@ -977,13 +981,11 @@ fn the_failure_paths_take_each_failure_where_the_jit_does() {
     assert!(outcome.result.as_ref().unwrap_err().contains("Secondary cleanup failure"), "{outcome:?}");
 }
 
-/// Every synchronous mnemonic runs, on both engines alike, in the Sparrow assembly of the repository: the
-/// SparrowBook's examples, sparrow-core's and sparrow-cli's `.spa` and `tests/mnemonics` (#1121). A new
-/// instruction needs a program here too. The async ones (`await`, the settles, `fut.spawn` of a body) wait for #1122.
+/// Every mnemonic runs, on both engines alike, in the Sparrow assembly of the repository: the SparrowBook's
+/// examples, sparrow-core's and sparrow-cli's `.spa` and `tests/mnemonics` (#1121; async ones since #1122). A new
+/// instruction needs a program here too.
 #[test]
-fn every_synchronous_mnemonic_runs_on_both_engines() {
-    const ASYNC: &[&str] =
-        &["await", "await.take", "region.settle", "region.settle_unwind", "resource.settle", "resource.settle_unwind", "fut.spawn"];
+fn every_mnemonic_runs_on_both_engines() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let directories = [
         root.join("../../../docs/SparrowBook/examples"),
@@ -1000,8 +1002,7 @@ fn every_synchronous_mnemonic_runs_on_both_engines() {
             let source = std::fs::read_to_string(&path).unwrap();
             // A fixture its own test completes (a template with `$` holes, a part of a program) is not a program.
             let Ok(program) = okkama_sparrow::assemble(&source) else { continue };
-            let Some(entry) = program.entry else { continue };
-            if program.functions[entry.0 as usize].is_async {
+            if program.entry.is_none() {
                 continue;
             }
             engines(&source);
@@ -1010,8 +1011,8 @@ fn every_synchronous_mnemonic_runs_on_both_engines() {
         }
     }
     let missing: Vec<_> =
-        okkama_sparrow::Instruction::MNEMONICS.iter().filter(|m| !ASYNC.contains(m) && !covered.contains(*m)).collect();
-    assert!(missing.is_empty(), "{programs} programs leave {} synchronous mnemonics unexecuted: {missing:?}", missing.len());
+        okkama_sparrow::Instruction::MNEMONICS.iter().filter(|m| !covered.contains(*m)).collect();
+    assert!(missing.is_empty(), "{programs} programs leave {} mnemonics unexecuted: {missing:?}", missing.len());
 }
 
 thread_local! {
@@ -1032,7 +1033,7 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
         .spawn(move || {
             let program = okkama_sparrow::assemble(&source).unwrap();
             let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
-            runtime.interp = Some(Box::new(Interp::new(runtime.loaded.program.functions.len())));
+            runtime.use_engine(crate::Engine::Interpreter);
             EXECUTED.with(|executed| executed.borrow_mut().clear());
             let _ = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
             EXECUTED.with(|executed| executed.take())
@@ -1042,22 +1043,47 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
         .unwrap()
 }
 
+/// #1122: async bodies on both engines (`tests/mnemonics/async.spa`): awaits, a spawned task, async destroys
+/// settled by a region and a static resource, one suspended until another task opens its gate, and a failure that
+/// unwinds through a suspended `region.settle_unwind`: the body is in the trace once, at the call the failure first
+/// reached, though it resumed at another stack depth (design #1079 §6.4: the JIT recorded it twice, by frame
+/// pointer, until it keyed async bodies by their heap frame).
 #[test]
-fn an_async_body_is_refused() {
-    let source = program("", "", r#"
-function f4 "main" async {
-    registers [t0]
+fn async_bodies_suspend_resume_and_settle_alike() {
+    let outcome = engines(include_str!("../tests/mnemonics/async.spa"));
+    assert_eq!(outcome.output, lines(&["25", "36", "gate closed", "settled", "gate closed", "gate closed", "1", "gate closed"]));
+    assert!(outcome.result.as_ref().unwrap_err().contains("oops"), "{outcome:?}");
+    assert_eq!(sites(&outcome), vec![(11, 1), (13, 11), (14, 26)]);
+    // Every resumption is a step, as every entry of the JIT's body: a budget stops both at one point.
+    for steps in [3, 12, 40, 400] {
+        engines_with(include_str!("../tests/mnemonics/async.spa"), Limits { steps: Some(steps), ..Limits::default() });
+    }
+    // `await.take` consumes the Future: a second await of it is a panic.
+    let taken = engines(&program("type t5 future t0", "", r#"
+function f4 "square" async {
+    registers [t0, t0]
+    params [r0]
+    result t0
+    0: int.mul r1, r0, r0
+    1: ret r1
+}
+function f5 "main" async {
+    registers [t0, t5, t0, t0]
     params []
     result t0
-    0: const r0, int 3
-    1: ret r0
+    0: const r0, int 7
+    1: call r1, f4, [r0]
+    2: await.take r2, r1
+    3: call _, f1, [r2]
+    4: await r3, r1
+    5: ret r3
 }
-entry f4
-"#);
-    let error = run(&source, Engine::Interpreter, false, Limits::default()).result.unwrap_err();
-    assert!(error.contains("main: an async body is not supported by the interpreter yet (#1122)"), "{error}");
-    #[cfg(feature = "jit")]
-    assert_eq!(run(&source, Engine::Jit, false, Limits::default()).result, Ok(3));
+entry f5
+"#));
+    assert_eq!(taken.output, "49\n");
+    assert!(taken.result.as_ref().unwrap_err().contains("await of a consumed Future"), "{taken:?}");
+    let simple = program("", "", "function f4 \"main\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 3\n 1: ret r0\n}\nentry f4\n");
+    assert_eq!(engines(&simple).result, Ok(3));
 }
 
 /// The collector reads every frame's registers: a chain of objects held only by the registers of callers below
@@ -1203,4 +1229,70 @@ entry f4
             }
         }
     }
+}
+
+/// #1122: entries from Rust nest only so deep (`REENTRIES`, 200 on wasm32, where the Rust stack's overflow is a trap):
+/// the entry past the limit is a stack overflow, as the machine stack's limit is for the JIT. Here a region's
+/// destroy, which the runtime calls from Rust, is the second entry.
+#[test]
+fn entries_from_rust_nest_only_so_deep() {
+    let source = program("type t5 object obj0\ntype t6 region", "object obj0 \"Handle\" {\n    field \"name\" t1\n    destroy f4\n}", r#"
+function f4 "Handle.destroy" {
+    registers [t5, t1]
+    params [r0]
+    result void
+    0: obj.get r1, r0, 0
+    1: call _, f2, [r1]
+    2: ret _
+}
+function f5 "main" {
+    registers [t6, t1, t5, t0]
+    params []
+    result t0
+    0: region.enter r0
+    1: const r1, str "closed"
+    2: obj.new r2, obj0, [r1]
+    3: region.track r0, r2
+    4: region.adopt r0, r2
+    5: region.leave r0, _
+    6: const r3, int 0
+    7: ret r3
+}
+entry f5
+"#);
+    let run_with = |reentries: u32| {
+        let source = source.clone();
+        std::thread::spawn(move || {
+            let program = okkama_sparrow::assemble(&source).unwrap();
+            let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
+            runtime.use_engine(crate::Engine::Interpreter);
+            runtime.interp.as_mut().unwrap().reentries = reentries;
+            let (result, output) = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
+            (result.map_err(|error| error.0), String::from_utf8(output).unwrap())
+        })
+        .join()
+        .unwrap()
+    };
+    assert_eq!(run_with(2), (Ok(0), "closed\n".to_owned()));
+    let (result, output) = run_with(1);
+    assert!(result.as_ref().unwrap_err().contains("Stack overflow"), "{result:?}");
+    assert_eq!(output, "");
+}
+
+/// #1122: the interpreter's runtime proves no register pointer-free, so a suspended frame traces every register of
+/// a traced kind (design #1079 §2.4: the oracle does not rest on the analysis it checks); the JIT's keeps the proofs.
+#[test]
+fn the_interpreter_loads_without_pointer_free_proofs() {
+    let source = "sparrow 18\nmodule \"ranges\" \"1\"\ntype t0 int\nfunction f0 \"rest\" async {\n registers [t0, t0, t0]\n \
+        params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n";
+    let program = okkama_sparrow::assemble(source).unwrap();
+    let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
+    if std::env::var_os("SPARROW_CORE_POINTER_FREE").is_none() && runtime.interp.is_none() {
+        assert!(runtime.loaded.functions[0].pointer_free.contains(&true), "the JIT's load proves r2 small");
+    }
+    runtime.use_engine(crate::Engine::Interpreter);
+    assert!(runtime.loaded.functions[0].pointer_free.iter().all(|free| !free));
+    // The frame's registers follow the header's seven fixed words; every int register is traced.
+    let frame = &runtime.heap.layouts().frames[0];
+    assert!(frame[crate::tasks::FIXED_WORDS..crate::tasks::FIXED_WORDS + 3].iter().all(|repr| *repr == Repr::Int), "{frame:?}");
 }

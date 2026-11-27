@@ -260,7 +260,12 @@ impl Runtime {
         self.interp = match engine {
             #[cfg(feature = "jit")]
             crate::Engine::Jit => None,
-            crate::Engine::Interpreter => Some(Box::new(crate::interp::Interp::new(self.loaded.program.functions.len()))),
+            crate::Engine::Interpreter => {
+                // #1122: its frames trace every register; nothing has been allocated with the old layouts' frames.
+                self.loaded.without_pointer_free();
+                self.heap.relayout(self.loaded.layouts());
+                Some(Box::new(crate::interp::Interp::new(self.loaded.program.functions.len())))
+            }
         };
     }
 
@@ -412,7 +417,12 @@ impl Runtime {
     }
 
 
-    fn assemble(loaded: Loaded) -> Result<Self, Error> {
+    fn assemble(mut loaded: Loaded) -> Result<Self, Error> {
+        // #1124: a build without the JIT has only the interpreter.
+        let interpret = !cfg!(feature = "jit") || crate::env_switch::enabled("SPARROW_CORE_INTERPRET");
+        if interpret {
+            loaded.without_pointer_free();
+        }
         let mut heap = Heap::new(loaded.layouts());
         heap.set_stress(crate::env_switch::enabled("SPARROW_CORE_GC_STRESS"));
         if crate::env_switch::enabled("SPARROW_CORE_STATS") {
@@ -456,9 +466,7 @@ impl Runtime {
             limits: crate::budget::Limits::default(),
             poisoned: false,
             budget: Budget::default(),
-            // #1124: a build without the JIT has only the interpreter.
-            interp: (!cfg!(feature = "jit") || crate::env_switch::enabled("SPARROW_CORE_INTERPRET"))
-                .then(|| Box::new(crate::interp::Interp::new(loaded.program.functions.len()))),
+            interp: interpret.then(|| Box::new(crate::interp::Interp::new(loaded.program.functions.len()))),
             heap,
             #[cfg(feature = "jit")]
             jit: crate::jit::Jit::new()?,

@@ -1114,7 +1114,13 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(recorded);
         let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
-        let mut frame = self.builder.ins().get_frame_pointer(types::I64);
+        // #1122 (design #1079 §6.4): an async body is keyed by its heap frame, which stays where it is while the
+        // body suspends and resumes on another stack depth; its machine frame pointer does not, and a failure that
+        // unwound through a suspended settle recorded the body twice.
+        let mut frame = match self.frame {
+            Some(frame) if self.inline.is_none() => self.builder.use_var(frame),
+            _ => self.builder.ins().get_frame_pointer(types::I64),
+        };
         if let Some(inline) = &self.inline {
             // An inlined activation shares its caller's frame: frame pointers are 16-aligned, so `fp - depth` keys
             // it apart for the trace's once-per-activation rule (#926).

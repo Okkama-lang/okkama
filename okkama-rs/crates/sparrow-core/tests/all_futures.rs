@@ -7,14 +7,10 @@ fn check_all_futures(ready: bool) {
     let bytes = okkama_sparrow::encode(&program).unwrap();
     assert!(sparrow_core::run_tests(bytes, Box::new(std::io::stdout())).unwrap());
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn all_futures_retains_duplicate_results_until_scope_exit() {
     check_all_futures(true);
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn all_futures_transfers_results_after_suspension() {
     check_all_futures(false);

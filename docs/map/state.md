@@ -2,6 +2,20 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1122 Interpreter 3 (feature/1122 from release/066 29d0bf49e, not committed; worktree okkama-work/hf-1122,
+  target t-1122): `interp::resume` (registers in the Future's frame, `RESUME`, a step per resumption), await,
+  await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +
+  `Heap::relayout` for the interpreter; `Interp::depth`/`reentries` (`REENTRIES` 200 on wasm32); the #1122
+  `#[ignore]`s of #1124 removed (26 tests; all pass on the no-default-features build); `tests/mnemonics/async.spa`,
+  coverage test now all 141 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
+  `region.settle_unwind`; fixed (`Emitter::check` passes the heap frame), ticket #1132. Also fixed: #1129 broke
+  `jit::ready_callees_tests::lazy_compilation_failure…` (it dropped a memory budget between runs; now a large
+  one). Tests: `interp::tests` 28, 9 mutations caught. Corpus (release, cage): t/ 142 identical on the JIT and
+  both interp configs (no skips); examples 263 identical (differ.py now runs a directory's programs serially:
+  examples/fs share files); bench/micro check 749/773 on the interpreter, the 24 cage failures the JIT's;
+  conformance on the interpreter (okkama-dev) 1075/1075. Micro A/B async cells (toolchain.sh seed 1, A B B A,
+  n=10⁵): geomean +0.3%, all within ±2.7%. The async exception line is gone; the Wave's sparrow-interp branch and
+  the gate's interpreter step are blocking. Toolchains okkama-work/micro-tc/1122-{base,cand}.
 - [x] #1129 (feature/1129 from release/066 cd4548694, not committed; worktree okkama-work/hf-1129, target t-1129):
   `Budget::polled` fixed in `start_budget`, `Runtime::polled()` read by `jit::compile`, `interp::step`,
   `intrinsics::sort_natural`; refusal text `polling_fixed`; test `interp::tests::the_polling_of_a_runtime_is_fixed…`

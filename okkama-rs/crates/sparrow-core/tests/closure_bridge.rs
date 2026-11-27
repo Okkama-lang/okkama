@@ -254,8 +254,6 @@ entry f1
 "#;
     assert_eq!(run(source).unwrap(), 10);
 }
-
-#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn closure_bridge_async_captures_survive_suspension_and_cancellation() {
     let source = include_str!("closure_bridge_async.spa");

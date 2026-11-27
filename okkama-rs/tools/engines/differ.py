@@ -129,8 +129,14 @@ def run(args):
     rules = load()
     paths = programs(args.paths or [os.path.join(ROOT, "examples")])
     counts, reasons, differing = {}, {}, []
+    # Programs of one directory run one after another: some write files next to themselves (examples/fs).
+    groups = {}
+    for path in paths:
+        groups.setdefault(os.path.dirname(path), []).append(path)
+    serial = lambda group: [compare(path, args, rules) for path in group]
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for path, verdict, detail in pool.map(lambda path: compare(path, args, rules), paths):
+        results = [result for group in pool.map(serial, groups.values()) for result in group]
+        for path, verdict, detail in results:
             counts[verdict] = counts.get(verdict, 0) + 1
             name = os.path.relpath(path, ROOT)
             if verdict == "excepted":

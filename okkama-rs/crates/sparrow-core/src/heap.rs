@@ -731,6 +731,13 @@ impl Heap {
     /// Declare which object descriptors carry their identity inline (#528).
     /// #588: a session runtime's extension appends layouts; the existing ones are unchanged (checked by
     /// `Runtime::extend`), so the trace descriptors are rebuilt for the longer tables.
+    /// #1122: other layouts for the same descriptors, before any frame of the old ones exists (a runtime choosing
+    /// its engine).
+    pub(crate) fn relayout(&mut self, layouts: Layouts) {
+        self.trace_layouts = TraceLayouts::new(&layouts);
+        self.layouts = layouts;
+    }
+
     pub(crate) fn extend_layouts(&mut self, layouts: Layouts) {
         debug_assert!(layouts.objects.starts_with(&self.layouts.objects));
         debug_assert!(layouts.closures.starts_with(&self.layouts.closures));

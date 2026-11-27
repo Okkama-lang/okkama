@@ -21,8 +21,8 @@
 #      TAP-потоки конфигураций обязаны совпадать;
 #   5. интерпретатор Sparrow (#1123): conformance sparrow-interp, t/ на
 #      sparrow-interp и sparrow-interp-gc-stress, differ.py на examples/ —
-#      пока только отчёт (informative): блокирующими станут после первого
-#      зелёного прогона (дизайн #1079, решение 11).
+#      блокирующие с #1122 (всё, что расходится с JIT, объяснено в
+#      okkama-rs/tools/engines/interp-exceptions.txt).
 #
 # Статус каждого шага — код выхода его команды (ocs: 0 только если прошли все
 # обязательные кейсы). Итог — gate.json в каталоге журналов: коммит, шаги со
@@ -149,15 +149,16 @@ if [[ $QUICK -eq 0 ]]; then
     fi
 fi
 
-# report NAME COMMAND...: a step that informs and does not fail the gate (the interpreter's, #1123).
+# report NAME COMMAND...: a step of the interpreter (#1123), with its own log; blocking since #1122.
 report() {
     local name="$1"; shift
     started=$SECONDS
     if "$@" >"$LOGS/$name.log" 2>&1; then
         record "$name" pass $((SECONDS - started))
     else
-        record "$name" informative $((SECONDS - started))
-        printf '.. %s did not pass (informative): %s\n' "$name" "$(tail -1 "$LOGS/$name.log")"
+        record "$name" fail $((SECONDS - started))
+        tail -3 "$LOGS/$name.log"
+        fail "$name"
     fi
 }
 
@@ -249,8 +250,7 @@ else
 fi
 
 # Sparrow's interpreter against the JIT (#1123): the same cases, files and programs; a difference that
-# okkama-rs/tools/engines/interp-exceptions.txt does not explain is a defect. Informative until its first
-# green run.
+# okkama-rs/tools/engines/interp-exceptions.txt does not explain is a defect. Blocking since #1122.
 step "interpreter"
 report conformance-sparrow-interp sh -c "cd '$ROOT/conformance' && ./ocs run --adapter adapters/rust/adapter.json \
     --profile full-release --stdlib-root ../std -j 6 --timeout-scale 4 --out '$LOGS/conformance-sparrow-interp' \

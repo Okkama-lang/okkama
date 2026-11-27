@@ -27,6 +27,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
   location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
   passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+- **Sparrow's interpreter runs async bodies (#1122, third part of #1079).** An async body's registers are its
+  Future's heap frame: a suspension writes the resume point and leaves, a resumption executes the suspending
+  instruction again, and `await`, `await.take`, `region.settle*` and `resource.settle*` call the JIT's helpers;
+  every resumption is a step, as every entry of the JIT's body. The interpreter's runtime loads without the
+  pointer-free proofs, so a suspended frame traces every register of a traced kind, and entries from Rust nest
+  at most 200 deep on wasm32 (a stack overflow, not a trap). The tests that waited for it (tasks, async destroys,
+  selection, all_futures, future inputs, timers, payloads) run on the interpreter in the build without the JIT,
+  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 141 mnemonics. The design's §6.4
+  hypothesis was confirmed: the JIT recorded an async body twice in a trace when a failure unwound through a
+  suspended `region.settle_unwind`, because it keyed the activation by its machine frame pointer, which differs
+  after a resumption; it now keys an async body by its heap frame, as the interpreter does. With nothing left
+  unexplained, the async line leaves `interp-exceptions.txt` and the Wave's `sparrow-interp` branch and the gate's
+  interpreter step are blocking. `differ.py` runs the programs of one directory one after another (examples/fs
+  share files).
 - **The interpreter is an oracle in the test runs (#1123, fourth part of #1079).** t/ has the configurations
   `sparrow-interp` and `sparrow-interp-gc-stress` (four times the timeout); the Wave's conformance-and-corpora
   matrix has a `sparrow-interp` branch (conformance with `SPARROW_CORE_INTERPRET=1`, t/ on the JIT and both

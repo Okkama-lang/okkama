@@ -103,9 +103,9 @@ jobs:
       matrix:
         # sparrow-interp: Sparrow's interpreter (SPARROW_CORE_INTERPRET=1) on the same cases and corpora, each
         # difference from the JIT explained by okkama-rs/tools/engines/interp-exceptions.txt or a defect (#1123).
-        # Report-only until its first green run (design #1079, decision 11): its failures do not fail the wave.
+        # Blocking since #1122 (design #1079, decision 11: report-only until a green run, 986/1075 with every
+        # failure an async refusal; async runs now).
         engine: [sparrow, sparrow-interp]
-    continue-on-error: ${{ matrix.engine == 'sparrow-interp' }}
     env:
       # Empty is off (the switch rule): the JIT's branch runs as before.
       SPARROW_CORE_INTERPRET: ${{ matrix.engine == 'sparrow-interp' && '1' || '' }}

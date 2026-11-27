@@ -14,8 +14,8 @@ Every file under t/ (or the ones given) runs on every configuration:
                     timeout: it collects far more often)
 
 A run of an interpreter configuration that okkama-rs/tools/engines/interp-exceptions.txt
-explains (a refusal: async bodies until #1122) is reported as skipped with its
-reason, not compared.
+explains (a known divergence of the design, each line with its ticket) is
+reported as skipped with its reason, not compared.
 
 Before the run, tools/t/gen.py writes the generated families to t/gen
 (`--no-generate` keeps what is there). A file prints `1..N`, then `ok K - name` or `not ok K - name` for K = 1..N in
