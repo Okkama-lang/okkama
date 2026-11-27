@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Closure calls through an entry word (#1110).** A closure carries its entry: its function's code when it takes
+  the arguments alone, otherwise a second compilation of the body whose prologue reads the captures from the
+  closure (made for each (function, captures) a compiled `fn.closure` names). A call is one load, a test and a call
+  with the closure as a trailing argument, instead of resolving the function, comparing arities and loading the
+  captures at every call site; async functions, natives and bodies over 400 instructions keep the general path.
+  09-closures steady 27.3 → 21.0 ms (−23%); micro closure-call −15%, closure-create +5% (the entry word is written).
 - **Fixes (2).** The ownership check refuses again a loop that overwrites a resource held in a block parameter
   while it may be in no region (a regression of #1093, #1138). An async main's interpreter stack obeys the memory
   budget, a worker spawned by an emulated worker is emulated too, and a worker's failure reads "RuntimeError:"

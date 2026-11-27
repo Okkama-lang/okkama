@@ -7,6 +7,14 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1110 closure entries (feature/1110; worktree okkama-work/p-1110, target t-1110; toolchains micro-tc/f1110a
+  base, f1110b stage 1, f1110c both): closure layout `[Raw entry] ++ params` (`heap::CLOSURE_ENTRY` 8,
+  `CLOSURE_CAPTURES` 16, `Heap::capture`), `CallTarget::Code`, the call site's entry fast path, `compile_entry`
+  with `captures`, `Jit::{closure_ids, closure_entries, closure_requests}`, `Emit::closure_entry`,
+  `CLOSURE_ENTRY_INSTRUCTIONS` 400. Stage 1 alone (only capture-less closures) was +2% on 09-closures: captured
+  closures paid the entry test; stage 2 made it −23%. Tests `interp::tests::closure_entries_call_with_a_trailing_
+  closure_past_the_register_arguments` (10 params), the inline-closure tests under GC stress; mutations (argument
+  order, capture offset) crash. Agents merged on this line: #1139 #1141 #1142 #1144 #1138.
 - [x] #1109 binary diet, closed by the owner with its first parts ("not a top priority"; the rest in #1170,
   POSTPONED): strip + symbols archive in tools/package.sh (771a3f470), core tables re-exported from runtime-core
   (8b52c1f24; −16 KB only: LTO had merged the copies), opt-level "s" for rustyline, pulldown-cmark, toml,

@@ -1285,3 +1285,16 @@ every declaration is open (#1005, owner decision).
 - A worker's run error crosses without its "RuntimeError: " prefix (`worker_wire::failure_text`), so the parent's
   report has it once; other report names (a panic's "Panic: …") are kept.
 
+## Closure entries (#1110, 2026-11-27; design Fable, owner approved the direction)
+
+- A closure's first word after the header is its entry (0: the general path); captures follow from offset 16. The
+  layout declares the entry Raw, so tracing and the ownership walks skip it.
+- Entry ABI `(ctx, a1..aA, closure)`: code of a function taking the arguments alone ignores the trailing closure
+  (C calling conventions, caller cleanup), so its ordinary code is its entry; for c ≥ 1 captures a second
+  compilation of the body reads them from the closure in its prologue. Its frames are the function's (traces,
+  stack maps registered as any code).
+- The entries a compiled function's `fn.closure` names are compiled right after it (`compile` drains
+  `closure_requests`); the closure reads its slot when it is made, so no helper patches closures. Closures made
+  by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
+  instructions.
+
