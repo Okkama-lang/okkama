@@ -10,8 +10,9 @@ publish.workspace = true
 [features]
 default = ["aws-lc"]
 # aws-lc (a C library): RSA, X.509 signature checks and the ECDSA verification fast path (`rsa_public`, `x509`,
-# `ops::rsa_op`). Without it those operations are refused as unsupported and the rest, RustCrypto, is pure Rust,
-# which builds for wasm32-unknown-unknown (#1124). Every runtime that has the host keeps it on.
+# `ops::rsa_op`). Without it RSA and X.509 are refused as unsupported, ECDSA verifies through RustCrypto (#1142), and
+# the rest, RustCrypto, is pure Rust, which builds for wasm32-unknown-unknown (#1124). Every runtime that has the host
+# keeps it on.
 aws-lc = ["dep:aws-lc-rs", "dep:aws-lc-sys"]
 
 [dependencies]

@@ -763,11 +763,35 @@ fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     }
 }
 
+/// ECDSA verification through RustCrypto (#1142): the path of a build without
+/// aws-lc, answering as aws-lc does. The key is DER SubjectPublicKeyInfo of a
+/// point on the curve, or the operation fails. The signature is strict DER (a
+/// SEQUENCE of two minimally encoded non-negative INTEGERs, definite short
+/// lengths, nothing after it) with r and s in [1, n-1]; anything else is a
+/// refusal, not a failure. A high S is accepted. With aws-lc only the tests
+/// use it, to hold the two paths to the same answers.
+#[cfg(any(test, not(feature = "aws-lc")))]
+macro_rules! ecdsa_verify_rustcrypto {
+    ($curve:ident, $digest:ty, $args:expr) => {{
+        use $curve::ecdsa::signature::hazmat::PrehashVerifier;
+        use $curve::{ecdsa::VerifyingKey, pkcs8::DecodePublicKey};
+        let args: &[&[u8]] = $args;
+        arity(args, 3, "ecdsa verify")
+            .and_then(|()| VerifyingKey::from_public_key_der(args[0]).map_err(|_| invalid("invalid ECDSA SPKI key")))
+            .map(|key| {
+                truth(match $curve::ecdsa::Signature::from_der(args[2]) {
+                    Ok(signature) => key.verify_prehash(&<$digest as sha2::Digest>::digest(args[1]), &signature).is_ok(),
+                    Err(_) => false,
+                })
+            })
+    }};
+}
+
 /// ECDSA on one curve (#943). Signing stays on RustCrypto for the RFC 6979
 /// deterministic nonces the std module promises, from the secret scalar alone
 /// (a `SigningKey` would derive the public key a second time); verification
-/// runs on aws-lc, five times faster. Both accept a high S, as the curves do
-/// not normalize it.
+/// runs on aws-lc, five times faster, and on RustCrypto in a build without it
+/// (#1142). All accept a high S, as the curves do not normalize it.
 macro_rules! ecdsa_curve {
     ($curve:ident, $point:ty, $digest:ty, $verifying:expr, $op:expr, $args:expr) => {{
         use $curve::ecdsa::SigningKey;
@@ -813,7 +837,7 @@ macro_rules! ecdsa_curve {
                 Ok(truth(public.verify(args[1], args[2]).is_ok()))
             }
             #[cfg(not(feature = "aws-lc"))]
-            "verify" => Err(without_aws_lc("ecdsa verify")),
+            "verify" => ecdsa_verify_rustcrypto!($curve, $digest, args),
             other => Err(Error::Unsupported(format!("unknown ECDSA operation {other}"))),
         }
     }};
@@ -1034,5 +1058,214 @@ mod zeroing_tests {
         // SAFETY: the value is dropped once; its storage stays ours, and a byte array has no invalid state.
         unsafe { std::ptr::drop_in_place(&mut *pair) };
         assert_eq!(pair.secret_key, [0; 32]);
+    }
+}
+
+/// #1142: ECDSA verification gives the same answers with and without aws-lc. The vectors go through `call`, which
+/// is aws-lc's path in the default build and RustCrypto's without it; with aws-lc each one also goes through
+/// RustCrypto's path directly, and the two must agree.
+#[cfg(test)]
+mod ecdsa_verify_tests {
+    use super::*;
+
+    fn hex(text: &str) -> Vec<u8> {
+        (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
+    }
+
+    /// One DER INTEGER of an unsigned big-endian value, minimally encoded.
+    fn integer(value: &[u8]) -> Vec<u8> {
+        let first = value.iter().position(|&byte| byte != 0).unwrap_or(value.len().saturating_sub(1));
+        let mut body = value[first..].to_vec();
+        if body.first().is_none_or(|&byte| byte >= 0x80) {
+            body.insert(0, 0);
+        }
+        let mut out = vec![0x02, body.len() as u8];
+        out.extend(body);
+        out
+    }
+
+    fn sequence(parts: &[&[u8]]) -> Vec<u8> {
+        let body = parts.concat();
+        let mut out = vec![0x30, body.len() as u8];
+        out.extend(body);
+        out
+    }
+
+    /// The two INTEGERs of a DER signature, as their raw contents.
+    fn components(signature: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        assert_eq!(signature[0], 0x30);
+        let r_length = signature[3] as usize;
+        let r = signature[4..4 + r_length].to_vec();
+        let s_at = 4 + r_length;
+        let s = signature[s_at + 2..s_at + 2 + signature[s_at + 1] as usize].to_vec();
+        (r, s)
+    }
+
+    /// `order - value`, both big-endian of the same width.
+    fn subtract(order: &[u8], value: &[u8]) -> Vec<u8> {
+        let mut value = value.to_vec();
+        while value.len() < order.len() {
+            value.insert(0, 0);
+        }
+        let value = &value[value.len() - order.len()..];
+        let mut out = vec![0; order.len()];
+        let mut borrow = 0i16;
+        for at in (0..order.len()).rev() {
+            let mut digit = order[at] as i16 - value[at] as i16 - borrow;
+            borrow = i16::from(digit < 0);
+            if digit < 0 {
+                digit += 256;
+            }
+            out[at] = digit as u8;
+        }
+        out
+    }
+
+    struct Curve {
+        name: &'static str,
+        order: &'static str,
+        width: usize,
+    }
+
+    const CURVES: [Curve; 2] = [
+        Curve { name: "p256", order: "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", width: 32 },
+        Curve {
+            name: "p384",
+            order: "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973",
+            width: 48,
+        },
+    ];
+
+    fn op(curve: &Curve, action: &str) -> String {
+        format!("ecdsa-{}-{action}", curve.name)
+    }
+
+    fn keypair(curve: &Curve, fill: u8) -> (Vec<u8>, Vec<u8>) {
+        let pkcs8 = call(&op(curve, "from-scalar"), &[&vec![fill; curve.width]]).unwrap();
+        let spki = call(&op(curve, "public"), &[&pkcs8]).unwrap();
+        (pkcs8, spki)
+    }
+
+    /// A case: its name, the key, the message, the signature and the expected answer.
+    type Case = (String, Vec<u8>, Vec<u8>, Vec<u8>, Result<Vec<u8>>);
+
+    fn cases(curve: &Curve) -> Vec<Case> {
+        let order = hex(curve.order);
+        let (pkcs8, spki) = keypair(curve, 0x11);
+        let (_, other) = keypair(curve, 0x22);
+        let message = b"the quick brown fox".to_vec();
+        let signature = call(&op(curve, "sign"), &[&pkcs8, &message]).unwrap();
+        let (r, s) = components(&signature);
+        let accepted = || Ok(vec![1]);
+        let refused = || Ok(vec![0]);
+        let mut out: Vec<Case> = Vec::new();
+        let mut case = |name: &str, key: &[u8], message: &[u8], signature: &[u8], expected: Result<Vec<u8>>| {
+            out.push((format!("{} {name}", curve.name), key.to_vec(), message.to_vec(), signature.to_vec(), expected));
+        };
+        case("valid", &spki, &message, &signature, accepted());
+        case("empty message", &spki, b"", &call(&op(curve, "sign"), &[&pkcs8, b""]).unwrap(), accepted());
+        // Both paths accept a high S: neither curve normalizes it.
+        let high = sequence(&[&integer(&r), &integer(&subtract(&order, &s))]);
+        case("high S", &spki, &message, &high, accepted());
+        for bit in [0, 7, 77, message.len() * 8 - 1] {
+            let mut flipped = message.clone();
+            flipped[bit / 8] ^= 1 << (bit % 8);
+            case(&format!("message bit {bit}"), &spki, &flipped, &signature, refused());
+        }
+        for at in [5, 4 + r.len() - 1, signature.len() - 1, signature.len() - 10] {
+            let mut flipped = signature.clone();
+            flipped[at] ^= 0x01;
+            case(&format!("signature byte {at}"), &spki, &message, &flipped, refused());
+        }
+        case("wrong key", &other, &message, &signature, refused());
+        case("signature for another message", &spki, b"another", &signature, refused());
+        // Malformed encodings are refusals, not errors.
+        case("empty signature", &spki, &message, b"", refused());
+        case("truncated", &spki, &message, &signature[..signature.len() - 1], refused());
+        case("trailing byte", &spki, &message, &[&signature[..], &[0]].concat(), refused());
+        let mut raw = vec![0; 2 * curve.width];
+        raw[curve.width - r.len().min(curve.width)..curve.width].copy_from_slice(&r[r.len().saturating_sub(curve.width)..]);
+        raw[2 * curve.width - s.len().min(curve.width)..].copy_from_slice(&s[s.len().saturating_sub(curve.width)..]);
+        case("raw r||s", &spki, &message, &raw, refused());
+        let padded_r = [&[0x02, r.len() as u8 + 1, 0][..], &r].concat();
+        case("non-minimal r", &spki, &message, &sequence(&[&padded_r, &integer(&s)]), refused());
+        let stripped = r.iter().copied().skip_while(|&byte| byte == 0).collect::<Vec<_>>();
+        if stripped[0] >= 0x80 {
+            let negative = [&[0x02, stripped.len() as u8][..], &stripped].concat();
+            case("negative r", &spki, &message, &sequence(&[&negative, &integer(&s)]), refused());
+        }
+        let long = [&[0x30, 0x81, (signature.len() - 2) as u8][..], &signature[2..]].concat();
+        case("long-form length", &spki, &message, &long, refused());
+        let mut tagged = signature.clone();
+        tagged[0] = 0x31;
+        case("SET instead of SEQUENCE", &spki, &message, &tagged, refused());
+        case("r zero", &spki, &message, &sequence(&[&integer(&[0]), &integer(&s)]), refused());
+        case("s zero", &spki, &message, &sequence(&[&integer(&r), &integer(&[0])]), refused());
+        case("r is the order", &spki, &message, &sequence(&[&integer(&order), &integer(&s)]), refused());
+        case("s is the order", &spki, &message, &sequence(&[&integer(&r), &integer(&order)]), refused());
+        let mut wide = order.clone();
+        wide.insert(0, 1);
+        case("s wider than the order", &spki, &message, &sequence(&[&integer(&r), &integer(&wide)]), refused());
+        // The key is checked before the signature, with the same failure in both paths.
+        let bad_key = || Err(invalid("invalid ECDSA SPKI key"));
+        case("PKCS#8 key", &pkcs8, &message, &signature, bad_key());
+        case("truncated key", &spki[..spki.len() - 1], &message, &signature, bad_key());
+        let mut off_curve = spki.clone();
+        let last = off_curve.len() - 1;
+        off_curve[last] ^= 0x01;
+        case("point off the curve", &off_curve, &message, &signature, bad_key());
+        let foreign = keypair(&CURVES[usize::from(curve.name == "p256")], 0x11).1;
+        case("key of the other curve", &foreign, &message, &signature, bad_key());
+        out
+    }
+
+    #[test]
+    fn ecdsa_verify_answers_the_vectors() {
+        for curve in &CURVES {
+            for (name, key, message, signature, expected) in cases(curve) {
+                let answer = call(&op(curve, "verify"), &[&key, &message, &signature]);
+                assert_eq!(answer, expected, "{name}");
+            }
+            let (_, spki) = keypair(curve, 0x11);
+            let answer = call(&op(curve, "verify"), &[&spki, b"message"]);
+            assert_eq!(answer, Err(invalid("ecdsa verify takes 3 arguments")), "arity");
+        }
+    }
+
+    /// With aws-lc, every vector gets the same answer from RustCrypto's path.
+    #[cfg(feature = "aws-lc")]
+    #[test]
+    fn ecdsa_verify_paths_agree() {
+        for curve in &CURVES {
+            for (name, key, message, signature, expected) in cases(curve) {
+                let args: &[&[u8]] = &[&key, &message, &signature];
+                let rustcrypto = match curve.name {
+                    "p256" => ecdsa_verify_rustcrypto!(p256, sha2::Sha256, args),
+                    _ => ecdsa_verify_rustcrypto!(p384, sha2::Sha384, args),
+                };
+                let aws_lc = call(&op(curve, "verify"), args);
+                assert_eq!(rustcrypto, aws_lc, "{name}");
+                assert_eq!(rustcrypto, expected, "{name}");
+            }
+        }
+    }
+
+    /// RFC 6979 A.2.5: P-256 with SHA-256, message "sample", a key and signature made elsewhere.
+    #[test]
+    fn ecdsa_verify_accepts_the_rfc_6979_vector() {
+        use p256::pkcs8::EncodePublicKey;
+        let point = hex(concat!(
+            "04",
+            "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6",
+            "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299"
+        ));
+        let spki = p256::PublicKey::from_sec1_bytes(&point).unwrap().to_public_key_der().unwrap();
+        let signature = sequence(&[
+            &integer(&hex("efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716")),
+            &integer(&hex("f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8")),
+        ]);
+        let key = spki.as_bytes();
+        assert_eq!(call("ecdsa-p256-verify", &[key, b"sample", &signature]).unwrap(), [1]);
+        assert_eq!(call("ecdsa-p256-verify", &[key, b"samplf", &signature]).unwrap(), [0]);
     }
 }
