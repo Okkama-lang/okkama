@@ -76,6 +76,41 @@ jobs:
         working-directory: okkama-rs
         run: cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli
 
+  # The playground's compiler (#1078): okkama-compiler and okkama-wasm build for wasm32, pass clippy there (the
+  # wasm-bindgen module is cfg(wasm32), so the host clippy of the Wave never sees it), and the bindgen output stays
+  # within the 5 MB compressed budget. The site commits the output per release, as it does the /man/ reference.
+  wasm:
+    name: Playground wasm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown --component clippy && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: wasm
+      - name: wasm-bindgen of Cargo.lock's version
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/, "", $3); print $3}' okkama-rs/Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build
+        working-directory: okkama-rs
+        run: |
+          cargo clippy --locked -p okkama-compiler -p okkama-wasm --target wasm32-unknown-unknown -- -D warnings
+          cargo build --locked -p okkama-wasm --release --target wasm32-unknown-unknown
+          wasm-bindgen --target web --remove-name-section --remove-producers-section \
+            --out-dir ../playground-wasm target/wasm32-unknown-unknown/release/okkama_wasm.wasm
+      - name: Size budget (5 MB compressed)
+        run: |
+          compressed=$(gzip -9 -c playground-wasm/okkama_wasm_bg.wasm | wc -c)
+          echo "okkama_wasm_bg.wasm: $(wc -c < playground-wasm/okkama_wasm_bg.wasm) bytes, $compressed gzip"
+          test "$compressed" -le 5000000
+      - uses: actions/upload-artifact@v5
+        with:
+          name: playground-wasm
+          path: playground-wasm
+
   conformance:
     name: Conformance (${{ matrix.engine }})
     strategy:
