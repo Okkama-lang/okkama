@@ -59,12 +59,12 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3121 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 387 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7627 lines
+## ir — 12 files, 7648 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 524 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
-- `okkama-compiler/src/ir/linearity.rs` 402 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
+- `okkama-compiler/src/ir/linearity.rs` 423 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
 - `okkama-compiler/src/ir/mod.rs` 1456 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
 - `okkama-compiler/src/ir/ownership.rs` 948 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 304 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
