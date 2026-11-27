@@ -2318,9 +2318,13 @@ impl Emitter<'_, '_> {
                     self.builder.ins().jump(done, &[value.into()]);
                 }
                 self.builder.switch_to_block(slow);
+                let fails = op == runtime::INT_MOD || self.refusable || self.polled;
                 let op = self.iconst(op as i64);
                 let result = self.helper(|h| h.int, &[ctx, op, l, r]).expect("result");
-                self.check(pc);
+                // #1147 (A4): add, subtract and multiply fail only by a memory budget or a stop.
+                if fails {
+                    self.check(pc);
+                }
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
                 let value = self.builder.block_params(done)[0];

@@ -33,16 +33,20 @@ const PRINT: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nmain
 // #1009: the memory budget is checked before `repeat` builds its result.
 const REPEAT: &str = "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nmain() is int {\n    Stdout().writeln(\"x\".repeat(200000000).length().string());\n    0;\n}\n";
 const GROW: &str = "module app v1.0.0;\nobject Keep {\n    Keep();\n    grow(items is @@int, n is int) is int { if n < 0 { 0; } else { self.grow(items + [(0..1000).map() -> i { i; }], n + 1); } }\n}\nmain() is int { Keep().grow([], 0); }\n";
+// #1147 (A4): an int product that would cross the memory budget stops the run where machine code checks the
+// status after a multiplication only under a budget.
+const SQUARE: &str = "module app v1.0.0;\nobject Square {\n    Square();\n    up(x is int) is int { if x < 0 { 0; } else { self.up(x * x + 1); } }\n}\nmain() is int { Square().up(3); }\n";
 
 #[test]
 fn every_budget_stops_sparrow() {
-    let cases: [(&str, &[&str], &str); 6] = [
+    let cases: [(&str, &[&str], &str); 7] = [
         (SPIN, &["--max-steps", "100000", "--timeout", "30"], "Execution budget exhausted: steps"),
         (RECURSE, &["--max-steps", "1000", "--timeout", "30"], "Execution budget exhausted: steps"),
         (PRINT, &["--max-output", "1K", "--timeout", "30"], "Execution budget exhausted: output"),
         (GROW, &["--max-memory", "64M", "--max-steps", "100000000", "--timeout", "60"], "Execution budget exhausted: memory"),
         (SPIN, &["--timeout", "1"], "Execution interrupted"),
         (REPEAT, &["--max-memory", "10M", "--timeout", "30"], "Execution budget exhausted: memory"),
+        (SQUARE, &["--max-memory", "16M", "--timeout", "30"], "Execution budget exhausted: memory"),
     ];
     for (source, budget, report) in cases {
         let output = run(source, budget);

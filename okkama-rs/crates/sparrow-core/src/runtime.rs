@@ -879,7 +879,7 @@ pub extern "C" fn rt_compile(ctx: *mut Ctx, function: u64) -> u64 {
         // (the C ABI ignores the arguments it is given) and the call's check finds the fatal status.
         Err(error) => {
             fatal(ctx, runtime, error.0);
-            rt_refused as usize as u64
+            rt_refused as extern "C" fn() -> Word as usize as u64
         }
     }
 }
@@ -928,6 +928,11 @@ pub extern "C" fn rt_int(ctx: *mut Ctx, op: u64, left: Word, right: Word) -> Wor
     if runtime.heap.needs_collection() {
         runtime.safepoint(frame, ctx, &[(word, Repr::Int)]);
     }
+    // #1147 (A4): machine code checks no status after add, subtract or multiply without a memory budget or polling.
+    debug_assert!(
+        op == INT_MOD || ctx.status == OK || runtime.limits.memory.is_some() || runtime.polled(),
+        "an int operation failed where machine code does not check"
+    );
     word
 }
 
