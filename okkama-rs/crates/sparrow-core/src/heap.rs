@@ -1691,6 +1691,17 @@ impl Heap {
             .and_then(|p| p.as_any_mut().downcast_mut())
     }
 
+    /// #1150: the payload of `object`, known to be a `T` (the program's types say so, as for a builder's word):
+    /// no virtual downcast. Debug builds check it.
+    ///
+    /// SAFETY: `object` is a live PAYLOAD object whose owner is a `T`.
+    pub(crate) unsafe fn payload_mut_unchecked<T: Payload>(&mut self, object: Word) -> &mut T {
+        debug_assert!(self.payload_mut::<T>(object).is_some(), "not the payload type the caller knows");
+        // SAFETY: as the caller promises; uniquely borrowed through &mut self.
+        let owner = unsafe { (*(object as *mut PayloadCell)).owner.as_deref_mut().unwrap_unchecked() };
+        unsafe { &mut *(owner as *mut dyn Payload as *mut T) }
+    }
+
     /// A PAYLOAD object around a spare payload that `reuse` takes (and
     /// resets), or none when there is no spare.
     pub fn allocate_spare(&mut self, reuse: impl FnOnce(&mut dyn Payload) -> bool) -> Option<Word> {

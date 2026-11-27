@@ -1275,7 +1275,8 @@ pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
 /// (#331): O(1), and nothing at all while the capacity holds.
 pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
     let grown = {
-        let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
+        // SAFETY: a builder word is a live builder (its type says so; machine code passes no other).
+        let items = &mut unsafe { heap.payload_mut_unchecked::<Builder>(builder) }.items;
         let before = items.capacity();
         grow(items);
         items.capacity().saturating_sub(before)
