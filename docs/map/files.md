@@ -121,7 +121,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 70 files, 38163 lines
+## sparrow — 70 files, 38088 lines
 
 - `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
@@ -157,7 +157,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
-- `sparrow-core/src/host/native_data.rs` 76 — Runtime tables (`okkama-runtime-core/data/*.dat`): gzip-compressed text,
+- `sparrow-core/src/host/native_data.rs` 1 — Runtime tables (`okkama-runtime-core/data/*.dat`): the core's providers read the same tables as
 - `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
 - `sparrow-core/src/host/native_debug.rs` 299 — `any` values for the bridged origin natives, and the parts of a value for
 - `sparrow-core/src/host/native_directory.rs` 224 — Host paths and directory snapshots, scoped to each VM's working directory.
