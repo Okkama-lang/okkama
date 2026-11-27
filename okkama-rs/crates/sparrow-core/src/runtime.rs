@@ -718,6 +718,8 @@ pub extern "C" fn rt_allocate(ctx: *mut Ctx, words: u64) -> Word {
 #[inline(never)]
 pub extern "C" fn rt_poll(ctx: *mut Ctx) {
     let (ctx, runtime) = unsafe { runtime(ctx) };
+    // #1136: an embedding that batches output hands it over here, so none waits while the program computes.
+    okkama_runtime_core::stdout::tick();
     if let Some(what) = runtime.over_budget() {
         runtime.exhaust(ctx, what);
         return;
@@ -776,14 +778,15 @@ impl Runtime {
     /// Charge the slice just used and size the next; None when the step
     /// budget is spent.
     fn refill(&mut self) -> Option<i64> {
+        let slice = self.limits.slice();
         let Some(left) = &mut self.budget.steps_left else {
-            return Some(crate::budget::SLICE as i64);
+            return Some(slice as i64);
         };
         *left = left.saturating_sub(self.budget.slice);
         if *left == 0 {
             return None;
         }
-        self.budget.slice = (*left).min(crate::budget::SLICE);
+        self.budget.slice = (*left).min(slice);
         Some(self.budget.slice as i64)
     }
 
@@ -809,11 +812,12 @@ impl Runtime {
             };
             self.heap.watch = Some(crate::budget::Watch::new(meter, limit, &self.budget.fuel));
         }
+        let slice = self.limits.slice();
         Ok(match self.limits.steps {
-            None => crate::budget::SLICE as i64,
+            None => slice as i64,
             Some(steps) => {
                 self.budget.steps_left = Some(steps);
-                self.budget.slice = steps.min(crate::budget::SLICE);
+                self.budget.slice = steps.min(slice);
                 self.budget.slice as i64
             }
         })

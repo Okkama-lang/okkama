@@ -7,6 +7,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Added
+- **The playground's output comes in batches, handed over at the budget polls (#1136).** A streamed run joins a
+  stream's writes within a 16 ms window into one chunk (`window` in the request; 0 keeps a chunk per write) and
+  hands it over at the next budget poll, every 65 536 steps (a few milliseconds in wasm), so nothing waits while a
+  program computes: 60 000 lines arrive in 11 chunks instead of 120 000, the run three times faster. `version()`
+  carries a `stopped` text for a run the user stops ("Execution stopped", wording awaiting the owner); `interrupted`
+  stays the watchdog's.
 - **The playground runs a module's tests (#1127).** sparrow-wasm's `test` runs an SPB built with tests as `okkama run
   -t` does, on the interpreter under the playground's profile, the report streamed a line at a time through the
   same output sink, with the CLI's exit status (0, 1, or 4 when the tests cannot run). The Bible's 13 test examples

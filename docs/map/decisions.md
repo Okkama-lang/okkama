@@ -1037,6 +1037,28 @@ every declaration is open (#1005, owner decision).
   (`PieceSink`, called on the VM thread) instead of collecting. On wasm32 the sink sits in a thread-local for the
   call (`JsValue` is not `Send`); a sink that throws loses that chunk (`catch`), the run goes on. Natively
   `sparrow_wasm::run_streaming(spb, request, emit)` takes a closure and returns the answer as a `Value`.
+- **Batches at the budget poll (#1136).** A streamed run joins a stream's consecutive writes into one chunk while
+  they fall within a window of the first (default 16 ms of the run's timeline, `window` in the request; 0 is a chunk
+  per write, kept for a page that wants every write) and within 64 KiB; the chunk goes when the next write does not
+  join it, at the run's next budget poll (`stdout::tick`, called from `rt_poll`; the playground always polls, it has
+  a step budget) and at the end. So no tail waits while the program computes: a poll comes every 65 536 steps.
+  Measured in wasm (Node 26, release build, best of three):
+
+  | slice (steps) | window | 60 000 lines: chunks | run | max wait | print-then-compute: "started" arrives |
+  |---|---|---|---|---|---|
+  | any | per write | 120 000 | 158–163 ms | 1.7–2.3 ms | 0.1–0.2 ms |
+  | 4 096 | 16 ms | 162 | 51 ms | 0.9 ms | 0.2 ms |
+  | 16 384 | 16 ms | 41 | 48 ms | 1.7 ms | 0.4 ms |
+  | 65 536 | 4 ms | 21 | 48 ms | 4.3 ms | 1.4 ms |
+  | 65 536 | 16 / 50 ms | 11 | 50 ms | 5.4–6.0 ms | 1.5 ms |
+
+  The interpreter runs about 50 million steps a second there (the design guessed 4–10 million), so the default slice
+  already bounds the wait to a few milliseconds: `SLICE_PLAYGROUND = SLICE` (65 536), now a field of the profile and
+  of `Limits` (`Limits::slice`) so it can be tuned; 16 ms windows (one frame). A run that writes per write costs three
+  times the time in messages alone. On Stop the page loses at most what was written since the last poll. The poll's
+  tick is a thread-local look in `rt_poll`, which runs only under budgets (micro-benchmarks have none: no A/B).
+- **A user's stop has its own text (#1136, wording awaiting the owner).** `version().profile.stopped` =
+  `"Execution stopped\n"` for the Stop button; `interrupted` stays the watchdog's, as `--timeout`'s in the CLI.
 - **The page's texts come from the runtime (#1134).** `version().profile.interrupted` is the line `okkama run`
   prints when interrupted (`Exhausted::Interrupted`), written by the page on Stop and on its watchdog;
   `profile.exhausted.{steps,memory,output}` are the budget lines (a run's own report carries them too).
@@ -1070,7 +1092,8 @@ every declaration is open (#1005, owner decision).
 
 ### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135, #1127)
 
-- `run(spb, request, sink?)` → request `{stdin?: text, arguments?: [text]}`; answer
+- `run(spb, request, sink?)` → request `{stdin?: text, arguments?: [text], window?: ms}` (`window`, #1136: a
+  stream's writes within it of the first are one chunk; 0 a chunk per write; default 16); answer
   `{exit: 0..255, output: [chunk], report: text | null, uncaught: Uncaught | null}`, or `{error}` for a request
   that is not JSON. A program that does not load: `exit` 1, `report` `"okkama: …\n"`. `report` is null when there
   is nothing to print (exit 0..255 from main), else the stderr text `okkama run` prints before the stack.
@@ -1080,13 +1103,13 @@ every declaration is open (#1005, owner decision).
   trace: [[function, pc, count]], traceOmitted, traceOffset, causeTraces: [[offset, [[function, pc, count]],
   omitted]]}`: stacks as runs of equal consecutive sites. okkama-wasm `failureText({report, uncaught, cwd?})` →
   `{ok: true, text}`.
-- `test(spb, request, sink?)` → request `{stdin?: text, seed?: 0..2^53-1}`; answer `{exit: 0 | 1 | 4, output:
+- `test(spb, request, sink?)` → request `{stdin?: text, seed?: 0..2^53-1, window?: ms}`; answer `{exit: 0 | 1 | 4, output:
   [chunk], report: text | null}` (`report` only with exit 4), or `{error}` for a request that is not JSON or a bad
   seed. With a sink, `output` is `[]`.
 - `requirements(spb)` → `{refused: [symbol], declared: [symbol], files: [name]}` (symbols sorted), or `{error}`.
 - `provide(name, gzipBytes)` → `{ok: true}` or `{error}`.
-- `version()` → `{version, profile: {name, groups: [name], steps, memory, output, interrupted, exhausted: {steps,
-  memory, output}}}`.
+- `version()` → `{version, profile: {name, groups: [name], steps, memory, output, interrupted, stopped, exhausted:
+  {steps, memory, output}}}`.
 - `lastPanic()` → `{panic: {message, location} | null}`.
 
 ## Map keys walk their depth on their own stack (#1130, 2026-11-27, from the #1124 audit)

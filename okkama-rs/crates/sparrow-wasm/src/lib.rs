@@ -75,7 +75,13 @@ pub fn run_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send +
         .map(|list| list.iter().filter_map(Value::as_str).map(|text| text.as_bytes().to_vec()).collect())
         .unwrap_or_default();
     let run = streamed(emit, |pieces| {
-        let embedding = Embedding { arguments, stdin: Some(stdin(&request)), limits: Limits::playground(), pieces: Some(pieces) };
+        let embedding = Embedding {
+            arguments,
+            stdin: Some(stdin(&request)),
+            limits: Limits::playground(),
+            pieces: Some(pieces),
+            batching: batching(&request),
+        };
         sparrow_core::run_embedded(spb.to_vec(), embedding)
     });
     let run = match run {
@@ -120,7 +126,13 @@ pub fn test_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send 
     };
     let plan = sparrow_core::test_report::TestPlan { seed, ..Default::default() };
     let ran = streamed(emit, |pieces| {
-        let embedding = Embedding { stdin: Some(stdin(&request)), limits: Limits::playground(), pieces: Some(pieces), ..Embedding::default() };
+        let embedding = Embedding {
+            stdin: Some(stdin(&request)),
+            limits: Limits::playground(),
+            pieces: Some(pieces),
+            batching: batching(&request),
+            ..Embedding::default()
+        };
         sparrow_core::run_tests_embedded(spb.to_vec(), embedding, plan)
     });
     match ran {
@@ -128,6 +140,21 @@ pub fn test_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send 
         Err(error) => json!({"exit": 4, "output": [], "report": format!("okkama: {}\n", error.0)}),
     }
 }
+
+/// How a streamed run's writes reach the sink (#1136): the request's `window`, in milliseconds of the run's timeline;
+/// a stream's writes within it of the first are one chunk, handed over when the next write does not join it, at the
+/// run's next budget poll and at the end. 0 is a chunk per write (#1134). Default [`WINDOW_MS`].
+fn batching(request: &Value) -> sparrow_core::Batching {
+    let window = request.get("window").and_then(Value::as_f64).filter(|ms| ms.is_finite() && *ms >= 0.0).unwrap_or(WINDOW_MS);
+    sparrow_core::Batching::Window((window * 1e6) as u64)
+}
+
+/// What the page writes when the user stops a run (#1136), apart from its watchdog's `interrupted`; the wording
+/// awaits the owner.
+pub const STOPPED: &str = "Execution stopped\n";
+
+/// The default window of a streamed run's chunks, in milliseconds (#1136; measured in decisions.md).
+pub const WINDOW_MS: f64 = 16.0;
 
 /// The request's standard input; empty without one (the playground never reads the process's).
 fn stdin(request: &Value) -> Vec<u8> {
@@ -184,9 +211,10 @@ pub fn provide(name: &str, bytes: &[u8]) -> String {
 }
 
 /// The runtime's version and the profile: `{version, profile: {name, groups, steps, memory, output, interrupted,
-/// exhausted: {steps, memory, output}}}`. The texts are lines as `okkama run` prints them: `interrupted` is what the
-/// page writes when it stops a run (Stop, its watchdog; #1134), `exhausted` what a run that ran out of a budget ends
-/// with (the run's own report carries it too).
+/// stopped, exhausted: {steps, memory, output}}}`. The texts are lines as `okkama run` prints them: `interrupted` is
+/// what the page writes when its watchdog stops a run (`okkama run --timeout`'s, #1134), `stopped` when the user does
+/// (#1136; no CLI counterpart, wording awaiting the owner), `exhausted` what a run that ran out of a budget ends with
+/// (the run's own report carries it too).
 pub fn version() -> String {
     begin();
     let groups: Vec<String> = PLAYGROUND.groups.iter().map(|group| format!("{group:?}")).collect();
@@ -195,7 +223,7 @@ pub fn version() -> String {
         "version": env!("CARGO_PKG_VERSION"),
         "profile": {
             "name": PLAYGROUND.name, "groups": groups, "steps": PLAYGROUND.steps, "memory": PLAYGROUND.memory,
-            "output": PLAYGROUND.output, "interrupted": line(Exhausted::Interrupted),
+            "output": PLAYGROUND.output, "interrupted": line(Exhausted::Interrupted), "stopped": STOPPED,
             "exhausted": {"steps": line(Exhausted::Steps), "memory": line(Exhausted::Memory), "output": line(Exhausted::Output)},
         },
     })
@@ -471,6 +499,7 @@ mod tests {
         assert_eq!(response["profile"]["name"], "playground");
         assert_eq!(response["profile"]["steps"], 50_000_000);
         assert_eq!(response["profile"]["interrupted"], "Execution interrupted\n");
+        assert_eq!(response["profile"]["stopped"], "Execution stopped\n");
         assert_eq!(response["profile"]["exhausted"]["steps"], "Execution budget exhausted: steps\n");
         assert_eq!(last_panic(), r#"{"panic":null}"#);
     }
@@ -564,17 +593,23 @@ function f2 "host" native "runtime/system@1::system_host_name/0" {
     }
 
 
-    /// #1134: streaming hands every write to the sink as it happens, in order, before the run's answer, whose
-    /// `output` is then empty; collected, the same writes come back in `output`.
+    /// #1134: streaming hands every write to the sink as it happens (window 0), in order, before the run's answer,
+    /// whose `output` is then empty; collected, the same writes come back in `output`.
     #[test]
     fn a_streamed_run_hands_over_each_write_as_it_happens() {
         let echo = spb("    0: call r0, f1, []\n    1: call _, f0, [r0]\n    2: call r0, f1, []\n    3: call _, f0, [r0]\n    4: const r1, int 0\n    5: ret r1\n");
         let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let into = chunks.clone();
-        let answer = run_streaming(&echo, r#"{"stdin": "a\nb\n"}"#, move |chunk| into.lock().unwrap().push(chunk));
+        let answer = run_streaming(&echo, r#"{"stdin": "a\nb\n", "window": 0}"#, move |chunk| into.lock().unwrap().push(chunk));
         assert_eq!((&answer["exit"], &answer["output"]), (&json!(0), &json!([])));
         let texts: Vec<String> = chunks.lock().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap().to_string()).collect();
-        assert_eq!(texts, ["a\n", "b\n"]);
+        assert_eq!(texts, ["a\n", "b\n"], "window 0: a chunk per write");
+        // #1136: by default the writes of a moment's window are one chunk.
+        let batched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = batched.clone();
+        run_streaming(&echo, r#"{"stdin": "a\nb\n"}"#, move |chunk| into.lock().unwrap().push(chunk));
+        let texts: Vec<String> = batched.lock().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap().to_string()).collect();
+        assert_eq!(texts, ["a\nb\n"]);
         assert!(chunks.lock().unwrap().iter().all(|chunk| chunk["stream"] == "stdout" && chunk["t"].is_u64()));
         let collected = ran(&echo, r#"{"stdin": "a\nb\n"}"#);
         let joined: String = collected["output"].as_array().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap()).collect();
@@ -630,7 +665,7 @@ function f2 "host" native "runtime/system@1::system_host_name/0" {
         // Each test reads the request's standard input afresh.
         assert!(text.contains("=== RUN   reads\nin\n--- PASS: reads\n"), "{text}");
         assert!(text.ends_with("FAIL\n"), "{text}");
-        let collected: Value = serde_json::from_str(&test(&spb, r#"{"seed": 1}"#)).unwrap();
+        let collected: Value = serde_json::from_str(&test(&spb, r#"{"seed": 1, "window": 0}"#)).unwrap();
         assert_eq!(collected["output"][0]["text"], "=== SEED  1\n", "a line at a time: {collected}");
         let bad: Value = serde_json::from_str(&test(&spb, r#"{"seed": -1}"#)).unwrap();
         assert!(bad["error"].as_str().unwrap().starts_with("`seed` must be"));

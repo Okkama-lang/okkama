@@ -22,6 +22,34 @@ thread_local! {
     static TO_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The receiver of a run inside [`with_sink`] (#1125).
     static SINK: std::cell::RefCell<Option<Sink>> = const { std::cell::RefCell::new(None) };
+    /// What [`tick`] calls inside [`with_tick`] (#1136).
+    static TICK: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Call `tick` at every [`tick`] on the current VM thread while `body` runs (#1136): Sparrow ticks at each budget
+/// poll, so a receiver that batches writes hands over what it holds while the program computes. The guard restores
+/// the previous one even if `body` panics. `tick` must not tick itself.
+pub fn with_tick<T>(tick: Box<dyn FnMut()>, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Box<dyn FnMut()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TICK.with(|current| *current.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TICK.with(|current| current.replace(Some(tick))));
+    body()
+}
+
+/// A moment to hand over batched output (#1136: a budget poll of the run on this thread); nothing without
+/// [`with_tick`].
+pub fn tick() {
+    TICK.with(|current| {
+        if let Ok(mut current) = current.try_borrow_mut()
+            && let Some(tick) = current.as_mut()
+        {
+            tick();
+        }
+    });
 }
 
 /// The stream a [`with_sink`] receiver gets bytes of.
@@ -288,6 +316,20 @@ mod tests {
         let expected = vec![(Stream::Output, b"a".to_vec()), (Stream::Error, b"b".to_vec()), (Stream::Output, b"c".to_vec())];
         assert_eq!(*pieces.borrow(), expected);
         assert!(SINK.with(|current| current.borrow().is_none()));
+    }
+
+    /// #1136: a tick reaches the installed receiver, and nothing outside it.
+    #[test]
+    fn a_tick_reaches_the_receiver_while_it_is_installed() {
+        let ticks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = ticks.clone();
+        tick();
+        with_tick(Box::new(move || counted.set(counted.get() + 1)), || {
+            tick();
+            tick();
+        });
+        tick();
+        assert_eq!(ticks.get(), 2);
     }
 
     /// #1011: after write_through nothing waits in the buffer, so a process

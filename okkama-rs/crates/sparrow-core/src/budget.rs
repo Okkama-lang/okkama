@@ -52,6 +52,9 @@ pub struct Limits {
     /// The natives an embedding offers, by name (#1125, [`Profile`]); `None` is every native. It is checked
     /// before `natives`, with its own refusal text.
     pub profile: Option<&'static Profile>,
+    /// Steps between two polls (#1136); `None` is [`SLICE`]. An embedding that batches output hands it over at each
+    /// poll, so this bounds how long a write waits while the program computes.
+    pub slice: Option<u64>,
 }
 
 /// What an embedding of Sparrow offers a program, as data (#1125): the host groups it allows, the natives it
@@ -70,6 +73,8 @@ pub struct Profile {
     pub steps: u64,
     pub memory: u64,
     pub output: u64,
+    /// Steps between two polls ([`Limits::slice`]).
+    pub slice: u64,
 }
 
 /// The playground (#1079 §5.2, #1125): Sparrow without `jit` and `host`, in a browser. Clocks and secure
@@ -88,7 +93,13 @@ pub const PLAYGROUND: Profile = Profile {
     steps: 50_000_000,
     memory: 256 << 20,
     output: 1 << 20,
+    slice: SLICE_PLAYGROUND,
 };
+
+/// The playground's steps between two polls (#1136): its output waits at most this long while a program computes.
+/// Measured in wasm (Node, release): 65 536 steps take 1.3–5 ms, so a write waits at most about 6 ms and 60 000 lines
+/// arrive in 11 chunks; 16 384 and 4 096 steps gave 41 and 162 chunks for under 2 ms less wait (decisions.md, #1136).
+pub const SLICE_PLAYGROUND: u64 = SLICE;
 
 impl Profile {
     /// Does the profile offer `native`?
@@ -231,6 +242,11 @@ impl Limits {
 }
 
 impl Limits {
+    /// Steps between two polls: [`Limits::slice`] or [`SLICE`], at least one.
+    pub fn slice(&self) -> u64 {
+        self.slice.unwrap_or(SLICE).max(1)
+    }
+
     /// The playground's limits (#1125): its [`PLAYGROUND`] profile and budgets, memory measured on the runtime's
     /// own heap (one runtime per page worker, no process allocator to read).
     pub fn playground() -> Self {
@@ -240,6 +256,7 @@ impl Limits {
             memory_scope: MemoryScope::Runtime,
             output: Some(PLAYGROUND.output),
             profile: Some(&PLAYGROUND),
+            slice: Some(PLAYGROUND.slice),
             ..Self::default()
         }
     }

@@ -181,7 +181,25 @@ pub struct Embedding {
     /// Where each write goes as it happens (#1134: the playground streams output, so what a stopped run printed
     /// stays); `None` collects them into [`Embedded::output`].
     pub pieces: Option<PieceSink>,
+    /// How [`Embedding::pieces`] gets the writes (#1136).
+    pub batching: Batching,
 }
+
+/// How an embedded run hands its writes to [`Embedding::pieces`] (#1136).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Batching {
+    /// Each write as it happens (#1134).
+    #[default]
+    Write,
+    /// A stream's consecutive writes joined while they fall within this many nanoseconds of the first (and within
+    /// [`BATCH_BYTES`]); the piece goes when the next write does not join it, at the run's next budget poll (every
+    /// [`budget::SLICE`] steps at most), and at the end. A program that writes and then computes hands its writes
+    /// over within a slice; one that sleeps (the virtual timeline's skip) starts a new piece with its own moment.
+    Window(u64),
+}
+
+/// The most bytes [`Batching::Window`] joins into one piece.
+pub const BATCH_BYTES: usize = 64 << 10;
 
 /// The receiver of an embedded run's writes, one [`Piece`] per write, on the VM thread.
 pub type PieceSink = Box<dyn FnMut(Piece) + Send>;
@@ -193,6 +211,7 @@ impl std::fmt::Debug for Embedding {
             .field("stdin", &self.stdin.as_ref().map(Vec::len))
             .field("limits", &self.limits)
             .field("pieces", &self.pieces.is_some())
+            .field("batching", &self.batching)
             .finish()
     }
 }
@@ -220,44 +239,90 @@ pub struct Embedded {
 pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let Embedding { arguments, stdin, limits, pieces: streamed } = embedding;
+        let Embedding { arguments, stdin, limits, pieces: streamed, batching } = embedding;
         let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
         runtime.use_engine(Engine::Interpreter);
         if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
             host.set_stdin(bytes);
         }
-        let (sink, pieces) = piece_sink(streamed);
-        let result = stdout::with_sink(sink, || execute(&mut runtime)).map_err(|failure| {
+        let (result, output) = Receiver::receive(&Receiver::new(streamed, batching), || execute(&mut runtime));
+        let result = result.map_err(|failure| {
             let (error, uncaught) = *failure;
             (error.0, uncaught)
         });
-        let output = std::mem::take(&mut *pieces.borrow_mut());
         Ok(Embedded { result, output })
     })
 }
 
-/// The receiver of an embedded run's writes: each to `streamed` as it happens, or collected (a stream's writes at one
-/// moment joined) into the returned list. Moments are nanoseconds since this call on Sparrow's clock.
-fn piece_sink(mut streamed: Option<PieceSink>) -> (stdout::Sink, std::rc::Rc<std::cell::RefCell<Vec<Piece>>>) {
-    let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Piece>::new()));
-    let into = pieces.clone();
-    let start = clock::Instant::now();
-    let sink: stdout::Sink = Box::new(move |stream, bytes| {
+/// The receiver of an embedded run's writes: each to `streamed` (by `batching`), or collected (a stream's writes at
+/// one moment joined). Moments are nanoseconds since it was made on Sparrow's clock.
+struct Receiver {
+    collected: Vec<Piece>,
+    pending: Option<Piece>,
+    streamed: Option<PieceSink>,
+    batching: Batching,
+    start: clock::Instant,
+}
+
+type Shared = std::rc::Rc<std::cell::RefCell<Receiver>>;
+
+impl Receiver {
+    fn new(streamed: Option<PieceSink>, batching: Batching) -> Shared {
+        let start = clock::Instant::now();
+        std::rc::Rc::new(std::cell::RefCell::new(Self { collected: Vec::new(), pending: None, streamed, batching, start }))
+    }
+
+    fn write(&mut self, stream: stdout::Stream, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
-        let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        if let Some(streamed) = streamed.as_mut() {
-            streamed(Piece { stream, bytes: bytes.to_vec(), nanos });
+        let nanos = u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let Some(streamed) = self.streamed.as_mut() else {
+            match self.collected.last_mut() {
+                Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
+                _ => self.collected.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
+            }
             return;
+        };
+        let window = match self.batching {
+            // A window of 0 joins nothing, so it holds nothing back either.
+            Batching::Write | Batching::Window(0) => return streamed(Piece { stream, bytes: bytes.to_vec(), nanos }),
+            Batching::Window(window) => window,
+        };
+        match self.pending.as_mut() {
+            Some(pending)
+                if pending.stream == stream
+                    && nanos.saturating_sub(pending.nanos) < window
+                    && pending.bytes.len() + bytes.len() <= BATCH_BYTES =>
+            {
+                pending.bytes.extend_from_slice(bytes);
+            }
+            _ => {
+                if let Some(pending) = self.pending.replace(Piece { stream, bytes: bytes.to_vec(), nanos }) {
+                    streamed(pending);
+                }
+            }
         }
-        let mut pieces = into.borrow_mut();
-        match pieces.last_mut() {
-            Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
-            _ => pieces.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
+    }
+
+    /// Hand over the piece being joined (a budget poll, the end of the run).
+    fn tick(&mut self) {
+        if let (Some(pending), Some(streamed)) = (self.pending.take(), self.streamed.as_mut()) {
+            streamed(pending);
         }
-    });
-    (sink, pieces)
+    }
+
+    /// Run `body` with the writes of this VM thread going here, ticked at each budget poll; then hand over what is
+    /// left and return what was collected.
+    fn receive<T>(shared: &Shared, body: impl FnOnce() -> T) -> (T, Vec<Piece>) {
+        let (writes, ticks) = (shared.clone(), shared.clone());
+        let sink: stdout::Sink = Box::new(move |stream, bytes| writes.borrow_mut().write(stream, bytes));
+        let tick = Box::new(move || ticks.borrow_mut().tick());
+        let result = stdout::with_sink(sink, || stdout::with_tick(tick, body));
+        let mut receiver = shared.borrow_mut();
+        receiver.tick();
+        (result, std::mem::take(&mut receiver.collected))
+    }
 }
 
 /// What an embedded test run shows (#1127): whether every test passed, and the human report (`okkama run -t`'s) with
@@ -275,15 +340,13 @@ pub struct EmbeddedTests {
 pub fn run_tests_embedded(bytes: Vec<u8>, embedding: Embedding, plan: test_report::TestPlan) -> Result<EmbeddedTests, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let Embedding { arguments: _, stdin, limits, pieces: streamed } = embedding;
+        let Embedding { arguments: _, stdin, limits, pieces: streamed, batching } = embedding;
         let setup = TestSetup { engine: Some(Engine::Interpreter), stdin };
-        let (sink, pieces) = piece_sink(streamed);
-        let report = stdout::with_sink(sink, || {
+        let (report, output) = Receiver::receive(&Receiver::new(streamed, batching), || {
             // A line at a time: the report is written in fragments, and each write is a piece the page receives.
             test_profile(program, plan, Some(Box::new(std::io::LineWriter::new(stdout::Buffered))), Vec::new(), &limits, &setup)
-        })?;
-        let output = std::mem::take(&mut *pieces.borrow_mut());
-        Ok(EmbeddedTests { passed: report.passed(), output })
+        });
+        Ok(EmbeddedTests { passed: report?.passed(), output })
     })
 }
 

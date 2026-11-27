@@ -104,6 +104,7 @@ assert.ok(needs.refused.every((symbol) => needs.declared.includes(symbol)), JSON
 const profile = JSON.parse(runtime.version()).profile;
 assert.equal(profile.name, "playground");
 assert.equal(profile.interrupted, "Execution interrupted\n");
+assert.equal(profile.stopped, "Execution stopped\n");
 assert.equal(profile.exhausted.steps, "Execution budget exhausted: steps\n");
 assert.deepEqual(JSON.parse(runtime.lastPanic()), { panic: null });
 
@@ -114,6 +115,27 @@ assert.equal(answer.exit, 3);
 assert.deepEqual(answer.output, []);
 assert.equal(streamed.map((chunk) => chunk.text).join(""), "hello you\nafter\n");
 assert.ok(streamed.every((chunk) => ["stdout", "stderr"].includes(chunk.stream) && Number.isInteger(chunk.t)));
+
+// Batched (#1136): 6000 lines arrive in a few chunks, handed over at the budget polls; window 0 is a chunk per write.
+const many = build(`module smoke v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    for 0..6000 -> n {
+        out.writeln(n.string());
+    }
+    0;
+}
+`);
+const expected = Array.from({ length: 6000 }, (_, n) => `${n}\n`).join("");
+for (const [window, fewer] of [[undefined, true], [0, false]]) {
+    const got = [];
+    runtime.run(many, JSON.stringify(window === undefined ? {} : { window }), (chunk) => got.push(JSON.parse(chunk)));
+    assert.equal(got.map((chunk) => chunk.text).join(""), expected);
+    assert.ok(fewer ? got.length < 100 : got.length === 12000, `window ${window}: ${got.length} chunks`);
+}
 
 // Stopped: a worker prints, then spins; the page stops it once the line has come, and the line is there.
 const spin = `module smoke v1.0.0;
@@ -148,8 +170,8 @@ const stopped = await new Promise((resolve, reject) => {
     });
 });
 assert.ok(stopped.every((chunk) => chunk.stream === "stdout"), JSON.stringify(stopped));
-const shown = stopped.map((chunk) => chunk.text).join("") + profile.interrupted;
-assert.equal(shown, "started\nExecution interrupted\n");
+const shown = stopped.map((chunk) => chunk.text).join("") + profile.stopped;
+assert.equal(shown, "started\nExecution stopped\n");
 // Tests: the report a line at a time, as `okkama run -t` prints it, exit 1 for a failed test.
 const tested = `module smoke v1.0.0;
 

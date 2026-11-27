@@ -2,6 +2,13 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1136 (feature/1136 from release/066 554a3f99c, not committed; worktree okkama-work/hf-1136, targets t-1136
+  and t-1136-nd): `stdout::{with_tick, tick}`, `rt_poll` ticks; `Batching {Write, Window}`, `BATCH_BYTES`,
+  `Receiver` (replaces `piece_sink`); `Limits::slice`/`Profile::slice`/`SLICE_PLAYGROUND` (= SLICE after
+  measuring); sparrow-wasm `window` request field (`WINDOW_MS` 16), `version().profile.stopped` (`STOPPED`,
+  wording awaiting the owner); tests in embedding_tests (poll hands over, stream and size bounds), stdout,
+  sparrow-wasm; smoke: 6000 lines batched vs per write, the stopped worker prints `stopped`. Measurement in
+  decisions.md. sparrow_wasm_bg.wasm 3,829,703 bytes, 1,881,648 gzip.
 - [x] #1127 (parts without owner decisions; feature/1127 from release/066 acea75ebb, not committed; worktree
   okkama-work/hf-1127, targets t-1127 and t-1127-nd): `sparrow_core::run_tests_embedded`, `EmbeddedTests`,
   `TestSetup` (engine, stdin) threaded through `test_profile`, `piece_sink`; sparrow-wasm `test`/`test_streaming`

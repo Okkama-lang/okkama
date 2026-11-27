@@ -110,3 +110,91 @@ fn refused_natives_names_what_the_profile_lacks() {
     assert!(!natives.reachable.contains(&okkama_runtime_abi::Native::SystemSystemHostName));
     assert!(refused_natives(b"not an spb", &PLAYGROUND).is_err());
 }
+
+/// Write "a", count to 1000 (a back-edge each), write "b".
+const COUNT: &str = r#"function f4 "main" {
+    registers [t3, t0, t1, t0, t0, t4]
+    params []
+    result t0
+    0: const r2, str "a"
+    1: str.utf8 r0, r2
+    2: call _, f0, [r0]
+    3: const r1, int 0
+    4: const r3, int 1
+    5: const r4, int 1000
+    6: int.add r1, r1, r3
+    7: int.cmp lt, r5, r1, r4
+    8: br r5, @6, @9
+    9: const r2, str "b"
+    10: str.utf8 r0, r2
+    11: call _, f0, [r0]
+    12: const r1, int 0
+    13: ret r1
+}
+entry f4
+"#;
+
+fn batched(slice: u64, batching: crate::Batching) -> Vec<String> {
+    let pieces = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = pieces.clone();
+    let limits = Limits { steps: Some(1 << 30), slice: Some(slice), ..Limits::default() };
+    let embedding = Embedding { limits, pieces: Some(Box::new(move |piece: Piece| into.lock().unwrap().push(piece))), batching, ..Embedding::default() };
+    let source = HEAD.replace("type t3 array t2\n", "type t3 array t2\ntype t4 bool\n");
+    let program = okkama_sparrow::assemble(&format!("{source}{COUNT}")).unwrap();
+    let run = run_embedded(okkama_sparrow::encode(&program).unwrap(), embedding).unwrap();
+    assert_eq!((run.result, run.output), (Ok(0), Vec::new()));
+    let texts = pieces.lock().unwrap().iter().map(|piece| String::from_utf8(piece.bytes.clone()).unwrap()).collect();
+    texts
+}
+
+/// #1136: a window joins a stream's writes until a budget poll hands them over: with polls every 100 steps the
+/// 1000 back-edges between "a" and "b" poll, so "a" goes alone; with polls past the loop both are one piece; a chunk
+/// per write keeps them apart whatever the polls.
+#[test]
+fn a_budget_poll_hands_over_the_writes_a_window_joined() {
+    let wide = crate::Batching::Window(u64::MAX);
+    assert_eq!(batched(100, wide), ["a", "b"]);
+    assert_eq!(batched(1 << 20, wide), ["ab"]);
+    assert_eq!(batched(1 << 20, crate::Batching::Write), ["a", "b"]);
+    assert_eq!(batched(1 << 20, crate::Batching::Window(0)), ["a", "b"], "a window of 0 joins nothing");
+}
+
+fn streamed_pieces(main: &str) -> Vec<(Stream, usize)> {
+    let pieces = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = pieces.clone();
+    let embedding = Embedding {
+        pieces: Some(Box::new(move |piece: Piece| into.lock().unwrap().push(piece))),
+        batching: crate::Batching::Window(u64::MAX),
+        ..Embedding::default()
+    };
+    assert_eq!(run_embedded(spb(main), embedding).unwrap().result, Ok(0));
+    let shape = pieces.lock().unwrap().iter().map(|piece| (piece.stream, piece.bytes.len())).collect();
+    shape
+}
+
+/// #1136: a window joins only one stream's writes, and at most `BATCH_BYTES` of them.
+#[test]
+fn a_window_joins_one_stream_and_a_bounded_size() {
+    let streams = r#"function f4 "main" {
+    registers [t3, t0, t1]
+    params []
+    result t0
+    0: const r2, str "ab"
+    1: str.utf8 r0, r2
+    2: call _, f0, [r0]
+    3: call _, f0, [r0]
+    4: call _, f1, [r0]
+    5: call _, f0, [r0]
+    6: const r1, int 0
+    7: ret r1
+}
+entry f4
+"#;
+    assert_eq!(streamed_pieces(streams), [(Stream::Output, 4), (Stream::Error, 2), (Stream::Output, 2)]);
+    let half = crate::BATCH_BYTES / 2 + 1;
+    let large = format!(
+        "function f4 \"main\" {{\n    registers [t3, t0, t1]\n    params []\n    result t0\n    0: const r2, str \"{}\"\n    1: str.utf8 r0, r2\n    2: call _, f0, [r0]\n    3: call _, f0, [r0]\n    4: const r1, int 0\n    5: ret r1\n}}\nentry f4\n",
+        "x".repeat(half)
+    );
+    assert_eq!(streamed_pieces(&large), [(Stream::Output, half), (Stream::Output, half)]);
+}

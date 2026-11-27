@@ -121,9 +121,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 69 files, 37442 lines
+## sparrow — 69 files, 37497 lines
 
-- `sparrow-core/src/budget.rs` 437 — Execution budgets (hardening H-04): steps, memory, output and external
+- `sparrow-core/src/budget.rs` 445 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
@@ -133,7 +133,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2952 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 798 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 842 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
 - `sparrow-core/src/ops.rs` 1953 — Exact semantics of value instructions, where machine code has no inline
@@ -141,7 +141,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/primitives.rs` 398 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 403 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/reach.rs` 276 — The functions a run of an SPB program can reach (#1135): what the playground warns about is what a run can cal
-- `sparrow-core/src/runtime.rs` 1284 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1287 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/texts.rs` 8 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
@@ -210,7 +210,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 73 files, 23861 lines
+## other — 73 files, 23917 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -251,7 +251,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/rat.rs` 243 — Точное рациональное `rat` (OIR-1 §16.2): несократимая дробь с
 - `okkama-runtime-core/src/scalar.rs` 53 — Exact scalar conversions shared by compiler constants, natives and Sparrow.
 - `okkama-runtime-core/src/sched.rs` 345 — Promise delivery for Sparrow's native bridge.
-- `okkama-runtime-core/src/stdout.rs` 222 — Standard output of the process, buffered (#132). Every `Stdout` value, the
+- `okkama-runtime-core/src/stdout.rs` 254 — Standard output of the process, buffered (#132). Every `Stdout` value, the
 - `okkama-runtime-core/src/strings.rs` 149 — Позиции строк измеряются Unicode code points; диапазон [start, end).
 - `okkama-runtime-core/src/testing.rs` 324 — Состояние текущего теста (§14), общее для исполнителя тестов, intrinsics
 - `okkama-runtime-core/src/value.rs` 164
@@ -284,4 +284,4 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-wasm/build.rs` 31 — Bundles the repository's std (#1078): every `std/**/*.ok`, embedded read-only, so imports resolve without a
 - `okkama-wasm/src/lib.rs` 757 — The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
 - `sparrow-cli/src/main.rs` 260 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
-- `sparrow-wasm/src/lib.rs` 500 — Sparrow for the playground (#1125, design `okkama-docs/runtime/sparrow-interpreter-1079.md` §5, §8 item 6):
+- `sparrow-wasm/src/lib.rs` 524 — Sparrow for the playground (#1125, design `okkama-docs/runtime/sparrow-interpreter-1079.md` §5, §8 item 6):
