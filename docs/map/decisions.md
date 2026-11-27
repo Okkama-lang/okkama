@@ -1298,6 +1298,15 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## First-run compile (#1147, 2026-11-28; design Fable)
+
+- Mixed mode (interpret first, JIT later) rejected: most compile time is in once-called functions with long loops,
+  which need OSR. Cheap Cranelift settings rejected (single_pass, opt_level none: steady losses).
+- Step 1 hygiene kept where measured: no-std frontend, exits by handler target, direct branch edges, no status check
+  after int add/sub/mul without budget/polling. Not kept: dropping the check after rt_compile (regalloc loss on a hot
+  closure), compile-context reuse (no gain).
+- Step 2: background codegen with demand-driven speculation of static callees (deterministic publication order).
+
 ## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
 
 - The not-due check is inline at every allocating helper; the collection is a cold out-of-line function.

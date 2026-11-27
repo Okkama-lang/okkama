@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Less to compile on the first run (#1147, step 1).** cranelift-frontend builds without std (its safepoint
+  spiller's sets in hashbrown); handlers with the same target share one failure exit and a function's later failure
+  exits one cold return; branch edges that move nothing go straight to their blocks; int add, subtract and multiply
+  check no status without a memory budget or polling. Compile time −7…−11% and machine code −8…−18% on 06, 08, 10
+  and 11; first repetition 11-ownership −8%, 06 −2%, 08 −5%, 10-app −2%; steady unchanged or better (09-closures
+  20.6 → 18.8 ms). Dropping the status check after a lazy call's compile and reusing compile contexts were measured
+  and not kept (a register-allocation loss on 09-closures; no gain).
 - **A safepoint that is not due costs almost nothing (#1175).** Every allocating helper asked the heap whether a
   collection was due through a huge out-of-line function (its prologue ran before the check) and a thread-local
   lookup in another crate (a call on macOS) for the map-node count. The check is now inline, the collection out
