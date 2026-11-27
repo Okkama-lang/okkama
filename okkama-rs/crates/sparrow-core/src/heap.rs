@@ -330,7 +330,7 @@ impl Liveness {
         self.map.resize(granules, 0);
         self.on = true;
         okkama_devtrace::count!("gc", "liveness map granules", granules);
-        okkama_devtrace::count!("gc", "liveness map page granules", pages.len() * PAGE_BYTES >> GRANULE_SHIFT);
+        okkama_devtrace::count!("gc", "liveness map page granules", (pages.len() * PAGE_BYTES) >> GRANULE_SHIFT);
     }
 
     /// No marked cell in `bytes` from `base`?
@@ -963,6 +963,22 @@ impl Heap {
     }
     pub fn header_of(&self, object: Word) -> u64 {
         unsafe { *(object as *const u64) }
+    }
+
+    /// Did a collection reclaim the cell at `address`: free (or poison, under stress), or on a page the sweep
+    /// took back whole by the liveness map and nothing has taken since (#1114: its cells keep stale headers until
+    /// the allocator threads it)? For tests and diagnostics.
+    pub fn is_reclaimed(&self, address: Word) -> bool {
+        let header = self.header_of(address);
+        if kind(header) == FREE || header == POISON {
+            return true;
+        }
+        self.pages.iter().any(|page| {
+            let base = page.memory.as_ptr() as Word;
+            (base..base + (page.memory.len() * 8) as Word).contains(&address)
+                && page.idle.is_some_and(|reserved| !reserved.threaded)
+                && !self.touched.contains(&page.id)
+        })
     }
 
     // ---- strings ----
@@ -1797,7 +1813,6 @@ impl Heap {
         if let (Some(allocations), Some(marking)) = (&mut self.allocations, marking) {
             allocations.mark_nanos += marking.elapsed().as_nanos() as u64;
         }
-        drop(marker);
         self.liveness = liveness;
         self.worklist = worklist;
         // Watched objects that died, found by their marks before the sweep:

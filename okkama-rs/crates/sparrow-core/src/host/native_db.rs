@@ -54,7 +54,8 @@ pub(crate) enum DbHandle {
     /// Position of each column name, `-2` for a name several columns share.
     /// The names come from the database server, so the map takes std's keyed
     /// hash, never `FastHasher` (#1103).
-    Schema(HashMap<Rc<str>, i64>),
+    /// Boxed: a keyed map is 48 bytes, past a handle's six words (#439).
+    Schema(Box<HashMap<Rc<str>, i64>>),
 }
 pub(crate) fn handles(native: Native) -> bool {
     native.symbol().starts_with("runtime/db@1::")
@@ -250,7 +251,7 @@ impl Heap {
                     .and_modify(|p| *p = -2)
                     .or_insert(i as i64);
             }
-            return Ok(self.db_new(DbHandle::Schema(positions))?);
+            return Ok(self.db_new(DbHandle::Schema(Box::new(positions)))?);
         }
         if n == DbPosition {
             let DbHandle::Schema(schema) = self.db_handle(a[0])? else {

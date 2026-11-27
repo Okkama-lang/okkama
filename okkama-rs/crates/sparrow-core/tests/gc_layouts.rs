@@ -24,7 +24,7 @@ fn gc_layout_empty_and_all_raw_objects_and_closures() {
         });
         assert_eq!(heap::kind(heap.header_of(object)), heap::OBJECT);
         assert_eq!(heap::kind(heap.header_of(closure)), heap::CLOSURE);
-        assert_eq!(heap::kind(heap.header_of(raw)), heap::FREE);
+        assert!(heap.is_reclaimed(raw), "raw bits kept the text alive");
         heap.collect(|_| {});
         assert_eq!(heap.stats().live_bytes, 0);
     }
@@ -61,7 +61,8 @@ fn gc_layout_mixed_objects_and_closures() {
                 assert_eq!(heap.integer(slot(&heap, 4)), Integer::Small(-7));
                 assert_eq!(slot(&heap, 5), UNBOUND);
                 assert_eq!(slot(&heap, 6), UNBOUND);
-                assert_eq!(heap::kind(heap.header_of(raw)), heap::FREE);
+                assert!(heap.is_reclaimed(raw), "raw bits kept the text alive");
+                assert!(!heap.is_reclaimed(slot(&heap, 1)), "a live text reads as reclaimed");
             }
             heap.collect(|_| {});
             assert_eq!(heap.stats().live_bytes, 0);
