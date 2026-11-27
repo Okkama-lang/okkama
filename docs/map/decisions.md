@@ -1309,7 +1309,8 @@ every declaration is open (#1005, owner decision).
 - Step 2 (done): background codegen with demand-driven speculation of static callees: emission stays on the VM
   thread, workers only run Context::compile, installation (definition order) only at a demand; a unit is stale when
   a lazy callee was published after its emission (then recompiled synchronously, keeping the synchronous code).
-  Default on (min(2, cores − 1) threads); synchronous under stats, profile, dump, memory budget, polling, sessions.
+  Default on with 1 worker (2 measured no faster, +3 MB more peak footprint each); synchronous under stats, profile,
+  dump, memory budget, polling, sessions.
 
 ## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
 

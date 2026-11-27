@@ -19,7 +19,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   burst −9%, 11-ownership −4%, 08-roles −2%.
 - **Compiling in the background (#1147, step 2).** A function's first compile also emits the static callees it
   calls lazily (two levels deep, at most 64 waiting) and hands their Cranelift codegen to worker threads
-  (`min(2, cores − 1)`, `SPARROW_CORE_COMPILE_THREADS` sets the number, 0 turns it off); a callee's first call
+  (one where there is a second core, `SPARROW_CORE_COMPILE_THREADS` sets the number, 0 turns it off; a worker
+  costs about 3 MB of peak footprint, its heap's share of Cranelift's working set); a callee's first call
   installs its finished code, so definitions keep the order a synchronous run gives them, and a unit whose lazy
   callee was compiled in between is compiled again (the call is then direct). Statistics, profiles, dumps, memory
   budgets, polling and sessions compile on the VM thread. Cold runs −3…−13% (11-ownership 24.9 → 21.8 ms), first
