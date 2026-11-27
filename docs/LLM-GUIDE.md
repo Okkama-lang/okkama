@@ -234,10 +234,12 @@ wasm-bindgen --target web --remove-name-section --remove-producers-section \
 
 The playground's runtime (#1125) is a second module, built alone (with okkama-wasm in one invocation the features
 of okkama-runtime-core unify): `cargo build -p sparrow-wasm --release --target wasm32-unknown-unknown`, then the
-same `wasm-bindgen`. It exports `run(spb, request)`, `requirements(spb)`, `provide(name, bytes)`, `version` and
-`lastPanic`. A run: `okkama_wasm.build({source, path})` → `builtSpb()` → `sparrow_wasm.requirements` (refused
-natives, CLDR files to `provide`) → `sparrow_wasm.run(spb, {stdin})` → `{exit, output: [{stream, text, t}],
-report, uncaught}` → for a failure `okkama_wasm.failureText({report, uncaught})`, the text `okkama run` prints.
+same `wasm-bindgen`. It exports `run(spb, request, sink?)`, `requirements(spb)`, `provide(name, bytes)`, `version`
+and `lastPanic` (JSON shapes in decisions.md, #1125 section). A run: `okkama_wasm.build({source, path})` →
+`builtSpb()` → `sparrow_wasm.requirements` (refused natives a run can reach, CLDR files to `provide`) →
+`sparrow_wasm.run(spb, {stdin}, sink)` (each write to `sink` as a chunk `{stream, text, t}` while it runs, #1134)
+→ `{exit, report, uncaught}` → for a failure `okkama_wasm.failureText({report, uncaught})`, the text `okkama run`
+prints; on Stop the page writes `version().profile.interrupted`.
 Budget: 2.0 MB gzip (CI checks it). `node okkama-rs/tools/playground/smoke.mjs DIR` runs both modules built with
 `wasm-bindgen --target nodejs --out-dir DIR`. The playground's profile is data (`sparrow_core::budget::PLAYGROUND`):
 natively `Limits::playground()` refuses the same natives with the same text; a native added to the ABI must fit

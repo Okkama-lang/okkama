@@ -4,8 +4,11 @@
 //! the interpreter under `Limits::playground()`, no wasm runtime) as by this binary. Both run in the example's
 //! directory on its bare name, as the Bible's build.py runs them, with empty standard input; the playground's
 //! workspace names std by the tree's directory and the example's neighbours relative to it, so a stack shows the
-//! same file names on both sides. An example the profile refuses is counted, not compared: what it needs is outside
-//! the playground (files, processes, the environment), and the profile's own refusal is tested in sparrow-core.
+//! same file names on both sides. The output is streamed as the page takes it (#1134). An example whose run can reach
+//! a native the profile refuses (#1135: over the call graph, not every native its imports declare) is counted, not
+//! compared: what it needs is outside the playground (files, processes, the environment), and the profile's own
+//! refusal is tested in sparrow-core. An example that declares such a native and is compared shows that the
+//! reachability is not too narrow: its run would hit the refusal and differ.
 mod tree;
 
 use std::path::{Path, PathBuf};
@@ -61,6 +64,12 @@ fn cli(case: &Case) -> Shown {
     }
 }
 
+/// Refused examples: refused natives declared, and reachable (#1135).
+static NARROWED: std::sync::Mutex<Vec<(String, usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Compared examples that declare a refused native no run of theirs reaches (#1135).
+static UNREACHED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// The playground's run of `case`, or `None` when its profile refuses a native the program declares.
 fn playground(case: &Case, std_dir: &str) -> Option<Shown> {
     let mut workspace = Workspace::new(std_dir);
@@ -76,11 +85,27 @@ fn playground(case: &Case, std_dir: &str) -> Option<Shown> {
     let spb = workspace.built_spb();
     let needs: Value = serde_json::from_str(&sparrow_wasm::requirements(&spb)).unwrap();
     if !needs["refused"].as_array().unwrap().is_empty() {
+        let count = |field: &str| needs[field].as_array().unwrap().len();
+        NARROWED.lock().unwrap().push((case.name.clone(), count("declared"), count("refused")));
+        // The run stops at the first refused native it calls: one `requirements` named (#1135: not too narrow).
+        let ran: Value = serde_json::from_str(&sparrow_wasm::run(&spb, r#"{"stdin": ""}"#)).unwrap();
+        let report = ran["report"].as_str().unwrap_or_default();
+        if let Some(at) = report.find("Native ") {
+            let symbol = report[at + 7..].split(' ').next().unwrap();
+            assert!(needs["refused"].as_array().unwrap().iter().any(|named| named == symbol), "{}: {symbol} called, not named in {}", case.name, needs["refused"]);
+        }
         return None;
     }
-    let ran: Value = serde_json::from_str(&sparrow_wasm::run(&spb, r#"{"stdin": ""}"#)).unwrap();
+    if !needs["declared"].as_array().unwrap().is_empty() {
+        UNREACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    // As the page runs it (#1134): every write streamed while the program runs.
+    let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = chunks.clone();
+    let ran = sparrow_wasm::run_streaming(&spb, r#"{"stdin": ""}"#, move |chunk| into.lock().unwrap().push(chunk));
+    assert_eq!(ran["output"], json!([]), "a streamed run's answer carries no output");
     let mut stdout = String::new();
-    for piece in ran["output"].as_array().unwrap() {
+    for piece in chunks.lock().unwrap().iter() {
         let text = piece["text"].as_str().unwrap();
         if piece["stream"] == "stdout" { stdout.push_str(text) } else { stderr.push_str(text) }
     }
@@ -149,9 +174,75 @@ fn the_playground_runs_the_bible_and_the_book_as_the_cli_does() {
             ));
         }
     }
-    eprintln!("playground_run: {compared} compared ({failed} failing), {} refused by the profile: {refused:?}", refused.len());
+    let unreached = UNREACHED.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "playground_run: {compared} compared ({failed} failing, {unreached} declaring a refused native they never reach), {} refused by the profile: {refused:?}",
+        refused.len()
+    );
+    eprintln!("playground_run: refused natives declared → reachable: {:?}", NARROWED.lock().unwrap());
     assert!(differences.is_empty(), "{} of {compared} differ:\n{}", differences.len(), differences.join("\n"));
     assert!(compared >= 150, "only {compared} examples ran in the playground");
     // Failures and their stacks are compared too, not only output.
     assert!(failed >= 5, "only {failed} compared examples fail");
+}
+
+/// #1135: over examples/ (programs that read files, open sockets, start processes), a run that stops at a native the
+/// profile refuses stops at one `requirements` named, and a run `requirements` cleared meets no refusal: the call
+/// graph is not too narrow.
+#[test]
+fn requirements_name_every_refused_native_a_run_calls() {
+    let std_dir = canonical(&tree::std_dir()).display().to_string();
+    let root = canonical(&tree::root().join("examples"));
+    let mut programs = Vec::new();
+    ok_files(&root, Path::new(""), &mut programs);
+    programs.retain(|(_, text)| text.contains("main()"));
+    // Four threads take the programs in turn: building the web examples takes seconds in a debug build.
+    let check = |(name, source): &(String, String)| -> (usize, usize, usize) {
+        let path = root.join(name);
+        let dir = path.parent().unwrap();
+        let mut workspace = Workspace::new(&std_dir);
+        let mut files = Vec::new();
+        ok_files(dir, Path::new(""), &mut files);
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        workspace.set_files(files.into_iter().filter(|(other, _)| *other != file));
+        if workspace.build(&json!({"source": source, "path": file}))["ok"] != true {
+            return (0, 0, 0);
+        }
+        let spb = workspace.built_spb();
+        let needs: Value = serde_json::from_str(&sparrow_wasm::requirements(&spb)).unwrap();
+        let refused = needs["refused"].as_array().unwrap();
+        let ran: Value = serde_json::from_str(&sparrow_wasm::run(&spb, r#"{"stdin": ""}"#)).unwrap();
+        let report = ran["report"].as_str().unwrap_or_default();
+        match report.find("is not available in the playground").and_then(|end| report[..end].rfind("Native ").map(|at| &report[at + 7..end])) {
+            Some(symbol) => {
+                assert!(refused.iter().any(|named| named == symbol.trim()), "{name}: {symbol} called, not in {refused:?}");
+                (1, 0, 0)
+            }
+            None => {
+                let declared = !needs["declared"].as_array().unwrap().is_empty();
+                (0, usize::from(refused.is_empty()), usize::from(refused.is_empty() && declared))
+            }
+        }
+    };
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let counts: Vec<(usize, usize, usize)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut counts = Vec::new();
+                    while let Some(program) = programs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        counts.push(check(program));
+                    }
+                    counts
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
+    });
+    let (stopped, cleared, narrowed) = counts.iter().fold((0, 0, 0), |(a, b, c), (d, e, f)| (a + d, b + e, c + f));
+    eprintln!(
+        "examples: {} programs, {stopped} stopped at a refused native, {cleared} cleared by requirements ({narrowed} of them declaring one)",
+        programs.len()
+    );
+    assert!(stopped >= 20, "only {stopped} runs met the profile");
 }

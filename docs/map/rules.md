@@ -11,20 +11,20 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - TLS suite names: `CHACHA20_POLY1305_SHA256`, `CHACHA20_POLY1305_SHA384`, `SSL_NULL_WITH_NULL_NULL`.
 - SQLite provider failure codes (`SQLITE_*`): runtime diagnostics, not compiler/verifier rules.
 
-## Tags in more than one ownership layer (2)
+## Tags in more than one ownership layer (3)
 
 | tag | layers | files |
 |---|---|---|
+| CARGO_MANIFEST_DIR | 4 | lower: `lowering/mod.rs`; sparrow: `reach.rs`; compiler: `host.rs`, `ide/std_paths.rs`; other: `native/x509.rs`, `okkama-wasm/build.rs` |
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (118)
+## Tags in one layer (117)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
 - BLADE_OKKAMA — other: `project.rs`
 - CARGO_CFG_TARGET_ARCH — other: `okkama-wasm/build.rs`
-- CARGO_MANIFEST_DIR — compiler: `host.rs`, `ide/std_paths.rs`
 - CARGO_PKG_VERSION — other: `lib.rs`, `lib.rs`, `main.rs` …
 - CHACHA20_POLY1305_SHA256 — sparrow: `host/native_tls.rs`
 - CHACHA20_POLY1305_SHA384 — sparrow: `host/native_tls.rs`

@@ -19,16 +19,44 @@ use std::cell::RefCell;
 
 use okkama_runtime_core::failure::{Site, Uncaught, main_outcome};
 use serde_json::{Value, json};
-use sparrow_core::budget::{Limits, PLAYGROUND};
+use sparrow_core::budget::{Exhausted, Limits, PLAYGROUND};
 use sparrow_core::stdout::Stream;
-use sparrow_core::{Embedding, Piece};
+use sparrow_core::{Embedding, Piece, ProgramNatives};
 
-/// Run `spb` as the playground does: request `{stdin?: text, arguments?: [text]}`.
+/// Run `spb` as the playground does: request `{stdin?: text, arguments?: [text]}`; the output comes back in the
+/// answer's `output` (a stream's writes at one moment joined).
 pub fn run(spb: &[u8], request: &str) -> String {
+    let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let into = collected.clone();
+    let mut answer = run_streaming(spb, request, move |chunk| {
+        collect(&mut into.lock().unwrap_or_else(std::sync::PoisonError::into_inner), chunk);
+    });
+    if let Some(output) = answer.get_mut("output") {
+        *output = json!(std::mem::take(&mut *collected.lock().unwrap_or_else(std::sync::PoisonError::into_inner)));
+    }
+    answer.to_string()
+}
+
+/// Add `chunk` to the collected output: joined with the last chunk when both are of one stream at one moment.
+fn collect(chunks: &mut Vec<Value>, chunk: Value) {
+    match chunks.last_mut() {
+        Some(last) if last["stream"] == chunk["stream"] && last["t"] == chunk["t"] => {
+            let text = format!("{}{}", last["text"].as_str().unwrap_or_default(), chunk["text"].as_str().unwrap_or_default());
+            last["text"] = json!(text);
+        }
+        _ => chunks.push(chunk),
+    }
+}
+
+/// [`run`], handing each write to `emit` as a chunk `{stream, text, t}` while the program runs (#1134): the page
+/// shows output as it comes and keeps what a stopped run printed. One chunk per write (a character split between
+/// two writes of a stream goes whole with the later one); the answer's `output` is then empty. Output is bounded
+/// by the profile's budget (1 MiB), so are the chunks.
+pub fn run_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send + 'static) -> Value {
     begin();
     let request: Value = match serde_json::from_str(request) {
         Ok(request) => request,
-        Err(error) => return refused(&format!("the request is not JSON: {error}")),
+        Err(error) => return json!({"error": format!("the request is not JSON: {error}")}),
     };
     let stdin = request.get("stdin").and_then(Value::as_str).map(|text| text.as_bytes().to_vec());
     let arguments = request
@@ -36,13 +64,29 @@ pub fn run(spb: &[u8], request: &str) -> String {
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(Value::as_str).map(|text| text.as_bytes().to_vec()).collect())
         .unwrap_or_default();
-    let embedding = Embedding { arguments, stdin: Some(stdin.unwrap_or_default()), limits: Limits::playground() };
-    let run = match sparrow_core::run_embedded(spb.to_vec(), embedding) {
+    let decoder = std::sync::Arc::new(std::sync::Mutex::new((Decoder::default(), emit)));
+    let streaming = decoder.clone();
+    let pieces: sparrow_core::PieceSink = Box::new(move |piece| {
+        let mut guard = streaming.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (decoder, emit) = &mut *guard;
+        if let Some(chunk) = decoder.push(&piece) {
+            emit(chunk);
+        }
+    });
+    let embedding =
+        Embedding { arguments, stdin: Some(stdin.unwrap_or_default()), limits: Limits::playground(), pieces: Some(pieces) };
+    let run = sparrow_core::run_embedded(spb.to_vec(), embedding);
+    {
+        let mut guard = decoder.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (decoder, emit) = &mut *guard;
+        decoder.finish().into_iter().for_each(emit);
+    }
+    let run = match run {
         Ok(run) => run,
         // A program that does not load, with the prefix `okkama run` gives it.
         Err(error) => {
             let (exit, report) = main_outcome(Err(&format!("okkama: {}", error.0)));
-            return json!({"exit": exit, "output": [], "report": report, "uncaught": null}).to_string();
+            return json!({"exit": exit, "output": [], "report": report, "uncaught": null});
         }
     };
     let (result, uncaught) = match &run.result {
@@ -52,27 +96,30 @@ pub fn run(spb: &[u8], request: &str) -> String {
     let (exit, report) = main_outcome(result);
     json!({
         "exit": exit,
-        "output": pieces(&run.output),
+        "output": [],
         "report": if report.is_empty() { Value::Null } else { json!(report) },
         "uncaught": uncaught.map(uncaught_json),
     })
-    .to_string()
 }
 
-/// What `spb` needs: `{refused: [symbol], files: [name]}`. `refused` are the natives the playground lacks: the page
-/// warns before a run, and the site marks the examples that run. `files` are the data files to [`provide`] first:
-/// the CLDR tables (0.9 MB compressed) stay out of the module and come only to a program that reads CLDR (dates,
+/// What `spb` needs: `{refused: [symbol], declared: [symbol], files: [name]}`. `refused` are the natives the
+/// playground lacks that a run can reach from `main`, or from the tests of a test build (#1135: over the call graph,
+/// `sparrow_core::reach`): the page warns before a run, and the site marks the examples that run. `declared` are
+/// all it lacks of what the program and its imports declare. `files` are the data files to [`provide`] first: the
+/// CLDR tables (0.9 MB compressed) stay out of the module and come only to a program that can read CLDR (dates,
 /// numbers, currencies, locales; which family it reads shows only when it runs, so all five).
 pub fn requirements(spb: &[u8]) -> String {
     begin();
-    let (natives, refused_natives) = match (sparrow_core::program_natives(spb), sparrow_core::refused_natives(spb, &PLAYGROUND)) {
-        (Ok(natives), Ok(refused)) => (natives, refused),
-        (Err(error), _) | (_, Err(error)) => return refused(&format!("okkama: {}", error.0)),
+    let natives = match sparrow_core::program_natives(spb) {
+        Ok(natives) => natives,
+        Err(error) => return refused(&format!("okkama: {}", error.0)),
     };
-    let cldr = natives.iter().any(|native| native.symbol().starts_with("runtime/cldr@"));
+    let cldr = natives.reachable.iter().any(|native| native.symbol().starts_with("runtime/cldr@"));
     let files: Vec<&str> =
         if cldr { okkama_runtime_core::native::CLDR_FILES.iter().map(|(_, file)| *file).collect() } else { Vec::new() };
-    json!({"refused": refused_natives, "files": files}).to_string()
+    let reachable = ProgramNatives::refused(&natives.reachable, &PLAYGROUND);
+    let declared = ProgramNatives::refused(&natives.declared, &PLAYGROUND);
+    json!({"refused": reachable, "declared": declared, "files": files}).to_string()
 }
 
 /// Give the data file `name` (one of `requirements`' `files`, as the site publishes it from
@@ -85,15 +132,20 @@ pub fn provide(name: &str, bytes: &[u8]) -> String {
     }
 }
 
-/// The runtime's version and the profile: `{version, profile: {name, groups, steps, memory, output}}`.
+/// The runtime's version and the profile: `{version, profile: {name, groups, steps, memory, output, interrupted,
+/// exhausted: {steps, memory, output}}}`. The texts are lines as `okkama run` prints them: `interrupted` is what the
+/// page writes when it stops a run (Stop, its watchdog; #1134), `exhausted` what a run that ran out of a budget ends
+/// with (the run's own report carries it too).
 pub fn version() -> String {
     begin();
     let groups: Vec<String> = PLAYGROUND.groups.iter().map(|group| format!("{group:?}")).collect();
+    let line = |what: Exhausted| format!("{}\n", what.message());
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": {
             "name": PLAYGROUND.name, "groups": groups, "steps": PLAYGROUND.steps, "memory": PLAYGROUND.memory,
-            "output": PLAYGROUND.output,
+            "output": PLAYGROUND.output, "interrupted": line(Exhausted::Interrupted),
+            "exhausted": {"steps": line(Exhausted::Steps), "memory": line(Exhausted::Memory), "output": line(Exhausted::Output)},
         },
     })
     .to_string()
@@ -104,30 +156,39 @@ fn refused(message: &str) -> String {
 }
 
 /// The writes as text: a character split between two writes to one stream goes whole with the later one, so every
-/// piece is valid UTF-8 (bytes that are not UTF-8 become U+FFFD, as the CLI's terminal would show them).
-fn pieces(output: &[Piece]) -> Vec<Value> {
-    let mut pending: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
-    let mut out = Vec::new();
-    for piece in output {
+/// chunk is valid UTF-8 (bytes that are not UTF-8 become U+FFFD, as the CLI's terminal would show them).
+#[derive(Debug, Default)]
+struct Decoder {
+    /// The unfinished character at the end of each stream (stdout, stderr).
+    pending: [Vec<u8>; 2],
+    last: u64,
+}
+
+impl Decoder {
+    fn push(&mut self, piece: &Piece) -> Option<Value> {
+        self.last = piece.nanos;
         let index = usize::from(piece.stream == Stream::Error);
-        let mut bytes = std::mem::take(&mut pending[index]);
+        let mut bytes = std::mem::take(&mut self.pending[index]);
         bytes.extend_from_slice(&piece.bytes);
         let keep = match std::str::from_utf8(&bytes) {
             Err(error) if error.error_len().is_none() => bytes.len() - error.valid_up_to(),
             _ => 0,
         };
-        pending[index] = bytes.split_off(bytes.len() - keep);
-        if !bytes.is_empty() {
-            out.push(piece_json(piece.stream, &bytes, piece.nanos));
-        }
+        self.pending[index] = bytes.split_off(bytes.len() - keep);
+        (!bytes.is_empty()).then(|| piece_json(piece.stream, &bytes, piece.nanos))
     }
-    let last = output.last().map_or(0, |piece| piece.nanos);
-    for (index, bytes) in pending.iter().enumerate() {
-        if !bytes.is_empty() {
-            out.push(piece_json(if index == 0 { Stream::Output } else { Stream::Error }, bytes, last));
-        }
+
+    /// What is left when the run ends: an unfinished character, as U+FFFD.
+    fn finish(&mut self) -> Vec<Value> {
+        let last = self.last;
+        let streams = [Stream::Output, Stream::Error];
+        streams
+            .into_iter()
+            .zip(self.pending.iter_mut())
+            .filter(|(_, bytes)| !bytes.is_empty())
+            .map(|(stream, bytes)| piece_json(stream, &std::mem::take(bytes), last))
+            .collect()
     }
-    out
 }
 
 fn piece_json(stream: Stream, bytes: &[u8], nanos: u64) -> Value {
@@ -233,8 +294,35 @@ mod bindings {
     }
 
     #[wasm_bindgen]
-    pub fn run(spb: &[u8], request: &str) -> String {
-        super::run(spb, request)
+    extern "C" {
+        /// The page's output sink (#1134): a function called with one chunk's JSON text, `{stream, text, t}`.
+        pub type OutputSink;
+        /// A sink that throws loses that chunk; the run goes on.
+        #[wasm_bindgen(method, js_name = call, catch)]
+        fn call_with(this: &OutputSink, receiver: &wasm_bindgen::JsValue, chunk: &str) -> Result<(), wasm_bindgen::JsValue>;
+    }
+
+    thread_local! {
+        /// The sink of the run in progress; the run is one synchronous call on this thread.
+        static SINK: std::cell::RefCell<Option<OutputSink>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// With `sink`, every write goes to it while the program runs and the answer's `output` is empty; without it
+    /// the output comes back in the answer.
+    #[wasm_bindgen]
+    pub fn run(spb: &[u8], request: &str, sink: Option<OutputSink>) -> String {
+        let Some(sink) = sink else { return super::run(spb, request) };
+        let previous = SINK.with(|current| current.replace(Some(sink)));
+        let answer = super::run_streaming(spb, request, |chunk| {
+            let text = chunk.to_string();
+            SINK.with(|current| {
+                if let Some(sink) = current.borrow().as_ref() {
+                    let _ = sink.call_with(&wasm_bindgen::JsValue::NULL, &text);
+                }
+            });
+        });
+        SINK.with(|current| *current.borrow_mut() = previous);
+        answer.to_string()
     }
 
     #[wasm_bindgen]
@@ -264,6 +352,13 @@ mod tests {
 
     fn piece(stream: Stream, bytes: &[u8], nanos: u64) -> Piece {
         Piece { stream, bytes: bytes.to_vec(), nanos }
+    }
+
+    fn pieces(output: &[Piece]) -> Vec<Value> {
+        let mut decoder = Decoder::default();
+        let mut chunks: Vec<Value> = output.iter().filter_map(|piece| decoder.push(piece)).collect();
+        chunks.extend(decoder.finish());
+        chunks
     }
 
     /// A character split between writes goes whole with the later write of its stream; the other stream between
@@ -311,6 +406,8 @@ mod tests {
         let response: Value = serde_json::from_str(&version()).unwrap();
         assert_eq!(response["profile"]["name"], "playground");
         assert_eq!(response["profile"]["steps"], 50_000_000);
+        assert_eq!(response["profile"]["interrupted"], "Execution interrupted\n");
+        assert_eq!(response["profile"]["exhausted"]["steps"], "Execution budget exhausted: steps\n");
         assert_eq!(last_panic(), r#"{"panic":null}"#);
     }
 
@@ -342,13 +439,13 @@ function f2 "host" native "runtime/system@1::system_host_name/0" {
     const CLDR: &str = "function f3 \"cldr\" native \"runtime/cldr@1::cldr_fields/2\" {\n    registers [t1, t1]\n    params [r0, r1]\n    result t4\n}\n";
     const NO_CLDR: &str = "function f3 \"plain\" {\n    registers [t1, t1, t4]\n    params [r0, r1]\n    result t4\n    0: str.split r2, r0, r1\n    1: ret r2\n}\n";
 
-    /// A program whose main runs `body` (registers r0: bytes, r1: int, r2: text).
+    /// A program whose main runs `body` (registers r0: bytes, r1: int, r2: text, r3: int).
     fn spb(body: &str) -> Vec<u8> {
         spb_with(NO_CLDR, body)
     }
 
     fn spb_with(f3: &str, body: &str) -> Vec<u8> {
-        let source = format!("{HEAD}{f3}function f4 \"main\" {{\n    registers [t3, t0, t1]\n    params []\n    result t0\n{body}}}\nentry f4\n");
+        let source = format!("{HEAD}{f3}function f4 \"main\" {{\n    registers [t3, t0, t1, t0]\n    params []\n    result t0\n{body}}}\nentry f4\n");
         let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
         okkama_sparrow::encode(&program).unwrap()
     }
@@ -387,15 +484,63 @@ function f2 "host" native "runtime/system@1::system_host_name/0" {
         assert_eq!(uncaught["trace"], json!([[4, 0, 1]]));
         assert_eq!(uncaught["causeTraces"], json!([]));
         let needs: Value = serde_json::from_str(&requirements(&host)).unwrap();
-        assert_eq!(needs, json!({"refused": ["runtime/system@1::system_host_name/0"], "files": []}));
+        let host_name = json!(["runtime/system@1::system_host_name/0"]);
+        assert_eq!(needs, json!({"refused": host_name, "declared": host_name, "files": []}));
         let cldr = spb_with(CLDR, "    0: const r2, str \"numbers.digits\"\n    1: call _, f3, [r2, r2]\n    2: const r1, int 0\n    3: ret r1\n");
         let needs: Value = serde_json::from_str(&requirements(&cldr)).unwrap();
-        // A declared native counts, called or not (f2 is declared in every program here).
-        assert_eq!(needs["refused"], json!(["runtime/system@1::system_host_name/0"]));
+        // #1135: only what a run can reach is refused (f2 is declared in every program here, called in `host`).
+        assert_eq!((&needs["refused"], &needs["declared"]), (&json!([]), &host_name));
         assert_eq!(needs["files"].as_array().map(Vec::len), Some(5));
         assert!(needs["files"].as_array().unwrap().iter().all(|file| file.as_str().unwrap().starts_with("cldr-")));
+        let unread = spb_with(CLDR, "    0: const r1, int 0\n    1: ret r1\n");
+        let needs: Value = serde_json::from_str(&requirements(&unread)).unwrap();
+        assert_eq!(needs["files"], json!([]), "CLDR declared, never read");
         let given: Value = serde_json::from_str(&provide("cldr-nowhere.dat", b"")).unwrap();
         assert_eq!(given["error"], "cldr-nowhere.dat is not a CLDR file");
+    }
+
+
+    /// #1134: streaming hands every write to the sink as it happens, in order, before the run's answer, whose
+    /// `output` is then empty; collected, the same writes come back in `output`.
+    #[test]
+    fn a_streamed_run_hands_over_each_write_as_it_happens() {
+        let echo = spb("    0: call r0, f1, []\n    1: call _, f0, [r0]\n    2: call r0, f1, []\n    3: call _, f0, [r0]\n    4: const r1, int 0\n    5: ret r1\n");
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = chunks.clone();
+        let answer = run_streaming(&echo, r#"{"stdin": "a\nb\n"}"#, move |chunk| into.lock().unwrap().push(chunk));
+        assert_eq!((&answer["exit"], &answer["output"]), (&json!(0), &json!([])));
+        let texts: Vec<String> = chunks.lock().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap().to_string()).collect();
+        assert_eq!(texts, ["a\n", "b\n"]);
+        assert!(chunks.lock().unwrap().iter().all(|chunk| chunk["stream"] == "stdout" && chunk["t"].is_u64()));
+        let collected = ran(&echo, r#"{"stdin": "a\nb\n"}"#);
+        let joined: String = collected["output"].as_array().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap()).collect();
+        assert_eq!(joined, "a\nb\n");
+    }
+
+
+    /// Collected, writes of one stream at one moment are one chunk; another moment or stream starts a new one.
+    #[test]
+    fn collected_chunks_join_one_stream_at_one_moment() {
+        let chunk = |stream: &str, text: &str, t: u64| json!({"stream": stream, "text": text, "t": t});
+        let mut chunks = Vec::new();
+        for (stream, text, t) in [("stdout", "a", 1), ("stdout", "b", 1), ("stdout", "c", 2), ("stderr", "d", 2), ("stdout", "e", 2)] {
+            collect(&mut chunks, chunk(stream, text, t));
+        }
+        assert_eq!(chunks, vec![chunk("stdout", "ab", 1), chunk("stdout", "c", 2), chunk("stderr", "d", 2), chunk("stdout", "e", 2)]);
+    }
+
+    /// A run that ends inside a character still hands over its last bytes, as U+FFFD, streamed or not.
+    #[test]
+    fn an_unfinished_character_at_the_end_comes_out() {
+        let half = spb("    0: const r2, str \"aЯ\"\n    1: str.utf8 r0, r2\n    2: const r1, int 0\n    3: const r3, int 2\n    4: arr.slice r0, r0, r1, r3\n    5: call _, f0, [r0]\n    6: ret r1\n");
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = chunks.clone();
+        run_streaming(&half, "{}", move |chunk| into.lock().unwrap().push(chunk));
+        let texts: Vec<String> = chunks.lock().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap().to_string()).collect();
+        assert_eq!(texts, ["a", "\u{fffd}"]);
+        let collected = ran(&half, "{}");
+        let joined: String = collected["output"].as_array().unwrap().iter().map(|chunk| chunk["text"].as_str().unwrap()).collect();
+        assert_eq!(joined, "a\u{fffd}");
     }
 
 }

@@ -2,11 +2,14 @@
 // its standard input from the request, sleeps two seconds on the virtual timeline without waiting for them (the
 // second piece is marked 2 s later, the call returns at once), and exits 3; a failure's report and stack come
 // back from failureText as `okkama run` prints them; a program that needs the file system is refused before it
-// runs, and the CLDR tables are named as files to fetch.
+// runs, and the CLDR tables are named as files to fetch. With an output sink (#1134) every write reaches the page while
+// the program runs: a run in a worker that prints and then spins is stopped, and what it printed has arrived; the
+// interruption text comes from version(). requirements names what a run can reach, and what is declared (#1135).
 //
 //     wasm-bindgen --target nodejs --out-dir DIR okkama_wasm.wasm sparrow_wasm.wasm (one call each)
 //     node okkama-rs/tools/playground/smoke.mjs DIR
 import { createRequire } from "node:module";
+import { Worker } from "node:worker_threads";
 import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
 
@@ -93,6 +96,54 @@ main() is int {
 `;
 const needs = JSON.parse(runtime.requirements(build(files)));
 assert.ok(needs.refused.length > 0 && needs.refused.every((symbol) => symbol.startsWith("runtime/")), JSON.stringify(needs));
-assert.equal(JSON.parse(runtime.version()).profile.name, "playground");
+assert.ok(needs.refused.every((symbol) => needs.declared.includes(symbol)), JSON.stringify(needs));
+const profile = JSON.parse(runtime.version()).profile;
+assert.equal(profile.name, "playground");
+assert.equal(profile.interrupted, "Execution interrupted\n");
+assert.equal(profile.exhausted.steps, "Execution budget exhausted: steps\n");
 assert.deepEqual(JSON.parse(runtime.lastPanic()), { panic: null });
-console.log(`playground smoke: ok (run ${elapsed.toFixed(0)} ms, refused ${needs.refused.length} natives)`);
+
+// Streamed: the chunks arrive through the sink before the answer, which then has no output.
+const streamed = [];
+const answer = JSON.parse(runtime.run(build(hello), JSON.stringify({ stdin: "you\n" }), (chunk) => streamed.push(JSON.parse(chunk))));
+assert.equal(answer.exit, 3);
+assert.deepEqual(answer.output, []);
+assert.equal(streamed.map((chunk) => chunk.text).join(""), "hello you\nafter\n");
+assert.ok(streamed.every((chunk) => ["stdout", "stderr"].includes(chunk.stream) && Number.isInteger(chunk.t)));
+
+// Stopped: a worker prints, then spins; the page stops it once the line has come, and the line is there.
+const spin = `module smoke v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    Stdout().writeln("started");
+    for 0..1000000000000 -> n {
+        confirm n >= 0;
+    }
+    0;
+}
+`;
+const worker = new Worker(`
+    const { parentPort, workerData } = require("node:worker_threads");
+    const compiler = require(workerData.dir + "/okkama_wasm.js");
+    const runtime = require(workerData.dir + "/sparrow_wasm.js");
+    compiler.build(JSON.stringify({ source: workerData.spin, path: "main.ok" }));
+    const answer = runtime.run(compiler.builtSpb(), "{}", (chunk) => parentPort.postMessage(chunk));
+    parentPort.postMessage(JSON.stringify({ finished: JSON.parse(answer) }));
+`, { eval: true, workerData: { dir, spin } });
+const stopped = await new Promise((resolve, reject) => {
+    const seen = [];
+    worker.on("error", reject);
+    worker.on("message", (message) => {
+        const chunk = JSON.parse(message);
+        if (chunk.finished) return reject(new Error(`the run ended before it was stopped: ${message}`));
+        seen.push(chunk);
+        // writeln writes the text and the newline apart: stop once the line is complete.
+        if (seen.map((piece) => piece.text).join("").endsWith("\n")) worker.terminate().then(() => resolve(seen));
+    });
+});
+assert.ok(stopped.every((chunk) => chunk.stream === "stdout"), JSON.stringify(stopped));
+const shown = stopped.map((chunk) => chunk.text).join("") + profile.interrupted;
+assert.equal(shown, "started\nExecution interrupted\n");
+console.log(`playground smoke: ok (run ${elapsed.toFixed(0)} ms, ${needs.refused.length} of ${needs.declared.length} declared refused natives reachable, a stopped run kept its output)`);

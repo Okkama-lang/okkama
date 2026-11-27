@@ -33,6 +33,8 @@ pub mod budget;
 pub use okkama_devtrace::env_switch;
 
 pub mod clock;
+/// The functions a run can reach (#1135).
+pub mod reach;
 #[cfg(feature = "jit")]
 mod code_memory;
 mod contracts;
@@ -170,12 +172,29 @@ pub fn observe(engine: Engine, bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: 
 }
 
 /// What an embedding gives a run (#1125: the playground, and the native run that checks it).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Embedding {
     pub arguments: Vec<Vec<u8>>,
     /// Standard input: these bytes, then end of input; `None` reads the process's.
     pub stdin: Option<Vec<u8>>,
     pub limits: budget::Limits,
+    /// Where each write goes as it happens (#1134: the playground streams output, so what a stopped run printed
+    /// stays); `None` collects them into [`Embedded::output`].
+    pub pieces: Option<PieceSink>,
+}
+
+/// The receiver of an embedded run's writes, one [`Piece`] per write, on the VM thread.
+pub type PieceSink = Box<dyn FnMut(Piece) + Send>;
+
+impl std::fmt::Debug for Embedding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Embedding")
+            .field("arguments", &self.arguments.len())
+            .field("stdin", &self.stdin.as_ref().map(Vec::len))
+            .field("limits", &self.limits)
+            .field("pieces", &self.pieces.is_some())
+            .finish()
+    }
 }
 
 /// One write of a run to a stream, `nanos` after the run started on Sparrow's clock (`clock`; on wasm32 the
@@ -188,7 +207,8 @@ pub struct Piece {
 }
 
 /// What an embedded run shows: `main`'s result, or the report and the uncaught failure, and the program's writes
-/// in order (consecutive writes to one stream at one moment are one piece).
+/// in order (consecutive writes to one stream at one moment are one piece; empty when [`Embedding::pieces`] took
+/// them).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Embedded {
     pub result: Result<i64, (String, Option<Uncaught>)>,
@@ -200,7 +220,7 @@ pub struct Embedded {
 pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let Embedding { arguments, stdin, limits } = embedding;
+        let Embedding { arguments, stdin, limits, pieces: mut streamed } = embedding;
         let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
         runtime.use_engine(Engine::Interpreter);
         if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
@@ -214,6 +234,10 @@ pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Er
                 return;
             }
             let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            if let Some(streamed) = streamed.as_mut() {
+                streamed(Piece { stream, bytes: bytes.to_vec(), nanos });
+                return;
+            }
             let mut pieces = into.borrow_mut();
             match pieces.last_mut() {
                 Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
@@ -229,24 +253,50 @@ pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Er
     })
 }
 
-/// The natives an SPB program declares, each once, in the ABI's order (#1125: what the playground needs for it).
-pub fn program_natives(bytes: &[u8]) -> Result<Vec<okkama_runtime_abi::Native>, Error> {
-    let DecodedProgram::Legacy(program) = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
-    let mut natives: Vec<okkama_runtime_abi::Native> = program.functions.iter()
-        .filter_map(|function| function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve))
-        .collect();
-    natives.sort_unstable_by_key(|native| *native as usize);
-    natives.dedup();
-    Ok(natives)
+/// The natives of an SPB program, each once, in the ABI's order (#1125, #1135).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramNatives {
+    /// Every native it declares (the imported modules' too).
+    pub declared: Vec<okkama_runtime_abi::Native>,
+    /// Those a run can call ([`reach`]): from the entry, or the tests of a test profile.
+    pub reachable: Vec<okkama_runtime_abi::Native>,
 }
 
-/// The natives of an SPB program that `profile` refuses, by symbol, sorted, each once (#1125: the playground warns
-/// before a run, and the site marks the examples that run).
+impl ProgramNatives {
+    /// The symbols of `natives` that `profile` refuses, sorted.
+    pub fn refused(natives: &[okkama_runtime_abi::Native], profile: &budget::Profile) -> Vec<&'static str> {
+        let mut refused: Vec<&'static str> =
+            natives.iter().filter(|native| !profile.offers(**native)).map(|native| native.symbol()).collect();
+        refused.sort_unstable();
+        refused
+    }
+}
+
+/// The natives an SPB program declares and those a run can reach (#1125: what the playground needs for it).
+pub fn program_natives(bytes: &[u8]) -> Result<ProgramNatives, Error> {
+    let DecodedProgram::Legacy(program) = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
+    let reached = reach::functions(&program);
+    let mut declared = Vec::new();
+    let mut reachable = Vec::new();
+    for (function, reached) in program.functions.iter().zip(reached) {
+        if let Some(native) = function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve) {
+            declared.push(native);
+            if reached {
+                reachable.push(native);
+            }
+        }
+    }
+    for natives in [&mut declared, &mut reachable] {
+        natives.sort_unstable_by_key(|native| *native as usize);
+        natives.dedup();
+    }
+    Ok(ProgramNatives { declared, reachable })
+}
+
+/// The natives a run of an SPB program can reach that `profile` refuses, by symbol, sorted, each once (#1125,
+/// #1135: the playground warns before a run, and the site marks the examples that run).
 pub fn refused_natives(bytes: &[u8], profile: &budget::Profile) -> Result<Vec<&'static str>, Error> {
-    let mut refused: Vec<&'static str> =
-        program_natives(bytes)?.into_iter().filter(|native| !profile.offers(*native)).map(|native| native.symbol()).collect();
-    refused.sort_unstable();
-    Ok(refused)
+    Ok(ProgramNatives::refused(&program_natives(bytes)?.reachable, profile))
 }
 
 /// CLI execution result. Loading failures remain the outer `Err`; runtime

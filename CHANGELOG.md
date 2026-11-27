@@ -7,6 +7,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Added
+- **The playground streams a run's output, and warns only about what a run can reach (#1134, #1135).**
+  sparrow-wasm's `run` takes an optional output sink: every write reaches it as a chunk `{stream, text, t}` while
+  the program runs, so the page shows output as it comes and keeps what a run it stops had printed (a Node smoke
+  test stops a spinning worker and finds its line). `version()` carries the profile's texts (`interrupted`, the
+  budget lines) for the page to print. `requirements` names the refused natives a run can reach from `main` (or
+  the tests of a test build) over the call graph (`sparrow_core::reach`: direct calls, closures, constants, cap
+  fields, built objects and the role methods that can be called on them), not every native the imports declare,
+  which stay in `declared`; over examples/ every run that stopped at a refused native stopped at a named one.
 - **The playground runs programs (#1125, sixth part of #1079).** A new crate `sparrow-wasm` (cdylib, wasm-bindgen)
   is Sparrow without the JIT and the host: it runs the SPB that okkama-wasm's new `build` makes on the interpreter
   under `Limits::playground()`, with standard input from the request and every write to stdout and stderr marked

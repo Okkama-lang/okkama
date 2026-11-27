@@ -1023,13 +1023,50 @@ every declaration is open (#1005, owner decision).
 - **Output as pieces.** `stdout::with_sink` hands every write of both streams to a closure on the VM thread (after
   `capture`, before buffering); `run_embedded` marks each piece with nanoseconds since the run's start on
   `clock::Instant` and joins consecutive writes of one stream at the same moment. sparrow-wasm turns pieces into
-  text holding back a character split between writes of one stream. The whole list comes back when the run ends
-  (one synchronous call); streaming through an import during the run is the page ticket's (§8 item 7).
+  text holding back a character split between writes of one stream. Since #1134 the writes can stream instead (below).
 - **Uncaught across modules.** sparrow-wasm describes the failure as JSON (`category`, `errorType`, `message`,
   stacks as runs `[function, pc, count]`, offsets, causes); okkama-wasm reads it back (`Uncaught::category_named`)
   and renders with the module of its last `build`. `main_outcome` is the CLI's 0..255 rule and report newline.
 - **stdin.** `Heap::set_stdin` puts a `Cursor` in `Stdin`; `Stdin::read` reads it instead of the process's; after
   it, end of input. The playground always passes a buffer (empty without the field).
+- **Streamed output (#1134).** `run(spb, request, sink?)`: with a sink (a JS function) every write is handed to it
+  while the program runs, as one chunk's JSON text, and the answer's `output` is `[]`; without one the output comes
+  back in the answer as before. One chunk per write, not batched: a run is one synchronous call, so neither the
+  module nor the worker's JS can flush on a timer, and a chunk held back would be lost when the page stops the run
+  (`worker.terminate()`); the output budget (1 MiB) bounds the number. sparrow-core: `Embedding::pieces`
+  (`PieceSink`, called on the VM thread) instead of collecting. On wasm32 the sink sits in a thread-local for the
+  call (`JsValue` is not `Send`); a sink that throws loses that chunk (`catch`), the run goes on. Natively
+  `sparrow_wasm::run_streaming(spb, request, emit)` takes a closure and returns the answer as a `Value`.
+- **The page's texts come from the runtime (#1134).** `version().profile.interrupted` is the line `okkama run`
+  prints when interrupted (`Exhausted::Interrupted`), written by the page on Stop and on its watchdog;
+  `profile.exhausted.{steps,memory,output}` are the budget lines (a run's own report carries them too).
+- **Reachable natives (#1135).** `requirements` names the refused natives a run can reach (`sparrow_core::reach`)
+  from the entry, or the tests of a test build; `declared` keeps the old list. The walk over-approximates: direct
+  calls and closures, constants' inits, cap fields called, intrinsic helpers and objects, built objects (`obj.new`,
+  `variant.new`, builtins) with their destroy, and a built object's implementation of a role method once that
+  method can be called (a reached `call.role` of that role and slot, or `reach::RUNTIME_CALLS`: `Error.text` for an
+  uncaught report, `size`/`item`/`order` from an intrinsic). A test counts the runtime's role-dispatch sites so a
+  new one cannot slip past the list. CLDR `files` follow the reachable natives too. Measured: the Bible's refused
+  examples 8→4, 16→12, 23→22 refused natives (others equal), the smoke test's file program 8→4; over examples/
+  (315 programs) every run that stopped at a refusal (47) stopped at a named native.
+
+### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135)
+
+- `run(spb, request, sink?)` → request `{stdin?: text, arguments?: [text]}`; answer
+  `{exit: 0..255, output: [chunk], report: text | null, uncaught: Uncaught | null}`, or `{error}` for a request
+  that is not JSON. A program that does not load: `exit` 1, `report` `"okkama: …\n"`. `report` is null when there
+  is nothing to print (exit 0..255 from main), else the stderr text `okkama run` prints before the stack.
+- chunk `{stream: "stdout" | "stderr", text, t}`: `t` nanoseconds since the run started on the run's timeline
+  (wasm32: virtual, sleeps skipped). Without a sink, writes of one stream at the same `t` are joined.
+- Uncaught `{category: "uncaught-error" | "runtime" | "panic" | "exhausted", errorType: text | null, message,
+  trace: [[function, pc, count]], traceOmitted, traceOffset, causeTraces: [[offset, [[function, pc, count]],
+  omitted]]}`: stacks as runs of equal consecutive sites. okkama-wasm `failureText({report, uncaught, cwd?})` →
+  `{ok: true, text}`.
+- `requirements(spb)` → `{refused: [symbol], declared: [symbol], files: [name]}` (symbols sorted), or `{error}`.
+- `provide(name, gzipBytes)` → `{ok: true}` or `{error}`.
+- `version()` → `{version, profile: {name, groups: [name], steps, memory, output, interrupted, exhausted: {steps,
+  memory, output}}}`.
+- `lastPanic()` → `{panic: {message, location} | null}`.
 
 ## Map keys walk their depth on their own stack (#1130, 2026-11-27, from the #1124 audit)
 

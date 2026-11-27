@@ -10,6 +10,13 @@
   `lsp.rs` and okkama-wasm; unit test `answers_come_from_the_last_analysed_inspection` (mutation: record parsed
   fails it); `tests/playground.rs` completes `bottle.` after `std.coll` (failed before: the LSP offered nothing);
   `cli.rs` lsp_* green; Bible `build.py --check` without the replace: 249 examples, 0 failures (gate build of the tree).
+- [x] #1134 + #1135 Playground streaming and reachable natives (feature/1134 from release/066 d7e6c5d79, not
+  committed; worktree okkama-work/hf-1134, targets t-1134 and t-1134-nd): `Embedding::pieces`/`PieceSink`;
+  sparrow-wasm `run(spb, request, sink?)`, `run_streaming`, `Decoder`, `version().profile.{interrupted,exhausted}`;
+  `sparrow-core/src/reach.rs` (`functions`, `RUNTIME_CALLS`), `ProgramNatives {declared, reachable}`,
+  `requirements` → `{refused, declared, files}`; playground_run streams and checks over examples/ that a refusal
+  hit is named (315 programs, 47 stopped, all named); smoke.mjs: sink, stopped worker, texts, declared/refused
+  (file program 8→4). sparrow_wasm_bg.wasm 3,773,197 bytes, 1,863,281 gzip (+8.3 KB; budget 2,000,000).
 - [x] #1125 Playground runtime (feature/1125 from release/066, rebased on f5e49d602, not committed; worktree
   okkama-work/hf-1125, targets t-1125 and t-1125-nd): crate `sparrow-wasm` (run/requirements/provide/version/
   lastPanic, clocks from the page); `budget::Profile`/`PLAYGROUND`/`Limits::playground()`/`permits_workers`;

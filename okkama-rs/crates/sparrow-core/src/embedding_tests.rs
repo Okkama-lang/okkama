@@ -103,5 +103,10 @@ fn the_profile_refusal_is_a_program_failure() {
 #[test]
 fn refused_natives_names_what_the_profile_lacks() {
     assert_eq!(refused_natives(&spb(HOST), &PLAYGROUND).unwrap(), vec!["runtime/system@1::system_host_name/0"]);
+    // #1135: ECHO declares the host native too but never calls it.
+    assert_eq!(refused_natives(&spb(ECHO), &PLAYGROUND).unwrap(), Vec::<&str>::new());
+    let natives = crate::program_natives(&spb(ECHO)).unwrap();
+    assert!(natives.declared.contains(&okkama_runtime_abi::Native::SystemSystemHostName));
+    assert!(!natives.reachable.contains(&okkama_runtime_abi::Native::SystemSystemHostName));
     assert!(refused_natives(b"not an spb", &PLAYGROUND).is_err());
 }
