@@ -1298,6 +1298,16 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## Sweep by page (#1114, 2026-11-28; owner: measured prototype; design Fable)
+
+- Payloads and big integers live on owner pages; general pages never hold Rust state. Owner pages are swept
+  eagerly (cleanup timing unchanged); only general pages may be taken back unread.
+- Page liveness is a byte per 4 KiB granule over the pages' span, set by `mark_and_queue` (the only writer of
+  MARK). Pages are not aligned: a granule shared with a neighbour or a large object only makes a page look live.
+- Lazy sweep rejected (unmarking and counting live is the walk; owner pages must stay eager); a per-cell side
+  bitmap deferred with the marking follow-up.
+- Owner (2026-11-28): a little more memory for this speed is acceptable, unless something is plainly wrong.
+
 ## Keys from outside the process take a keyed hash (#1103, 2026-11-28; owner: research first)
 
 - Text or bytes that come from outside (DB column names, JSON members, headers) key std's RandomState

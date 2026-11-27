@@ -122,6 +122,25 @@ const CLASS_BY_WORDS: [u8; SMALL_CLASS_LIMIT + 1] = {
     table
 };
 
+/// #1114: the page classes of cells that own Rust memory, after the general ones: big integers (header and box)
+/// and payloads. A general page then never holds Rust state, so its dead cells need no visit to release any;
+/// owner pages are swept eagerly, so each box drops in the collection that finds it dead. Only the heap makes
+/// these cells (machine code allocates general classes only).
+const OWNER_BIG: usize = CLASSES.len();
+const OWNER_PAYLOAD: usize = CLASSES.len() + 1;
+/// Cell words of every page class: the general classes, then the owner classes.
+const CELL_WORDS: [usize; CLASSES.len() + 2] = {
+    let mut words = [0; CLASSES.len() + 2];
+    let mut class = 0;
+    while class < CLASSES.len() {
+        words[class] = CLASSES[class];
+        class += 1;
+    }
+    words[OWNER_BIG] = 2;
+    words[OWNER_PAYLOAD] = PAYLOAD_WORDS;
+    words
+};
+
 /// The words of a reclaimed cell under collector stress.
 const POISON: u64 = 0xdead_dead_dead_dead;
 /// The ephemeron pass of a collection (#503): given which objects are marked,
@@ -270,15 +289,74 @@ impl TraceLayouts {
     }
 }
 
+/// The free cells of a page that a sweep left (#522, #1114): a chain from `head`, or, when the page held no
+/// live cell by the liveness map, the whole page unthreaded from `head` (its base), threaded when the
+/// allocator takes it.
+#[derive(Debug, Clone, Copy)]
+struct Reserved {
+    head: Word,
+    bytes: usize,
+    page: u32,
+    threaded: bool,
+}
+
+/// #1114: which 4 KiB granules of the pages' address span hold a marked cell, set by marking. A general page
+/// whose granules are all clear held no live cell: the sweep takes it back whole without reading a cell. A
+/// granule shared with a neighbouring page or a large object only makes a page look live (it is walked).
+#[derive(Debug, Default)]
+struct Liveness {
+    lo: Word,
+    map: Vec<u8>,
+    /// Off when the span is larger than the cap: the sweep walks every page.
+    on: bool,
+}
+const GRANULE_SHIFT: u32 = 12;
+/// The largest map, in granules (4 GiB of span); past it the collection walks every page.
+const LIVENESS_GRANULES: usize = 1 << 20;
+
+impl Liveness {
+    /// Clear for a collection over `pages`.
+    fn reset(&mut self, pages: &[Page]) {
+        self.map.clear();
+        self.on = false;
+        let Some(lo) = pages.iter().map(|page| page.memory.as_ptr() as Word).min() else { return };
+        let hi = pages.iter().map(|page| page.memory.as_ptr() as Word + (page.memory.len() * 8) as Word).max().unwrap_or(lo);
+        let lo = lo >> GRANULE_SHIFT << GRANULE_SHIFT;
+        let granules = ((hi - lo) >> GRANULE_SHIFT) as usize + 1;
+        if granules > LIVENESS_GRANULES {
+            return;
+        }
+        self.lo = lo;
+        self.map.resize(granules, 0);
+        self.on = true;
+        okkama_devtrace::count!("gc", "liveness map granules", granules);
+        okkama_devtrace::count!("gc", "liveness map page granules", pages.len() * PAGE_BYTES >> GRANULE_SHIFT);
+    }
+
+    /// No marked cell in `bytes` from `base`?
+    fn clear(&self, base: Word, bytes: usize) -> bool {
+        let first = ((base - self.lo) >> GRANULE_SHIFT) as usize;
+        let last = ((base + bytes as Word - 1 - self.lo) >> GRANULE_SHIFT) as usize;
+        self.on && self.map[first..=last].iter().all(|&granule| granule == 0)
+    }
+}
+
+/// What marking writes to: the worklist and the liveness map.
+struct Marker<'a> {
+    worklist: &'a mut Vec<Word>,
+    lo: Word,
+    map: &'a mut [u8],
+}
+
 #[derive(Debug)]
 struct Page {
     class: usize,
     memory: Box<[u64]>,
     /// Stable identity (indices shift when empty pages are freed).
     id: u32,
-    /// #538: the page held no live cell at the last sweep, which left this free chain (head, bytes). While no
-    /// allocation takes the chain, the next sweep keeps it without walking the page.
-    idle: Option<(Word, usize)>,
+    /// #538: the page held no live cell at the last sweep, which left these free cells. While no allocation
+    /// takes them, the next sweep keeps them without looking at the page.
+    idle: Option<Reserved>,
 }
 
 /// An integer read from a word.
@@ -318,7 +396,7 @@ pub struct Heap {
     canonical: Canonical,
     pages: Vec<Page>,
     /// Free list heads per class; a free cell's second word links the next.
-    free: [Word; CLASSES.len()],
+    free: [Word; CELL_WORDS.len()],
     /// The free cells of the last sweep, per class: one chain per page and
     /// its bytes (#522). A sweep leaves the free lists empty; when one runs
     /// dry, the next chain becomes the list and its bytes count as
@@ -326,12 +404,16 @@ pub struct Heap {
     /// uncounted, so without this a program that recycles its garbage
     /// reused every swept cell before a collection could come, then grew
     /// by new pages every cycle.
-    reserve: [Vec<(Word, usize, u32)>; CLASSES.len()],
+    reserve: [Vec<Reserved>; CELL_WORDS.len()],
+    /// #1114: set by marking, read by the sweep.
+    liveness: Liveness,
     /// Pages whose reserved chain an allocation took since the last sweep (#538).
     touched: std::collections::HashSet<u32>,
     next_page: u32,
     /// Pages the sweeps kept idle without walking them (#538), for tests and statistics.
     pub(crate) idle_pages_kept: u64,
+    /// #1114: general pages the sweeps took back whole by the liveness map, without reading a cell.
+    pub(crate) dead_pages_unread: u64,
     large: Vec<Box<[u64]>>,
     /// Bytes of the large objects, live or not yet swept.
     large_bytes: usize,
@@ -499,11 +581,13 @@ impl Heap {
             canonical: Canonical::default(),
             layouts,
             pages: Vec::new(),
-            free: [0; CLASSES.len()],
+            free: [0; CELL_WORDS.len()],
             reserve: std::array::from_fn(|_| Vec::new()),
+            liveness: Liveness::default(),
             touched: std::collections::HashSet::new(),
             next_page: 0,
             idle_pages_kept: 0,
+            dead_pages_unread: 0,
             large: Vec::new(),
             large_bytes: 0,
             allocated: 0,
@@ -605,7 +689,11 @@ impl Heap {
             }
         };
         for page in &self.pages {
-            let step = CLASSES[page.class] * 8;
+            // #1114: an unthreaded page not taken since holds only stale headers of cells already counted dead.
+            if page.idle.is_some_and(|reserved| !reserved.threaded) && !self.touched.contains(&page.id) {
+                continue;
+            }
+            let step = CELL_WORDS[page.class] * 8;
             let base = page.memory.as_ptr() as Word;
             for cell in 0..page.memory.len() * 8 / step {
                 let address = base + (cell * step) as Word;
@@ -693,8 +781,8 @@ impl Heap {
         okkama_devtrace::count!("runtime", "heap class allocations");
         if self.free[class] == 0 {
             match self.reserve[class].pop() {
-                Some((chain, bytes, page)) => {
-                    self.free[class] = chain;
+                Some(Reserved { head, bytes, page, threaded }) => {
+                    self.free[class] = if threaded { head } else { thread(head, bytes / 8, CELL_WORDS[class]) };
                     self.allocated += bytes;
                     self.touched.insert(page);
                 }
@@ -716,19 +804,11 @@ impl Heap {
         if let Some(watch) = &mut self.watch {
             watch.grow(PAGE_BYTES, held);
         }
-        let size = CLASSES[class];
+        let size = CELL_WORDS[class];
         let mut memory = vec![0u64; PAGE_WORDS - PAGE_WORDS % size].into_boxed_slice();
         let base = memory.as_mut_ptr() as Word;
-        let cells = memory.len() / size;
-        for cell in (0..cells).rev() {
-            let address = base + (cell * size * 8) as Word;
-            // SAFETY: inside the page just allocated.
-            unsafe {
-                *(address as *mut u64) = header(FREE, Repr::Raw, 0);
-                *((address + 8) as *mut u64) = self.free[class];
-            }
-            self.free[class] = address;
-        }
+        debug_assert_eq!(self.free[class], 0, "a page is added when the list is empty");
+        self.free[class] = thread(base, memory.len(), size);
         self.next_page = self.next_page.wrapping_add(1);
         self.pages.push(Page { class, memory, id: self.next_page, idle: None });
     }
@@ -1511,7 +1591,8 @@ impl Heap {
         // big integers trigger collections by their real size.
         self.external += big_bytes(&n);
         self.counted("bigint", 0, 2);
-        let object = self.allocate(2);
+        okkama_devtrace::count!("runtime", "heap words allocated", 2);
+        let object = self.allocate_class(OWNER_BIG);
         // SAFETY: two fresh words; the box is dropped by the sweep.
         unsafe {
             *(object as *mut u64) = header(BIGINT, Repr::Raw, 0);
@@ -1550,7 +1631,8 @@ impl Heap {
     /// collects, so no safepoint can see the uninitialized cell.
     fn store_payload(&mut self, payload: Box<dyn Payload>) -> Word {
         self.counted("payload", 0, PAYLOAD_WORDS);
-        let object = self.allocate(PAYLOAD_WORDS);
+        okkama_devtrace::count!("runtime", "heap words allocated", PAYLOAD_WORDS);
+        let object = self.allocate_class(OWNER_PAYLOAD);
         // SAFETY: fresh storage sized and aligned for PayloadCell. Write the
         // whole typed value without dropping the free-list/poison bytes.
         unsafe {
@@ -1674,24 +1756,27 @@ impl Heap {
         crate::maps::begin_pass();
         let marking = self.allocations.is_some().then(crate::clock::Instant::now);
         let mut worklist = std::mem::take(&mut self.worklist);
+        let mut liveness = std::mem::take(&mut self.liveness);
+        liveness.reset(&self.pages);
+        let mut marker = Marker { worklist: &mut worklist, lo: liveness.lo, map: &mut liveness.map };
         // An object is marked when it is queued, not when it is traced
         // (#438): one shared by many edges enters the worklist once.
         let roots_span = okkama_devtrace::span!("gc", "mark roots");
         roots(&mut |word, repr| {
             if let Some(pointer) = repr.pointer(word) {
                 // SAFETY: a root is a live object pointer.
-                unsafe { mark_and_queue(pointer, &mut worklist) };
+                unsafe { mark_and_queue(pointer, &mut marker) };
             }
         });
         // #1168: the shared instances are roots of every collection of a running heap.
         for word in self.canonical.words() {
             // SAFETY: each is a live object the heap made and never frees while it runs.
-            unsafe { mark_and_queue(word, &mut worklist) };
+            unsafe { mark_and_queue(word, &mut marker) };
         }
         drop(roots_span);
         loop {
             let trace_span = okkama_devtrace::span!("gc", "mark trace");
-            self.mark_reachable(&mut worklist);
+            self.mark_reachable(&mut marker);
             drop(trace_span);
             // SAFETY: keys are live object pointers; their headers are read.
             let marked = |object: Word| unsafe { *(object as *const u64) } & MARK != 0;
@@ -1701,7 +1786,7 @@ impl Heap {
                     && unsafe { *(pointer as *const u64) } & MARK == 0
                 {
                     // SAFETY: an ephemeron value is a live object pointer.
-                    unsafe { mark_and_queue(pointer, &mut worklist) };
+                    unsafe { mark_and_queue(pointer, &mut marker) };
                     found = true;
                 }
             });
@@ -1712,6 +1797,8 @@ impl Heap {
         if let (Some(allocations), Some(marking)) = (&mut self.allocations, marking) {
             allocations.mark_nanos += marking.elapsed().as_nanos() as u64;
         }
+        drop(marker);
+        self.liveness = liveness;
         self.worklist = worklist;
         // Watched objects that died, found by their marks before the sweep:
         // a pass over the watched few, instead of a set lookup for every dead
@@ -1741,12 +1828,12 @@ impl Heap {
     }
 
     /// Mark everything reachable from the worklist.
-    fn mark_reachable(&self, worklist: &mut Vec<Word>) {
-        while let Some(object) = worklist.pop() {
+    fn mark_reachable(&self, marker: &mut Marker<'_>) {
+        while let Some(object) = marker.worklist.pop() {
             let mut push = |word: Word, repr: Repr| {
                 if let Some(pointer) = repr.pointer(word) {
                     // SAFETY: a traced field holds a live object pointer.
-                    unsafe { mark_and_queue(pointer, worklist) };
+                    unsafe { mark_and_queue(pointer, marker) };
                 }
             };
             self.trace_object(object, &mut push);
@@ -1868,13 +1955,12 @@ impl Heap {
     /// heap shrinks back instead of keeping, and sweeping, its high-water
     /// pages for the life of the program. Kept pages offer their cells like
     /// any other; the allocator returns freed ones to the system.
-    fn release_empty_pages(&mut self, empty: Vec<(usize, Word, usize)>) {
+    fn release_empty_pages(&mut self, empty: Vec<(usize, Reserved)>) {
         let keep = self.threshold / PAGE_BYTES + EMPTY_PAGES_SLACK;
         let mut freed = Vec::new();
-        for (count, (index, chain, bytes)) in empty.into_iter().enumerate() {
+        for (count, (index, reserved)) in empty.into_iter().enumerate() {
             if count < keep || self.stress {
-                let page = &self.pages[index];
-                self.reserve[page.class].push((chain, bytes, page.id));
+                self.reserve[self.pages[index].class].push(reserved);
             } else {
                 freed.push(index);
             }
@@ -1896,8 +1982,15 @@ impl Heap {
 
     /// Overwrite every free cell past its link (collector stress).
     fn poison(&mut self) {
-        for (class, &size) in CLASSES.iter().enumerate() {
-            let chains = self.reserve[class].iter().map(|&(chain, _, _)| chain);
+        for (class, &size) in CELL_WORDS.iter().enumerate() {
+            // #1114: an unthreaded page is poisoned whole, headers included (POISON is no kind).
+            for reserved in self.reserve[class].iter().filter(|reserved| !reserved.threaded) {
+                for word in 0..reserved.bytes / 8 {
+                    // SAFETY: the words of a live page none of whose cells is live.
+                    unsafe { *((reserved.head + word as Word * 8) as *mut u64) = POISON };
+                }
+            }
+            let chains = self.reserve[class].iter().filter(|reserved| reserved.threaded).map(|reserved| reserved.head);
             for mut cell in std::iter::once(self.free[class]).chain(chains) {
                 while cell != 0 {
                     for word in 2..size {
@@ -1914,8 +2007,8 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "sweep");
         // Development counters (#538), per page, reported once per sweep. Nothing is counted per cell: the
         // cell loop stays the shape it had in 0.5.8, which #922 measured ~5% faster on allocation-heavy runs.
-        let (mut full_cells, mut empty_cells, mut visited, mut idle_pages) = (0, 0, 0, 0u64);
-        self.free = [0; CLASSES.len()];
+        let (mut full_cells, mut empty_cells, mut visited, mut idle_pages, mut dead_pages) = (0, 0, 0, 0u64, 0u64);
+        self.free = [0; CELL_WORDS.len()];
         for chains in &mut self.reserve {
             chains.clear();
         }
@@ -1926,23 +2019,33 @@ impl Heap {
         let mut external_live = 0;
         // Pages with no live cell (#435): their chains wait until the end of
         // the sweep decides how many empty pages the next cycle needs.
-        let mut empty: Vec<(usize, Word, usize)> = Vec::new();
+        let mut empty: Vec<(usize, Reserved)> = Vec::new();
         let touched = std::mem::take(&mut self.touched);
         for (index, page) in self.pages.iter_mut().enumerate() {
-            let size = CLASSES[page.class];
+            let size = CELL_WORDS[page.class];
             let cells = page.memory.len() / size;
             // #538: empty at the last sweep and no allocation took its chain since: nothing on it can be marked,
             // and its free chain is intact, so it is empty again without a walk.
-            if let Some((chain, bytes)) = page.idle
+            if let Some(reserved) = page.idle
                 && !touched.contains(&page.id)
             {
                 visited += cells;
                 empty_cells += cells;
                 idle_pages += 1;
-                empty.push((index, chain, bytes));
+                empty.push((index, reserved));
                 continue;
             }
             let base = page.memory.as_mut_ptr() as Word;
+            // #1114: a general page with no marked cell by the liveness map goes back whole, unread; it is
+            // threaded when the allocator takes it. (An owner page is always walked: its dead cells drop now.)
+            if page.class < CLASSES.len() && self.liveness.clear(base, cells * size * 8) {
+                empty_cells += cells;
+                dead_pages += 1;
+                let reserved = Reserved { head: base, bytes: cells * size * 8, page: page.id, threaded: false };
+                page.idle = Some(reserved);
+                empty.push((index, reserved));
+                continue;
+            }
             let mut kept = 0;
             let mut chain = 0;
             let step = size * 8;
@@ -1975,12 +2078,14 @@ impl Heap {
                 empty_cells += cells;
             }
             if kept == 0 {
-                page.idle = Some((chain, cells * size * 8));
-                empty.push((index, chain, cells * size * 8));
+                let reserved = Reserved { head: chain, bytes: cells * size * 8, page: page.id, threaded: true };
+                page.idle = Some(reserved);
+                empty.push((index, reserved));
             } else {
                 page.idle = None;
                 if chain != 0 {
-                    self.reserve[page.class].push((chain, (cells - kept) * size * 8, page.id));
+                    let bytes = (cells - kept) * size * 8;
+                    self.reserve[page.class].push(Reserved { head: chain, bytes, page: page.id, threaded: true });
                 }
             }
         }
@@ -2002,9 +2107,6 @@ impl Heap {
                 false
             }
         });
-        if self.stress {
-            self.poison();
-        }
         self.large_bytes = large_bytes;
         if let Some(allocations) = &mut self.allocations {
             let Allocations { live_dense, live, .. } = &mut **allocations;
@@ -2027,11 +2129,17 @@ impl Heap {
         self.external_live = external_live;
         self.threshold = if self.stress { 0 } else { (live + external_live).max(COLLECTION_FLOOR) };
         self.release_empty_pages(empty);
+        // After the empty pages join the reserve (#1114: before, their cells escaped the poison).
+        if self.stress {
+            self.poison();
+        }
         self.collections += 1;
         okkama_devtrace::count!("gc", "sweep cells visited", visited);
         okkama_devtrace::count!("gc", "sweep cells in full pages", full_cells);
         okkama_devtrace::count!("gc", "sweep cells in empty pages", empty_cells);
         okkama_devtrace::count!("gc", "sweep pages kept idle without a walk", idle_pages);
+        okkama_devtrace::count!("gc", "sweep pages dead by the liveness map", dead_pages);
+        self.dead_pages_unread += dead_pages;
         self.idle_pages_kept += idle_pages;
     }
 }
@@ -2075,12 +2183,32 @@ unsafe fn owned_bytes(address: Word, header: u64) -> usize {
 ///
 /// SAFETY: `object` is a live object pointer.
 #[inline(always)]
-unsafe fn mark_and_queue(object: Word, worklist: &mut Vec<Word>) {
+unsafe fn mark_and_queue(object: Word, marker: &mut Marker<'_>) {
     let header = unsafe { *(object as *const u64) };
     if header & MARK == 0 {
         unsafe { *(object as *mut u64) = header | MARK };
-        worklist.push(object);
+        // #1114: its granule holds a live cell (an address outside the span, a large object, sets nothing).
+        if let Some(granule) = marker.map.get_mut((object.wrapping_sub(marker.lo) >> GRANULE_SHIFT) as usize) {
+            *granule = 1;
+        }
+        marker.worklist.push(object);
     }
+}
+
+/// Thread `words` words of cells of `size` words from `base` into a free list (each cell FREE, its second word
+/// the next); the head is the first cell.
+fn thread(base: Word, words: usize, size: usize) -> Word {
+    let mut head = 0;
+    for cell in (0..words / size).rev() {
+        let address = base + (cell * size * 8) as Word;
+        // SAFETY: cells of a live page.
+        unsafe {
+            *(address as *mut u64) = header(FREE, Repr::Raw, 0);
+            *((address + 8) as *mut u64) = head;
+        }
+        head = address;
+    }
+    head
 }
 
 /// Drop Rust data owned by a dead object.
@@ -2840,6 +2968,108 @@ mod tests {
             heap.collect(|_| {});
             assert_eq!(Rc::strong_count(&alive), 1);
         }
+    }
+
+    /// #1114: a page whose one live cell is its first, a middle or its last keeps it, unmarked and intact, cycle
+    /// after cycle, while the allocator hands out every other cell of the page exactly once.
+    #[test]
+    fn a_survivor_anywhere_in_a_page_keeps_it_1114() {
+        let cells = PAGE_WORDS / 2;
+        for keep in [0, cells / 2, cells - 1] {
+            let mut heap = Heap::new(layouts());
+            let objects: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64])).collect();
+            assert_eq!(heap.pages.len(), 1);
+            let survivor = objects[keep];
+            for _ in 0..3 {
+                heap.collect(|visit| visit(survivor, Repr::Ref));
+                assert_eq!(heap.dead_pages_unread, 0, "a page with a live cell is walked");
+                assert_eq!(&*heap.elements(survivor), &[keep as u64]);
+                // SAFETY: a live object's header.
+                assert_eq!(unsafe { *(survivor as *const u64) } & MARK, 0);
+                let mut again: Vec<Word> = (0..cells - 1).map(|_| heap.allocate_array(Repr::Raw, &[7])).collect();
+                assert_eq!(heap.pages.len(), 1, "the page's free cells are reused");
+                assert!(!again.contains(&survivor));
+                again.sort_unstable();
+                again.dedup();
+                assert_eq!(again.len(), cells - 1, "each cell handed out once");
+            }
+        }
+    }
+
+    /// #1114: a general page with no live cell comes back whole without a read, and the allocator, taking it,
+    /// hands out each of its cells once; under collector stress its dead cells are poison until then.
+    #[test]
+    fn a_dead_page_comes_back_whole_1114() {
+        let cells = PAGE_WORDS / 2;
+        for stress in [false, true] {
+            let mut heap = Heap::new(layouts());
+            heap.set_stress(stress);
+            let objects: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64])).collect();
+            heap.collect(|_| {});
+            assert_eq!(heap.dead_pages_unread, 1);
+            assert_eq!(heap.stats().live_bytes, 0);
+            if stress {
+                for &object in &objects {
+                    // SAFETY: the words of a dead cell of a live page.
+                    assert_eq!(unsafe { *((object + 8) as *const u64) }, POISON);
+                }
+            }
+            // An idle dead page stays as it is.
+            heap.collect(|_| {});
+            assert_eq!(heap.dead_pages_unread, 1);
+            let mut again: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64 + 1])).collect();
+            assert_eq!(heap.pages.len(), 1);
+            for (n, &object) in again.iter().enumerate() {
+                assert_eq!(&*heap.elements(object), &[n as u64 + 1]);
+            }
+            again.sort_unstable();
+            let mut before = objects.clone();
+            before.sort_unstable();
+            assert_eq!(again, before, "the same cells, each once");
+        }
+    }
+
+    /// #1114: big integers and payloads live only on owner pages, other cells only on general pages, so a dead
+    /// general cell never owns Rust memory; every owner still drops in the collection that finds it dead.
+    #[test]
+    fn owners_live_only_on_owner_pages_1114() {
+        let mut heap = Heap::new(layouts());
+        let alive = Rc::new(());
+        let mut roots = Vec::new();
+        for n in 0..600 {
+            roots.push(heap.allocate_array(Repr::Raw, &[n]));
+            roots.push(heap.big(BigInt::from(n) << 80));
+            roots.push(heap.allocate_payload(Box::new(Counted { _alive: alive.clone(), words: vec![] })));
+        }
+        let owner = |kind: u8| kind == BIGINT || kind == PAYLOAD;
+        let check = |heap: &Heap| {
+            for page in &heap.pages {
+                let step = CELL_WORDS[page.class] * 8;
+                let base = page.memory.as_ptr() as Word;
+                for cell in 0..page.memory.len() * 8 / step {
+                    // SAFETY: every cell of a page starts with a header.
+                    let kind = kind(unsafe { *((base + (cell * step) as Word) as *const u64) });
+                    if kind == FREE {
+                        continue;
+                    }
+                    match page.class {
+                        OWNER_BIG => assert_eq!(kind, BIGINT),
+                        OWNER_PAYLOAD => assert_eq!(kind, PAYLOAD),
+                        _ => assert!(!owner(kind), "an owner on a general page"),
+                    }
+                }
+            }
+        };
+        check(&heap);
+        assert!(heap.pages.iter().any(|page| page.class == OWNER_BIG));
+        assert!(heap.pages.iter().any(|page| page.class == OWNER_PAYLOAD));
+        // Keep every third payload: the others drop in this very collection.
+        let kept: Vec<Word> = roots.iter().copied().skip(2).step_by(9).collect();
+        heap.collect(|visit| kept.iter().for_each(|&root| visit(root, Repr::Ref)));
+        assert_eq!(Rc::strong_count(&alive), 1 + kept.len());
+        check(&heap);
+        heap.collect(|_| {});
+        assert_eq!(Rc::strong_count(&alive), 1);
     }
 
     #[derive(Debug)]

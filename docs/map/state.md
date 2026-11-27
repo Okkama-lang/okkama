@@ -7,6 +7,13 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [~] #1114 GC: steps 1–2 done (design Fable on the ticket): `OWNER_BIG`/`OWNER_PAYLOAD`, `CELL_WORDS`,
+  `Liveness` (granule 4 KiB, cap 2^20), `Marker`, `Reserved { head, bytes, page, threaded }`, `thread()`,
+  `dead_pages_unread`; poison after `release_empty_pages`. Tests `heap::tests::*_1114` (3, mutations: owner
+  allocation, granule shift, poison skip, threading short — all caught). Corpus under GC stress vs base: 364/364.
+  Step 3 (bump lanes in the JIT) next, gate ≥ 1% on 10-app. Burst's +1.1 MB allocated with owner classes is
+  unexplained (not whole pages; a separate empty-page allowance did not change it).
+- [x] #1146 closed: no start-up regression (A/B v0.6.0/v0.6.6/now); breakdown on the ticket; pre-main → #1173.
 - [x] #1103 DB schema → std RandomState (Opus agent, feature/1103, cherry-picked): benchmarks in the ticket
   comment (scratchpad hbench), FastHasher `write` debug_assert (no text keys), integer writes mixed directly;
   tests `cargo test -p sparrow-core --lib 1103` (4, mutation-checked). Audit: no other FastMap with external keys.

@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **The sweep skips pages with no live cell (#1114).** Big integers and payloads get page classes of their own,
+  so a general page never holds Rust memory to release. Marking sets a byte per 4 KiB of the pages' span, and a
+  general page whose bytes stay clear goes back whole without reading a cell; its free list is threaded when the
+  allocator takes it. Owner pages are still swept eagerly, so every box drops in the collection that finds it
+  dead. Under collector stress, pages that died whole are now poisoned too (before, empty pages escaped the
+  poison). bench/gc sweep: tiny −94%, deep −60%, burst −35%, ownership −31% (bigint +8%, payload +4%); steady:
+  ownership −10%, tiny −5.5%, deep and burst −2%; 10-app sweep 32.1 → 16.8 ms (steady −3.7%), 11-ownership
+  −10%, 08-roles and 05-strings unchanged. Peak footprint: burst +4%, payload +1.6%, others unchanged.
 - **Database column names take a keyed hash (#1103).** A result set's schema keyed its column names, which the
   server chooses, by the engine's unkeyed FastHasher: 1024 colliding names of 4096 bytes made a schema take 66 ms
   instead of 1.3 ms and every `row.get(name)` 63 µs. The schema now uses std's keyed RandomState (SipHash-1-3); a
