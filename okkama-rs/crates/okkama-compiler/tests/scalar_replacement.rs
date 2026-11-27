@@ -81,3 +81,49 @@ fn a_callee_that_can_fail_stays_a_call() {
     let module = lower("main() is int { Point(x: 7, y: 2).ratio(); }\n", "all");
     assert!(kinds(&module, "main").contains(&"call"), "{:?}", kinds(&module, "main"));
 }
+
+const COUNTER: &str = "object Counter {
+    has total is int;
+    Counter(:total);
+    plus(value is int) is ^Counter { ^total = total + value; }
+    total() is int { total; }
+}
+";
+
+/// A loop-carried object (`sum = sum.plus(v)`) becomes one block parameter per field: the loop carries ints.
+#[test]
+fn a_loop_carried_object_becomes_its_fields() {
+    let body = format!("{COUNTER}main() is int {{ let sum = Counter(total: 1); for 0..8 -> value {{ sum = sum.plus(value); }} sum.total(); }}\n");
+    let module = lower(&body, "all");
+    let main = kinds(&module, "main");
+    assert!(!main.iter().any(|kind| matches!(*kind, "call" | "obj.new" | "obj.next" | "obj.get")), "{main:?}");
+    let function = function(&module, "main");
+    for block in &function.blocks {
+        for param in &block.params {
+            assert_eq!(function.values[param.0], okkama_compiler::ir::Type::Int, "every loop parameter is an int");
+        }
+    }
+}
+
+/// A loop-carried object that a call inside the loop takes is made as before, at every step.
+#[test]
+fn a_loop_carried_object_that_escapes_stays_an_object() {
+    let body = format!(
+        "{COUNTER}object Sink {{ Sink(); keep(counter is Counter) is int {{ counter.total() % 3; }} }}\n\
+         main() is int {{ let sum = Counter(total: 1); for 0..8 -> value {{ sum = sum.plus(value); Sink().keep(sum); }} sum.total(); }}\n"
+    );
+    let module = lower(&body, "all");
+    assert!(kinds(&module, "main").contains(&"obj.next"), "{:?}", kinds(&module, "main"));
+}
+
+/// An array's element reaches a loop through the parameter its lookup fills itself: that parameter is no
+/// candidate (the edge passes no argument for it), while the loop's own Counter still becomes its field.
+#[test]
+fn a_parameter_a_lookup_fills_is_not_split() {
+    let body = format!(
+        "{COUNTER}main() is int {{ let items = [Counter(total: 1), Counter(total: 2)]; let total = Counter(total: 0); \
+         for 0..2 -> i {{ let item = items[i] else Counter(total: 0); total = total.plus(item.total()); }} total.total(); }}\n"
+    );
+    let module = lower(&body, "all");
+    okkama_compiler::ir::verify(&module).unwrap();
+}
