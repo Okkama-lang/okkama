@@ -56,8 +56,9 @@ CONFIGS = {
 # Timeout multiples: the interpreter under GC stress took 105 s on a file the JIT runs in 31 s (#1123). On the
 # Wave's debug adapter t/gen/persistence/04 takes 121 s locally under it (the JIT under GC stress 57 s, either
 # engine without stress 16-19 s) and ran out of 240 s on CI at 520 of 618 checks; a slow runner adds up to x1.86
-# (#843), so ten times, 600 s: the whole suite stays in the Wave and the gate, and only a hang waits that long.
-TIMEOUT_SCALE = {"sparrow-interp-gc-stress": 10}
+# (#843), so ten times, 600 s, was the first guess; t/gen/persistence/06, the heaviest, still ran out of it on the
+# Wave, so twenty, 1200 s: the whole suite stays in the Wave and the gate, and only a hang waits that long.
+TIMEOUT_SCALE = {"sparrow-interp-gc-stress": 20}
 
 
 def exceptions():
