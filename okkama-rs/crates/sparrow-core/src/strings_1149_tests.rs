@@ -63,3 +63,29 @@ fn pieces_and_concatenations_of_ascii_strings_are_flagged_ascii() {
     let non_ascii_piece = runtime.heap.substring(mixed, 0, 2);
     assert!(!runtime.heap.is_ascii_text(non_ascii_piece));
 }
+
+/// The direct search of short texts finds what `str::match_indices` finds (non-overlapping, leftmost), in ASCII and
+/// in multi-byte text, below and above the short-text bound.
+#[test]
+fn the_direct_search_finds_what_match_indices_finds() {
+    let alphabet = ["a", "b", "→", "é", ";", "aa"];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |bound: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % bound as u64) as usize
+    };
+    for round in 0..2000 {
+        let length = if round % 10 == 0 { 100 + next(200) } else { next(40) };
+        let text: String = (0..length).map(|_| alphabet[next(alphabet.len())]).collect();
+        let pattern: String = (0..1 + next(3)).map(|_| alphabet[next(alphabet.len())]).collect();
+        let mut found = Vec::new();
+        match_starts(&text, &pattern, |at| {
+            found.push(at);
+            true
+        });
+        let expected: Vec<usize> = text.match_indices(pattern.as_str()).map(|(at, _)| at).collect();
+        assert_eq!(found, expected, "{text:?} / {pattern:?}");
+    }
+}

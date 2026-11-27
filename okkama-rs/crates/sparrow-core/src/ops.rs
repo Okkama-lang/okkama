@@ -2299,6 +2299,42 @@ pub(crate) fn str_slice(runtime: &mut Runtime, text: Word, start: Word, end: Wor
 #[path = "strings_1149_tests.rs"]
 mod strings_1149_tests;
 
+/// #1149: the byte offsets of the non-overlapping matches of a non-empty `pattern` in `source`, left to right, as
+/// `str::match_indices` gives them. A short text is searched directly (its first byte, then a compare): building
+/// std's two-way searcher costs more than the search on a line-sized text.
+fn match_starts(source: &str, pattern: &str, mut each: impl FnMut(usize) -> bool) {
+    debug_assert!(!pattern.is_empty());
+    if source.len() <= SHORT_TEXT {
+        let (haystack, needle) = (source.as_bytes(), pattern.as_bytes());
+        let mut at = 0;
+        while at + needle.len() <= haystack.len() {
+            match haystack[at..=haystack.len() - needle.len()].iter().position(|&byte| byte == needle[0]) {
+                None => return,
+                Some(offset) => {
+                    let start = at + offset;
+                    if &haystack[start..start + needle.len()] == needle {
+                        if !each(start) {
+                            return;
+                        }
+                        at = start + needle.len();
+                    } else {
+                        at = start + 1;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    for (start, _) in source.match_indices(pattern) {
+        if !each(start) {
+            return;
+        }
+    }
+}
+
+/// Texts up to this many bytes are searched directly ([`match_starts`]).
+const SHORT_TEXT: usize = 256;
+
 pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> Word {
     // Byte ranges of the parts, then one copy per part.
     let ranges: Vec<(usize, usize)> = {
@@ -2318,12 +2354,11 @@ pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> W
                         start = at + width;
                     }
                 }
-                _ => {
-                    for (at, matched) in source.match_indices(separator) {
-                        ranges.push((start, at));
-                        start = at + matched.len();
-                    }
-                }
+                _ => match_starts(source, separator, |at| {
+                    ranges.push((start, at));
+                    start = at + separator.len();
+                    true
+                }),
             }
             ranges.push((start, source.len()));
             ranges
@@ -2354,14 +2389,12 @@ pub(crate) fn str_replace(runtime: &mut Runtime, text: Word, pattern: Word, repl
     let (source, replacement) = unsafe { (&*source, &*replacement) };
     let mut parts: Vec<&str> = Vec::new();
     let mut start = 0;
-    for (at, matched) in source.match_indices(pattern) {
+    match_starts(source, pattern, |at| {
         parts.push(&source[start..at]);
         parts.push(replacement);
-        start = at + matched.len();
-        if first {
-            break;
-        }
-    }
+        start = at + pattern.len();
+        !first
+    });
     parts.push(&source[start..]);
     Ok(runtime.text_new_of(&parts, ascii))
 }
