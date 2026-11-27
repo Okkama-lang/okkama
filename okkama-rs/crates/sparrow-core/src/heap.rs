@@ -997,11 +997,17 @@ impl Heap {
 
     /// A flat string of `parts` in order, copied once.
     pub fn allocate_text_of(&mut self, parts: &[&str]) -> Word {
+        self.allocate_text_with(parts, false)
+    }
+
+    /// [`Heap::allocate_text_of`] when the caller knows the parts are ASCII (`known_ascii`, from their flags):
+    /// no byte is looked at twice (#1149).
+    pub(crate) fn allocate_text_with(&mut self, parts: &[&str], known_ascii: bool) -> Word {
         let bytes: usize = parts.iter().map(|part| part.len()).sum();
         let words = 1 + bytes.div_ceil(8).max(1);
         self.counted("string", 0, words);
         let string = self.allocate(words);
-        let ascii = parts.iter().all(|part| part.is_ascii());
+        let ascii = known_ascii || parts.iter().all(|part| part.is_ascii());
         // SAFETY: room for the header and `bytes` bytes.
         unsafe {
             *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
@@ -1173,7 +1179,9 @@ impl Heap {
         // SAFETY: the source string stays where it is while the copy is
         // allocated (allocation neither moves nor collects).
         let part = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(pointer, length)) };
-        self.allocate_text(part)
+        // #1149: a piece of an ASCII string is ASCII.
+        let ascii = self.is_ascii_text(string);
+        self.allocate_text_with(&[part], ascii)
     }
 
     /// The number of code points of `string`.

@@ -414,6 +414,10 @@ impl Runtime {
     pub fn text_new(&mut self, text: &str) -> Word {
         self.heap.allocate_text(text)
     }
+    /// A string of `parts` in order, copied once; `ascii` when the caller knows they are (#1149).
+    pub(crate) fn text_new_of(&mut self, parts: &[&str], ascii: bool) -> Word {
+        self.heap.allocate_text_with(parts, ascii)
+    }
     fn ty(&self, function: usize, register: okkama_sparrow::Register) -> Option<&Type> {
         let source = &self.loaded.program.functions[function];
         self.loaded.program.ty(source.registers[register.0 as usize])
@@ -767,7 +771,7 @@ pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: 
     if !fits(runtime, size) {
         return None;
     }
-    let string = runtime.heap.allocate_text_of(&parts);
+    let string = runtime.heap.allocate_text_with(&parts, ascii);
     if chains && ll >= TEXT_CHAIN_MIN {
         runtime.heap.mark(string, APPENDED);
     } else if chains && rl >= TEXT_CHAIN_MIN {
@@ -2291,6 +2295,10 @@ pub(crate) fn str_slice(runtime: &mut Runtime, text: Word, start: Word, end: Wor
 }
 
 /// The parts between separators; an empty separator splits into code points.
+#[cfg(test)]
+#[path = "strings_1149_tests.rs"]
+mod strings_1149_tests;
+
 pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> Word {
     // Byte ranges of the parts, then one copy per part.
     let ranges: Vec<(usize, usize)> = {
@@ -2300,9 +2308,22 @@ pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> W
         } else {
             let mut ranges = Vec::new();
             let mut start = 0;
-            for (at, matched) in source.match_indices(separator) {
-                ranges.push((start, at));
-                start = at + matched.len();
+            let mut chars = separator.chars();
+            match (chars.next(), chars.next()) {
+                // #1149: a one-character separator is searched as a character (memchr), not as a pattern.
+                (Some(separator), None) => {
+                    let width = separator.len_utf8();
+                    for (at, _) in source.match_indices(separator) {
+                        ranges.push((start, at));
+                        start = at + width;
+                    }
+                }
+                _ => {
+                    for (at, matched) in source.match_indices(separator) {
+                        ranges.push((start, at));
+                        start = at + matched.len();
+                    }
+                }
             }
             ranges.push((start, source.len()));
             ranges
@@ -2320,10 +2341,29 @@ pub(crate) fn replace_bytes(source: &str, pattern: &str, replacement: &str) -> u
 
 /// Every (or only the first) occurrence of `pattern` replaced.
 pub(crate) fn str_replace(runtime: &mut Runtime, text: Word, pattern: Word, replacement: Word, first: bool) -> Outcome {
+    let ascii = runtime.heap.is_ascii_text(text) && runtime.heap.is_ascii_text(replacement);
     let (source, pattern, replacement) =
         (runtime.heap.text(text), runtime.heap.text(pattern), runtime.heap.text(replacement));
-    let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
-    Ok(runtime.text_new(&replaced))
+    if pattern.is_empty() {
+        let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
+        return Ok(runtime.text_new(&replaced));
+    }
+    // #1149: the pieces between matches and the replacements, copied once into the new string.
+    let (source, replacement) = (source as *const str, replacement as *const str);
+    // SAFETY: the strings stay where they are while the result is allocated (allocation neither moves nor collects).
+    let (source, replacement) = unsafe { (&*source, &*replacement) };
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0;
+    for (at, matched) in source.match_indices(pattern) {
+        parts.push(&source[start..at]);
+        parts.push(replacement);
+        start = at + matched.len();
+        if first {
+            break;
+        }
+    }
+    parts.push(&source[start..]);
+    Ok(runtime.text_new_of(&parts, ascii))
 }
 
 /// Unicode whitespace removed from both ends.
