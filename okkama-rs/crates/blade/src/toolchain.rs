@@ -331,11 +331,16 @@ struct Listed {
 }
 
 /// Every file of the tree at `root` outside hidden directories (links
-/// followed), sorted by its path in the tree.
+/// followed), sorted by its path in the tree. A link back to a directory the
+/// walk is already inside is a loop and is skipped (#1140): the files under
+/// it are listed once, by their path outside the loop. Only ancestors count,
+/// so two links to one directory elsewhere list it under both names whatever
+/// order the directory reads in.
 fn list(root: &Path) -> Result<Vec<Listed>, String> {
     let mut files = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let top = std::fs::metadata(root).map_err(|error| format!("{}: {error}", root.display()))?;
+    let mut stack = vec![(root.to_path_buf(), directory(&top).into_iter().collect::<Vec<_>>())];
+    while let Some((dir, ancestors)) = stack.pop() {
         let entries = std::fs::read_dir(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
         for entry in entries {
             let entry = entry.map_err(|error| format!("{}: {error}", dir.display()))?;
@@ -347,7 +352,11 @@ fn list(root: &Path) -> Result<Vec<Listed>, String> {
             let meta = if link { std::fs::metadata(&path) } else { entry.metadata() }
                 .map_err(|error| format!("{}: {error}", path.display()))?;
             if meta.is_dir() {
-                stack.push(path);
+                let identity = directory(&meta);
+                if identity.is_some_and(|identity| ancestors.contains(&identity)) {
+                    continue;
+                }
+                stack.push((path, ancestors.iter().copied().chain(identity).collect()));
             } else if meta.is_file() {
                 let relative = path.strip_prefix(root).unwrap_or(&path);
                 let parts: Vec<String> =
@@ -358,6 +367,21 @@ fn list(root: &Path) -> Result<Vec<Listed>, String> {
     }
     files.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(files)
+}
+
+/// What tells one directory from another however it is reached: its device
+/// and inode on Unix; elsewhere nothing, and loops are not looked for.
+fn directory(meta: &Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
 }
 
 /// The cache file: the trees it last saw, and the digests by path; a line
@@ -495,6 +519,35 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
+    }
+
+    /// #1140: a link back to a directory the walk is inside is a loop: the
+    /// tree lists without it, and its digest is the digest without the link.
+    /// Two links to one directory outside the walk's path list it twice.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_loop_in_a_tree_is_skipped() {
+        use std::os::unix::fs::symlink;
+        let temp = Temp::new("loop");
+        temp.write("std/io/stdout.ok", "module io/stdout;\n");
+        temp.write("std/text.ok", "module text;\n");
+        temp.write("shared/one.ok", "module one;\n");
+        let std = temp.0.join("std");
+        let cache = temp.0.join("cache");
+        let before = Digests::load(&cache).tree(list(&std).unwrap()).unwrap();
+
+        symlink("..", std.join("io/up")).unwrap();
+        symlink(".", std.join("here")).unwrap();
+        symlink(&std, temp.0.join("shared/std")).unwrap();
+        let names = |dir: &Path| list(dir).unwrap().into_iter().map(|file| file.name).collect::<Vec<_>>();
+        assert_eq!(names(&std), ["io/stdout.ok", "text.ok"]);
+        assert_eq!(Digests::load(&cache).tree(list(&std).unwrap()).unwrap(), before, "a loop adds nothing");
+
+        symlink("../shared", std.join("a")).unwrap();
+        symlink("../shared", std.join("b")).unwrap();
+        // shared/std leads back into std, which the walk is inside.
+        assert_eq!(names(&std), ["a/one.ok", "b/one.ok", "io/stdout.ok", "text.ok"]);
+        assert_eq!(names(&temp.0.join("shared")), ["one.ok", "std/io/stdout.ok", "std/text.ok"]);
     }
 
     /// The cache answers for a file whose key is as remembered, without

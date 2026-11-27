@@ -211,14 +211,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 73 files, 23917 lines
+## other — 73 files, 23956 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
 - `blade/src/lock.rs` 131 — `blade.lock` — the exact versions a project was installed with.
 - `blade/src/manifest.rs` 300 — `blade.toml` — the manifest of a Blade project or package, and the project
 - `blade/src/project.rs` 400 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
-- `blade/src/toolchain.rs` 514 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
+- `blade/src/toolchain.rs` 553 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 7
 - `okkama-native/src/lib.rs` 7 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc
