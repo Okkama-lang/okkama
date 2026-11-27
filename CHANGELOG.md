@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **One shared empty array, empty map and fieldless value (#1168, part of #1106; owner's decision).** `[]`, `[:]`
+  and a value of a fieldless type without destroy, runtime role or Error role are one instance per representation
+  or type, made once and kept by the heap; nothing observes the difference (no fields, no identity, no in-place
+  writer). An extension of a session that would make a published type unshareable is refused. Micro A/B against
+  the previous step: map-empty 39.37 → 7.33 ns (−81%; what remains is `size()` and the loop), match −9%; the rest
+  within ±1.7%.
 - **Small array literals and closures allocated inline (#1167, part of #1106).** Array literals of up to 16
   elements (byte arrays packed) and closures are allocated by the JIT's own allocator in the layouts the runtime
   writes, instead of a call into the runtime. Micro A/B against the previous step: closure-create 14.32 → 5.49 ns

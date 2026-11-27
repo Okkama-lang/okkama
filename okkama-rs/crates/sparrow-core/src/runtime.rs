@@ -380,6 +380,12 @@ impl Runtime {
         prefix("object layouts", layouts.objects.starts_with(&published.objects))?;
         prefix("closure layouts", layouts.closures.starts_with(&published.closures))?;
         prefix("frame layouts", layouts.frames.starts_with(&published.frames))?;
+        // #1168: a published type keeps its sharing; an extension that makes it held (or otherwise unshareable)
+        // would leave its shared instance where a fresh one is required.
+        let held = held_objects(new);
+        let shareable = shareable_objects(new, &held, &layouts);
+        let published = shareable_objects(old, &self.held, &self.heap.layouts());
+        prefix("object sharing", shareable.starts_with(&published))?;
         let (functions, objects) = (new.functions.len(), new.objects.len());
         if functions > capacities.functions {
             return Err(Error(format!("the session holds at most {} functions", capacities.functions)));
@@ -408,7 +414,8 @@ impl Runtime {
         self.invocations[from..functions].copy_from_slice(&records);
         self.natives.extend(natives);
         self.intrinsics.extend(intrinsics);
-        self.held = held_objects(&loaded.program);
+        self.heap.set_shareable(shareable);
+        self.held = held;
         self.globals.resize(globals, None);
         #[cfg(feature = "jit")]
         self.jit.extend_dispatch(&loaded.program, objects_before);
@@ -445,6 +452,7 @@ impl Runtime {
         }).collect::<Result<Box<[_]>, Error>>()?;
         let resources = crate::failures::Resources::new(&loaded.program);
         heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
+        heap.set_shareable(shareable_objects(&loaded.program, &held_objects(&loaded.program), &loaded.layouts()));
         let intrinsics = loaded
             .program
             .functions
@@ -942,7 +950,10 @@ pub extern "C" fn rt_array(ctx: *mut Ctx, repr: u64, elements: *const Word, coun
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
     let elements = unsafe { std::slice::from_raw_parts(elements, count as usize) };
-    let word = if repr == ARRAY_BYTES {
+    let word = if elements.is_empty() {
+        // #1168: one shared empty array per representation.
+        runtime.heap.empty_array(repr)
+    } else if repr == ARRAY_BYTES {
         let bytes: Vec<u8> = elements.iter().map(|&w| w as u8).collect();
         runtime.heap.allocate_bytes(&bytes)
     } else {
@@ -1395,6 +1406,20 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// (`new…`) and the first parameter of an action. A constructor's parameters are
 /// values, not the object. Two of them are equal only when they are the same
 /// object.
+/// #1168: the object types whose fieldless values may share one instance: no fields, no destroy, not a runtime
+/// object, not held by the runtime (Atomic, Event, …: keyed by address or written in place), no traced slot, and
+/// not throwable (a rethrow is recognised by the thrown value's address, so a fresh `throw` must be a fresh value).
+pub(crate) fn shareable_objects(program: &okkama_sparrow::Program, held: &[bool], layouts: &crate::heap::Layouts) -> Vec<bool> {
+    program.objects.iter().enumerate().map(|(descriptor, object)| {
+        object.fields.is_empty()
+            && object.destroy.is_none()
+            && !object.builtin
+            && !held.get(descriptor).copied().unwrap_or(true)
+            && layouts.objects.get(descriptor).is_some_and(Vec::is_empty)
+            && !object.does.iter().any(|witness| program.roles[witness.role.0 as usize].is_error())
+    }).collect()
+}
+
 pub(crate) fn held_objects(program: &okkama_sparrow::Program) -> Vec<bool> {
     let mut held = vec![false; program.objects.len()];
     for function in &program.functions {

@@ -1389,3 +1389,201 @@ entry f5
     #[cfg(feature = "jit")]
     assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
 }
+
+/// #1168: the declarations of the sharing tests: a fieldless object, one with a field, one with a destroy, a
+/// fieldless error and a variant with two fieldless cases.
+const SHARING: &str = r#"
+role role0 "Error" builtin {
+    method "text" [] -> t1
+}
+object obj0 "Marker" {
+}
+object obj1 "Point" {
+    field "x" t0
+}
+object obj2 "Handle" {
+    destroy f4
+}
+object obj3 "Oops" {
+    does role0 [f5]
+}
+object obj4 "Light.on" {
+}
+object obj5 "Light.off" {
+}
+variant variant0 "Light" { case "on" obj4 case "off" obj5 }
+"#;
+const SHARING_TYPES: &str = "type t5 object obj0\ntype t6 object obj1\ntype t7 object obj2\ntype t8 object obj3\ntype t9 variant variant0\ntype t10 array t0\ntype t11 map t0 t0\ntype t12 map t1 t0";
+const SHARING_HELPERS: &str = r#"
+function f4 "Handle.destroy" {
+    registers [t7]
+    params [r0]
+    result void
+    0: ret _
+}
+function f5 "Oops.text" {
+    registers [t8, t1]
+    params [r0]
+    result t1
+    0: const r1, str "oops"
+    1: ret r1
+}
+"#;
+
+/// #1168: only fieldless, destroy-free, non-error types share one instance; each engine hands out the same word
+/// for each of them, for the empty array of a representation and the empty map of a key and value representation,
+/// and fresh words for everything else.
+#[test]
+fn shareable_types_and_shared_instances() {
+    let program_text = program(SHARING_TYPES, SHARING, &format!(r#"{SHARING_HELPERS}
+function f6 "marker" {{
+    registers [t5]
+    params []
+    result t5
+    0: obj.new r0, obj0, []
+    1: ret r0
+}}
+function f7 "point" {{
+    registers [t0, t6]
+    params []
+    result t6
+    0: const r0, int 1
+    1: obj.new r1, obj1, [r0]
+    2: ret r1
+}}
+function f8 "oops" {{
+    registers [t8]
+    params []
+    result t8
+    0: obj.new r0, obj3, []
+    1: ret r0
+}}
+function f9 "off" {{
+    registers [t9]
+    params []
+    result t9
+    0: variant.new r0, variant0, 1, []
+    1: ret r0
+}}
+function f10 "empty" {{
+    registers [t10]
+    params []
+    result t10
+    0: arr.new r0, []
+    1: ret r0
+}}
+function f11 "map" {{
+    registers [t11]
+    params []
+    result t11
+    0: map.new r0, []
+    1: ret r0
+}}
+function f12 "text map" {{
+    registers [t12]
+    params []
+    result t12
+    0: map.new r0, []
+    1: ret r0
+}}
+function f13 "main" {{
+    registers [t0]
+    params []
+    result t0
+    0: const r0, int 0
+    1: ret r0
+}}
+entry f13
+"#));
+    let program = okkama_sparrow::assemble(&program_text).unwrap_or_else(|error| panic!("{error}\n{program_text}"));
+    let loaded = Loaded::verified(program).unwrap();
+    let shareable = crate::runtime::shareable_objects(&loaded.program, &crate::runtime::held_objects(&loaded.program), &loaded.layouts());
+    assert_eq!(shareable, vec![true, false, false, false, true, true], "Marker, Point, Handle, Oops, Light.on, Light.off");
+    let engines_list: &[Engine] = if cfg!(feature = "jit") { &[Engine::Jit, Engine::Interpreter] } else { &[Engine::Interpreter] };
+    for &engine in engines_list {
+        let mut runtime = Box::new(Runtime::new(Loaded::verified(okkama_sparrow::assemble(&program_text).unwrap()).unwrap()).unwrap());
+        match engine {
+            Engine::Interpreter => runtime.use_engine(crate::Engine::Interpreter),
+            #[cfg(feature = "jit")]
+            Engine::Jit => runtime.use_engine(crate::Engine::Jit),
+            #[cfg(not(feature = "jit"))]
+            Engine::Jit => unreachable!(),
+        }
+        // Two values while the first is still live; for a shared one, a third after a collection without roots
+        // (the heap keeps its shared instances itself).
+        fn twice(runtime: &mut Box<Runtime>, function: usize) -> (u64, u64) {
+            let first = runtime.run_function_with(function, &[], STACK).unwrap();
+            let second = runtime.run_function_with(function, &[], STACK).unwrap();
+            (first, second)
+        }
+        for (function, shared) in [(6, true), (7, false), (8, false), (9, true), (10, true), (11, true), (12, true)] {
+            let (first, second) = twice(&mut runtime, function);
+            assert_eq!(first == second, shared, "f{function} on {engine:?}");
+            if shared {
+                let header = runtime.heap.header_of(first);
+                runtime.heap.collect(|_| {});
+                // Fresh values of the small size classes after the collection must not take the shared cell.
+                for _ in 0..64 {
+                    runtime.run_function_with(7, &[], STACK).unwrap();
+                    runtime.run_function_with(8, &[], STACK).unwrap();
+                }
+                assert_eq!(runtime.heap.header_of(first), header, "f{function} on {engine:?}: the shared cell was reused");
+                let third = runtime.run_function_with(function, &[], STACK).unwrap();
+                assert_eq!(third, first, "f{function} on {engine:?} after a collection");
+            }
+        }
+        // Different representations get different instances.
+        let (int_map, _) = twice(&mut runtime, 11);
+        let (text_map, _) = twice(&mut runtime, 12);
+        assert_ne!(int_map, text_map, "{engine:?}");
+    }
+}
+
+/// #1168: a shared empty array or map is never changed by what is built from it, fieldless values compare equal,
+/// and all of it survives collections; the interpreter and the JIT agree, with GC stress on both.
+#[test]
+fn shared_empty_values_stay_empty() {
+    let source = program(SHARING_TYPES, SHARING, &format!(r#"{SHARING_HELPERS}
+function f6 "main" {{
+    registers [t10, t10, t10, t0, t0, t11, t11, t11, t5, t5, t4, t9, t9, t0, t10]
+    params []
+    result t0
+    0: arr.new r0, []
+    1: const r3, int 1
+    2: arr.new r1, [r3]
+    3: arr.concat r2, [r0, r1]
+    4: arr.concat r14, [r0, r0]
+    5: arr.len r4, r2
+    6: call _, f1, [r4]
+    7: arr.len r4, r0
+    8: call _, f1, [r4]
+    9: arr.len r4, r14
+    10: call _, f1, [r4]
+    11: const r4, int 2
+    12: map.new r5, []
+    13: map.new r6, [r3: r4]
+    14: map.merge r7, [r5, r6]
+    15: map.len r13, r7
+    16: call _, f1, [r13]
+    17: map.len r13, r5
+    18: call _, f1, [r13]
+    19: obj.new r8, obj0, []
+    20: obj.new r9, obj0, []
+    21: val.cmp eq, r10, r8, r9
+    22: call _, f3, [r10]
+    23: variant.new r11, variant0, 0, []
+    24: variant.new r12, variant0, 1, []
+    25: val.cmp eq, r10, r11, r12
+    26: call _, f3, [r10]
+    27: arr.new r0, []
+    28: arr.len r4, r0
+    29: ret r4
+}}
+entry f6
+"#));
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&["1", "0", "0", "1", "0", "1", "0"]));
+    assert_eq!(outcome.result, Ok(0));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}

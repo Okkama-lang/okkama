@@ -1207,3 +1207,16 @@ every declaration is open (#1005, owner decision).
 - Tests compare the inline build with `jit.plain` (every such instruction through rt_exec) on edge values, and
   assert the fast inputs never reach rt_exec (`exec <mnemonic>` stats).
 
+## Shared empty and fieldless values (#1168 / #1106 stage 3, 2026-11-27; owner approved sharing; rules from Fable's review)
+
+- One instance per runtime of: the empty array of each representation (and the packed byte array), the empty map
+  of each (key Repr, value Repr), and the fieldless value of each shareable object type. The heap keeps them as
+  roots (`Canonical`), made on first use; the JIT bakes their addresses as constants.
+- Substitute only at the construction instructions (`obj.new`/`variant.new` with no fields, `arr.new []`,
+  `map.new []`); never a map builder (`mbuilder.put` changes it) and never inside `allocate_payload`.
+- Shareable type = no fields, no destroy, not builtin, not `held` (Atomic/Event cells are written in place and
+  keyed by address), no traced layout slot, and not throwable: a rethrow is recognised by the thrown value's
+  address (`failure_link`), so `throw Oops{}` inside a handler must be a fresh value.
+- A session extension that turns a published descriptor unshareable is refused (`held` is recomputed on extend).
+- `map.len` stays a checked helper (#537); the remaining cost of map-empty is that call.
+

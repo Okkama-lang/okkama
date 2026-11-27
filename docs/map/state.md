@@ -7,6 +7,15 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1168 (#1106 stage 3) shared instances (design and safety review: Fable): `heap::Canonical` (empty arrays per
+  repr incl. ARRAY_BYTES, empty maps per (key, value) Repr, fieldless objects per shareable descriptor; marked in
+  `collect_inner`, cleared in `Drop`), `Heap::{set_shareable, empty_array, empty_map, shared_object}`,
+  `runtime::shareable_objects` (no fields, no destroy, not builtin, not held, no traced slot, no Error witness),
+  `extend` refuses "the extension changes published object sharing". Substituted at construction only: JIT
+  (`ObjNew`/`VariantNew`/`arr.new []`/`map.new []` as constants), interpreter, `rt_array` count 0, ops `MapNew`
+  without entries. Tests `interp::tests::{shareable_types_and_shared_instances, shared_empty_values_stay_empty}`;
+  mutations (no rooting, no Error exclusion) caught. Micro map-empty 39.37 → 7.33 ns, match −8.7%. Also: the
+  no-JIT build's dead-code warning on `closure_words` (#1167) silenced.
 - [x] #1167 (#1106 stage 2) inline array literals ≤ 16 (`INLINE_ARRAY_LITERAL`, `Emit::array_literal`, byte arrays
   PACKED eight to a word) and closures (`Heap::closure_words`, the `closure_new` layout; rt_closure's checks are a
   guard, else the helper). Tests `interp::tests::inline_array_literals_match_the_interpreter` (int with a BigInt,

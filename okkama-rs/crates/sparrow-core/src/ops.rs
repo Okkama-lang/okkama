@@ -1669,6 +1669,11 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             let packed = matches!(runtime.ty(function, dst.0), Some(Type::Array(element)) if runtime.kind_of(*element) == Kind::Byte);
             builder_finish(runtime, value(builder), packed)
         }
+        I::MapNew { dst, entries } if entries.is_empty() => {
+            // #1168: one shared empty map per key and value representation.
+            let map = map_for(runtime, function, dst.0)?;
+            Ok(runtime.heap.empty_map(map.key, map.value))
+        }
         I::MapNew { dst, entries } => {
             let mut map = map_for(runtime, function, dst.0)?;
             let (key_kind, key_type) = map_key(runtime, function, dst.0);

@@ -310,6 +310,8 @@ pub struct Heap {
     trace_layouts: TraceLayouts,
     /// Per object descriptor (#528): two hidden words (serial, owner) after the fields hold its resource identity.
     identity_words: Vec<bool>,
+    /// #1168: the shared empty and fieldless values.
+    canonical: Canonical,
     pages: Vec<Page>,
     /// Free list heads per class; a free cell's second word links the next.
     free: [Word; CLASSES.len()],
@@ -490,6 +492,7 @@ impl Heap {
         Self {
             trace_layouts: TraceLayouts::new(&layouts),
             identity_words: Vec::new(),
+            canonical: Canonical::default(),
             layouts,
             pages: Vec::new(),
             free: [0; CLASSES.len()],
@@ -744,6 +747,56 @@ impl Heap {
         debug_assert!(layouts.frames.starts_with(&self.layouts.frames));
         self.trace_layouts = TraceLayouts::new(&layouts);
         self.layouts = layouts;
+    }
+
+    /// #1168: which object types may share one instance of a fieldless value (`shareable_objects`).
+    pub(crate) fn set_shareable(&mut self, shareable: Vec<bool>) {
+        self.canonical.objects.resize(shareable.len(), None);
+        self.canonical.shareable = shareable;
+    }
+
+    /// The one empty array of `repr` (an element `Repr`'s bits, or `runtime::ARRAY_BYTES` for a packed byte
+    /// array), made on first use (#1168). No path writes a zero-length array in place.
+    pub(crate) fn empty_array(&mut self, repr: u64) -> Word {
+        if let Some(&(_, word)) = self.canonical.arrays.iter().find(|(r, _)| *r == repr) {
+            return word;
+        }
+        let word = if repr == crate::runtime::ARRAY_BYTES { self.allocate_bytes(&[]) } else { self.allocate_array(Repr::from_bits(repr), &[]) };
+        self.canonical.arrays.push((repr, word));
+        word
+    }
+
+    /// The one empty map of a key and value representation, made on first use (#1168): `map.new` without entries.
+    /// A map builder is never this value (`mbuilder.put` changes its builder).
+    pub(crate) fn empty_map(&mut self, key: Repr, value: Repr) -> Word {
+        if let Some(&(_, word)) = self.canonical.maps.iter().find(|(kinds, _)| *kinds == (key, value)) {
+            return word;
+        }
+        let map = crate::ops::MapValue { key, value, entries: Default::default(), owned: std::cell::Cell::new(Some(0)) };
+        let word = self.allocate_payload(Box::new(map));
+        self.canonical.maps.push(((key, value), word));
+        word
+    }
+
+    /// The one instance of a fieldless object of `descriptor`, when its type is shareable (#1168), made on first
+    /// use; `None` for any other type, which is built as before.
+    pub(crate) fn shared_object(&mut self, descriptor: u32) -> Option<Word> {
+        let index = descriptor as usize;
+        if !self.canonical.shareable.get(index).copied().unwrap_or(false) {
+            return None;
+        }
+        if let Some(word) = self.canonical.objects[index] {
+            return Some(word);
+        }
+        let words = self.object_words(descriptor, 0);
+        let object = self.allocate(words);
+        // SAFETY: a fresh cell of `words` words: the header, then words no layout traces, zeroed.
+        unsafe {
+            *(object as *mut u64) = header(OBJECT, Repr::Raw, descriptor);
+            std::ptr::write_bytes((object + 8) as *mut u64, 0, words - 1);
+        }
+        self.canonical.objects[index] = Some(object);
+        Some(object)
     }
 
     pub fn set_identity_words(&mut self, descriptors: Vec<bool>) {
@@ -1552,6 +1605,7 @@ impl Heap {
     /// A closure has one word per parameter of its function (its layout);
     /// captures fill a prefix and the remaining words are unbound.
     /// The words a closure of `function` holds after its header (#1167: the JIT allocates closures inline).
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(crate) fn closure_words(&self, function: u32) -> usize {
         self.layouts.closures[function as usize].len().max(1)
     }
@@ -1620,6 +1674,11 @@ impl Heap {
                 unsafe { mark_and_queue(pointer, &mut worklist) };
             }
         });
+        // #1168: the shared instances are roots of every collection of a running heap.
+        for word in self.canonical.words() {
+            // SAFETY: each is a live object the heap made and never frees while it runs.
+            unsafe { mark_and_queue(word, &mut worklist) };
+        }
         drop(roots_span);
         loop {
             let trace_span = okkama_devtrace::span!("gc", "mark trace");
@@ -2030,11 +2089,31 @@ unsafe fn release(address: Word, header: u64) {
     }
 }
 
+/// #1168: the one shared instance of each empty array representation, each empty map's key and value
+/// representation and each shareable fieldless object type, made on first use and kept as roots by the heap.
+/// Sharing is invisible: these values have no fields to differ in, no identity, no destroy and no in-place writer.
+#[derive(Debug, Default)]
+pub(crate) struct Canonical {
+    arrays: Vec<(u64, Word)>,
+    maps: Vec<((Repr, Repr), Word)>,
+    objects: Vec<Option<Word>>,
+    shareable: Vec<bool>,
+}
+
+impl Canonical {
+    fn words(&self) -> impl Iterator<Item = Word> + '_ {
+        self.arrays.iter().map(|(_, word)| *word)
+            .chain(self.maps.iter().map(|(_, word)| *word))
+            .chain(self.objects.iter().flatten().copied())
+    }
+}
+
 impl Drop for Heap {
     fn drop(&mut self) {
         // Terminal teardown (including STOP/host drop) does not promise language cleanup.
         // Only collection of a running heap checks lost ownership roots.
-        // Release Rust data of every remaining object.
+        // Release Rust data of every remaining object, the shared instances' too (#1168).
+        self.canonical = Canonical::default();
         self.collect(|_| {});
     }
 }

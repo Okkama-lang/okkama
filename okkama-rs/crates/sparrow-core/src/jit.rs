@@ -2046,6 +2046,13 @@ impl Emitter<'_, '_> {
                     Some(Type::Array(element)) => Kind::of(program, *element).repr() as u64,
                     _ => return Err(unsupported()),
                 };
+                if elements.is_empty() {
+                    // #1168: one shared empty array per representation, a constant of the code.
+                    let shared = self.heap.empty_array(repr);
+                    let shared = self.iconst(shared as i64);
+                    self.set(&dst.0, shared);
+                    return Ok(false);
+                }
                 if elements.len() <= INLINE_ARRAY_LITERAL {
                     let array = self.array_literal(repr, elements);
                     self.set(&dst.0, array);
@@ -2056,6 +2063,16 @@ impl Emitter<'_, '_> {
                 let count = self.iconst(elements.len() as i64);
                 let array = self.helper(|h| h.array, &[ctx, repr, address, count]).expect("result");
                 self.set(&dst.0, array);
+            }
+            I::MapNew { dst, entries } if entries.is_empty() && !self.plain => {
+                // #1168: one shared empty map per key and value representation, a constant of the code.
+                let (key, value) = match self.register_type(&dst.0) {
+                    Some(Type::Map(key, value)) => (Kind::of(program, *key).repr(), Kind::of(program, *value).repr()),
+                    _ => return Err(unsupported()),
+                };
+                let shared = self.heap.empty_map(key, value);
+                let shared = self.iconst(shared as i64);
+                self.set(&dst.0, shared);
             }
             I::ArrayLen { dst, array } => {
                 let array = self.get(array);
@@ -2087,6 +2104,12 @@ impl Emitter<'_, '_> {
                 self.builder.switch_to_block(load);
                 let value = self.element(array, header, position, self.bytes_array(array_register));
                 self.set_word(&dst.0, value);
+            }
+            // #1168: a fieldless value of a shareable type is its one shared instance, a constant of the code.
+            I::ObjNew { dst, object, fields } if fields.is_empty() && self.heap.shared_object(object.0).is_some() => {
+                let shared = self.heap.shared_object(object.0).expect("shareable");
+                let shared = self.iconst(shared as i64);
+                self.set(&dst.0, shared);
             }
             I::ObjNew { dst, object, fields } => {
                 let pointer = {
@@ -2147,6 +2170,13 @@ impl Emitter<'_, '_> {
             // номер случая — разность дескрипторов.
             I::VariantNew { dst, variant, case, fields } => {
                 let object = program.variants[variant.0 as usize].cases[*case as usize].1;
+                if fields.is_empty()
+                    && let Some(shared) = self.heap.shared_object(object.0)
+                {
+                    let shared = self.iconst(shared as i64);
+                    self.set(&dst.0, shared);
+                    return Ok(false);
+                }
                 let pointer = {
                     let words = self.object_words(object.0 as usize, fields.len());
                     let pointer = self.allocate(words);
