@@ -80,8 +80,7 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
             let written = if native == Native::StdoutWrite {
                 okkama_runtime_core::stdout::write(&bytes)
             } else {
-                okkama_runtime_core::stdout::flush()
-                    .and_then(|()| std::io::Write::write_all(&mut std::io::stderr().lock(), &bytes))
+                okkama_runtime_core::stdout::write_error(&bytes)
             };
             drop(bytes);
             match written {

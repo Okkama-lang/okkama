@@ -1,0 +1,173 @@
+; Collections on both engines (#1121): arrays and their builders, maps and map builders, ranges, boxed values,
+; enums, constants and the stub of `undef`.
+sparrow 18
+module "mnemonics-collections" "1.0.0"
+type t0 int
+type t1 str
+type t2 byte
+type t3 array t2
+type t4 bool
+type t5 array t0
+type t6 builder t0
+type t7 map t1 t0
+type t8 mbuilder t1 t0
+type t9 range
+type t10 any
+type t11 enum enum0
+type t12 array t1
+enum enum0 "Light" ["red", "amber", "green"]
+global g0 t5 f6 data array 3 int 7 int 8 int 9
+global g1 t0 f7
+function f0 "write" native "runtime/stdio@1::stdout_write/1" {
+    registers [t3]
+    params [r0]
+    result t0
+}
+function f1 "print" {
+    registers [t0, t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: cvt r1, r0
+    1: const r2, str "\n"
+    2: str.concat r3, r1, r2
+    3: str.utf8 r4, r3
+    4: call _, f0, [r4]
+    5: ret _
+}
+function f2 "say" {
+    registers [t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: const r1, str "\n"
+    1: str.concat r2, r0, r1
+    2: str.utf8 r3, r2
+    3: call _, f0, [r3]
+    4: ret _
+}
+function f3 "flag" {
+    registers [t4, t0]
+    params [r0]
+    result void
+    0: br r0, @1, @3
+    1: const r1, int 1
+    2: jmp @4
+    3: const r1, int 0
+    4: call _, f1, [r1]
+    5: ret _
+}
+
+function f4 "main" {
+    registers [t0, t0, t0, t5, t5, t5, t6, t7, t7, t7, t8, t9, t10, t11, t11, t4, t1, t1, t12, t0, t3]
+    params []
+    result t0
+    0: const r0, int 1
+    1: const r1, int 2
+    2: const r2, int 3
+    3: arr.new r3, [r0, r1, r2]
+    4: arr.new r4, [r2, r2]
+    5: arr.concat r5, [r3, r4]
+    6: arr.len r0, r5
+    7: call _, f1, [r0]
+    8: arr.diff r5, r5, [r4]
+    9: arr.len r0, r5
+    10: call _, f1, [r0]
+    11: const r0, int 0
+    12: const r19, int 40
+    13: arr.replace r5, r3, r0, r19
+    14: call _, f5, [r5]
+    15: arr.remove r5, r5, r1
+    16: call _, f5, [r5]
+    17: const r0, int 1
+    18: arr.slice r5, r3, r0, r2
+    19: call _, f5, [r5]
+    20: builder.new r6
+    21: builder.push r6, r6, r19
+    22: builder.append r6, r6, r3
+    23: const r0, int 10
+    24: const r19, int 13
+    25: builder.range r6, r6, r0, r19, true
+    26: builder.finish r5, r6
+    27: call _, f5, [r5]
+    28: const r16, str "a"
+    29: const r17, str "b"
+    30: map.new r7, [r16: r1, r17: r2]
+    31: map.len r0, r7
+    32: call _, f1, [r0]
+    33: map.has r15, r7, r17
+    34: call _, f3, [r15]
+    35: map.get r0, r7, r16
+    36: call _, f1, [r0]
+    37: map.keys r18, r7
+    38: arr.len r0, r18
+    39: call _, f1, [r0]
+    40: map.values r5, r7
+    41: call _, f5, [r5]
+    42: mbuilder.new r10
+    43: const r16, str "c"
+    44: mbuilder.put r10, r10, r16, r19
+    45: mbuilder.finish r8, r10
+    46: map.merge r9, [r7, r8]
+    47: map.len r0, r9
+    48: call _, f1, [r0]
+    49: map.diff r9, r9, [r8]
+    50: map.len r0, r9
+    51: call _, f1, [r0]
+    52: range.new r11, r1, r19, false
+    53: range.part r0, r11, true
+    54: call _, f1, [r0]
+    55: range.part r0, r11, false
+    56: call _, f1, [r0]
+    57: any.box r12, r1
+    58: enum.case r13, enum0, 1
+    59: enum.case r14, enum0, 2
+    60: enum.cmp lt, r15, r13, r14
+    61: call _, f3, [r15]
+    62: global.get r5, 0
+    63: call _, f5, [r5]
+    64: global.get r0, 1
+    65: call _, f1, [r0]
+    66: global.get r0, 1
+    67: call _, f1, [r0]
+    68: undef r20
+    69: const r16, str "-"
+    70: arr.join r17, r18, r16
+    71: call _, f2, [r17]
+    72: const r0, int 0
+    73: ret r0
+}
+function f5 "show" {
+    registers [t5, t0, t0, t0, t4, t0, t0]
+    params [r0]
+    result void
+    0: const r1, int 0
+    1: arr.len r2, r0
+    2: const r5, int 1
+    3: const r6, int 0
+    4: int.cmp lt, r4, r1, r2
+    5: br r4, @6, @10
+    6: arr.get r3, r0, r1
+    7: int.add r6, r6, r3
+    8: int.add r1, r1, r5
+    9: jmp @4
+    10: call _, f1, [r6]
+    11: ret _
+}
+function f6 "g0.init" {
+    registers [t5]
+    params []
+    result t5
+    0: arr.new r0, []
+    1: ret r0
+}
+function f7 "g1.init" {
+    registers [t0, t0, t1]
+    params []
+    result t0
+    0: const r2, str "init\n"
+    1: call _, f2, [r2]
+    2: const r0, int 6
+    3: const r1, int 7
+    4: int.mul r0, r0, r1
+    5: ret r0
+}
+entry f4

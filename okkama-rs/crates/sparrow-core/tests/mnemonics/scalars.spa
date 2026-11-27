@@ -1,0 +1,191 @@
+; Scalar instructions on both engines (#1121): integers past the inline range, bit actions, bytes, floats,
+; rationals and conversions, each result printed.
+sparrow 18
+module "mnemonics-scalars" "1.0.0"
+type t0 int
+type t1 str
+type t2 byte
+type t3 array t2
+type t4 bool
+type t5 float
+type t6 rat
+type t7 char
+function f0 "write" native "runtime/stdio@1::stdout_write/1" {
+    registers [t3]
+    params [r0]
+    result t0
+}
+function f1 "print" {
+    registers [t0, t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: cvt r1, r0
+    1: const r2, str "\n"
+    2: str.concat r3, r1, r2
+    3: str.utf8 r4, r3
+    4: call _, f0, [r4]
+    5: ret _
+}
+function f2 "say" {
+    registers [t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: const r1, str "\n"
+    1: str.concat r2, r0, r1
+    2: str.utf8 r3, r2
+    3: call _, f0, [r3]
+    4: ret _
+}
+function f3 "flag" {
+    registers [t4, t0]
+    params [r0]
+    result void
+    0: br r0, @1, @3
+    1: const r1, int 1
+    2: jmp @4
+    3: const r1, int 0
+    4: call _, f1, [r1]
+    5: ret _
+}
+
+function f4 "main" {
+    registers [t0, t0, t0, t0, t2, t2, t2, t5, t5, t5, t6, t6, t6, t1, t4, t7, t0]
+    params []
+    result t0
+    0: const r0, int 5000000000000000000
+    1: const r1, int 12
+    2: int.and r2, r0, r1
+    3: call _, f1, [r2]
+    4: int.or r2, r0, r1
+    5: call _, f1, [r2]
+    6: int.xor r2, r0, r1
+    7: call _, f1, [r2]
+    8: const r3, int 3
+    9: int.shl r2, r1, r3
+    10: call _, f1, [r2]
+    11: int.shr r2, r0, r3
+    12: call _, f1, [r2]
+    13: const r2, int -12
+    14: int.ushr r2, r2, r3
+    15: call _, f1, [r2]
+    16: int.not r2, r0
+    17: call _, f1, [r2]
+    18: int.neg r2, r0
+    19: call _, f1, [r2]
+    20: int.abs r2, r2
+    21: call _, f1, [r2]
+    22: sign r2, r2
+    23: call _, f1, [r2]
+    24: bits bit_count, false, r2, r1, _
+    25: call _, f1, [r2]
+    26: bits rotl, false, r2, r1, r3
+    27: call _, f1, [r2]
+    28: const r4, byte 202
+    29: const r5, byte 7
+    30: byte.and r6, r4, r5
+    31: cvt r16, r6
+    32: call _, f1, [r16]
+    33: byte.or r6, r4, r5
+    34: cvt r16, r6
+    35: call _, f1, [r16]
+    36: byte.xor r6, r4, r5
+    37: cvt r16, r6
+    38: call _, f1, [r16]
+    39: const r2, int 2
+    40: byte.shl r6, r4, r2
+    41: cvt r16, r6
+    42: call _, f1, [r16]
+    43: byte.shr r6, r4, r2
+    44: cvt r16, r6
+    45: call _, f1, [r16]
+    46: byte.ushr r6, r4, r2
+    47: cvt r16, r6
+    48: call _, f1, [r16]
+    49: byte.not r6, r4
+    50: cvt r16, r6
+    51: call _, f1, [r16]
+    52: byte.cmp lt, r14, r5, r4
+    53: call _, f3, [r14]
+    54: bits swap_bytes, true, r6, r4, _
+    55: cvt r16, r6
+    56: call _, f1, [r16]
+    57: const r2, int 255
+    58: byte.from r6, r2, _
+    59: cvt r16, r6
+    60: call _, f1, [r16]
+    61: const r7, float 0x4022000000000000
+    62: float.sqrt r8, r7
+    63: cvt r13, r8
+    64: call _, f2, [r13]
+    65: const r9, float 0x4000000000000000
+    66: float.pow r8, r7, r9
+    67: cvt r13, r8
+    68: call _, f2, [r13]
+    69: float.mod r8, r7, r9
+    70: cvt r13, r8
+    71: call _, f2, [r13]
+    72: cvt r8, r1
+    73: float.div r8, r8, r9
+    74: cvt r2, r8
+    75: call _, f1, [r2]
+    76: rat.new r10, r1, r3
+    77: call _, f5, [r10]
+    78: const r2, int 5
+    79: rat.new r11, r3, r2
+    80: rat.add r12, r10, r11
+    81: call _, f5, [r12]
+    82: rat.sub r12, r10, r11
+    83: call _, f5, [r12]
+    84: rat.mul r12, r10, r11
+    85: call _, f5, [r12]
+    86: rat.div r12, r10, r11
+    87: call _, f5, [r12]
+    88: rat.mod r12, r10, r11
+    89: call _, f5, [r12]
+    90: rat.neg r12, r11
+    91: call _, f5, [r12]
+    92: rat.abs r12, r12
+    93: call _, f5, [r12]
+    94: rat.cmp gt, r14, r10, r11
+    95: call _, f3, [r14]
+    96: rat.part r2, r11, true
+    97: call _, f1, [r2]
+    98: cvt r8, r11
+    99: cvt r13, r8
+    100: call _, f2, [r13]
+    101: const r15, char 1078
+    102: cvt r2, r15
+    103: call _, f1, [r2]
+    104: const r2, int 955
+    105: cvt r15, r2
+    106: cvt r13, r15
+    107: call _, f2, [r13]
+    108: const r14, bool true
+    109: bool.not r14, r14
+    110: bool.cmp eq, r14, r14, r14
+    111: call _, f3, [r14]
+    112: const r15, char 98
+    113: char.cmp ge, r14, r15, r15
+    114: call _, f3, [r14]
+    115: const r7, float 0x3ff8000000000000
+    116: float.add r8, r7, r9
+    117: float.sub r8, r8, r7
+    118: float.mul r8, r8, r9
+    119: float.neg r8, r8
+    120: float.abs r8, r8
+    121: float.cmp lt, r14, r7, r8
+    122: call _, f3, [r14]
+    123: cvt r13, r8
+    124: call _, f2, [r13]
+    125: const r2, int 0
+    126: ret r2
+}
+function f5 "show" {
+    registers [t6, t1]
+    params [r0]
+    result void
+    0: cvt r1, r0
+    1: call _, f2, [r1]
+    2: ret _
+}
+entry f4

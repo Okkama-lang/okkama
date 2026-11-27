@@ -27,6 +27,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
   location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
   passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+- **Sparrow's interpreter runs failure handlers (#1121, second part of #1079).** A failure follows the JIT's
+  status protocol: each activation it reaches is recorded once, at the instruction it reached, and the first
+  handler covering that instruction takes it (the activations above it left, the handler's edge moves taken,
+  a step when the edge goes back, the failure in the handler's register); `catch` matches through `rt_catch`.
+  Cleanups on the failure path (`region.unwind`, `resource.unwind`, destroys) are the program's own code, as
+  under the JIT. `sparrow_core::observe` runs one SPB on either engine (`Engine::Jit`, `Engine::Interpreter`)
+  with standard output and, now, standard error captured apart (`okkama_runtime_core::stdout::capture_streams`;
+  `stderr_write` goes through `stdout::write_error`). `okkama-cli/tests/differential.rs` compares the two engines
+  in one process on t/, sixteen examples of the Bible and the Book, conformance's run-time failures and five step
+  budgets: result, uncaught report as a structure, both streams. `sparrow-core/tests/mnemonics/` and the
+  SparrowBook's programs execute every synchronous mnemonic on both engines (checked by a test). Results: t/
+  139 of 142, examples 211 of 263, conformance failures 55 of 58 give the JIT's output (the rest async,
+  refused), also under GC stress; bench/micro `check.py` passes 621 of 773 programs on the interpreter (128
+  async, 24 failing in the cage on both).
 - **Sparrow runs synchronous programs without the JIT: `SPARROW_CORE_INTERPRET=1` (#1120, first part of #1079).**
   The interpreter (`sparrow-core/src/interp.rs`) is a mode of the same runtime: heap, collector, `ops`, failures,
   regions, natives, intrinsics and budgets are shared, and every instruction the JIT runs through a helper calls

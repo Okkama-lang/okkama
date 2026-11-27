@@ -857,3 +857,25 @@ every declaration is open (#1005, owner decision).
   `Ctx.stack_limit`, as the JIT's prologue checks SP. No re-entry counter yet: the design gives it to the async part (#1122).
 - **Shared code moved out of `jit.rs`.** `program.rs`: `generic`, `failure_or_region`, `suspends`,
   `dispatch_table`, `role_slot_is_async`; `texts.rs`: the four emitter texts. Moves only, no change in the JIT.
+
+## Sparrow's interpreter: handlers and the differential test (#1121, 2026-11-27; design Fable; implementer's choices)
+
+- **Unwinding mirrors `check`.** For each activation from the innermost: record (`rt_trace`, keyed by its
+  register file), then take the first handler whose range covers the instruction (ranges end before `end`, as
+  the JIT reads them); FATAL and EXHAUSTED pass every handler. The handler's edge is a step when it goes back,
+  its moves read before they write, the failure goes into the handler register last; `ctx.failure` keeps the
+  failure, as in the JIT.
+- **One observation API, not a second runner.** `sparrow_core::observe(Engine, bytes, arguments, limits)` is
+  `run_described` with the engine chosen in the call (`Runtime::use_engine`, before anything runs) and both
+  streams captured; the environment switch stays the way to choose it for a process.
+- **Standard error has a sink.** `okkama_runtime_core::stdout::write_error` is the one way `stderr_write` writes;
+  inside `capture_streams` it appends to the capture, otherwise it flushes standard output first, as before.
+- **Coverage is dynamic.** A test-only recorder in the interpreter's loop collects the mnemonics a run executes;
+  the coverage test runs every `.spa` with an entry of the SparrowBook, sparrow-core's tests, `tests/mnemonics`
+  and sparrow-cli's handler programs on both engines and fails while a synchronous mnemonic is not executed.
+  Templates that do not assemble on their own are skipped (their tests complete them). `fut.spawn` counts as
+  async: spawning runs a body (#1122).
+- **The differential samples are fixed lists**, not the whole corpora (CI time, debug profile included): t/
+  base, op and lang; sixteen examples whose output depends on the program alone; every single-file conformance
+  case expecting a run-time failure that builds (at least 50). Whole corpora stay #1123's (`sparrow-interp`
+  configurations).

@@ -792,14 +792,37 @@ entry f5
     assert_eq!(message(&interpreted), message(&jit));
 }
 
+/// #1121: a failure at an instruction a handler covers goes to the handler, with the failure in its register;
+/// one outside every range leaves the function.
 #[test]
-fn a_failure_a_handler_would_catch_is_refused() {
-    let source = program("type t5 failure", "", r#"
+fn a_handler_takes_the_failures_of_its_range() {
+    let outcome = engines(&program("type t5 failure", "", r#"
+function f4 "main" {
+    registers [t0, t0, t0, t5, t0]
+    params []
+    result t0
+    handler 1 3 @6 r3
+    0: const r0, int 1
+    1: const r1, int 0
+    2: int.mod r2, r0, r1
+    3: const r4, int 5
+    4: int.mod r2, r4, r1
+    5: ret r2
+    6: const r4, int 9
+    7: call _, f1, [r4]
+    8: jmp @3(r1 <- r0)
+}
+entry f4
+"#));
+    assert_eq!(outcome.output, "9\n");
+    assert_eq!(outcome.result, Ok(0));
+    // A range ends before its end: the failure at pc 2 of `handler 1 2` is not the handler's.
+    let outside = engines(&program("type t5 failure", "", r#"
 function f4 "main" {
     registers [t0, t0, t0, t5]
     params []
     result t0
-    handler 1 3 @4 r3
+    handler 1 2 @4 r3
     0: const r0, int 1
     1: const r1, int 0
     2: int.mod r2, r0, r1
@@ -808,11 +831,207 @@ function f4 "main" {
     5: ret r2
 }
 entry f4
+"#));
+    assert!(outside.result.as_ref().unwrap_err().contains("Modulo by zero"), "{outside:?}");
+}
+
+/// #1121: a handler in a caller takes a callee's failure, the callee's activation left; raised again outside every
+/// handler, the failure reports each activation once (the caller at the instruction it first reached).
+#[test]
+fn a_caller_takes_a_callee_failure_and_records_each_activation_once() {
+    let outcome = engines(&program("type t5 failure", "", r#"
+function f4 "inner" {
+    registers [t0, t0, t0]
+    params [r0]
+    result t0
+    0: const r1, int 0
+    1: int.mod r2, r0, r1
+    2: ret r2
+}
+function f5 "main" {
+    registers [t0, t0, t5]
+    params []
+    result t0
+    handler 1 2 @3 r2
+    0: const r0, int 4
+    1: call r1, f4, [r0]
+    2: ret r1
+    3: call _, f1, [r0]
+    4: raise r2
+}
+entry f5
+"#));
+    assert_eq!(outcome.output, "4\n");
+    assert!(outcome.result.as_ref().unwrap_err().contains("Modulo by zero"), "{outcome:?}");
+    assert_eq!(sites(&outcome), vec![(4, 1), (5, 1)]);
+}
+
+/// #1121: a handler's edge moves read the registers as they were, the failure is written last, and an edge that goes
+/// back is a step: a failure caught over and over stops at the same step on both engines.
+#[test]
+fn a_handler_edge_moves_in_parallel_and_steps_when_it_goes_back() {
+    let source = program("type t5 failure", "", r#"
+function f4 "main" {
+    registers [t0, t0, t0, t5, t0]
+    params []
+    result t0
+    handler 3 4 @1 r3
+    0: const r0, int 1
+    1: const r1, int 0
+    2: call _, f1, [r0]
+    3: int.mod r2, r0, r1
+    4: ret r2
+}
+entry f4
 "#);
-    let error = run(&source, Engine::Interpreter, false, Limits::default()).result.unwrap_err();
-    assert!(error.contains("main:2: a failure handler is not supported by the interpreter yet (#1121)"), "{error}");
-    // The JIT catches it.
-    assert_eq!(run(&source, Engine::Jit, false, Limits::default()).result, Ok(9));
+    let swap = engines(&program("type t5 failure", "", r#"
+function f4 "fail" {
+    registers [t0, t0, t0]
+    params [r0, r1]
+    result t0
+    0: const r2, int 0
+    1: int.mod r2, r0, r2
+    2: ret r2
+}
+function f5 "main" {
+    registers [t0, t0, t5, t0]
+    params []
+    result t0
+    handler 2 3 @4(r0 <- r1, r1 <- r0) r2
+    0: const r0, int 1
+    1: const r1, int 2
+    2: call r3, f4, [r0, r1]
+    3: ret r3
+    4: call _, f1, [r0]
+    5: call _, f1, [r1]
+    6: ret r0
+}
+entry f5
+"#));
+    assert_eq!(swap.output, lines(&["2", "1"]));
+    for (steps, printed) in [(1, 0), (2, 1), (3, 1), (4, 2), (50, 25)] {
+        let outcome = engines_with(&source, Limits { steps: Some(steps), ..Limits::default() });
+        assert!(outcome.result.as_ref().unwrap_err().contains("Execution budget exhausted: steps"), "{outcome:?}");
+        // main's entry, then per line: print's entry and the handler's edge back to @1.
+        assert_eq!(outcome.output.lines().count(), printed, "{steps} steps");
+    }
+}
+
+/// #1121: the handler register keeps the failure (a heap word) across what the handler does next, a collection
+/// at every safepoint included.
+#[test]
+fn a_caught_failure_survives_collections_in_its_register() {
+    let outcome = engines(&program("type t5 failure\ntype t6 object obj0", r#"object obj0 "Cell" { field "text" t1 }"#, r#"
+function f4 "main" {
+    registers [t0, t0, t5, t1, t6, t0]
+    params []
+    result t0
+    handler 2 3 @4 r2
+    0: const r0, int 3
+    1: const r1, int 0
+    2: int.mod r5, r0, r1
+    3: ret r5
+    4: const r3, str "after"
+    5: obj.new r4, obj0, [r3]
+    6: str.concat r3, r3, r3
+    7: call _, f2, [r3]
+    8: raise r2
+}
+entry f4
+"#));
+    assert_eq!(outcome.output, "afterafter\n");
+    assert!(outcome.result.as_ref().unwrap_err().contains("Modulo by zero"), "{outcome:?}");
+}
+
+/// #1121: the program of every failure path (`tests/mnemonics/failures.spa`): each failure where the JIT takes it,
+/// the cleanups on the failure path, and the uncaught report with its secondary.
+#[test]
+fn the_failure_paths_take_each_failure_where_the_jit_does() {
+    let outcome = engines(include_str!("../tests/mnemonics/failures.spa"));
+    assert_eq!(outcome.output, lines(&[
+        "7",
+        "oops",
+        "0",
+        "oops",
+        "overflow taken",
+        "closing b",
+        "closing a",
+        "region unwound",
+        "closing pinned",
+        "resource unwound",
+        "narrow refused",
+        "trap taken",
+        "closing kept",
+        "3",
+    ]));
+    let uncaught = outcome.uncaught.as_ref().expect("an uncaught failure");
+    assert_eq!(uncaught.message, crate::texts::UNREACHABLE);
+    assert!(outcome.result.as_ref().unwrap_err().contains("Secondary cleanup failure"), "{outcome:?}");
+}
+
+/// Every synchronous mnemonic runs, on both engines alike, in the Sparrow assembly of the repository: the
+/// SparrowBook's examples, sparrow-core's and sparrow-cli's `.spa` and `tests/mnemonics` (#1121). A new
+/// instruction needs a program here too. The async ones (`await`, the settles, `fut.spawn` of a body) wait for #1122.
+#[test]
+fn every_synchronous_mnemonic_runs_on_both_engines() {
+    const ASYNC: &[&str] =
+        &["await", "await.take", "region.settle", "region.settle_unwind", "resource.settle", "resource.settle_unwind", "fut.spawn"];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let directories = [
+        root.join("../../../docs/SparrowBook/examples"),
+        root.join("tests"),
+        root.join("tests/mnemonics"),
+        root.join("../sparrow-cli/tests/handlers"),
+    ];
+    let mut covered = std::collections::BTreeSet::new();
+    let mut programs = 0;
+    for directory in directories {
+        let mut files: Vec<_> = std::fs::read_dir(&directory).unwrap().map(|entry| entry.unwrap().path()).collect();
+        files.sort();
+        for path in files.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "spa")) {
+            let source = std::fs::read_to_string(&path).unwrap();
+            // A fixture its own test completes (a template with `$` holes, a part of a program) is not a program.
+            let Ok(program) = okkama_sparrow::assemble(&source) else { continue };
+            let Some(entry) = program.entry else { continue };
+            if program.functions[entry.0 as usize].is_async {
+                continue;
+            }
+            engines(&source);
+            covered.extend(run_covering(&source));
+            programs += 1;
+        }
+    }
+    let missing: Vec<_> =
+        okkama_sparrow::Instruction::MNEMONICS.iter().filter(|m| !ASYNC.contains(m) && !covered.contains(*m)).collect();
+    assert!(missing.is_empty(), "{programs} programs leave {} synchronous mnemonics unexecuted: {missing:?}", missing.len());
+}
+
+thread_local! {
+    /// The mnemonics the interpreter executed on this thread (test builds only).
+    static EXECUTED: std::cell::RefCell<std::collections::BTreeSet<&'static str>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// The interpreter's loop reports each instruction it starts (test builds only).
+pub(super) fn executed(mnemonic: &'static str) {
+    EXECUTED.with(|executed| executed.borrow_mut().insert(mnemonic));
+}
+
+/// The mnemonics an interpreted run of `source` executes.
+fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
+    let source = source.to_owned();
+    std::thread::Builder::new()
+        .stack_size((STACK as usize) * 2)
+        .spawn(move || {
+            let program = okkama_sparrow::assemble(&source).unwrap();
+            let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
+            runtime.interp = Some(Box::new(Interp::new(runtime.loaded.program.functions.len())));
+            EXECUTED.with(|executed| executed.borrow_mut().clear());
+            let _ = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
+            EXECUTED.with(|executed| executed.take())
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 #[test]

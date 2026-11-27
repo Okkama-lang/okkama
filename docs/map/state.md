@@ -2,6 +2,17 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1121 Interpreter 2 (feature/1121 from release/066 c828a2d62, not committed; worktree okkama-work/hf-1121,
+  target t-1121): handlers and `catch` in `interp.rs` (`unwind` returns whether a handler caught; `fail!` in the
+  loop resumes there; `jump_then!` shared by catch and the lookups); `sparrow_core::{Engine, Observed, observe}`,
+  `Runtime::use_engine`; okkama-runtime-core `stdout::{capture_streams, write_error}` (natives.rs stderr goes
+  through it); `okkama-cli/tests/differential.rs` (t/ 49, 16 examples, conformance run failures 58 that build,
+  step parity on 3 programs × 5 budgets); `sparrow-core/tests/mnemonics/*.spa` (6 programs) and
+  `interp::tests::every_synchronous_mnemonic_runs_on_both_engines` (dynamic coverage, test-only recorder in the
+  loop; async mnemonics and `fut.spawn` wait for #1122). Tests: `interp::tests` 24, differential 4,
+  `stdout::tests::capture_streams…` 1; 11 mutations caught. Corpus (release, cage, JIT/interp/interp+GC):
+  t/ 139/142, examples 211/263, conformance run failures 55/58 same, the rest async refusals, 0 differ;
+  bench/micro check 621/773 on the interpreter (128 async, 24 cage-only on both). JIT path untouched (no A/B).
 - [x] #1120 Interpreter 1 (feature/1120 from release/066 39a627b67, not committed; worktree okkama-work/hf-1120,
   target t-1120): `sparrow-core/src/interp.rs` behind the seam `Runtime::invoke`/`Runtime::resume` (runtime.rs;
   the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in

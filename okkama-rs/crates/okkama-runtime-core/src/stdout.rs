@@ -17,6 +17,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 thread_local! {
     static CAPTURE: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+    /// Standard error of a run inside [`capture_streams`] (#1121).
+    static CAPTURE_ERROR: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
     static TO_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -50,6 +52,40 @@ pub fn capture<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>) {
     let output = CAPTURE.with(|capture| capture.borrow_mut().take().unwrap_or_default());
     drop(restore);
     (result, output)
+}
+
+/// [`capture`] of both streams (#1121): what the run on the current VM thread writes to standard output and, through
+/// [`write_error`], to standard error, each apart. The differential test of Sparrow's two engines compares both.
+pub fn capture_streams<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
+    struct Restore(Option<Vec<u8>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAPTURE_ERROR.with(|capture| *capture.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = CAPTURE_ERROR.with(|capture| capture.replace(Some(Vec::new())));
+    let restore = Restore(previous);
+    let (result, output) = capture(body);
+    let error = CAPTURE_ERROR.with(|capture| capture.borrow_mut().take().unwrap_or_default());
+    drop(restore);
+    (result, output, error)
+}
+
+/// Write `bytes` to standard error, after the standard output pending before it (the order of the two holds),
+/// or into a [`capture_streams`] in progress.
+pub fn write_error(bytes: &[u8]) -> io::Result<()> {
+    let captured = CAPTURE_ERROR.with(|capture| match capture.borrow_mut().as_mut() {
+        Some(error) => {
+            error.extend_from_slice(bytes);
+            true
+        }
+        None => false,
+    });
+    if captured {
+        return Ok(());
+    }
+    flush()?;
+    io::stderr().lock().write_all(bytes)
 }
 
 /// The block a pipe or a file gets at once.
@@ -182,6 +218,18 @@ mod tests {
         assert!(!TO_STDERR.with(std::cell::Cell::get));
         let (_, captured) = capture(|| to_stderr(|| write(b"captured").unwrap()));
         assert_eq!(captured, b"captured");
+    }
+
+    /// #1121: both streams of a run are captured apart; standard error outside a capture is not.
+    #[test]
+    fn capture_streams_keeps_the_two_streams_apart() {
+        let ((), output, error) = capture_streams(|| {
+            write(b"out").unwrap();
+            write_error(b"err").unwrap();
+            write(b"!").unwrap();
+        });
+        assert_eq!((output.as_slice(), error.as_slice()), (&b"out!"[..], &b"err"[..]));
+        assert!(CAPTURE_ERROR.with(|capture| capture.borrow().is_none()));
     }
 
     /// #1011: after write_through nothing waits in the buffer, so a process

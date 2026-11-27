@@ -237,6 +237,16 @@ impl Runtime {
         Ok(runtime)
     }
 
+    /// #1121: run on `engine` from now on, whatever `SPARROW_CORE_INTERPRET` said; before anything ran (a runtime
+    /// never mixes the two engines' frames).
+    pub fn use_engine(&mut self, engine: crate::Engine) {
+        debug_assert!(self.invocations.iter().all(|entry| entry.code == 0), "an engine is chosen before code runs");
+        self.interp = match engine {
+            crate::Engine::Jit => None,
+            crate::Engine::Interpreter => Some(Box::new(crate::interp::Interp::new(self.loaded.program.functions.len()))),
+        };
+    }
+
     /// The root Future of an async entry leaves the GC roots once its run is over.
     fn drop_root(&mut self, root: Word) {
         if let Some(index) = self.roots.iter().rposition(|&(word, _)| word == root) {

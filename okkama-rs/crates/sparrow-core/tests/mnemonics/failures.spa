@@ -1,0 +1,298 @@
+; Failures on both engines (#1121): handlers and `catch` of an object, a role and a variant, a catch that does
+; not match and rethrows to an outer handler (the activation is recorded once), a program failure and a stack
+; overflow taken by a handler, a handler edge that goes back (a step), cleanups on the failure path (a region's
+; destroys, a static resource), a failed role.narrow, and at the end an uncaught failure with a cause and a
+; secondary.
+sparrow 18
+module "mnemonics-failures" "1.0.0"
+type t0 int
+type t1 str
+type t2 byte
+type t3 array t2
+type t4 bool
+type t5 object obj0
+type t6 failure
+type t7 role role0
+type t8 object obj1
+type t9 region
+type t10 variant variant0
+type t11 object obj2
+type t12 object obj3
+type t13 role role1
+role role0 "Error" builtin {
+    method "text" [] -> t1
+}
+role role1 "Sized" {
+    method "size" [] -> t0
+}
+object obj0 "Oops" {
+    field "code" t0
+    does role0 [f5]
+}
+object obj1 "Handle" {
+    field "name" t1
+    destroy f6
+}
+object obj2 "Problem.bad" {
+    field "level" t0
+    does role0 [f15]
+}
+object obj3 "Problem.worse" {
+    field "level" t0
+    does role0 [f16]
+}
+variant variant0 "Problem" { case "bad" obj2 case "worse" obj3 }
+function f0 "write" native "runtime/stdio@1::stdout_write/1" {
+    registers [t3]
+    params [r0]
+    result t0
+}
+function f1 "print" {
+    registers [t0, t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: cvt r1, r0
+    1: const r2, str "\n"
+    2: str.concat r3, r1, r2
+    3: str.utf8 r4, r3
+    4: call _, f0, [r4]
+    5: ret _
+}
+function f2 "say" {
+    registers [t1, t1, t1, t3]
+    params [r0]
+    result void
+    0: const r1, str "\n"
+    1: str.concat r2, r0, r1
+    2: str.utf8 r3, r2
+    3: call _, f0, [r3]
+    4: ret _
+}
+function f3 "flag" {
+    registers [t4, t0]
+    params [r0]
+    result void
+    0: br r0, @1, @3
+    1: const r1, int 1
+    2: jmp @4
+    3: const r1, int 0
+    4: call _, f1, [r1]
+    5: ret _
+}
+
+function f4 "main" {
+    registers [t0, t0, t6, t5, t0, t1, t11, t6, t4, t7, t13, t6, t10, t6, t0]
+    params []
+    result t0
+    handler 2 3 @4 r2
+    handler 9 10 @11 r2
+    handler 16 17 @18 r2
+    handler 23 24 @25 r7
+    handler 30 31 @32 r2
+    handler 34 35 @36 r2
+    handler 38 39 @40 r2
+    handler 44 45 @46 r2
+    handler 48 49 @49 r2
+    handler 57 58 @53 r11
+    handler 59 60 @61 r2
+    handler 61 62 @63 r11
+    handler 63 64 @65 r13
+    0: const r0, int 7
+    1: const r14, int 1
+    2: call r1, f8, [r0]
+    3: jmp @9
+    4: catch r2, object, 0, r3, @5, @8
+    5: obj.get r4, r3, 0
+    6: call _, f1, [r4]
+    7: jmp @9
+    8: raise r2
+    9: call r1, f8, [r0]
+    10: jmp @16
+    11: catch r2, role, 0, r9, @12, @15
+    12: call.role r5, r9, role0, 0, []
+    13: call _, f2, [r5]
+    14: jmp @16
+    15: raise r2
+    16: call r1, f9, [r0]
+    17: jmp @23
+    18: catch r2, variant, 0, r12, @19, @22
+    19: variant.tag r4, r12
+    20: call _, f1, [r4]
+    21: jmp @23
+    22: raise r2
+    23: call r1, f14, [r0]
+    24: jmp @30
+    25: catch r7, role, 0, r9, @26, @29
+    26: call.role r5, r9, role0, 0, []
+    27: call _, f2, [r5]
+    28: jmp @30
+    29: raise r7
+    30: call r1, f10, [r0]
+    31: jmp @34
+    32: const r5, str "overflow taken"
+    33: call _, f2, [r5]
+    34: call r1, f11, [r0]
+    35: jmp @38
+    36: const r5, str "region unwound"
+    37: call _, f2, [r5]
+    38: call r1, f12, [r0]
+    39: jmp @42
+    40: const r5, str "resource unwound"
+    41: call _, f2, [r5]
+    42: obj.new r3, obj0, [r0]
+    43: role.wrap r9, r3, role0
+    44: role.narrow r10, r9, role1, "not sized"
+    45: jmp @48
+    46: const r5, str "narrow refused"
+    47: call _, f2, [r5]
+    48: trap range, "out of range"
+    49: const r5, str "trap taken"
+    50: call _, f2, [r5]
+    51: call r1, f17, []
+    52: const r4, int 0
+    53: int.add r4, r4, r14
+    54: const r1, int 3
+    55: int.cmp lt, r8, r4, r1
+    56: br r8, @57, @58
+    57: unreachable
+    58: call _, f1, [r4]
+    59: call r1, f8, [r0]
+    60: jmp @68
+    61: call r1, f13, []
+    62: jmp @68
+    63: call r1, f8, [r14]
+    64: jmp @68
+    65: fail.caused r7, r11, r2
+    66: fail.secondary r7, r7, r13
+    67: raise r7
+    68: const r1, int 0
+    69: ret r1
+}
+function f5 "Oops.text" {
+    registers [t5, t1]
+    params [r0]
+    result t1
+    0: const r1, str "oops"
+    1: ret r1
+}
+function f6 "Handle.destroy" {
+    registers [t8, t1, t1, t1]
+    params [r0]
+    result void
+    0: const r1, str "closing "
+    1: obj.get r2, r0, 0
+    2: str.concat r3, r1, r2
+    3: call _, f2, [r3]
+    4: ret _
+}
+function f7 "thrower" {
+    registers [t0, t5]
+    params [r0]
+    result t0
+    0: obj.new r1, obj0, [r0]
+    1: throw r1
+}
+function f8 "middle" {
+    registers [t0, t0]
+    params [r0]
+    result t0
+    0: call r1, f7, [r0]
+    1: ret r1
+}
+function f9 "variant thrower" {
+    registers [t0, t11, t10]
+    params [r0]
+    result t0
+    0: obj.new r1, obj2, [r0]
+    1: variant.of r2, r1, variant0
+    2: throw r1
+}
+function f10 "down" {
+    registers [t0, t0, t0]
+    params [r0]
+    result t0
+    0: const r1, int 1
+    1: int.add r1, r0, r1
+    2: call r2, f10, [r1]
+    3: ret r2
+}
+function f11 "with region" {
+    registers [t0, t9, t1, t8, t0, t6, t6, t8, t9]
+    params [r0]
+    result t0
+    handler 12 13 @15 r5
+    0: region.enter r1
+    1: region.enter r8
+    2: const r2, str "a"
+    3: obj.new r3, obj1, [r2]
+    4: region.track r1, r3
+    5: region.adopt r1, r3
+    6: const r2, str "b"
+    7: obj.new r7, obj1, [r2]
+    8: region.track r8, r7
+    9: region.adopt r8, r7
+    10: region.transfer r8, r1, r7
+    11: region.leave r8, _
+    12: call r4, f8, [r0]
+    13: region.leave r1, _
+    14: ret r4
+    15: region.unwind r6, r1, r5
+    16: raise r6
+}
+function f12 "with resource" {
+    registers [t0, t1, t8, t0, t6, t6]
+    params [r0]
+    result t0
+    handler 3 4 @6 r4
+    0: const r1, str "pinned"
+    1: obj.new r2, obj1, [r1]
+    2: resource.pin r2
+    3: call r3, f8, [r0]
+    4: resource.leave r2
+    5: ret r3
+    6: resource.unwind r5, r2, r4
+    7: raise r5
+}
+function f13 "never" {
+    registers [t0]
+    params []
+    result t0
+    0: unreachable
+}
+function f14 "rethrower" {
+    registers [t0, t0, t6, t11]
+    params [r0]
+    result t0
+    handler 0 1 @2 r2
+    0: call r1, f8, [r0]
+    1: ret r1
+    2: catch r2, object, 2, r3, @3, @4
+    3: ret r0
+    4: raise r2
+}
+function f15 "Problem.bad.text" {
+    registers [t11, t1]
+    params [r0]
+    result t1
+    0: const r1, str "bad"
+    1: ret r1
+}
+function f16 "Problem.worse.text" {
+    registers [t12, t1]
+    params [r0]
+    result t1
+    0: const r1, str "worse"
+    1: ret r1
+}
+function f17 "kept resource" {
+    registers [t1, t8, t0]
+    params []
+    result t0
+    0: const r0, str "kept"
+    1: obj.new r1, obj1, [r0]
+    2: resource.pin r1
+    3: resource.leave r1
+    4: const r2, int 0
+    5: ret r2
+}
+entry f4

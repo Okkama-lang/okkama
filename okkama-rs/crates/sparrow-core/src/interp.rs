@@ -18,8 +18,12 @@
 //!   the registers' initial words, the traced registers, and per instruction what its execution needs that the
 //!   program says statically (a constant's word, the uses of a helper's instruction, a dispatch table).
 //!
-//! Not yet: failure handlers (a failure an active handler would catch stops the run with a refusal, #1121) and
-//! async bodies (#1122).
+//! - **A failure follows the JIT's status protocol** (#1121): each activation it reaches is recorded once, and the
+//!   first handler covering the instruction takes it with the activations above it left; `catch` asks
+//!   `rt_catch`. Cleanups are the program's own code there (`region.unwind`, `resource.unwind`, `fail.*`), run
+//!   through `rt_failure_op` as any instruction.
+//!
+//! Not yet: async bodies (#1122).
 //!
 //! Rule for this file: a heap word is not held in a Rust local across a call that may collect, unless it is still
 //! in a register (all registers are roots; the heap does not move objects). Operations follow the JIT's order: an
@@ -272,9 +276,8 @@ fn refuse(ctx: *mut Ctx, function: usize, pc: Option<usize>, what: &str) -> Word
     let runtime = unsafe { &mut *(*ctx).runtime };
     okkama_devtrace::count!("interp", format!("refused: {what}"));
     let symbol = &runtime.loaded.program.functions[function].symbol;
-    let ticket = if what == "an async body" { "#1122" } else { "#1121" };
     let at = pc.map_or(String::new(), |pc| format!(":{pc}"));
-    let message = format!("{symbol}{at}: {what} is not supported by the interpreter yet ({ticket})");
+    let message = format!("{symbol}{at}: {what} is not supported by the interpreter yet (#1122)");
     runtime::fatal(unsafe { &mut *ctx }, runtime, message)
 }
 
@@ -559,12 +562,15 @@ fn trap(ctx: *mut Ctx, message: &str) {
     }
 }
 
-/// The failure or stop of the innermost activation at `pc`: record each activation of this entry the failure
-/// leaves (innermost first, at the instruction it is at) and leave them. A failure an active handler would catch
-/// is refused instead (#1121).
+/// The failure or stop of the innermost activation at `pc`, as the JIT's `check` after each instruction that may
+/// fail: each activation the failure reaches is recorded (once, at the instruction it is at), then the first
+/// handler covering that instruction takes it — the activations above it are left, the status is OK again, the
+/// handler's edge is taken (a step when it goes back) and its register gets the failure. True when a handler
+/// caught it: its activation is innermost, at the handler's target. Otherwise (no handler, or a stop: FATAL and
+/// EXHAUSTED pass every handler) every activation above `base` is left.
 #[cold]
 #[inline(never)]
-fn unwind(ctx: *mut Ctx, interp: *mut Interp, base: usize, pc: usize) -> Word {
+fn unwind(ctx: *mut Ctx, interp: *mut Interp, base: usize, pc: usize) -> bool {
     let (runtime, _) = unsafe { parts(ctx) };
     let interp = unsafe { &mut *interp };
     if unsafe { (*ctx).status } == FAILED {
@@ -572,16 +578,31 @@ fn unwind(ctx: *mut Ctx, interp: *mut Interp, base: usize, pc: usize) -> Word {
         interp.activations[top].pc = pc as u32;
         for index in (base..=top).rev() {
             let Activation { function, pc, regs, .. } = interp.activations[index];
-            let source = &runtime.loaded.program.functions[function as usize];
-            if source.handlers.iter().any(|h| (h.start..h.end).contains(&pc)) {
-                refuse(ctx, function as usize, Some(pc as usize), "a failure handler");
+            runtime::rt_trace(ctx, u64::from(function), u64::from(pc), regs as u64);
+            let source: *const okkama_sparrow::Function = &runtime.loaded.program.functions[function as usize];
+            // SAFETY: the code and handlers are never mutated while they run (as for `rt_exec`).
+            let source = unsafe { &*source };
+            let Some(handler) = source.handlers.iter().find(|h| (h.start..h.end).contains(&pc)) else { continue };
+            okkama_devtrace::count!("interp", "failures caught");
+            interp.pop_to(index + 1);
+            unsafe { (*ctx).status = OK };
+            let target = &handler.target;
+            if target.pc <= pc && step(ctx, runtime) {
                 break;
             }
-            runtime::rt_trace(ctx, u64::from(function), u64::from(pc), regs as u64);
+            // The edge's moves read the old registers; the failure is written last.
+            let read = |register: &Register| unsafe { *regs.add(register.0 as usize) };
+            let moved: Vec<Word> = target.moves.iter().map(|(_, source)| read(source)).collect();
+            for ((register, _), value) in target.moves.iter().zip(moved) {
+                unsafe { *regs.add(register.0 as usize) = value };
+            }
+            unsafe { *regs.add(handler.failure.0 as usize) = (*ctx).failure };
+            interp.activations[index].pc = target.pc;
+            return true;
         }
     }
     interp.pop_to(base);
-    0
+    false
 }
 
 /// The loop: run the activation on top until the one at `base` returns (its result) or the run fails or stops
@@ -633,20 +654,49 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
             unsafe { *regs.add($register.0 as usize) = value };
         }};
     }
+    // The failure or stop of this instruction: on at a handler that caught it, or out of this entry.
+    macro_rules! fail {
+        () => {{
+            if unwind(ctx, interp, base, pc) {
+                load!();
+                pc = it!().activations.last().expect("the handler's activation").pc as usize;
+                continue;
+            }
+            return 0;
+        }};
+    }
     // After anything that may fail or stop.
     macro_rules! check {
         () => {
             if unsafe { (*ctx).status } != OK {
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
         };
+    }
+    // Take an edge, then define `$register` as `$word` (a found element, a caught payload).
+    macro_rules! jump_then {
+        ($target:expr, $register:expr, $word:expr) => {{
+            let target: &Target = $target;
+            let word: Word = $word;
+            if (target.pc as usize) <= pc && step(ctx, rt!()) {
+                fail!();
+            }
+            moved.clear();
+            moved.extend(target.moves.iter().map(|(_, source)| get!(source)));
+            for ((register, _), &value) in target.moves.iter().zip(&moved) {
+                set!(register, value);
+            }
+            set!($register, word);
+            pc = target.pc as usize;
+            continue;
+        }};
     }
     // Take an edge: a back-edge is a step; the moves read every source before they write.
     macro_rules! jump {
         ($target:expr) => {{
             let target: &Target = $target;
             if (target.pc as usize) <= pc && step(ctx, rt!()) {
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             match target.moves.as_slice() {
                 [] => {}
@@ -675,7 +725,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 }
                 // A failed prologue (a stack overflow) is this instruction's failure: the callee is not in the
                 // trace. An entry's step that stopped the run leaves every activation, the callee's too.
-                Entered::Stopped => return unwind(ctx, interp, base, pc),
+                Entered::Stopped => fail!(),
             }
         }};
     }
@@ -703,13 +753,15 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 // The JIT cannot compile an async native or intrinsic either.
                 let message = format!("{}: async natives and intrinsics are driven, not compiled", source.symbol);
                 runtime::fatal(unsafe { &mut *ctx }, rt!(), message);
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             call_body!(callee, $words)
         }};
     }
     loop {
         let instruction = &code[pc];
+        #[cfg(test)]
+        tests::executed(instruction.mnemonic());
         match instruction {
             I::Const { dst, .. } => {
                 let Prep::Word(word) = prep[pc] else { unreachable!("a const has its word") };
@@ -813,23 +865,12 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                     if !inside {
                         jump!(missing);
                     }
-                    let item = element(ctx, array, header, position, matches!(prep[pc], Prep::Bytes));
                     // The edge's moves read the old registers; the element is written last.
-                    if (found.pc as usize) <= pc && step(ctx, rt!()) {
-                        return unwind(ctx, interp, base, pc);
-                    }
-                    moved.clear();
-                    moved.extend(found.moves.iter().map(|(_, source)| get!(source)));
-                    for ((register, _), &value) in found.moves.iter().zip(&moved) {
-                        set!(register, value);
-                    }
-                    set!(dst.0, item);
-                    pc = found.pc as usize;
-                    continue;
+                    jump_then!(found, dst.0, element(ctx, array, header, position, matches!(prep[pc], Prep::Bytes)));
                 }
                 if !inside {
                     trap(ctx, crate::texts::ARRAY_INDEX);
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 set!(dst.0, element(ctx, array, header, position, matches!(prep[pc], Prep::Bytes)));
             }
@@ -837,7 +878,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let words = rt!().heap.object_words(object.0, fields.len());
                 let pointer = allocate(ctx, rt!(), words);
                 if pointer == 0 {
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 // A fresh cell of `words` words; the fields are read after the allocation.
                 store(pointer, heap::header(heap::OBJECT, Repr::Raw, object.0));
@@ -852,7 +893,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let words = rt!().heap.object_words(object, fields.len());
                 let pointer = allocate(ctx, rt!(), words);
                 if pointer == 0 {
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 store(pointer, heap::header(heap::OBJECT, Repr::Raw, object));
                 for (i, field) in fields.iter().enumerate() {
@@ -867,7 +908,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                     Prep::Stub { stub, boolean } if value == stub => {
                         if !boolean {
                             stub_read(ctx, function, pc);
-                            return unwind(ctx, interp, base, pc);
+                            fail!();
                         }
                         1
                     }
@@ -884,7 +925,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let words = rt!().heap.object_words(declared, count);
                 let pointer = allocate(ctx, rt!(), words);
                 if pointer == 0 {
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 let source = get!(object);
                 // The header and fields of the source, into a fresh cell of the same layout.
@@ -909,14 +950,14 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let pointer = get!(value);
                 if heap::payload(rt!().heap.header_of(pointer)) != object {
                     trap(ctx, crate::texts::INACTIVE_CASE);
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 let read = load(pointer + 8 + u64::from(*field) * 8);
                 let read = match stub {
                     Some((stub, boolean)) if read == stub => {
                         if !boolean {
                             stub_read(ctx, function, pc);
-                            return unwind(ctx, interp, base, pc);
+                            fail!();
                         }
                         1
                     }
@@ -946,7 +987,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let callee = it!().tables[table as usize][descriptor];
                 if callee == u64::MAX {
                     runtime::fatal(unsafe { &mut *ctx }, rt!(), format!("call.role: no implementation for descriptor {descriptor}"));
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 }
                 // The receiver, then the arguments.
                 let words: &[Word] = if args.len() < short.len() {
@@ -975,7 +1016,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
             I::CallCap { dst, cap, ty, field } => {
                 let Some(&(_, callee)) = rt!().loaded.program.caps[ty.0 as usize].fields.get(*field as usize) else {
                     runtime::fatal(unsafe { &mut *ctx }, rt!(), format!("call.cap: no field {field}"));
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 };
                 let receiver = [get!(cap)];
                 if rt!().loaded.program.functions[callee.0 as usize].is_async {
@@ -999,7 +1040,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 let target = heap::payload(rt!().heap.header_of(closure)) as usize;
                 let Some(mut entry) = rt!().invocations.get(target).copied() else {
                     runtime::fatal(unsafe { &mut *ctx }, rt!(), "invalid closure function".into());
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 };
                 if rt!().closure_bridge_reference {
                     let source = &rt!().loaded.program.functions[target];
@@ -1008,7 +1049,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 }
                 let Some(captured) = (entry.params as usize).checked_sub(args.len()) else {
                     runtime::fatal(unsafe { &mut *ctx }, rt!(), "closure argument count exceeds parameter count".into());
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 };
                 long.clear();
                 long.extend((0..captured).map(|i| rt!().heap.field(closure, i)));
@@ -1054,30 +1095,19 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 if present == 0 {
                     jump!(missing);
                 }
-                let item = unsafe { (*ctx).scratch };
-                if (found.pc as usize) <= pc && step(ctx, rt!()) {
-                    return unwind(ctx, interp, base, pc);
-                }
-                moved.clear();
-                moved.extend(found.moves.iter().map(|(_, source)| get!(source)));
-                for ((register, _), &word) in found.moves.iter().zip(&moved) {
-                    set!(register, word);
-                }
-                set!(value.0, item);
-                pc = found.pc as usize;
-                continue;
+                jump_then!(found, value.0, unsafe { (*ctx).scratch });
             }
             I::Throw { value } => {
                 runtime::rt_throw(ctx, get!(value));
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             I::Trap { message, .. } => {
                 trap(ctx, message);
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             I::Unreachable {} => {
                 trap(ctx, crate::texts::UNREACHABLE);
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             I::FutSpawn { dst, future } => {
                 let spawned = crate::tasks::rt_spawn(ctx, get!(future));
@@ -1096,9 +1126,13 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
                 crate::failures::rt_resource_leave(ctx, get!(value));
                 check!();
             }
-            I::Catch { .. } => {
-                refuse(ctx, function, Some(pc), "a failure handler");
-                return unwind(ctx, interp, base, pc);
+            // The failure in a handler's register against the caught type: its payload, or the next test.
+            I::Catch { failure, value, handler, next, .. } => {
+                let matched = crate::failures::rt_catch(ctx, function as u64, pc as u64, get!(failure));
+                if matched != 0 {
+                    jump_then!(handler, value.0, unsafe { (*ctx).scratch });
+                }
+                jump!(next);
             }
             I::Await { .. }
             | I::AwaitTake { .. }
@@ -1107,13 +1141,13 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize) -> Word {
             | I::ResourceSettle { .. }
             | I::ResourceSettleUnwind { .. } => {
                 refuse(ctx, function, Some(pc), "an async body");
-                return unwind(ctx, interp, base, pc);
+                fail!();
             }
             other => {
                 let Prep::Uses { uses, def, region } = &prep[pc] else {
                     let message = format!("{}:{pc}: {} is not supported by sparrow-core yet", rt!().loaded.program.functions[function].symbol, other.mnemonic());
                     runtime::fatal(unsafe { &mut *ctx }, rt!(), message);
-                    return unwind(ctx, interp, base, pc);
+                    fail!();
                 };
                 let words = gather(regs, uses, &mut short, &mut long);
                 let result = if *region {

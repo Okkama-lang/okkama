@@ -119,6 +119,37 @@ pub fn run_described(
 
 
 
+/// The engine of a run, whatever `SPARROW_CORE_INTERPRET` says (#1121: the differential test of the two).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    Jit,
+    Interpreter,
+}
+
+/// What a run shows, to compare Sparrow's engines (#1121): `main`'s result, or the report and the uncaught failure
+/// (category, type, message, sites, causes), and what the program wrote to each stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observed {
+    pub result: Result<i64, (String, Option<Uncaught>)>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// `run_described` on `engine`, with both streams captured (#1121).
+pub fn observe(engine: Engine, bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: budget::Limits) -> Result<Observed, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
+        runtime.use_engine(engine);
+        let (result, stdout, stderr) = okkama_runtime_core::stdout::capture_streams(|| execute(&mut runtime));
+        let result = result.map_err(|failure| {
+            let (error, uncaught) = *failure;
+            (error.0, uncaught)
+        });
+        Ok(Observed { result, stdout, stderr })
+    })
+}
+
 /// CLI execution result. Loading failures remain the outer `Err`; runtime
 /// failures carry the report prefix and an already rendered Sparrow trace
 /// followed by cause reports with their own stacks. With tracing disabled,
