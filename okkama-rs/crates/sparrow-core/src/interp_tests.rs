@@ -1681,3 +1681,77 @@ fn closure_entries_call_with_a_trailing_closure_past_the_register_arguments() {
     #[cfg(feature = "jit")]
     assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
 }
+
+/// #1111: an empty builder finishes as the shared empty array of its representation, the same one `[]` is
+/// (#1168), on both engines, for an int array and a byte array; a builder that got items still makes a fresh array.
+#[test]
+fn an_empty_builder_finishes_as_the_shared_empty_array() {
+    let source = program("type t5 array t0\ntype t6 builder t0\ntype t7 builder t2", "", r#"
+function f4 "built" {
+    registers [t6, t5]
+    params []
+    result t5
+    0: builder.new r0
+    1: builder.finish r1, r0
+    2: ret r1
+}
+function f5 "literal" {
+    registers [t5]
+    params []
+    result t5
+    0: arr.new r0, []
+    1: ret r0
+}
+function f6 "bytes built" {
+    registers [t7, t3]
+    params []
+    result t3
+    0: builder.new r0
+    1: builder.finish r1, r0
+    2: ret r1
+}
+function f7 "bytes literal" {
+    registers [t3]
+    params []
+    result t3
+    0: arr.new r0, []
+    1: ret r0
+}
+function f8 "one" {
+    registers [t6, t0, t6, t5]
+    params []
+    result t5
+    0: builder.new r0
+    1: const r1, int 7
+    2: builder.push r2, r0, r1
+    3: builder.finish r3, r2
+    4: ret r3
+}
+function f9 "main" {
+    registers [t0]
+    params []
+    result t0
+    0: const r0, int 0
+    1: ret r0
+}
+entry f9
+"#);
+    let engines_list: &[Engine] = if cfg!(feature = "jit") { &[Engine::Jit, Engine::Interpreter] } else { &[Engine::Interpreter] };
+    for &engine in engines_list {
+        let mut runtime = Box::new(Runtime::new(Loaded::verified(okkama_sparrow::assemble(&source).unwrap()).unwrap()).unwrap());
+        match engine {
+            Engine::Interpreter => runtime.use_engine(crate::Engine::Interpreter),
+            #[cfg(feature = "jit")]
+            Engine::Jit => runtime.use_engine(crate::Engine::Jit),
+            #[cfg(not(feature = "jit"))]
+            Engine::Jit => unreachable!(),
+        }
+        let mut call = |function: usize| runtime.run_function_with(function, &[], STACK).unwrap();
+        let (built, literal) = (call(4), call(5));
+        assert_eq!(built, literal, "{engine:?}: an empty int builder is the shared []");
+        let (bytes, byte_literal) = (call(6), call(7));
+        assert_eq!(bytes, byte_literal, "{engine:?}: an empty byte builder is the shared packed []");
+        assert_ne!(bytes, built, "{engine:?}: representations keep their own empty array");
+        assert_ne!(call(8), call(8), "{engine:?}: a builder with items makes a fresh array");
+    }
+}

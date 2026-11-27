@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Cheaper int text and empty builders (#1111).** A small int becomes text through a stack buffer, without a Rust
+  String per number; an empty builder (a filter that kept nothing) finishes as the shared empty array. Measured:
+  10-app and 06-collections within noise (−2% to +0.5% over two seeds); the builder redesign that the audit's
+  estimate needs is #1171 (postponed by the owner).
 - **Closure calls through an entry word (#1110).** A closure carries its entry: its function's code when it takes
   the arguments alone, otherwise a second compilation of the body whose prologue reads the captures from the
   closure (made for each (function, captures) a compiled `fn.closure` names). A call is one load, a test and a call

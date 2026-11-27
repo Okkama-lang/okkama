@@ -1205,7 +1205,11 @@ pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) 
         return Err(array_limit());
     }
     let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
-    let array = if packed {
+    // #1111: an empty result (a filter that kept nothing, the common case in real code) is the shared empty array
+    // of its representation (#1168): no allocation and no copy.
+    let array = if items.is_empty() {
+        runtime.heap.empty_array(if packed { crate::runtime::ARRAY_BYTES } else { repr as u64 })
+    } else if packed {
         let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
         runtime.heap.allocate_bytes(&bytes)
     } else {
