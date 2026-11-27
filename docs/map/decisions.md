@@ -900,3 +900,64 @@ every declaration is open (#1005, owner decision).
 - **The seeded JIT defect needs no reference build.** The mutated build's interpreter does not run the emitter's
   code, so `okgen.py --engines sparrow,sparrow-interp` on that one build finds it; the existing shared-helper
   mutant keeps its unmutated reference.
+
+## Sparrow without the JIT and the host, wasm32-clean (#1124, 2026-11-27; design Fable §7, §4.2; implementer's choices where it leaves room)
+
+- **Features, as the design's §7.1.** sparrow-core `default = ["jit", "host"]`; okkama-runtime-core's `native`
+  (still the default) is `providers + host + zstd + brotli + crypto`; okkama-native `aws-lc` (default). Every
+  binary and every other crate's tests build the defaults, so `cargo tree -e features` of okkama-cli and
+  sparrow-cli changes only by the new feature names of these three crates (every external crate's version and
+  features identical). `jit` or `host` on wasm32 is a `compile_error!` that names `--no-default-features`.
+- **sparrow-core depends on runtime-core `providers + crypto` and on okkama-native without `aws-lc`
+  unconditionally; `host` adds the rest.** RustCrypto digests, HMAC, HKDF, AEAD, ECC and argon2 stay in the
+  no-host build (sparrow-core's own `native_crypto`/`native_secret`/digest handles use them); what the playground
+  allows is the profile's question (#1125, owner decision 6 of the design), not the build's. zstd (C) and Brotli
+  are left out without the host; their formats are then refused as `unsupported` ("zstd is not available in this
+  build"), not as unknown.
+- **What `host` gates in sparrow-core** is the design's list, files and sockets, plus `native_glob`, `path_syntax`
+  (path natives use the host's path rules) and the worker modules. `native_net` (numeric IP parse/format) and
+  `native_postgres` (DataRow pages, no socket) are pure and stay: the design listed them with the host, but they
+  touch no OS. `native_db`, `native_input` (stdin through `std::io`), `native_io` (the request machinery) stay.
+  runtime-core's `native::idna` (public suffixes) serves only `x509`'s name checks and goes with it.
+- **The bridge routes only what runtime-core provides.** `native_origin::handles` (the catch-all for synchronous
+  natives) also requires `okkama_runtime_core::native::provides` without the host, so a native neither side has
+  is unsupported (`--native-capabilities`, `natives::supported`) instead of routed to the bridge's refusal; with
+  the host the condition is constant true. `origin_routes_match_the_runtime_core_providers` holds in both builds.
+- **`Engine::Jit` exists only with `jit`** (#1121's `observe`/`Runtime::use_engine`): a build without the JIT
+  cannot be asked for it.
+- **Without `jit` every runtime interprets** (`Runtime::assemble`: `!cfg!(feature = "jit") ||
+  SPARROW_CORE_INTERPRET`), `invoke`/`resume` call the interpreter directly, the collector's JIT branch is
+  `unreachable!`, `frame_pointer!` is 0. The JIT path's `invoke`/`resume`/`*_cold` bodies are unchanged under
+  `cfg(feature = "jit")`.
+- **Process workers without the host behave as a runtime without a worker command** (`worker_absent.rs`): `bind`
+  copies the action (`Runtime::closure_copy`, shared with `worker.rs`), a pool hands the plain action back, closing
+  one is done, `spawn` refuses with `texts::NO_WORKER_COMMAND` (the text `worker.rs` gives without a command). The
+  `WorkerBinding`/`WorkerPool` states exist only with the host.
+- **The VM thread** stays natively without the host (deep recursion needs its 1 GiB); only the host session
+  (`okkama_runtime_core::host::enter`) is the host's. On wasm32 the run takes the caller's stack.
+- **`clock`.** `clock::Instant` is `std::time::Instant` natively (timers, statistics, JIT-path code unchanged)
+  and a virtual timeline on wasm32: `now = installed source + skipped`, `skip_to(deadline)` never goes back, the
+  wall clock is the source's wall clock at installation plus the timeline's progress. Without an installed source
+  time stands still except for skips (a deterministic run). The embedder (#1125, sparrow-wasm) installs
+  `Source { monotonic, wall }` as plain function pointers: sparrow-core has no wasm-bindgen. The time natives
+  (`wall_clock`, `monotonic_clock`, `clock_domain`'s process number) read `clock`.
+- **`io.rs`: one portable part, three waits.** The woken queue, requests, wakers and the firing of due timers are
+  shared by `wait_external`; the wait is `wait_tokio` (host, the old body unchanged), `wait_sleeping` (native
+  without the host: a condition variable the waker notifies holding its lock, woken by the earliest timer and the
+  interrupt look) or `skipping` (wasm32: a fired waker needs no wait; else skip to the earliest timer; requests
+  alone cannot progress there, so false and "no task can make progress").
+- **`sort_or_stop` under `panic = "abort"`** is a stable bottom-up merge sort over two copies whose comparison may
+  stop it, the slice taking the result only when the sort completes; the unwinding version stays the native one.
+  Both are tested natively (`sort_tests` run the same properties on each).
+- **Budget arithmetic in `i64`**, not `isize` (`Runtime::memory_used`, `would_exceed`, `over_budget`,
+  `rt_allocate`, `budget::Meter::used`, `Watch::grow`): identical on 64-bit targets.
+- **`catch_unwind`** (`rt_native`, `rt_exec`'s panic guard) stays: under `panic = "abort"` a panic is a trap, and
+  the page gets its text from a panic hook (#1125).
+- **Recursion over value depth (audit, design §7.2).** Unbounded by value depth: `Runtime::is_key`/`key` and
+  `Key::cmp_other`/`data_bytes`/its drop (`ops.rs`, nested value-object map keys). Bounded: the regex parser
+  (nesting ≤ 256), `data_dump` (depth 64), test-report `show` (`SHOWN_DEPTH`); iterative: `equal`, JSON, marking.
+  v1 keeps the trap (design); the keys' rewrite is a ticket.
+- **Tests without the JIT.** Tests that need an async body or a failure handler carry
+  `cfg_attr(not(feature = "jit"), ignore = "#1122 …"/"#1121, #1122 …")`; the JIT's own tests (`jit/`,
+  `ready_callees`, compile limits) are `cfg(feature = "jit")`; `interp_tests::engines` compares the interpreter
+  with itself under GC stress when there is no JIT.

@@ -21,11 +21,19 @@
 // the context as a raw pointer and are sound for the code that calls them.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+// #1124: the features `jit` and `host` are native only; without both Sparrow builds for wasm32-unknown-unknown.
+#[cfg(all(target_family = "wasm", feature = "jit"))]
+compile_error!("sparrow-core's `jit` feature generates native code: build for wasm32 with `--no-default-features`");
+#[cfg(all(target_family = "wasm", feature = "host"))]
+compile_error!("sparrow-core's `host` feature needs an operating system: build for wasm32 with `--no-default-features`");
+
 pub mod budget;
 // The one switch policy of every crate (#1095), under its old path.
 #[doc(hidden)]
 pub use okkama_devtrace::env_switch;
 
+pub mod clock;
+#[cfg(feature = "jit")]
 mod code_memory;
 mod contracts;
 pub mod drivers;
@@ -35,6 +43,7 @@ pub(crate) mod host;
 pub mod io;
 pub mod intrinsics;
 mod interp;
+#[cfg(feature = "jit")]
 pub mod jit;
 pub mod natives;
 pub mod maps;
@@ -48,7 +57,13 @@ mod pointer_free;
 pub mod tasks;
 pub mod test_report;
 pub mod word;
+#[cfg(feature = "host")]
 pub mod worker;
+// #1124: without the host no worker command can exist; spawn refuses as it does without one.
+#[cfg(not(feature = "host"))]
+#[path = "worker_absent.rs"]
+pub mod worker;
+#[cfg(feature = "host")]
 mod worker_process;
 
 /// Machine stack of the VM thread (R2): deep recursion is bounded by this
@@ -122,6 +137,8 @@ pub fn run_described(
 /// The engine of a run, whatever `SPARROW_CORE_INTERPRET` says (#1121: the differential test of the two).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
+    /// The JIT, in a build with it (#1124: without it the interpreter is the only engine).
+    #[cfg(feature = "jit")]
     Jit,
     Interpreter,
 }
@@ -655,6 +672,7 @@ fn human_outcome(
 /// program `bytes`; nested spawns run `worker_command`. For the CLIs' worker
 /// processes only, not an embedding entry point: a worker runs without
 /// budgets or native permissions.
+#[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<Vec<u8>, Error> {
     on_vm_thread(move || {
@@ -667,6 +685,7 @@ pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi
 
 /// Internal CLI worker transport. One-shot spawn keeps its EOF protocol;
 /// run-local pools use a duplex control socket, separate from program output.
+#[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<(), Error> {
     use std::io::{Read, Write};
@@ -717,12 +736,15 @@ pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> 
         .and_then(|()| out.flush())
         .map_err(|e| Error(format!("worker response: {e}")))
 }
+/// Run `body` on a VM thread with a stack of `STACK_BYTES` (R2); with the host, inside a host session.
+#[cfg(not(target_family = "wasm"))]
 fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
     std::thread::Builder::new()
         .name("sparrow-core".into())
         .stack_size(STACK_BYTES as usize)
         .spawn(move || {
             // The program's cwd and environment live as long as this run (#40).
+            #[cfg(feature = "host")]
             let _host = okkama_runtime_core::host::enter(
                 okkama_runtime_core::host::Context::process().without("SPARROW_INTERNAL_WORKER").without("SPARROW_INTERNAL_WORKER_POOL"),
             );
@@ -733,8 +755,16 @@ fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Sen
         .map_err(|payload| Error(format!("internal error: {}", runtime::panic_text(&*payload))))?
 }
 
+/// wasm32 has no threads: the run takes the caller's stack (#1124). The interpreter's frames are on its own
+/// register stack, so only Rust's re-entries (closures called by natives, destroys) use it; a panic is a trap.
+#[cfg(target_family = "wasm")]
+fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
+    body()
+}
+
 /// A variable the launcher adds to the program's environment when the
 /// process lacks it (`okkama run` passes the pinned ICU this way).
+#[cfg(feature = "host")]
 pub fn default_environment(name: &str, value: &str) {
     okkama_runtime_core::host::default_environment(name, value);
 }
@@ -764,6 +794,7 @@ enum DecodedProgram {
 }
 
 impl DecodedProgram {
+    #[cfg(feature = "host")]
     fn legacy(self) -> Result<okkama_sparrow::Program, Error> {
         match self {
             Self::Legacy(program) => Ok(program),
@@ -823,5 +854,55 @@ mod uncaught_report_tests {
             caused.render_report(text, |_| "  at f\n".into()),
             "E: rethrown\n  at f\nCaused by:\n  RuntimeError: Stack overflow\n    at f\n  ... and 5 more activations in the middle, not recorded"
         );
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use okkama_runtime_abi::Native;
+
+    /// #1124: every build provides the pure natives (text, numbers, JSON, regex, IDNA, digests, the clocks), and
+    /// only a build with the host provides the host's (files, the environment, processes, networks, SQLite, the
+    /// terminal through runtime-core); a native a build lacks is unsupported, never routed to a refusal.
+    #[test]
+    fn the_build_provides_the_pure_natives_and_the_host_its_own() {
+        for native in [
+            Native::Utf8Encode,
+            Native::NetIpParse,
+            Native::RegexRegexEscape,
+            Native::CryptoDigest,
+            Native::LayoutDedent,
+            Native::TimeWallClock,
+            Native::TimeMonotonicClock,
+            Native::TimeSleepNanoseconds,
+        ] {
+            assert!(crate::natives::supported(native), "{}", native.symbol());
+        }
+        for native in [
+            Native::FsOpen,
+            Native::FsPathJoin,
+            Native::EnvironmentEnvironmentSnapshot,
+            Native::ProcessProcessStateStart,
+            Native::SystemSystemCpuCount,
+            Native::AccountAccountCurrentUser,
+            Native::X509SystemCertificates,
+        ] {
+            let host = cfg!(feature = "host");
+            assert_eq!(crate::natives::supported(native), host, "{}", native.symbol());
+        }
+    }
+
+    /// #1124: without the JIT every runtime runs on the interpreter, switch or not; with it, the switch chooses.
+    #[test]
+    fn a_runtime_interprets_without_the_jit_or_when_chosen() {
+        let program = okkama_sparrow::assemble(
+            "sparrow 18\nmodule \"m\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 3\n 1: ret r0\n}\nentry f0\n",
+        )
+        .unwrap();
+        let mut runtime = Box::new(crate::runtime::Runtime::new(crate::program::Loaded::verified(program).unwrap()).unwrap());
+        let chosen = crate::env_switch::enabled("SPARROW_CORE_INTERPRET");
+        assert_eq!(runtime.interp.is_some(), !cfg!(feature = "jit") || chosen);
+        assert_eq!(runtime.run_entry(64 << 20).unwrap(), 3);
+        assert_eq!(runtime.invocations[0].code != 0, cfg!(feature = "jit") && !chosen, "only the JIT publishes code");
     }
 }

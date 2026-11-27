@@ -27,6 +27,25 @@
   `stdout::tests::capture_streams…` 1; 11 mutations caught. Corpus (release, cage, JIT/interp/interp+GC):
   t/ 139/142, examples 211/263, conformance run failures 55/58 same, the rest async refusals, 0 differ;
   bench/micro check 621/773 on the interpreter (128 async, 24 cage-only on both). JIT path untouched (no A/B).
+- [x] #1124 Interpreter 5 (feature/1124 from release/066 c828a2d62, not committed; worktree okkama-work/hf-1124,
+  target t-1124; baseline worktree okkama-work/hf-1124-base + target t-1124-base, both to remove): sparrow-core
+  features `jit` and `host` (default), okkama-runtime-core `native` = `providers + host + zstd + brotli +
+  crypto`, okkama-native `aws-lc`; `clock.rs` (std::time natively, virtual timeline on wasm32: `install`,
+  `skip_to`), `io.rs` split (portable part + `wait_tokio` / `wait_sleeping` / `skipping`), `worker_absent.rs`,
+  stoppable merge sort under `panic = "abort"`, budget math in i64; decisions.md #1124 has every gate and the
+  recursion audit. `cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown` clean (no
+  tokio, cranelift, libc, aws-lc, rusqlite, zstd, brotli in its tree: 130 crates); `cargo check` clean (lib and
+  tests) for default, none, `jit`, `host`; runtime-core providers/providers+crypto/host/zstd/default clean;
+  okkama-compiler + okkama-wasm wasm32 still clean. Tests without defaults, run locally by module filter: lib, every module
+  (all modules; 7 async tests ignored #1122), integration all 13 files (19 ignored #1121/#1122, compile limits
+  and ready_callees JIT-only); `timer_wait` on the Tokio and the sleeping wait (`--features jit`); mutations
+  caught: no interrupt look in the sleeping wait, waker not notifying, unstable merge. Default build: `cargo tree
+  -e features` of okkama-cli/sparrow-cli identical for every external crate (only the three crates' new feature
+  names); corpus A/B of gate builds (release/066 c828a2d62 vs candidate, cage, scratchpad compare.py): t/ 142,
+  examples 333, std -t 125 (every 4th module), conformance 1075 cases: exit, stdout, stderr identical, 0 flaky;
+  SPB of 2121 files identical. Wave part `wasm` and a CI "Playground wasm" step added, not yet run on GitHub
+  (clippy of the no-default combinations is first checked there). Cargo.lock gains js-sys (getrandom `wasm_js`
+  on wasm32 only).
 - [x] #1120 Interpreter 1 (feature/1120 from release/066 39a627b67, not committed; worktree okkama-work/hf-1120,
   target t-1120): `sparrow-core/src/interp.rs` behind the seam `Runtime::invoke`/`Runtime::resume` (runtime.rs;
   the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in

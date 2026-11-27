@@ -283,10 +283,7 @@ fn build(runtime: &mut Runtime, ty: TypeRef, values: &[Word]) -> Word {
 /// The receiver fields a bound action (`worker.bind`) passes to its worker
 /// entry ahead of the call's arguments.
 pub fn bind(runtime: &mut Runtime, action: Word, entry: Word, fields: Vec<(Word, Repr)>) -> Word {
-    let function = crate::heap::payload(runtime.heap.header_of(action));
-    let words = runtime.heap.layouts().closures[function as usize].len();
-    let captures: Vec<Word> = (0..words).map(|i| runtime.heap.field(action, i)).collect();
-    let bound = runtime.heap.closure_new(function, &captures);
+    let bound = runtime.closure_copy(action);
     runtime.state_new(bound, State::WorkerBinding { entry, fields, pool: None });
     bound
 }
@@ -393,7 +390,7 @@ impl Payload for Call {
 /// receiver fields precede `arguments`.
 pub fn spawn(runtime: &mut Runtime, ctx: *mut Ctx, entry: Word, arguments: &[Word], direct: bool) -> Result<Word, String> {
     if runtime.worker_command.is_empty() {
-        return Err("process workers require an explicit worker command".into());
+        return Err(crate::texts::NO_WORKER_COMMAND.into());
     }
     let (entry, arguments, pool) = if direct {
         (entry, arguments.to_vec(), None)

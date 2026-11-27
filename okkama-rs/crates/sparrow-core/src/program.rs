@@ -71,6 +71,8 @@ pub struct Loaded {
     workers: Vec<(Option<TypeRef>, usize)>,
     /// Native process launches can leave descendants outside VM ownership.
     /// Keep spawn's per-item process-group teardown for such programs.
+    // A fact of the program that only the host's worker pools read (#1124).
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     pub(crate) worker_reuse_safe: bool,
     /// Per descriptor, the fields a stub of `undef` may reach (#1076, `Program::stub_fields`): the JIT
     /// checks every read of such a field and only those.
@@ -154,7 +156,7 @@ impl Loaded {
             .map(|f| {
                 let kinds: Vec<Kind> = f.registers.iter().map(|t| Kind::of(&program, *t)).collect();
                 // This work happens at load time, outside jit::compile's timer.
-                let started = profile.then(std::time::Instant::now);
+                let started = profile.then(crate::clock::Instant::now);
                 let pointer_free = if !pointer_free {
                     vec![false; kinds.len()]
                 } else if int_ranges {
@@ -314,6 +316,8 @@ pub(crate) fn role_slot_is_async(program: &Program, role: okkama_sparrow::RoleRe
 
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
+/// The JIT's; the interpreter's async part (#1122) will read it too.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) fn suspends(instruction: &Instruction) -> bool {
     matches!(
         instruction,

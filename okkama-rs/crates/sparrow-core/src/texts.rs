@@ -7,6 +7,9 @@ pub(crate) const ARRAY_INDEX: &str = "Array index out of bounds";
 /// `variant.get` of a case that is not the active one.
 pub(crate) const INACTIVE_CASE: &str = "Variant payload of an inactive case";
 
+/// `worker.spawn` in a runtime without a worker command (none configured, or no host: #1124).
+pub(crate) const NO_WORKER_COMMAND: &str = "process workers require an explicit worker command";
+
 /// The program error of a reached `unreachable` (#1072).
 pub(crate) const UNREACHABLE: &str = "Unreachable code reached";
 

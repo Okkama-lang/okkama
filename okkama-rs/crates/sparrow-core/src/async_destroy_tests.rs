@@ -113,6 +113,7 @@ fn single_async_close_hands_a_pinned_object_to_its_holder() {
     assert!(matches!(next(&mut r, holder, &[]), Closed::Async(found, None) if found == object));
 }
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn single_async_close_links_destroy_failure_and_keeps_unwind_primary() {
     crate::on_vm_thread(|| {
@@ -141,6 +142,7 @@ fn single_async_close_links_destroy_failure_and_keeps_unwind_primary() {
     }).unwrap();
 }
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc() {
     crate::on_vm_thread(|| {

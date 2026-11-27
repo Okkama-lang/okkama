@@ -87,7 +87,11 @@ fn compiled_code_and_old_values_survive_extensions_and_reach_new_implementations
     assert_eq!(number(&mut runtime, 1, &[seven]), 7);
     assert_eq!(number(&mut runtime, 2, &[double]), 10);
     let compiled = runtime.invocations[1].code;
+    #[cfg(feature = "jit")]
     assert_ne!(compiled, 0);
+    // #1124: without the JIT the interpreter runs it and publishes no code.
+    #[cfg(not(feature = "jit"))]
+    assert_eq!(compiled, 0);
     let table = runtime.invocations.as_ptr();
 
     runtime.extend(program(&[BASE, SECOND])).unwrap();

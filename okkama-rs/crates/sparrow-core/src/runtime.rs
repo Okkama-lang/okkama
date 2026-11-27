@@ -119,6 +119,7 @@ impl Invocation {
 pub struct Runtime {
     pub heap: Heap,
     pub loaded: Loaded,
+    #[cfg(feature = "jit")]
     pub jit: crate::jit::Jit,
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
@@ -145,7 +146,7 @@ pub struct Runtime {
     pub spawned: Vec<Word>,
     pub running: Vec<Word>,
     /// Sleeping drivers by deadline; roots.
-    pub timers: Vec<(std::time::Instant, Word)>,
+    pub timers: Vec<(crate::clock::Instant, Word)>,
     /// Async primitive state by owning object (see `primitives`).
     pub states: crate::word::FastMap<Word, crate::primitives::State>,
     /// Native provider of each function, resolved once.
@@ -161,7 +162,7 @@ pub struct Runtime {
     pub stats: Option<Box<std::collections::HashMap<String, u64>>>,
     /// When this runtime was made: `--stats` reports the run's wall time, so
     /// machine code ≈ run − compile − collection (#55).
-    created: std::time::Instant,
+    created: crate::clock::Instant,
     /// The command (`sparrow`, FILE.spb) process workers run; empty
     /// when the embedder configured none.
     pub worker_command: Vec<std::ffi::OsString>,
@@ -192,7 +193,10 @@ pub(crate) struct Budget {
     pub stack_capped: bool,
 }
 
-/// Frame pointer of the calling function's own frame record.
+/// Frame pointer of the calling function's own frame record. The JIT's root walk
+/// follows frame records from a helper; without the JIT nothing reads it (0, #1124:
+/// the `asm!` exists for aarch64 and x86_64 only).
+#[cfg(feature = "jit")]
 macro_rules! frame_pointer {
     () => {{
         let frame: u64;
@@ -207,6 +211,12 @@ macro_rules! frame_pointer {
         };
         frame
     }};
+}
+#[cfg(not(feature = "jit"))]
+macro_rules! frame_pointer {
+    () => {
+        0u64
+    };
 }
 
 impl Runtime {
@@ -232,7 +242,10 @@ impl Runtime {
         let mut invocations = vec![empty; capacities.functions];
         invocations[..functions].copy_from_slice(&runtime.invocations);
         runtime.invocations = invocations.into_boxed_slice();
-        runtime.jit.object_capacity = capacities.objects;
+        #[cfg(feature = "jit")]
+        {
+            runtime.jit.object_capacity = capacities.objects;
+        }
         runtime.capacities = Some(capacities);
         Ok(runtime)
     }
@@ -242,9 +255,18 @@ impl Runtime {
     pub fn use_engine(&mut self, engine: crate::Engine) {
         debug_assert!(self.invocations.iter().all(|entry| entry.code == 0), "an engine is chosen before code runs");
         self.interp = match engine {
+            #[cfg(feature = "jit")]
             crate::Engine::Jit => None,
             crate::Engine::Interpreter => Some(Box::new(crate::interp::Interp::new(self.loaded.program.functions.len()))),
         };
+    }
+
+    /// A new closure of `closure`'s function over the same captures (`worker.bind`).
+    pub(crate) fn closure_copy(&mut self, closure: Word) -> Word {
+        let function = heap::payload(self.heap.header_of(closure));
+        let words = self.heap.layouts().closures[function as usize].len();
+        let captures: Vec<Word> = (0..words).map(|i| self.heap.field(closure, i)).collect();
+        self.heap.closure_new(function, &captures)
     }
 
     /// The root Future of an async entry leaves the GC roots once its run is over.
@@ -372,7 +394,10 @@ impl Runtime {
         self.intrinsics.extend(intrinsics);
         self.held = held_objects(&loaded.program);
         self.globals.resize(globals, None);
+        #[cfg(feature = "jit")]
         self.jit.extend_dispatch(&loaded.program, objects_before);
+        #[cfg(not(feature = "jit"))]
+        let _ = objects_before;
         if let Some(interp) = &mut self.interp {
             interp.extend(functions);
         }
@@ -423,14 +448,16 @@ impl Runtime {
             host: Some(Box::new(crate::host::Heap::new(&loaded.program))),
             io: crate::io::Io::default(),
             stats: crate::env_switch::enabled("SPARROW_CORE_STATS").then(Box::default),
-            created: std::time::Instant::now(),
+            created: crate::clock::Instant::now(),
             worker_command: Vec::new(),
             limits: crate::budget::Limits::default(),
             poisoned: false,
             budget: Budget::default(),
-            interp: crate::env_switch::enabled("SPARROW_CORE_INTERPRET")
+            // #1124: a build without the JIT has only the interpreter.
+            interp: (!cfg!(feature = "jit") || crate::env_switch::enabled("SPARROW_CORE_INTERPRET"))
                 .then(|| Box::new(crate::interp::Interp::new(loaded.program.functions.len()))),
             heap,
+            #[cfg(feature = "jit")]
             jit: crate::jit::Jit::new()?,
             invocations,
             capacities: None,
@@ -453,8 +480,9 @@ impl Runtime {
             return;
         }
         self.count(|_| "gc collection".into());
-        let started = self.heap.allocations.is_some().then(std::time::Instant::now);
+        let started = self.heap.allocations.is_some().then(crate::clock::Instant::now);
         self.prune_spawned();
+        #[cfg(feature = "jit")]
         let jit = &self.jit;
         let interp = self.interp.as_deref();
         let constants = &self.constants;
@@ -483,7 +511,14 @@ impl Runtime {
                 Some(interp) => interp.roots(visit),
                 // SAFETY: frame records above a helper called from machine code
                 // lead through JIT frames to the Rust entry.
+                #[cfg(feature = "jit")]
                 None => unsafe { jit.frame_roots(frame, ctx.entry_frame, visit) },
+                // #1124: without the JIT every runtime interprets (`assemble`).
+                #[cfg(not(feature = "jit"))]
+                None => {
+                    let _ = (frame, ctx.entry_frame);
+                    unreachable!("a runtime without the JIT always has its interpreter")
+                }
             }
             for &(word, repr) in constants.iter().chain(roots).chain(extra) {
                 visit(word, repr);
@@ -541,7 +576,10 @@ impl Runtime {
             ("owned Rust bytes live after the last collection, estimate".to_string(), heap.external_live_bytes as u64),
             ("collections triggered by owned Rust memory".to_string(), heap.external_collections as u64),
         ];
+        #[cfg(feature = "jit")]
         let helpers = self.jit.helper_calls();
+        #[cfg(not(feature = "jit"))]
+        let helpers: Vec<(String, u64)> = Vec::new();
         // Runtime allocations by kind (objects by type) and collection time.
         let program = &self.loaded.program;
         let allocations: Vec<(String, u64)> = self
@@ -651,7 +689,7 @@ pub extern "C" fn rt_allocate(ctx: *mut Ctx, words: u64) -> Word {
             Some(_) => crate::heap::PAGE_BYTES,
             None => words as usize * 8,
         };
-        if used.saturating_add(bytes as isize) > limit as isize {
+        if used.saturating_add(bytes as i64) > limit as i64 {
             return runtime.exhaust(ctx, Exhausted::Memory);
         }
     }
@@ -687,19 +725,20 @@ impl Runtime {
     }
 
     /// What the memory budget measures now (#269): the process allocator's
-    /// bytes beyond the start of the run, or this runtime's heap.
-    pub(crate) fn memory_used(&self) -> Option<isize> {
+    /// bytes beyond the start of the run, or this runtime's heap. In `i64` on
+    /// every target (#1124: `isize` is 32 bits on wasm32).
+    pub(crate) fn memory_used(&self) -> Option<i64> {
         self.limits.memory?;
         match self.limits.memory_scope {
             crate::budget::MemoryScope::Process => self.budget.meter.as_ref().map(crate::budget::Meter::used),
-            crate::budget::MemoryScope::Runtime => Some(self.heap.held_bytes() as isize),
+            crate::budget::MemoryScope::Runtime => Some(self.heap.held_bytes() as i64),
         }
     }
 
     /// Would `bytes` more cross the memory budget?
     pub(crate) fn would_exceed(&self, bytes: u64) -> bool {
         match (self.limits.memory, self.memory_used()) {
-            (Some(limit), Some(used)) => used.saturating_add(bytes.min(isize::MAX as u64) as isize) > limit as isize,
+            (Some(limit), Some(used)) => used.saturating_add(bytes.min(i64::MAX as u64) as i64) > limit as i64,
             _ => false,
         }
     }
@@ -713,7 +752,7 @@ impl Runtime {
             return Some(Exhausted::Interrupted);
         }
         match (self.limits.memory, self.memory_used()) {
-            (Some(limit), Some(used)) if used > limit as isize => Some(Exhausted::Memory),
+            (Some(limit), Some(used)) if used > limit as i64 => Some(Exhausted::Memory),
             _ => None,
         }
     }
@@ -766,6 +805,7 @@ impl Runtime {
 }
 
 /// Compile a function on its first call; returns its code address.
+#[cfg(feature = "jit")]
 #[inline(never)]
 pub extern "C" fn rt_compile(ctx: *mut Ctx, function: u64) -> u64 {
     let (ctx, runtime) = unsafe { runtime(ctx) };
@@ -1123,6 +1163,7 @@ impl Runtime {
     /// Run synchronous `function` over `words` (its parameters) on this runtime's engine; its result word, with
     /// a failure or a stop in `ctx.status`. `Err` only when the JIT could not compile the function: each caller
     /// reports that as it did before the seam.
+    #[cfg(feature = "jit")]
     #[inline]
     pub(crate) fn invoke(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
         let code = match self.invocations[function].code {
@@ -1134,6 +1175,7 @@ impl Runtime {
     }
 
     /// Start or resume the async body of `frame` (a RUNNING frame of `function`): true while it is pending.
+    #[cfg(feature = "jit")]
     #[inline]
     pub(crate) fn resume(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
         let code = match self.invocations[function].code {
@@ -1145,6 +1187,7 @@ impl Runtime {
     }
 
     /// A function without code: the interpreter runs it, or the JIT compiles it first.
+    #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
     fn invoke_cold(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
@@ -1156,6 +1199,7 @@ impl Runtime {
         Ok(unsafe { crate::jit::invoke(code, ctx, words) })
     }
 
+    #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
     fn resume_cold(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
@@ -1165,6 +1209,19 @@ impl Runtime {
         let code = crate::jit::compile(self, function)?;
         // SAFETY: async bodies take their frame.
         Ok(unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0)
+    }
+
+    /// Without the JIT (#1124) the interpreter runs every function: no code is ever published.
+    #[cfg(not(feature = "jit"))]
+    #[inline]
+    pub(crate) fn invoke(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        Ok(crate::interp::invoke(ctx, function, words))
+    }
+
+    #[cfg(not(feature = "jit"))]
+    #[inline]
+    pub(crate) fn resume(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        Ok(crate::interp::resume(ctx, function, frame))
     }
 }
 
@@ -1392,6 +1449,7 @@ mod embedding_tests {
         }
     }
 
+    #[cfg(feature = "jit")]
     #[test]
     fn closure_bridge_invocation_publication_is_stable() {
         let mut runtime = bridge_runtime();
@@ -1411,6 +1469,7 @@ mod embedding_tests {
         }
     }
 
+    #[cfg(feature = "jit")]
     #[test]
     fn closure_bridge_compilation_failure_does_not_publish_code() {
         let mut runtime = bridge_runtime();

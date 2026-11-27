@@ -352,14 +352,18 @@ pub fn call(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
             arity(args, 1, op)?;
             spki_algorithm(args[0])
         }
+        #[cfg(feature = "aws-lc")]
         "x509-key" => {
             arity(args, 1, op)?;
             Ok(crate::x509::key(args[0])?.into_bytes())
         }
+        #[cfg(feature = "aws-lc")]
         "x509-verify" => {
             arity(args, 4, op)?;
             Ok(truth(crate::x509::verify(args[0], args[1], args[2], args[3])?))
         }
+        #[cfg(not(feature = "aws-lc"))]
+        "x509-key" | "x509-verify" => Err(without_aws_lc(op)),
         other => Err(Error::Unsupported(format!(
             "unknown crypto operation {other}"
         ))),
@@ -766,8 +770,8 @@ fn x25519(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
 /// not normalize it.
 macro_rules! ecdsa_curve {
     ($curve:ident, $point:ty, $digest:ty, $verifying:expr, $op:expr, $args:expr) => {{
-        use $curve::ecdsa::{SigningKey, VerifyingKey};
-        use $curve::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+        use $curve::ecdsa::SigningKey;
+        use $curve::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
         let args = $args;
         match $op {
             // Скаляр из байт энтропии: вне диапазона — повтор с новыми байтами у вызывающего.
@@ -798,16 +802,27 @@ macro_rules! ecdsa_curve {
                 scalar.zeroize();
                 Ok(signature.to_der().as_bytes().to_vec())
             }
+            // `$verifying` names aws-lc's algorithm; without aws-lc it is never expanded.
+            #[cfg(feature = "aws-lc")]
             "verify" => {
+                use $curve::{ecdsa::VerifyingKey, pkcs8::DecodePublicKey};
                 arity(args, 3, "ecdsa verify")?;
                 let key = VerifyingKey::from_public_key_der(args[0]).map_err(|_| invalid("invalid ECDSA SPKI key"))?;
                 let point = key.to_sec1_point(false);
                 let public = aws_lc_rs::signature::UnparsedPublicKey::new($verifying, point.as_bytes());
                 Ok(truth(public.verify(args[1], args[2]).is_ok()))
             }
+            #[cfg(not(feature = "aws-lc"))]
+            "verify" => Err(without_aws_lc("ecdsa verify")),
             other => Err(Error::Unsupported(format!("unknown ECDSA operation {other}"))),
         }
     }};
+}
+
+/// An operation that needs aws-lc, in a build without it (#1124: wasm32).
+#[cfg(not(feature = "aws-lc"))]
+fn without_aws_lc(op: &str) -> Error {
+    Error::Unsupported(format!("{op} needs aws-lc, which this build does not have"))
 }
 
 fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
@@ -835,10 +850,17 @@ fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     }
 }
 
+/// RSA is aws-lc's alone: a build without it refuses every RSA operation.
+#[cfg(not(feature = "aws-lc"))]
+fn rsa_op(op: &str, _args: &[&[u8]]) -> Result<Vec<u8>> {
+    Err(without_aws_lc(&format!("rsa-{op}")))
+}
+
 /// RSA через aws-lc: закрытые операции (генерация, подпись, расшифровка OAEP)
 /// постоянного времени с ослеплением (RUSTSEC-2023-0071 у крейта `rsa`, #70).
 /// Случайность генерации, соли PSS и OAEP берётся из CSPRNG aws-lc;
 /// энтропия вызывающего остаётся аргументом ABI и не используется.
+#[cfg(feature = "aws-lc")]
 fn rsa_op(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     use aws_lc_rs::encoding::AsDer;
     use aws_lc_rs::rand::SystemRandom;

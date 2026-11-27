@@ -4,7 +4,9 @@
 //! объект сжимает или распаковывает один поток; Sparrow берёт эти natives
 //! через мост синхронных natives (`native_origin`). zstd и Brotli (#184)
 //! живут в подмодулях за теми же natives.
+#[cfg(feature = "brotli")]
 mod brotli_codec;
+#[cfg(feature = "zstd")]
 mod zstd_codec;
 
 use std::cell::RefCell;
@@ -111,6 +113,7 @@ fn exceeded(limit: u64) -> Fail {
 
 /// A codec of a format outside miniz_oxide (zstd, Brotli) behind the same
 /// natives.
+#[cfg(any(feature = "zstd", feature = "brotli"))]
 trait Stream {
     fn write(&mut self, input: &[u8]) -> Result<Vec<u8>, Fail>;
     fn finish(&mut self) -> Result<Vec<u8>, Fail>;
@@ -463,6 +466,7 @@ impl Drop for Decompressor {
 enum Codec {
     Compress(Compressor),
     Decompress(Decompressor),
+    #[cfg(any(feature = "zstd", feature = "brotli"))]
     Other(Box<dyn Stream>),
 }
 
@@ -494,15 +498,30 @@ fn open(format: &str, compressing: bool, level: i64, limit: u64) -> Result<Codec
         ("deflate", _) => deflate(Format::Deflate),
         ("zlib", _) => deflate(Format::Zlib),
         ("gzip", _) => deflate(Format::Gzip),
+        #[cfg(feature = "zstd")]
         ("zstd", true) => {
             let size = (limit != UNKNOWN_SIZE).then_some(limit);
             Codec::Other(Box::new(zstd_codec::ZstdCompressor::new(level as i32, size)?))
         }
+        #[cfg(feature = "zstd")]
         ("zstd", false) => Codec::Other(Box::new(zstd_codec::ZstdDecompressor::new(limit)?)),
+        #[cfg(feature = "brotli")]
         ("brotli", true) => Codec::Other(Box::new(brotli_codec::BrotliCompressor::new(level as u32))),
+        #[cfg(feature = "brotli")]
         ("brotli", false) => Codec::Other(Box::new(brotli_codec::BrotliDecompressor::new(limit))),
+        // #1124: a build without the codec (wasm32) knows the format and refuses it.
+        #[cfg(not(feature = "zstd"))]
+        ("zstd", _) => return Err(unavailable(format)),
+        #[cfg(not(feature = "brotli"))]
+        ("brotli", _) => return Err(unavailable(format)),
         _ => return Err(invalid("Unknown compression format")),
     })
+}
+
+/// A known format whose codec this build leaves out (#1124).
+#[cfg(not(all(feature = "zstd", feature = "brotli")))]
+fn unavailable(format: &str) -> Fail {
+    Fail("unsupported", format!("{format} is not available in this build"))
 }
 
 fn failure(native: Native, Fail(code, message): Fail) -> Error {
@@ -587,7 +606,9 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
             let out = match &mut *state(&args[0])?.borrow_mut() {
                 Codec::Compress(codec) => codec.write(&input),
                 Codec::Decompress(codec) => codec.write(&input),
-                Codec::Other(codec) => codec.write(&input),
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+            Codec::Other(codec) => codec.write(&input),
             }
             .map_err(|fail| failure(native, fail))?;
             Ok(array(arrays, out))
@@ -596,7 +617,9 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
             let out = match &mut *state(&args[0])?.borrow_mut() {
                 Codec::Compress(codec) => codec.finish(),
                 Codec::Decompress(codec) => codec.finish(),
-                Codec::Other(codec) => codec.finish(),
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+            Codec::Other(codec) => codec.finish(),
             }
             .map_err(|fail| failure(native, fail))?;
             Ok(array(arrays, out))
@@ -604,13 +627,16 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
         CompressionCodecEnded => Ok(Value::Bool(match &*state(&args[0])?.borrow() {
             Codec::Compress(codec) => codec.finished,
             Codec::Decompress(codec) => codec.stage == Stage::Ended,
+            #[cfg(any(feature = "zstd", feature = "brotli"))]
             Codec::Other(codec) => codec.ended(),
         })),
         CompressionCodecRemainder => {
             let out = match &*state(&args[0])?.borrow() {
                 Codec::Compress(_) => Vec::new(),
                 Codec::Decompress(codec) => codec.remainder.clone(),
-                Codec::Other(codec) => codec.remainder(),
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+                #[cfg(any(feature = "zstd", feature = "brotli"))]
+            Codec::Other(codec) => codec.remainder(),
             };
             Ok(array(arrays, out))
         }
@@ -668,6 +694,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "zstd", feature = "brotli"))]
     fn other_roundtrip(format: &str, level: i64, data: &[u8], pieces: usize) -> (Vec<u8>, usize) {
         let Ok(Codec::Other(mut compressor)) = open(format, true, level, UNKNOWN_SIZE) else { panic!("open") };
         let mut packed = Vec::new();
@@ -690,6 +717,7 @@ mod tests {
         (plain, size)
     }
 
+    #[cfg(all(feature = "zstd", feature = "brotli"))]
     #[test]
     fn zstd_and_brotli_round_trip_and_keep_the_remainder() {
         let data: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8 ^ (n / 1000) as u8).collect();
@@ -701,6 +729,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "zstd", feature = "brotli"))]
     #[test]
     fn zstd_and_brotli_refuse_damage_truncation_and_overflow() {
         let data = b"tea ".repeat(1000);
@@ -727,6 +756,7 @@ mod tests {
     /// #939: a whole input of known size is compressed into a frame that says
     /// its size, reads back whole, and costs far less to start than a stream
     /// of unknown size.
+    #[cfg(all(feature = "zstd", feature = "brotli"))]
     #[test]
     fn zstd_with_a_known_size_records_it_and_starts_cheaply() {
         let compress = |data: &[u8], size: u64| {
@@ -757,6 +787,7 @@ mod tests {
         assert!(known * 4 < unknown, "known {known:?} vs unknown {unknown:?}");
     }
 
+    #[cfg(all(feature = "zstd", feature = "brotli"))]
     #[test]
     fn zstd_and_brotli_read_what_the_reference_tools_wrote() {
         // `printf 'hello, world' | zstd` (1.5.7) and `| brotli` (1.2.1), the reference CLIs.
@@ -891,5 +922,20 @@ mod tests {
             assert!(out == data);
         }
     }
-}
 
+    /// #1124: a build without a codec still knows its format, and refuses it as unsupported rather than unknown.
+    #[cfg(not(all(feature = "zstd", feature = "brotli")))]
+    #[test]
+    fn a_format_whose_codec_is_left_out_is_unsupported() {
+        for (format, present) in [("zstd", cfg!(feature = "zstd")), ("brotli", cfg!(feature = "brotli"))] {
+            match open(format, true, levels(format).unwrap().0, UNKNOWN_SIZE) {
+                Err(Fail(code, message)) => {
+                    assert!(!present, "{format}");
+                    assert_eq!((code, message.as_str()), ("unsupported", &*format!("{format} is not available in this build")));
+                }
+                Ok(_) => assert!(present, "{format}"),
+            }
+        }
+        assert!(matches!(open("lz4", true, 1, UNKNOWN_SIZE), Err(Fail("invalid_input", _))));
+    }
+}

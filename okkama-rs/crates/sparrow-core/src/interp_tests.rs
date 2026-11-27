@@ -15,6 +15,7 @@ struct Outcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 enum Engine {
     Jit,
     Interpreter,
@@ -55,7 +56,11 @@ fn run(source: &str, engine: Engine, stress: bool, limits: Limits) -> Outcome {
 
 /// The comparison helper: the JIT's outcome, which the interpreter must give too, with and without GC stress.
 fn engines_with(source: &str, limits: Limits) -> Outcome {
+    // #1124: a build without the JIT holds the interpreter to its own outcome without GC stress.
+    #[cfg(feature = "jit")]
     let jit = run(source, Engine::Jit, false, limits.clone());
+    #[cfg(not(feature = "jit"))]
+    let jit = run(source, Engine::Interpreter, false, limits.clone());
     for stress in [false, true] {
         let interpreted = run(source, Engine::Interpreter, stress, limits.clone());
         assert_eq!(interpreted, jit, "the interpreter (GC stress: {stress}) differs from the JIT\n{source}");
@@ -780,8 +785,11 @@ function f5 "main" {
 }
 entry f5
 "#);
+    #[cfg(feature = "jit")]
     let jit = run(&source, Engine::Jit, false, Limits::default());
     let interpreted = run(&source, Engine::Interpreter, false, Limits::default());
+    #[cfg(not(feature = "jit"))]
+    let jit = interpreted.clone();
     for outcome in [&jit, &interpreted] {
         assert!(outcome.result.as_ref().unwrap_err().contains("Stack overflow"), "{outcome:?}");
         let sites = sites(outcome);
@@ -1048,6 +1056,7 @@ entry f4
 "#);
     let error = run(&source, Engine::Interpreter, false, Limits::default()).result.unwrap_err();
     assert!(error.contains("main: an async body is not supported by the interpreter yet (#1122)"), "{error}");
+    #[cfg(feature = "jit")]
     assert_eq!(run(&source, Engine::Jit, false, Limits::default()).result, Ok(3));
 }
 

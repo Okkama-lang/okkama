@@ -223,12 +223,14 @@ impl Resources {
 
     /// #909: machine code may count serials, write inline identities and destroy static resources itself when
     /// nothing observes those steps one by one (no destroy trace).
+    #[cfg(feature = "jit")]
     pub(crate) fn inline_ownership(&self) -> bool {
         self.enabled && self.trace.is_none()
     }
 
     /// The address of the serial counter, for machine code that numbers new identities (#909). Stable: the
     /// runtime lives in a box for as long as its machine code.
+    #[cfg(feature = "jit")]
     pub(crate) fn serial_address(&self) -> u64 {
         &self.serial as *const u64 as u64
     }

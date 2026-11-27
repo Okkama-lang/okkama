@@ -1584,7 +1584,7 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "collect");
         // A freed string's address may be reused for another one.
         self.positions = Positions::default();
-        let started = self.allocations.is_some().then(std::time::Instant::now);
+        let started = self.allocations.is_some().then(crate::clock::Instant::now);
         self.collect_inner(roots, &mut ephemerons);
         if let (Some(allocations), Some(started)) = (&mut self.allocations, started) {
             allocations.collection_nanos += started.elapsed().as_nanos() as u64;
@@ -1597,7 +1597,7 @@ impl Heap {
         ephemerons: &mut Ephemerons<'_>,
     ) {
         crate::maps::begin_pass();
-        let marking = self.allocations.is_some().then(std::time::Instant::now);
+        let marking = self.allocations.is_some().then(crate::clock::Instant::now);
         let mut worklist = std::mem::take(&mut self.worklist);
         // An object is marked when it is queued, not when it is traced
         // (#438): one shared by many edges enters the worklist once.
@@ -1650,7 +1650,7 @@ impl Heap {
                 self.released.push(object);
             }
         }
-        let swept = self.allocations.is_some().then(std::time::Instant::now);
+        let swept = self.allocations.is_some().then(crate::clock::Instant::now);
         if self.ages.is_some() {
             self.age_census();
         }
@@ -2712,11 +2712,12 @@ mod tests {
     fn payload_436_cell_layout_census_and_reinitialization() {
         assert_eq!(std::mem::offset_of!(PayloadCell, header), 0);
         assert!(align_of::<PayloadCell>() <= align_of::<u64>());
-        // Supported 64-bit targets: verify the observed layout, without
-        // using it to split or reconstruct the typed owner.
-        assert_eq!(size_of::<usize>(), 8);
-        assert_eq!(size_of::<PayloadCell>(), 24);
-        assert_eq!(CLASSES[Heap::class_of(PAYLOAD_WORDS).unwrap()], 3);
+        // Verify the observed layout, without using it to split or reconstruct
+        // the typed owner: the header word and the payload's fat box, 24 bytes
+        // on 64-bit targets and 16 on 32-bit ones (wasm32, #1124).
+        let bytes = size_of::<u64>() + 2 * size_of::<usize>();
+        assert_eq!(size_of::<PayloadCell>(), bytes);
+        assert_eq!(CLASSES[Heap::class_of(PAYLOAD_WORDS).unwrap()], bytes / 8);
         let mut heap = Heap::new(layouts());
         heap.set_stress(true);
         heap.allocations = Some(Box::default());
@@ -2726,10 +2727,10 @@ mod tests {
             // afresh, rather than assigned over the previous cell bytes.
             let object = heap.allocate_payload(Box::new(Counted { _alive: alive.clone(), words: vec![] }));
             heap.collect(|visit| visit(object, Repr::Ref));
-            assert_eq!(heap.stats().live_bytes, 24);
+            assert_eq!(heap.stats().live_bytes, bytes);
             let allocations = heap.allocations.as_ref().unwrap();
-            assert_eq!(allocations.kinds[&("payload", 0)], (n, n * 24));
-            assert_eq!(allocations.live[&("payload", 0)], (1, 24));
+            assert_eq!(allocations.kinds[&("payload", 0)], (n, n * bytes as u64));
+            assert_eq!(allocations.live[&("payload", 0)], (1, bytes as u64));
             assert_eq!(Rc::strong_count(&alive), 2);
             heap.collect(|_| {});
             assert_eq!(Rc::strong_count(&alive), 1);

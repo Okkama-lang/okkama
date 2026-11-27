@@ -2,9 +2,9 @@
 //! `runtime/crypto` (digest, secure_equal), `runtime/debug`, `runtime/diff`,
 //! `runtime/math_aggregate`, `runtime/layout`. Failure texts follow the Perl
 //! provider. `runtime/secret` is Sparrow's own provider.
-use super::support::{
-    byte_array, bytes, failure, float, int, int_value, items, string, text,
-};
+use super::support::{failure, float, int, int_value, items, string, text};
+#[cfg(feature = "crypto")]
+use super::support::{byte_array, bytes};
 use super::{Context, Error};
 use crate::{Value, abi::Native};
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ fn length(text: &str) -> usize {
 
 /// HMAC is std code over `digest/host` (`crypto/hmac`); no ABI symbol reaches a
 /// keyed provider here (#990).
+#[cfg(feature = "crypto")]
 fn digest_with(native: Native, algorithm: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
     let unsupported = || failure("core.crypto", "unsupported", native, "Unsupported digest algorithm");
     let mut hasher = okkama_native::Hasher::new(algorithm, &[], 0).map_err(|_| unsupported())?;
@@ -363,6 +364,7 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
     let name = operation(native);
     let module = native.module();
     match (module, name) {
+        #[cfg(feature = "crypto")]
         ("runtime/crypto", "digest") => {
             let algorithm = string(&args[0])?;
             let name = match algorithm {
@@ -379,6 +381,7 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
             };
             Ok(byte_array(digest_with(native, name, &bytes(&args[1])?)?))
         }
+        #[cfg(feature = "crypto")]
         ("runtime/crypto", "secure_equal") => {
             let (left, right) = (bytes(&args[0])?, bytes(&args[1])?);
             let limit = left.len().max(right.len());

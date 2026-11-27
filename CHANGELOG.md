@@ -72,6 +72,24 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   and examples 133 of 263 give the JIT's output and exit code (the rest refused, none different), under
   `SPARROW_CORE_GC_STRESS=1` too; bench/micro `check.py` passes 560 of 773 programs on the interpreter (the others
   refused, or failing in the cage on both). With the switch off, the output of every corpus is unchanged.
+- **Sparrow builds without the JIT and the host, for WebAssembly (#1124, part of #1079).** sparrow-core has two
+  default features: `jit` (Cranelift, `jit.rs`, `code_memory.rs`) and `host` (Tokio, files, sockets, DNS, TLS,
+  SQLite, processes and process workers, the environment). Without them Sparrow is its interpreter and the pure
+  native providers, and `cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown`
+  passes (Wave part `wasm`, CI job "Playground wasm"). okkama-runtime-core's `native` is now `providers`
+  (text, numbers, Unicode, formats, JSON splitting, time zones, CLDR, DEFLATE, UUIDs), `crypto` (digests),
+  `host`, `zstd` and `brotli`; okkama-native keeps aws-lc (RSA, X.509, the ECDSA verification fast path)
+  behind its default feature `aws-lc`, and on wasm32 takes randomness from the JavaScript host. A new module
+  `sparrow_core::clock` gives the timers and the time natives their clocks: the system's natively, a virtual
+  timeline on wasm32, where the scheduler moves time to the next timer instead of waiting for it. The
+  scheduler's wait has three bodies: Tokio with the host, a sleep on a condition variable natively without it,
+  that skip on wasm32. Without the host a native neither runtime provides is unsupported rather than routed to a
+  refusal, a zstd or Brotli codec is refused as unsupported, and a worker spawn is refused as without a worker
+  command; where a panic aborts, a sort that a budget stops is a merge sort that can stop; budget arithmetic is in
+  `i64` on every target. `cargo test -p sparrow-core --no-default-features` passes natively, with the interpreter
+  as the only engine (the tests that need an async body or a failure handler wait for #1122/#1121). The default
+  build is unchanged: `cargo tree -e features` of okkama-cli and sparrow-cli differs only by the new feature
+  names, and every corpus gives the same exit status, standard output and standard error byte for byte as before (t/ 142 programs, examples 333, std -t 125 modules, conformance 1075 cases, in the cage), with byte-identical SPB (2121 files, 1380 built).
 
 ### Changed
 - **Diagnostics name an imported file relative to the current directory (#1119).** `okkama check`, `build`,

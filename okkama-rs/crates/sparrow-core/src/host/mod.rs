@@ -13,7 +13,9 @@
 #![allow(unsafe_code)]
 
 pub(crate) mod arena;
-#[cfg(unix)]
+// #1124: the providers of the host (files, sockets, DNS, TLS, SQLite, processes, the environment) and their
+// helpers are behind the feature `host`; the rest are pure and build for wasm32.
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod file_lock;
 mod handle;
 pub(crate) mod native_binary;
@@ -22,47 +24,64 @@ pub(crate) mod native_crypto;
 pub(crate) mod native_data;
 pub(crate) mod native_db;
 pub(crate) mod native_debug;
+#[cfg(feature = "host")]
 pub(crate) mod native_directory;
+#[cfg(feature = "host")]
 pub(crate) mod native_dns;
 pub(crate) mod native_encoding;
+#[cfg(feature = "host")]
 pub(crate) mod native_environment;
+#[cfg(feature = "host")]
 pub(crate) mod native_file;
+#[cfg(feature = "host")]
 pub(crate) mod native_file_state;
+#[cfg(feature = "host")]
 pub(crate) mod native_fs;
+#[cfg(feature = "host")]
 pub(crate) mod native_glob;
 pub(crate) mod native_idna;
 pub(crate) mod native_input;
 pub(crate) mod native_io;
 pub(crate) mod native_json;
+#[cfg(feature = "host")]
 pub(crate) mod native_multicast;
 pub(crate) mod native_net;
+#[cfg(feature = "host")]
 pub(crate) mod native_network;
 pub(crate) mod native_numbers;
 pub(crate) mod native_origin;
 pub(crate) mod native_postgres;
+#[cfg(feature = "host")]
 pub(crate) mod native_tls;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod native_process;
 pub(crate) mod native_regex;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod native_root;
 pub(crate) mod native_secret;
+#[cfg(feature = "host")]
 pub(crate) mod native_sqlite;
+#[cfg(feature = "host")]
 pub(crate) mod native_temporary;
 pub(crate) mod native_text;
+#[cfg(feature = "host")]
 pub(crate) mod native_udp;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod native_unix;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod native_watch;
+#[cfg(feature = "host")]
 pub(crate) mod path_regex;
+#[cfg(feature = "host")]
 pub(crate) mod path_syntax;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "host"))]
 pub(crate) mod process_host;
 
 pub(crate) use crate::Error;
 pub(crate) use handle::Handle;
-pub(crate) use native_io::{CancelHook, Output};
+#[cfg(feature = "host")]
+pub(crate) use native_io::CancelHook;
+pub(crate) use native_io::Output;
 
 use crate::runtime::Runtime;
 use crate::word::{Repr, Word};
@@ -593,19 +612,26 @@ pub fn supported(native: Native) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Provider {
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Unix,
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Root,
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Process,
     Input,
+    #[cfg(feature = "host")]
     Fs,
+    #[cfg(feature = "host")]
     Environment,
+    #[cfg(feature = "host")]
     Multicast,
+    #[cfg(feature = "host")]
     Udp,
+    #[cfg(feature = "host")]
     Network,
+    #[cfg(feature = "host")]
     Dns,
+    #[cfg(feature = "host")]
     Sqlite,
     Db,
     Json,
@@ -622,6 +648,7 @@ enum Provider {
     Core,
     Origin,
     Postgres,
+    #[cfg(feature = "host")]
     Tls,
 }
 
@@ -638,36 +665,28 @@ fn provider(native: Native) -> Option<Provider> {
     table[native as usize]
 }
 
+/// The provider of `native`, the first whose module handles it, in this order.
 fn classify(native: Native) -> Option<Provider> {
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     if native_unix::handles(native) {
         return Some(Provider::Unix);
     }
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     if native_root::handles(native) {
         return Some(Provider::Root);
     }
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     if native_process::handles(native) {
         return Some(Provider::Process);
     }
-    Some(if native_input::handles(native) {
-        Provider::Input
-    } else if native_fs::handles(native) {
-        Provider::Fs
-    } else if native_environment::handles(native) {
-        Provider::Environment
-    } else if native_multicast::handles(native) {
-        Provider::Multicast
-    } else if native_udp::handles(native) {
-        Provider::Udp
-    } else if native_network::handles(native) {
-        Provider::Network
-    } else if native_dns::handles(native) {
-        Provider::Dns
-    } else if native_sqlite::handles(native) {
-        Provider::Sqlite
-    } else if native_db::handles(native) {
+    if native_input::handles(native) {
+        return Some(Provider::Input);
+    }
+    #[cfg(feature = "host")]
+    if let Some(provider) = classify_host(native) {
+        return Some(provider);
+    }
+    Some(if native_db::handles(native) {
         Provider::Db
     } else if native_json::handles(native) {
         Provider::Json
@@ -708,10 +727,35 @@ fn classify(native: Native) -> Option<Provider> {
         Provider::Core
     } else if native_postgres::handles(native) {
         Provider::Postgres
-    } else if native_tls::handles(native) {
-        Provider::Tls
-    } else if native_origin::handles(native) {
+    } else {
+        #[cfg(feature = "host")]
+        if native_tls::handles(native) {
+            return Some(Provider::Tls);
+        }
+        if !native_origin::handles(native) {
+            return None;
+        }
         Provider::Origin
+    })
+}
+
+/// The host's providers between stdin and the pure ones, in `classify`'s order.
+#[cfg(feature = "host")]
+fn classify_host(native: Native) -> Option<Provider> {
+    Some(if native_fs::handles(native) {
+        Provider::Fs
+    } else if native_environment::handles(native) {
+        Provider::Environment
+    } else if native_multicast::handles(native) {
+        Provider::Multicast
+    } else if native_udp::handles(native) {
+        Provider::Udp
+    } else if native_network::handles(native) {
+        Provider::Network
+    } else if native_dns::handles(native) {
+        Provider::Dns
+    } else if native_sqlite::handles(native) {
+        Provider::Sqlite
     } else {
         return None;
     })
@@ -720,19 +764,26 @@ fn classify(native: Native) -> Option<Provider> {
 impl Heap {
     fn native_invoke(&mut self, native: Native, args: &[Slot]) -> Result<Outcome, Error> {
         match provider(native) {
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "host"))]
             Some(Provider::Unix) => return self.native_unix(native, args),
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "host"))]
             Some(Provider::Root) => return self.native_root(native, args),
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "host"))]
             Some(Provider::Process) => return self.native_process(native, args),
             Some(Provider::Input) => return self.native_input(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Fs) => return self.native_fs(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Environment) => return self.native_environment(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Multicast) => return self.native_multicast(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Udp) => return self.native_udp(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Network) => return self.native_network(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Dns) => return self.native_dns(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Sqlite) => return self.native_sqlite(native, args),
             Some(Provider::Db) => return self.native_db(native, args),
             Some(Provider::Json) => return self.native_json(native, args),
@@ -748,6 +799,7 @@ impl Heap {
             Some(Provider::Text) => return self.native_text(native, args),
             Some(Provider::Origin) => return self.native_origin(native, args),
             Some(Provider::Postgres) => return self.native_postgres(native, args),
+            #[cfg(feature = "host")]
             Some(Provider::Tls) => return self.native_tls(native, args),
             Some(Provider::Core) => {}
             None => return Err(Error("unsupported native invocation".into())),
@@ -759,25 +811,16 @@ impl Heap {
             | Native::TestingTestStateSize
             | Native::TestingTestStateClose => self.handle_test(native, args),
             Native::TestingTestContextActive => Ok(Outcome::Value(Slot::boolean(self.test_failures.is_some()))),
-            Native::TimeWallClock => {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos();
-                self.allocate(BigInt::from(nanos)).map(Outcome::Value)
-            }
-            Native::TimeMonotonicClock => {
-                static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-                let nanos = ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_nanos();
-                self.allocate(BigInt::from(nanos)).map(Outcome::Value)
-            }
+            // Sparrow's clocks (#1124: a virtual timeline on wasm32).
+            Native::TimeWallClock => self.allocate(BigInt::from(crate::clock::wall_nanos())).map(Outcome::Value),
+            Native::TimeMonotonicClock => self.allocate(BigInt::from(crate::clock::monotonic_nanos())).map(Outcome::Value),
             Native::TimeClockDomain => {
                 if args[0].bits == 0 {
-                    text(self, &format!("system:{}:1", std::process::id()))
+                    text(self, &format!("system:{}:1", crate::clock::process_id()))
                 } else if self.test_failures.is_some() {
                     static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                     let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    text(self, &format!("manual:{}:{serial}", std::process::id()))
+                    text(self, &format!("manual:{}:{serial}", crate::clock::process_id()))
                 } else {
                     let payload = self.native_failure_new(NativeFailure {
                         domain: "core.time".into(),
@@ -839,6 +882,7 @@ pub fn call(runtime: &mut Runtime, native: Native, arguments: &[Word]) -> Result
 }
 
 /// Providers whose synchronous calls create Tokio resources (sockets, processes).
+#[cfg(feature = "host")]
 fn needs_tokio(native: Native) -> bool {
     !matches!(
         provider(native),
@@ -860,6 +904,12 @@ fn needs_tokio(native: Native) -> bool {
                 | Provider::Core
         )
     )
+}
+
+/// No Tokio without the host (#1124).
+#[cfg(not(feature = "host"))]
+fn needs_tokio(_native: Native) -> bool {
+    false
 }
 
 fn call_in(host: &mut Heap, native: Native, arguments: &[Word]) -> Result2 {
@@ -901,9 +951,14 @@ pub enum Start {
 fn with_host<T>(runtime: &mut Runtime, tokio: bool, body: impl FnOnce(&mut Heap) -> T) -> T {
     let mut host = runtime.host.take().expect("native host");
     // Tokio resources created or polled by providers need the runtime context.
+    #[cfg(feature = "host")]
     let handle = tokio.then(|| runtime.io.tokio().handle().clone());
+    #[cfg(feature = "host")]
     let _context = handle.as_ref().map(|h| h.enter());
+    #[cfg(feature = "host")]
     let _local = tokio.then(|| runtime.io.local().enter());
+    #[cfg(not(feature = "host"))]
+    let _ = tokio;
     // The raw pointer is made after the last use of `runtime` above and is
     // the only way into it until `body` returns: `failure_new` reborrows the
     // whole `Runtime` through it, and a use of `runtime` in between would

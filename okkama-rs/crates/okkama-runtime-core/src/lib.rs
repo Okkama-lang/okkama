@@ -2,20 +2,20 @@
 
 pub mod bignum;
 pub mod budget;
-#[cfg(feature = "native")]
+#[cfg(feature = "providers")]
 pub mod data;
 pub mod failure;
 pub mod float;
 pub mod rat;
 pub mod heap;
-#[cfg(feature = "native")]
+#[cfg(feature = "host")]
 pub mod host;
-#[cfg(feature = "native")]
+#[cfg(feature = "providers")]
 pub mod native;
 pub mod ops;
 pub mod range;
 // The one switch policy of every crate (#1095); only tests read a switch here.
-#[cfg(test)]
+#[cfg(all(test, feature = "host"))]
 use okkama_devtrace::env_switch;
 
 pub use okkama_runtime_abi as abi;

@@ -6,6 +6,7 @@ use sparrow_core::program::Loaded;
 use sparrow_core::runtime::{Failure, FailureKind, Runtime};
 use sparrow_core::word::Repr;
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn payload_436_jit_maps_builders_and_versions() {
     // Dynamically made strings must survive through their containers, rather

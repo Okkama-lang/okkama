@@ -79,6 +79,8 @@ jobs:
   # The playground's compiler (#1078): okkama-compiler and okkama-wasm build for wasm32, pass clippy there (the
   # wasm-bindgen module is cfg(wasm32), so the host clippy of the Wave never sees it), and the bindgen output stays
   # within the 5 MB compressed budget. The site commits the output per release, as it does the /man/ reference.
+  # Sparrow without its default features (#1124: the interpreter and the pure providers) passes clippy for wasm32
+  # too, and its suite passes natively, where the interpreter is the only engine.
   wasm:
     name: Playground wasm
     runs-on: ubuntu-24.04
@@ -98,6 +100,7 @@ jobs:
         working-directory: okkama-rs
         run: |
           cargo clippy --locked -p okkama-compiler -p okkama-wasm --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy --locked -p sparrow-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
           cargo build --locked -p okkama-wasm --release --target wasm32-unknown-unknown
           wasm-bindgen --target web --remove-name-section --remove-producers-section \
             --out-dir ../playground-wasm target/wasm32-unknown-unknown/release/okkama_wasm.wasm
@@ -110,6 +113,9 @@ jobs:
         with:
           name: playground-wasm
           path: playground-wasm
+      - name: Sparrow without default features, natively
+        working-directory: okkama-rs
+        run: cargo test --profile gate --locked --no-fail-fast -p sparrow-core --no-default-features
 
   conformance:
     name: Conformance (${{ matrix.engine }})

@@ -169,7 +169,8 @@ impl Heap {
     }
     /// A request whose body is woken only from a provider thread (it waits on
     /// a channel a worker thread answers, never on the reactor or a timer);
-    /// a cancellation cleanup is not bound by that.
+    /// a cancellation cleanup is not bound by that. Only SQLite's workers answer so (`host`).
+    #[cfg(feature = "host")]
     pub(crate) fn native_io_threaded<F, T>(
         &mut self,
         body: F,

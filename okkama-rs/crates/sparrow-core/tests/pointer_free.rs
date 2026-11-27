@@ -10,6 +10,7 @@ fn pointer_free_sync_public_loader() {
     assert_eq!(sparrow_core::run(encode(include_str!("pointer_free.spa"))).unwrap(), 42);
 }
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn pointer_free_async_public_loader() {
     let source = include_str!("all_futures.spa").replace("bool true", "bool false");

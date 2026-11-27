@@ -2,6 +2,7 @@
 //! await and region cleanup. The existing #580 oracle expects exactly BA.
 use okkama_sparrow::{Dst, Instruction as I, Register, Type, TypeRef};
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1122: the interpreter runs no async body yet")]
 #[test]
 fn builder_dispatch_resources_survive_finish_and_cleanup_once_in_reverse_order() {
     for ready in [false, true] {

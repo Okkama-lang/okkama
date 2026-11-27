@@ -189,6 +189,27 @@ make gate                  # release gate in Docker (§5)
 and ICU into `<prefix>/lib/okkama`; `okkama` finds them next
 to itself. Without installing, set `OKKAMA_STDLIB_DIR=<repo>/std`.
 
+Features of the runtime crates (#1078, #1124). Every binary (okkama, sparrow, blade) and every test of the
+other crates builds the defaults; the other builds exist for wasm32 (the playground) and are checked by the
+Wave's `wasm` part and CI's "Playground wasm" job:
+
+| Crate | Feature | What it gates |
+|---|---|---|
+| `sparrow-core` | `jit` (default) | `jit.rs`, `jit/`, `code_memory.rs`, Cranelift, `Runtime.jit`, `rt_compile`, `frame_pointer!`; without it every function runs on the interpreter (`interp.rs`) and no code is published |
+| `sparrow-core` | `host` (default) | Tokio and the Tokio wait (`io.rs`), files, sockets, DNS, TLS, SQLite, processes, the environment (`host/native_{directory,dns,environment,file,file_state,fs,glob,multicast,network,process,root,sqlite,temporary,tls,udp,unix,watch}.rs`, `path_regex.rs`, `path_syntax.rs`, `process_host.rs`, `file_lock.rs`), process workers (`worker.rs`, `worker_process.rs`; without the host `worker_absent.rs` refuses a spawn as a runtime without a worker command does), the VM thread's host session, `run_worker`/`serve_worker`/`default_environment`, runtime-core's `native` and okkama-native's `aws-lc` |
+| `okkama-runtime-core` | `native` (default) = `providers` + `host` + `zstd` + `brotli` + `crypto` | `providers`: `data` and the pure providers of `native` (text, numbers, JSON splitting, Unicode, formats, time zones, CLDR, diff and layout, DEFLATE, UUIDs); `crypto`: digests (okkama-native's RustCrypto); `host`: the `host` module (cwd and environment), `native::{application, collation, fs, host, idna, net, signal, x509}` and aws-lc; `zstd`, `brotli`: the codecs (without them the format is refused as unsupported). The compiler takes none |
+| `okkama-native` | `aws-lc` (default) | `rsa_public`, `x509`, the RSA operations and the ECDSA verification fast path; without it they are refused as unsupported and the rest is pure RustCrypto. On wasm32 `getrandom` uses its `wasm_js` backend |
+
+```sh
+cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown   # the playground's runtime
+cargo test -p sparrow-core --no-default-features --lib <filter>      # natively: the interpreter is the only engine
+cargo test -p sparrow-core --no-default-features --features jit --test timer_wait   # the sleeping wait
+```
+
+Without `jit` the tests that need an async body or a failure handler are `#[ignore]`d with #1122/#1121, and the
+JIT's own tests are compiled out. Time on wasm32 is `sparrow_core::clock`'s virtual timeline (the embedder's clock
+plus what the scheduler skipped instead of waiting).
+
 Builds for experiments go to the scratchpad, not to `okkama-rs/target`:
 `CARGO_TARGET_DIR=$SCRATCH/target cargo build --release -p okkama-cli -p sparrow-cli`.
 
@@ -565,7 +586,7 @@ not needed (#292).
 
 | File | Role |
 |---|---|
-| `lib.rs` | entry points: `run_configured`, `run_reported` (OCS: `Uncaught`), `run_tests`, `run_worker`, `default_environment`; VM thread with a 1 GiB stack |
+| `lib.rs` | entry points: `run_configured`, `run_reported` (OCS: `Uncaught`), `run_tests`, `run_worker`, `default_environment`; VM thread with a 1 GiB stack (wasm32: the caller's stack, #1124) |
 | `program.rs` | loaded program facts: machine representation (`Kind`) of every type; Atomic and Event cells (descriptors their constructor intrinsics name) |
 | `budget.rs` | execution budgets and embedding policy (`Limits`: steps, memory, output, interrupt, native groups `NativeGroup` — checked in `natives::call` and the async native driver): fuel cell polled at entries and back-edges only when a budget is set, `EXHAUSTED` status, memory probe set by the embedder (CLIs: mimalloc committed), or `MemoryScope::Runtime`: the runtime's own heap (`Heap::held_bytes`, #269) |
 | `contracts.rs` | load-time intrinsic contracts: arity, kinds, receiver layouts, related objects, timeout helpers (`sparrow check` runs them too) |
@@ -576,11 +597,12 @@ not needed (#292).
 | `runtime.rs` | runtime state shared with machine code, helpers (`rt_*`), `run_function_with`, stats; the engine seam (#1120): every entry from Rust into Okkama code (a synchronous entry, a closure's helper, an async body, an intrinsic's callback, a destroy, `Error.text`) goes through `Runtime::invoke`/`Runtime::resume`, which read the published code first and take a cold branch (the interpreter, or the JIT's compile) only without it; `safepoint` asks the same engine for its frames' roots |
 | `interp.rs` | the interpreter (#1120, `SPARROW_CORE_INTERPRET=1`): a `match` over decoded instructions, frames on a register stack of fixed chunks (a call of an Okkama body is a new activation, not a Rust call), a plan per function made at its first call; every instruction the JIT runs through a helper (`program::generic`, `program::failure_or_region`, natives, intrinsics, closures, Futures) calls that helper, the rest are its own branches with the JIT's texts (`texts.rs`); every register is a root by its kind; a failure follows the JIT's `check` (trace, then the first covering handler). A new instruction needs a rule in `okkama-sparrow` `typing.rs`, a branch in `jit.rs`, a branch here and a program in `sparrow-core/tests/mnemonics/` (`interp::tests::every_synchronous_mnemonic_runs_on_both_engines` fails until one executes it) |
 | `tasks.rs`, `drivers.rs` | stackless async: an async call's heap frame is its Future; drivers are bodies of async natives/intrinsics |
-| `io.rs` | external waits: native I/O requests (Rust futures), timers; single-thread Tokio reactor polled while spinning (`wait_external`) |
+| `io.rs` | external waits: native I/O requests (Rust futures), timers; `wait_external` waits in one of three bodies (#1124): the single-thread Tokio reactor polled while spinning (`host`), a sleep on a condition variable (natively without the host), a skip of the clock to the earliest timer (wasm32) |
+| `clock.rs` | `Instant`, the wall and monotonic clocks of the time natives, the clock domain's process number; `std::time` natively, a virtual timeline on wasm32 (`install`, `skip_to`, #1124) |
 | `failures.rs` | failures, cleanup regions, resource identities and graph walks (`descriptor_flags`: closed-world reachability of `destroy`), failure reports |
 | `intrinsics.rs`, `primitives.rs` | runtime-provided functions; Atomic, Event, Lock, channels, groups |
 | `natives.rs` + `host/` | native providers: `host/mod.rs` classifies each ABI native to a provider (`native_network`, `native_tls`, `native_sqlite`, `native_postgres`, `native_db`, `native_json`, …); `native_origin.rs` bridges the rest to `okkama-runtime-core` (sync, plus terminal promises pumped through `sched::pump`) |
-| `worker.rs`, `worker_process.rs` | process workers (OKW2 format), child `--worker FILE.spb` |
+| `worker.rs`, `worker_process.rs` | process workers (OKW2 format), child `--worker FILE.spb`; without the host `worker_absent.rs` |
 
 ### Форматы с явной версией
 

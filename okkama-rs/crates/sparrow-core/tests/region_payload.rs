@@ -161,6 +161,7 @@ fn gh09_region_boundaries_duplicates_transfers_and_keeps() {
     }
 }
 
+#[cfg_attr(not(feature = "jit"), ignore = "#1121, #1122: the interpreter runs no failure handler and no async body yet")]
 #[test]
 fn gh09_region_failing_and_async_nested_cleanup() {
     for asynchronous in [false, true] {

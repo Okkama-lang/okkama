@@ -10,13 +10,22 @@ publish.workspace = true
 [features]
 default = ["native"]
 allocation-scopes = ["dep:okkama-allocation-counter"]
-# The native providers (`native`, `host`, `data`) and the libraries only they use: libc, the C zstd, Brotli,
-# miniz, Unicode tables, digests and host cryptography. The compiler leaves it off (#1078): it uses the value
-# types, exact arithmetic and constant folding only, and builds for wasm32 without it. Every runtime turns it on.
-native = [
-    "dep:okkama-native", "dep:libc", "dep:miniz_oxide", "dep:zstd", "dep:brotli", "dep:unicode-normalization",
-    "dep:unicode-segmentation", "dep:md-5", "dep:sha1",
+# Every native provider (#1078): what every runtime with a host turns on. The compiler leaves it off: it uses the
+# value types, exact arithmetic and constant folding only, and builds for wasm32 without it. The parts (#1124):
+native = ["providers", "host", "zstd", "brotli", "crypto"]
+# The pure providers, which build for wasm32-unknown-unknown: the runtime tables (`data`), text, numbers, Unicode,
+# formats, JSON splitting, IDNA, time zones, CLDR, diff and layout, DEFLATE/zlib/gzip (miniz_oxide), UUIDs.
+providers = [
+    "dep:miniz_oxide", "dep:unicode-normalization", "dep:unicode-segmentation", "dep:md-5", "dep:sha1",
 ]
+# Digests through okkama-native's RustCrypto (pure Rust; aws-lc stays behind `host`).
+crypto = ["providers", "dep:okkama-native"]
+# The host: the process's directory and environment (`host`), the file system, signals, the terminal and
+# accounts, host facts, collation through the system's ICU, X.509 with the system's certificates (aws-lc).
+host = ["providers", "crypto", "dep:libc", "okkama-native/aws-lc"]
+# The zstd (a C library) and Brotli codecs (#184).
+zstd = ["providers", "dep:zstd"]
+brotli = ["providers", "dep:brotli"]
 
 [dependencies]
 okkama-allocation-counter = { path = "../../tools/allocation-counter", optional = true }
@@ -29,7 +38,7 @@ num-integer = "0.1"
 num-traits = "0.2"
 # Platform randomness, digests and certificate store (runtime/system,
 # runtime/crypto, runtime/x509), Rust API.
-okkama-native = { path = "../okkama-native", optional = true }
+okkama-native = { path = "../okkama-native", default-features = false, optional = true }
 
 # Вызовы ОС без обёртки std (renameat2/renamex_np, терминал, сигналы, учётные записи).
 libc = { version = "0.2", optional = true }

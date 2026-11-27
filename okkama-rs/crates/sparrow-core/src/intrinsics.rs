@@ -970,7 +970,8 @@ const SORT_POLL: u32 = 4096;
 /// is caught here, before any `extern "C"` frame. Answering the remaining
 /// comparisons with `Equal` instead contradicts earlier answers, and Rust's
 /// sort may detect that and panic.
-fn sort_or_stop<T, E>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>) -> Result<(), E> {
+#[cfg(not(panic = "abort"))]
+fn sort_or_stop<T: Copy, E>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>) -> Result<(), E> {
     struct Stop;
     let mut error = None;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -987,6 +988,48 @@ fn sort_or_stop<T, E>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Result
         Err(payload) if payload.is::<Stop>() => Err(error.expect("a stop records its reason")),
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+/// Where a panic aborts (wasm32, #1124) a stop cannot unwind out of the standard sort: the merge sort.
+#[cfg(panic = "abort")]
+fn sort_or_stop<T: Copy, E>(items: &mut [T], compare: impl FnMut(&T, &T) -> Result<Ordering, E>) -> Result<(), E> {
+    merge_sort_or_stop(items, compare)
+}
+
+/// A stable bottom-up merge sort whose comparison may stop it: runs of 1, 2, 4… merge between two copies of
+/// `items`, which takes the result only when the sort completes, so a stop leaves it as it was. No comparison is
+/// made after a stop.
+#[cfg_attr(not(panic = "abort"), allow(dead_code))]
+fn merge_sort_or_stop<T: Copy, E>(
+    items: &mut [T],
+    mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>,
+) -> Result<(), E> {
+    let length = items.len();
+    let (mut from, mut to) = (items.to_vec(), items.to_vec());
+    let mut width = 1;
+    while width < length {
+        for start in (0..length).step_by(2 * width) {
+            let middle = (start + width).min(length);
+            let end = (start + 2 * width).min(length);
+            let (mut left, mut right) = (start, middle);
+            for slot in &mut to[start..end] {
+                // The left run goes first on a tie: the sort is stable.
+                let take_left = right == end
+                    || (left < middle && compare(&from[left], &from[right])? != Ordering::Greater);
+                if take_left {
+                    *slot = from[left];
+                    left += 1;
+                } else {
+                    *slot = from[right];
+                    right += 1;
+                }
+            }
+        }
+        std::mem::swap(&mut from, &mut to);
+        width *= 2;
+    }
+    items.copy_from_slice(&from);
+    Ok(())
 }
 
 /// The natural order `ordering` sorts scalars and text by.
@@ -1141,16 +1184,24 @@ fn order(ctx: *mut Ctx, runtime: &mut Runtime, role: u32, slot: u32, left: Word,
 
 #[cfg(test)]
 mod sort_tests {
-    use super::sort_or_stop;
+    use super::{merge_sort_or_stop, sort_or_stop};
+
+    /// A sort that may stop: this build's, or the merge sort of builds where a panic aborts (#1124).
+    type Sort = fn(&mut [u64], &mut dyn FnMut(&u64, &u64) -> Result<std::cmp::Ordering, u32>) -> Result<(), u32>;
+    const SORTS: [Sort; 2] = [|items, compare| sort_or_stop(items, compare), |items, compare| merge_sort_or_stop(items, compare)];
 
     /// A stop in the middle of a long sort ends it with the stop, at once and
     /// without a panic, wherever it lands (#283).
     #[test]
     fn a_stop_leaves_the_sort_without_a_panic() {
-        for stop_at in [1u32, 7, 500, 4096, 30_000] {
+        for (sort, stop_at) in SORTS.iter().flat_map(|sort| [1u32, 7, 500, 4096, 30_000].map(|stop_at| (sort, stop_at))) {
             let mut items: Vec<u64> = (0..100_000u64).map(|i| (i * 7919 + 13) % 1_000_003).collect();
             let mut compared = 0u32;
-            let outcome = sort_or_stop(&mut items, |a, b| {
+            let before: std::collections::BTreeMap<u64, usize> = items.iter().fold(Default::default(), |mut counts, &item| {
+                *counts.entry(item).or_default() += 1;
+                counts
+            });
+            let outcome = sort(&mut items, &mut |a, b| {
                 compared += 1;
                 if compared == stop_at {
                     return Err(stop_at);
@@ -1159,14 +1210,22 @@ mod sort_tests {
             });
             assert_eq!(outcome, Err(stop_at));
             assert_eq!(compared, stop_at, "no comparison after the stop");
-            assert_eq!(items.len(), 100_000, "the slice stays a permutation");
+            let after: std::collections::BTreeMap<u64, usize> = items.iter().fold(Default::default(), |mut counts, &item| {
+                *counts.entry(item).or_default() += 1;
+                counts
+            });
+            assert_eq!(after, before, "the slice stays a permutation");
         }
     }
 
     #[test]
     fn without_a_stop_the_sort_is_stable() {
-        let mut items: Vec<(u32, u32)> = (0..10_000u32).map(|i| (i % 7, i)).collect();
-        sort_or_stop(&mut items, |a, b| Ok::<_, ()>(a.0.cmp(&b.0))).expect("no stop");
-        assert!(items.windows(2).all(|w| w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 < w[1].1)));
+        for merge in [false, true] {
+            let mut items: Vec<(u32, u32)> = (0..10_001u32).map(|i| ((i * 7919) % 7, i)).collect();
+            let compare = |a: &(u32, u32), b: &(u32, u32)| Ok::<_, ()>(a.0.cmp(&b.0));
+            if merge { merge_sort_or_stop(&mut items, compare) } else { sort_or_stop(&mut items, compare) }.expect("no stop");
+            assert_eq!(items.len(), 10_001);
+            assert!(items.windows(2).all(|w| w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 < w[1].1)), "merge: {merge}");
+        }
     }
 }

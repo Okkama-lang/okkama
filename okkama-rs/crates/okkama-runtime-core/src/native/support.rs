@@ -83,6 +83,7 @@ pub fn map(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
         .expect("string keys")
 }
 
+#[cfg(feature = "host")]
 pub fn int_map<'a>(entries: impl IntoIterator<Item = (&'a str, i64)>) -> Value {
     map(entries
         .into_iter()

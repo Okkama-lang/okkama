@@ -34,8 +34,11 @@ pub enum State {
     Selection(Selection),
     Group(Group),
     Stream(Box<Stream>),
-    /// A bound action (`worker.bind`): its worker entry and receiver fields.
+    /// A bound action (`worker.bind`): its worker entry and receiver fields. Without the host (#1124) no spawn
+    /// can use them, and a binding keeps none.
+    #[cfg(feature = "host")]
     WorkerBinding { entry: Word, fields: Vec<(Word, Repr)>, pool: Option<Rc<crate::worker_process::Pool>> },
+    #[cfg(feature = "host")]
     WorkerPool(Rc<crate::worker_process::Pool>),
 }
 
@@ -149,6 +152,7 @@ impl State {
             Self::Selection(selection) => {
                 selection.pending.iter().for_each(|&w| visit(w, Repr::Ref));
             }
+            #[cfg(feature = "host")]
             Self::WorkerBinding { entry, fields, .. } => {
                 visit(*entry, Repr::Ref);
                 fields.iter().for_each(|&(w, repr)| visit(w, repr));

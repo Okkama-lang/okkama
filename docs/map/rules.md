@@ -78,7 +78,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - SPARROW_CORE_FS_FAULTS — sparrow: `host/native_fs.rs`
 - SPARROW_CORE_GC_AGES — sparrow: `heap.rs`
 - SPARROW_CORE_GC_STRESS — sparrow: `runtime.rs`
-- SPARROW_CORE_INTERPRET — sparrow: `runtime.rs`
+- SPARROW_CORE_INTERPRET — sparrow: `lib.rs`, `runtime.rs`
 - SPARROW_CORE_INT_RANGE — sparrow: `program.rs`
 - SPARROW_CORE_NO_INLINE — sparrow: `jit.rs`
 - SPARROW_CORE_OLD_DISPATCH — sparrow: `jit.rs`

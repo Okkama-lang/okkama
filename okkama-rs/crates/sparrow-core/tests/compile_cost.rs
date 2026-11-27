@@ -2,7 +2,7 @@
 //! instructions is refused before machine code generation takes memory
 //! quadratic in their number; ordinary functions compile as before.
 
-use sparrow_core::budget::{Limits, counted_bytes, set_memory_probe};
+use sparrow_core::budget::Limits;
 
 /// `deep(n)`: k floats computed in a chain, live across a recursive call,
 /// summed after it. Every float operation is fallible, so each one emits
@@ -39,12 +39,16 @@ fn chain(k: usize) -> Vec<u8> {
     okkama_sparrow::encode(&okkama_sparrow::assemble(&text).unwrap()).unwrap()
 }
 
+// The compile limit is the JIT's: the interpreter compiles nothing (#1124).
+#[cfg(feature = "jit")]
 fn run(bytes: Vec<u8>, memory: u64) -> Result<i64, sparrow_core::Error> {
+    use sparrow_core::budget::{counted_bytes, set_memory_probe};
     set_memory_probe(counted_bytes);
     let limits = Limits { memory: Some(memory), ..Limits::default() };
     sparrow_core::run_limited(bytes, Vec::new(), false, Vec::new(), limits)
 }
 
+#[cfg(feature = "jit")]
 #[test]
 fn many_values_live_across_fallible_instructions_are_refused_before_compiling() {
     // About 6 blocks × k² / 2 live registers at 64 bytes: k = 300 needs some
@@ -55,6 +59,7 @@ fn many_values_live_across_fallible_instructions_are_refused_before_compiling() 
 }
 
 /// #1066: under a budget below 1 MiB the refusal names the limit in KiB, not as 0 MiB.
+#[cfg(feature = "jit")]
 #[test]
 fn a_sub_mib_budget_names_its_compile_limit_in_kib() {
     let error = run(chain(100), 256 << 10).unwrap_err();

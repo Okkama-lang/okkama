@@ -333,9 +333,10 @@ impl Meter {
         Self { probe, base: probe() }
     }
 
-    /// Bytes held beyond the start (negative after freeing older ones).
-    pub fn used(&self) -> isize {
-        (self.probe)() as isize - self.base as isize
+    /// Bytes held beyond the start (negative after freeing older ones). In `i64`, not `isize`: a budget's
+    /// arithmetic must not depend on the pointer width (wasm32, #1124).
+    pub fn used(&self) -> i64 {
+        (self.probe)() as i64 - self.base as i64
     }
 }
 
@@ -366,8 +367,8 @@ impl Watch {
             return;
         }
         self.unprobed = 0;
-        let used = self.meter.map_or(held as isize, |meter| meter.used());
-        if used > self.limit as isize {
+        let used = self.meter.map_or(held as i64, |meter| meter.used());
+        if used > self.limit as i64 {
             // SAFETY: the runtime owns both the heap and its fuel cell.
             unsafe { self.fuel.write_volatile(0) };
         }

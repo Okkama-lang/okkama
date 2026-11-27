@@ -8,6 +8,25 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+# Without default features Sparrow is its interpreter and the pure providers: it builds for
+# wasm32-unknown-unknown (#1124; `cargo check -p sparrow-core --no-default-features --target
+# wasm32-unknown-unknown`, the Wave's and CI's wasm job).
+default = ["jit", "host"]
+# The whole-function JIT (Cranelift): `jit.rs`, `jit/`, `code_memory.rs`, `Runtime.jit`, `rt_compile`, the frame
+# pointer register its root walk reads. Without it every function runs on the interpreter (`interp.rs`).
+jit = [
+    "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module",
+    "dep:cranelift-native", "dep:wasmtime-jit-icache-coherence", "dep:libc",
+]
+# The host: Tokio and the waits on it, files, sockets, DNS, TLS, SQLite, processes and process workers, the
+# environment, the terminal, the VM thread's host session, the host's providers of okkama-runtime-core and
+# aws-lc. Without it a program sees only the pure providers, and the scheduler waits by sleeping (natively) or
+# by moving its clock forward (wasm32, `clock`).
+host = [
+    "dep:tokio", "dep:rusqlite", "dep:aliasable", "dep:fallible-iterator", "dep:dns-lookup", "dep:fancy-regex",
+    "dep:socket2", "dep:libc", "dep:rustls", "dep:nix", "dep:rustix", "okkama-runtime-core/native",
+    "okkama-native/aws-lc",
+]
 # Candidate layout/JIT/runtime only. Data transformations remain unconditional.
 # `budget::mimalloc_committed`: a memory probe for processes whose allocator
 # is mimalloc (the CLIs); it links against mimalloc's C library.
@@ -17,33 +36,42 @@ mimalloc = []
 okkama-devtrace = { path = "../okkama-devtrace" }
 okkama-sparrow = { path = "../okkama-sparrow" }
 okkama-runtime-abi = { path = "../okkama-runtime-abi" }
-okkama-runtime-core = { path = "../okkama-runtime-core" }
-okkama-native = { path = "../okkama-native" }
+# The pure providers and digests always; `host` adds the rest (`native`).
+okkama-runtime-core = { path = "../okkama-runtime-core", default-features = false, features = ["providers", "crypto"] }
+# RustCrypto always; `host` adds aws-lc.
+okkama-native = { path = "../okkama-native", default-features = false }
 okkama-persistent = { path = "../okkama-persistent" }
 zeroize = "1.9.1"
 miniz_oxide = "0.8"
 unicode-normalization = "0.1"
-tokio = { version = "1.54.1", features = ["macros", "rt", "time", "net", "sync", "io-util", "process"] }
-rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
-aliasable = "0.1"
-fallible-iterator = "0.3"
-dns-lookup = "2"
-fancy-regex = "0.14"
-socket2 = { version = "0.6", features = ["all"] }
-libc = "0.2"
 memchr = "2.8"
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-nix = { version = "0.29", features = ["fs"] }
-rustix = { version = "1", features = ["fs", "process", "stdio"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 num-integer = "0.1"
-cranelift-codegen = "0.137"
-cranelift-frontend = "0.137"
-cranelift-jit = "0.137"
-cranelift-module = "0.137"
-cranelift-native = "0.137"
-wasmtime-jit-icache-coherence = { package = "wasmtime-internal-jit-icache-coherence", version = "50.0.0" }
+# `host`
+tokio = { version = "1.54.1", features = ["macros", "rt", "time", "net", "sync", "io-util", "process"], optional = true }
+rusqlite = { version = "0.41", features = ["bundled", "column_decltype"], optional = true }
+aliasable = { version = "0.1", optional = true }
+fallible-iterator = { version = "0.3", optional = true }
+dns-lookup = { version = "2", optional = true }
+fancy-regex = { version = "0.14", optional = true }
+socket2 = { version = "0.6", features = ["all"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+nix = { version = "0.29", features = ["fs"], optional = true }
+rustix = { version = "1", features = ["fs", "process", "stdio"], optional = true }
+# `host` and `jit` (`code_memory`)
+libc = { version = "0.2", optional = true }
+# `jit`
+cranelift-codegen = { version = "0.137", optional = true }
+cranelift-frontend = { version = "0.137", optional = true }
+cranelift-jit = { version = "0.137", optional = true }
+cranelift-module = { version = "0.137", optional = true }
+cranelift-native = { version = "0.137", optional = true }
+wasmtime-jit-icache-coherence = { package = "wasmtime-internal-jit-icache-coherence", version = "50.0.0", optional = true }
+
+[dev-dependencies]
+# The regex provider's tests compare its Unicode classes with fancy-regex's, also without the host (#1124).
+fancy-regex = "0.14"
 
 [lints.rust]
 # Machine code, frame walking and the heap need unsafe; each module that uses
