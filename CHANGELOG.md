@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Rare paths out of the hot layout (#1107, stage 2).** The failure blocks after every call, the allocation's
+  refill, the first call of a callee not yet compiled, an array index out of bounds and the BigInt paths of integer
+  operations are cold blocks now, placed after the hot code. Micro A/B against the previous step: recursion −11.9%,
+  method-call −8.1%; int-big and the other controls unchanged.
 - **One shared empty array, empty map and fieldless value (#1168, part of #1106; owner's decision).** `[]`, `[:]`
   and a value of a fieldless type without destroy, runtime role or Error role are one instance per representation
   or type, made once and kept by the heap; nothing observes the difference (no fields, no identity, no in-place

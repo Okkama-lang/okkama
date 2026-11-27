@@ -680,7 +680,6 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             inline: None,
             inlined: 0,
             no_inline,
-            cold: false,
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -886,9 +885,6 @@ struct Emitter<'a, 'b> {
     inlined: usize,
     /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
     no_inline: bool,
-    /// Emitting inside a cold slow path (#1105): `check` marks its failure blocks cold too, since cold is not
-    /// inherited and they would otherwise sit in the hot layout between the fast path and its continuation.
-    cold: bool,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -1129,10 +1125,9 @@ impl Emitter<'_, '_> {
         let is_failure = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
         let recorded = self.builder.create_block();
         let fatal = self.builder.create_block();
-        if self.cold {
-            for block in [failed, recorded, fatal] {
-                self.builder.set_cold_block(block);
-            }
+        // #1107: a failure is rare; its blocks leave the hot layout.
+        for block in [failed, recorded, fatal] {
+            self.builder.set_cold_block(block);
         }
         self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
         self.builder.switch_to_block(fatal);
@@ -1362,6 +1357,7 @@ impl Emitter<'_, '_> {
         let cell = self.builder.ins().load(types::I64, MEMORY, head, 0);
         let fast = self.builder.create_block();
         let slow = self.builder.create_block();
+        self.builder.set_cold_block(slow);
         let done = self.builder.create_block();
         self.builder.append_block_param(done, types::I64);
         self.builder.ins().brif(cell, fast, &[], slow, &[]);
@@ -1484,6 +1480,7 @@ impl Emitter<'_, '_> {
             let code = self.builder.ins().load(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, code) as i32);
             let ready = self.builder.create_block();
             let compile = self.builder.create_block();
+            self.builder.set_cold_block(compile);
             self.builder.append_block_param(ready, types::I64);
             self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
             self.builder.switch_to_block(compile);
@@ -1892,6 +1889,7 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let fast = self.builder.create_block();
                 let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
                 let done = self.builder.create_block();
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
@@ -1946,6 +1944,7 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let fast = self.builder.create_block();
                 let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
                 let done = self.builder.create_block();
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
@@ -2004,9 +2003,7 @@ impl Emitter<'_, '_> {
                 let lw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), l);
                 let rw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), r);
                 self.helper(|h| h.float, &[ctx, op, lw, rw]).expect("result");
-                self.cold = true;
                 self.check(pc);
-                self.cold = false;
                 self.builder.ins().trap(TrapCode::unwrap_user(FLOAT_SLOW_PATH_RETURNED));
                 self.builder.switch_to_block(done);
                 self.set(&dst.0, value);
@@ -2095,6 +2092,7 @@ impl Emitter<'_, '_> {
                 let valid = self.builder.ins().band(small, inside);
                 let load = self.builder.create_block();
                 let outside = self.builder.create_block();
+                self.builder.set_cold_block(outside);
                 self.builder.ins().brif(valid, load, &[], outside, &[]);
                 self.builder.switch_to_block(outside);
                 let message = self.constant_text(crate::texts::ARRAY_INDEX);
@@ -2705,6 +2703,7 @@ impl Emitter<'_, '_> {
                 let both = self.builder.ins().band(l, r);
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
@@ -2764,6 +2763,7 @@ impl Emitter<'_, '_> {
                 let v = self.get(operand);
                 let small = self.builder.ins().band_imm_u(v, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
@@ -3048,9 +3048,7 @@ impl Emitter<'_, '_> {
                 let result = self.builder.ins().fcvt_from_sint(types::F64, integer);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
-                self.cold = true;
                 let bits = self.exec_generic(pc, instruction);
-                self.cold = false;
                 let result = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), bits);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
@@ -3083,9 +3081,7 @@ impl Emitter<'_, '_> {
                 let result = self.builder.ins().bor_imm_u(doubled, 1);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
-                self.cold = true;
                 let result = self.exec_generic(pc, instruction);
-                self.cold = false;
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
                 let result = self.builder.block_params(done)[0];
@@ -3329,9 +3325,7 @@ impl Emitter<'_, '_> {
     /// In the cold block `slow`: the shared path of `instruction`, whose result joins `done` (#1106).
     fn slow_generic(&mut self, slow: Block, done: Block, pc: usize, instruction: &I) {
         self.builder.switch_to_block(slow);
-        self.cold = true;
         let result = self.exec_generic(pc, instruction);
-        self.cold = false;
         self.builder.ins().jump(done, &[result.into()]);
     }
 
@@ -3339,9 +3333,7 @@ impl Emitter<'_, '_> {
     /// (#1106; the trap is a broken invariant, as after the float slow path of #1105).
     fn fail_generic(&mut self, slow: Block, pc: usize, instruction: &I) {
         self.builder.switch_to_block(slow);
-        self.cold = true;
         self.exec_generic(pc, instruction);
-        self.cold = false;
         self.builder.ins().trap(TrapCode::unwrap_user(GENERIC_SLOW_PATH_RETURNED));
     }
 

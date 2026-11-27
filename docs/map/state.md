@@ -7,6 +7,12 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1107 stage 2 cold blocks (feature/1107; worktree okkama-work/p-1107, target t-1107; toolchains
+  micro-tc/f1107c-s{1,2}): `check`'s failure blocks always cold (the `Emit::cold` flag of #1105 removed), cold
+  allocation refill, compile-on-first-call, array index outside, int arith/compare/bitwise/not-neg slow paths,
+  atomic intrinsic slow path. Not cold (frequent on real data): equal-length string compare, non-ASCII `StrLen`,
+  structural `val.cmp`. Micro recursion −11.9%, method-call −8.1%, int-big +0.1%. Stage 1 (spill at safepoints)
+  waits for Fable's design.
 - [x] #1168 (#1106 stage 3) shared instances (design and safety review: Fable): `heap::Canonical` (empty arrays per
   repr incl. ARRAY_BYTES, empty maps per (key, value) Repr, fieldless objects per shareable descriptor; marked in
   `collect_inner`, cleared in `Drop`), `Heap::{set_shareable, empty_array, empty_map, shared_object}`,

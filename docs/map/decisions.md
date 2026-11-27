@@ -1190,9 +1190,8 @@ every declaration is open (#1005, owner decision).
   without a conversion never had one (Fable's review: not every allocation path is a safepoint, e.g.
   `charge_external`, map-node growth and `[Allocates]`-only helpers, so "the allocation slow path is a safepoint"
   is not the argument). #537's "do not remove required safepoints" stays for anything that allocates or polls.
-- Inside a cold slow path the emitter marks `check`'s failure blocks cold too (`Emit::cold`): cold is not
-  inherited, and they sat in the hot layout between the fast path and its continuation. Global cold checks are
-  #1107's (audit item B). After the range proof float→int uses `fcvt_to_sint_sat` (a bare `fcvtzs`).
+- `check`'s failure blocks are cold everywhere since #1107 stage 2 (first only inside slow paths, `Emit::cold`,
+  removed then): cold is not inherited, and they sat in the hot layout between the fast path and its continuation. After the range proof float→int uses `fcvt_to_sint_sat` (a bare `fcvtzs`).
 - Float `+ − × ÷` on finite operands: a non-finite result always fails (`scalar::float_binary`), so the JIT's slow
   path never returns. After its `check` the continuation is `trap(user 1)` (`FLOAT_SLOW_PATH_RETURNED`): reaching it
   is a broken invariant, not a program failure. Finiteness is `fcmp ord (x − x), (x − x)` (`Ordered`: one condition on x86-64).
@@ -1219,4 +1218,12 @@ every declaration is open (#1005, owner decision).
   address (`failure_link`), so `throw Oops{}` inside a handler must be a fresh value.
 - A session extension that turns a published descriptor unshareable is refused (`held` is recomputed on extend).
 - `map.len` stays a checked helper (#537); the remaining cost of map-empty is that call.
+
+## Cold blocks: rare paths only (#1107 stage 2, 2026-11-27; lead, from the audit's item B)
+
+- Cold: `check`'s failure blocks, the allocation's free-list refill, compile on first call, array index outside,
+  the BigInt paths of int arithmetic, comparison, bit operations and not/neg, the atomic intrinsics' closed path,
+  and the failing slow paths of #1105/#1106. int-big did not move (+0.1%), so BigInt paths may stay cold.
+- Not cold, because real data takes them often: equal-length string comparison, `StrLen` of non-ASCII text,
+  structural `val.cmp` of objects.
 
