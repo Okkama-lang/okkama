@@ -38,6 +38,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - GIT_ALLOW_PROTOCOL — other: `install.rs`
 - GIT_TERMINAL_PROMPT — other: `install.rs`
 - GREATER_EQUAL — front: `syntax/token.rs`
+- HOST_TEST_UNSET_SWITCH_1116 — compiler: `host.rs`
 - LC_ALL — other: `native/host.rs`
 - LEFT_BRACE — front: `syntax/token.rs`
 - LEFT_BRACKET — front: `syntax/token.rs`
@@ -49,7 +50,6 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - OKKAMA_DEV — devtrace: `lib.rs`
 - OKKAMA_DEV_OUT — devtrace: `lib.rs`
 - OKKAMA_DUMP_INVALID_IR — lower: `lowering/mod.rs`
-- OKKAMA_HOST_TEST_UNSET_1116 — compiler: `host.rs`
 - OKKAMA_ICU_LIBDIR — cli: `main.rs`, `repl.rs`
 - OKKAMA_IMPORT_DIRS — cli: `main.rs`
 - OKKAMA_IR_PASSES — lower: `lowering/mod.rs`
