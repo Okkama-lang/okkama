@@ -71,9 +71,10 @@ fn ready_static_target_elides_dispatch_but_keeps_the_call_and_status_check() {
     // Table/status loads and frontend root reloads belong to the fallback;
     // count branches exactly, but leave reload placement to Cranelift.
     assert!(opcodes(&old, 1, Opcode::Load) >= opcodes(&fast, 1, Opcode::Load) + 2);
-    // The fallback adds the table check only: since #1147 (A2) a failed compile returns a callee that returns 0,
-    // and the call's own status check reports it.
-    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 1);
+    // The fallback adds the table check and its compile helper's status check; since #1108 that check enters the
+    // same shared failure exit as the call's, so the exit's own branch is not repeated. (#1147 measured dropping
+    // the compile check: a register-allocation loss on 09-closures' hot closure, +17% steady; kept.)
+    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 2);
     assert!(opcodes(&fast, 1, Opcode::Brif) > 0);
     assert_eq!(fast.run_function_with(1, &[word::small(42).unwrap()], 2 << 20).unwrap(), word::small(42).unwrap());
 }

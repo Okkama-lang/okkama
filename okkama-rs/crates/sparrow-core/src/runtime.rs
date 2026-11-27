@@ -875,18 +875,8 @@ pub extern "C" fn rt_compile(ctx: *mut Ctx, function: u64) -> u64 {
     let (ctx, runtime) = unsafe { runtime(ctx) };
     match crate::jit::compile(runtime, function as usize) {
         Ok(code) => code,
-        // #1147 (A2): the call site calls what this returns without a check of its own; `rt_refused` returns 0
-        // (the C ABI ignores the arguments it is given) and the call's check finds the fatal status.
-        Err(error) => {
-            fatal(ctx, runtime, error.0);
-            rt_refused as extern "C" fn() -> Word as usize as u64
-        }
+        Err(error) => fatal(ctx, runtime, error.0),
     }
-}
-
-/// What a call whose callee could not be compiled calls (#1147): nothing happens, the status says why.
-pub extern "C" fn rt_refused() -> Word {
-    0
 }
 
 pub const INT_ADD: u64 = 0;

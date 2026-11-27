@@ -1737,8 +1737,8 @@ impl Emitter<'_, '_> {
             self.builder.append_block_param(ready, types::I64);
             self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
             self.builder.switch_to_block(compile);
-            // #1147 (A2): no check here: a failed compile returns `rt_refused`, and the call's own check sees it.
             let compiled = self.helper(|h| h.compile, &[ctx, function]).expect("result");
+            self.check(pc);
             self.builder.ins().jump(ready, &[compiled.into()]);
             self.builder.switch_to_block(ready);
             self.builder.block_params(ready)[0]
