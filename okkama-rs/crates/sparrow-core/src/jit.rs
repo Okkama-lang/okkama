@@ -153,6 +153,13 @@ pub struct Jit {
     closure_entries: BTreeMap<(usize, usize), Box<u64>>,
     /// Closure entries a compiled function's `fn.closure` asked for, compiled after it.
     closure_requests: Vec<(usize, usize)>,
+    /// #1113: the general version of each function that got a small-int version (the published code), which
+    /// the small version restarts in when an int leaves the tagged-small range.
+    /// Compiled at the first restart (0 until then): a call that stays small never compiles it.
+    general: BTreeMap<usize, Box<u64>>,
+    general_ids: BTreeMap<usize, FuncId>,
+    /// `SPARROW_CORE_SMALL_INTS=0` compiles no small-int versions (A/B in one binary).
+    small_ints: bool,
     /// Stack map of each call site: return address, the frame's FP-to-SP
     /// distance, and the SP offsets of its live words.
     maps: Vec<(u64, u32, Vec<u32>)>,
@@ -337,6 +344,9 @@ impl Jit {
             closure_ids: BTreeMap::new(),
             closure_entries: BTreeMap::new(),
             closure_requests: Vec::new(),
+            general: BTreeMap::new(),
+            general_ids: BTreeMap::new(),
+            small_ints: crate::env_switch::enabled_or("SPARROW_CORE_SMALL_INTS", true),
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
@@ -575,12 +585,21 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
 
 
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
-    let address = compile_entry(runtime, function, None)?;
+    let address = if function as u64 & GENERAL_VERSION != 0 {
+        // #1113: a small-int version's first restart.
+        compile_entry(runtime, (function as u64 & !GENERAL_VERSION) as usize, None, Version::General)?
+    } else if runtime.invocations[function].code == 0 && runtime.jit.small_ints && !runtime.polled() && small_eligible(&runtime.loaded, function) {
+        // #1113: the small-int version as the code; its general version waits for a restart.
+        runtime.jit.general.entry(function).or_insert_with(|| Box::new(0));
+        compile_entry(runtime, function, None, Version::Small)?
+    } else {
+        compile_entry(runtime, function, None, Version::Ordinary)?
+    };
     // #1110: the closure entries its closures will be called through. One that cannot be compiled stays 0, and
     // those closures keep the general path.
     while let Some((callee, captures)) = runtime.jit.closure_requests.pop() {
         if runtime.jit.closure_entries.get(&(callee, captures)).is_some_and(|slot| **slot == 0) {
-            let _ = compile_entry(runtime, callee, Some(captures));
+            let _ = compile_entry(runtime, callee, Some(captures), Version::Ordinary);
         }
     }
     Ok(address)
@@ -590,12 +609,59 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
 /// its body.
 const CLOSURE_ENTRY_INSTRUCTIONS: usize = 400;
 
+/// `rt_compile`'s request for the general version of a function with a small-int one (#1113).
+pub(crate) const GENERAL_VERSION: u64 = 1 << 63;
+
+/// Which code of a function `compile_entry` makes (#1113).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Version {
+    /// The only version: the function's code.
+    Ordinary,
+    /// The general version of a function that also gets a small-int one, which restarts in it.
+    General,
+    /// The small-int version, published as the function's code.
+    Small,
+}
+
+/// #1113: does `function` get a small-int version? A synchronous Okkama function whose registers are ints, raw
+/// words (bool, char, enum) and references and whose instructions are only small-int arithmetic and comparisons, moves, small
+/// constants, branches and returns: it has no effect, so a restart from its entry in the general version, when an
+/// int leaves the tagged-small range, repeats nothing observable. Its ints then are untagged machine words: no tag
+/// checks or conversions, no stack maps.
+fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
+    let source = &loaded.program.functions[function];
+    if source.is_async || source.native.is_some() || source.intrinsic.is_some() || !source.handlers.is_empty() {
+        return false;
+    }
+    let kinds = &loaded.functions[function].kinds;
+    // A reference (a receiver) is only passed on: nothing reads it, and no safepoint follows while it lives.
+    if !kinds.iter().all(|kind| matches!(kind, Kind::Int | Kind::Raw | Kind::Ref)) {
+        return false;
+    }
+    let mut arithmetic = false;
+    let eligible = source.code.iter().all(|instruction| match instruction {
+        I::Const { value: Constant::Int(text), .. } => {
+            text.parse::<i64>().is_ok_and(|n| (word::SMALL_MIN..=word::SMALL_MAX).contains(&n))
+        }
+        I::Const { value: Constant::Bool(_) | Constant::Char(_), .. } => true,
+        I::IntAdd { .. } | I::IntSub { .. } | I::IntMul { .. } | I::IntMod { .. } | I::IntCmp { .. } => {
+            arithmetic = true;
+            true
+        }
+        I::Move { .. } | I::BoolNot { .. } | I::BoolCmp { .. } | I::Jump { .. } | I::Branch { .. } | I::Return { .. } => true,
+        _ => false,
+    });
+    eligible && arithmetic
+}
+
 /// Compile `function`: its ordinary entry, or with `captures` its closure entry for closures holding that many
-/// captures (#1110), which takes the remaining arguments and then the closure.
-fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>) -> Result<u64, Error> {
-    let published = match captures {
-        None => runtime.invocations[function].code,
-        Some(captures) => runtime.jit.closure_entries.get(&(function, captures)).map_or(0, |slot| **slot),
+/// captures (#1110), which takes the remaining arguments and then the closure; `version` says which version of a
+/// function with a small-int one it is (#1113).
+fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<u64, Error> {
+    let published = match (captures, version) {
+        (_, Version::General) => runtime.jit.general.get(&function).map_or(0, |slot| **slot),
+        (None, _) => runtime.invocations[function].code,
+        (Some(captures), _) => runtime.jit.closure_entries.get(&(function, captures)).map_or(0, |slot| **slot),
     };
     if published != 0 {
         return Ok(published);
@@ -603,6 +669,7 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
     let closure_reference = runtime.closure_bridge_reference;
+    let general_code = (version == Version::Small).then(|| &*runtime.jit.general[&function] as *const u64 as u64);
     // #1129: the polling of this runtime's code, as the interpreter reads it.
     let polled = runtime.polled();
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
@@ -632,25 +699,28 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
         None if source.is_async => 1,
         None => source.params.len(),
     };
-    let known = match captures {
-        None => jit.ids.get(&function).copied(),
-        Some(captures) => jit.closure_ids.get(&(function, captures)).copied(),
+    let known = match (captures, version) {
+        (_, Version::General) => jit.general_ids.get(&function).copied(),
+        (None, _) => jit.ids.get(&function).copied(),
+        (Some(captures), _) => jit.closure_ids.get(&(function, captures)).copied(),
     };
     let id = match known {
         Some(id) => id,
         None => {
             let signature = jit.signature(params);
-            let name = match captures {
-                None => format!("f{function}"),
-                Some(captures) => format!("f{function}c{captures}"),
+            let name = match (captures, version) {
+                (_, Version::General) => format!("f{function}g"),
+                (None, _) => format!("f{function}"),
+                (Some(captures), _) => format!("f{function}c{captures}"),
             };
             let id = jit
                 .module
                 .declare_function(&name, Linkage::Local, &signature)
                 .map_err(|e| Error(format!("JIT declare: {e}")))?;
-            match captures {
-                None => jit.ids.insert(function, id),
-                Some(captures) => jit.closure_ids.insert((function, captures), id),
+            match (captures, version) {
+                (_, Version::General) => jit.general_ids.insert(function, id),
+                (None, _) => jit.ids.insert(function, id),
+                (Some(captures), _) => jit.closure_ids.insert((function, captures), id),
             };
             id
         }
@@ -728,6 +798,9 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
             no_inline,
             exits: BTreeMap::new(),
             closure_captures: captures,
+            small: general_code,
+            entry_args: Vec::new(),
+            restart: None,
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -743,7 +816,7 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
         (context.func.layout.blocks().count(), context.func.dfg.num_insts())
     });
     #[cfg(test)]
-    if captures.is_none() {
+    if captures.is_none() && version != Version::General {
         jit.emitted.insert(function, context.func.clone());
     }
     let dump = jit.dump.has(symbol);
@@ -826,9 +899,10 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
     register_code(&mut jit.maps, &mut jit.ranges, address, size, fp_to_sp, maps);
     // Publish only after finalization and registration of maps/ranges. All
     // static/role/async/closure users read this same stable record; a closure entry its own slot (#1110).
-    match captures {
-        None => invocations[function].code = address,
-        Some(captures) => **jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0)) = address,
+    match (captures, version) {
+        (_, Version::General) => **jit.general.entry(function).or_insert_with(|| Box::new(0)) = address,
+        (None, _) => invocations[function].code = address,
+        (Some(captures), _) => **jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0)) = address,
     }
     mark!();
     if let Some(passes) = jit.profile.as_mut() {
@@ -960,6 +1034,12 @@ struct Emitter<'a, 'b> {
     exits: BTreeMap<(usize, Option<Block>, Option<usize>), Block>,
     /// #1110: compiling the closure entry for this many captures: they come from the trailing closure argument.
     closure_captures: Option<usize>,
+    /// #1113: compiling the small-int version: the slot of the general version's code, which its restart calls
+    /// (compiling it the first time).
+    small: Option<u64>,
+    /// The entry's argument values, which a restart passes on unchanged.
+    entry_args: Vec<Value>,
+    restart: Option<Block>,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -1752,7 +1832,10 @@ impl Emitter<'_, '_> {
         let mut next = 0u32;
         for (register, kind) in self.kinds.iter().enumerate() {
             let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
-            let traced = kind.traced() && !self.loaded.functions[self.function].pointer_free[register];
+            // #1113: a small-int version's ints are never pointers.
+            let traced = kind.traced()
+                && !self.loaded.functions[self.function].pointer_free[register]
+                && !(self.small.is_some() && *kind == Kind::Int);
             if traced && explicit {
                 words.push(Some(next));
                 next += 1;
@@ -1841,6 +1924,36 @@ impl Emitter<'_, '_> {
                 };
                 self.set_word(register, value);
             }
+            if self.small.is_some() {
+                // #1113: the general version takes the same arguments on a restart; a big int parameter restarts
+                // at once.
+                self.entry_args = self.builder.block_params(entry).to_vec();
+                let mut words: Option<Value> = None;
+                for register in &source.params {
+                    if self.kinds[register.0 as usize] == Kind::Int {
+                        let value = self.word(register);
+                        words = Some(match words {
+                            Some(all) => self.builder.ins().band(all, value),
+                            None => value,
+                        });
+                    }
+                }
+                if let Some(all) = words {
+                    let small = self.builder.ins().band_imm_u(all, 1);
+                    let next = self.builder.create_block();
+                    let restart = self.restart();
+                    self.builder.ins().brif(small, next, &[], restart, &[]);
+                    self.builder.switch_to_block(next);
+                    // Inside, ints are untagged.
+                    for register in &source.params {
+                        if self.kinds[register.0 as usize] == Kind::Int {
+                            let word = self.word(register);
+                            let raw = self.builder.ins().sshr_imm_u(word, 1);
+                            self.set_word(register, raw);
+                        }
+                    }
+                }
+            }
             // The prologue's calls find the parameters.
             if let Some(roots) = &mut self.roots {
                 roots.reported = source.params.iter().filter_map(|register| roots.word[register.0 as usize]).collect();
@@ -1876,7 +1989,44 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(overflow);
         self.helper(|h| h.stack_overflow, &[ctx]);
         self.exit_fail();
-        self.emit_code()
+        self.emit_code()?;
+        if let (Some(slot), Some(restart)) = (self.small, self.restart) {
+            // #1113: the general version from the entry, with the entry's arguments; its result and status are
+            // this call's (a failure there records its own frame, as this one would have).
+            self.builder.switch_to_block(restart);
+            let slot = self.iconst(slot as i64);
+            let code = self.builder.ins().load(types::I64, MEMORY, slot, 0);
+            let ready = self.builder.create_block();
+            self.builder.append_block_param(ready, types::I64);
+            let compile = self.builder.create_block();
+            self.builder.set_cold_block(compile);
+            self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
+            self.builder.switch_to_block(compile);
+            let ctx = self.ctx();
+            let request = self.iconst((GENERAL_VERSION | self.function as u64) as i64);
+            let compiled = self.helper(|h| h.compile, &[ctx, request]).expect("result");
+            let compiled_ok = self.builder.create_block();
+            self.return_unless_ok(compiled_ok);
+            self.builder.ins().jump(ready, &[compiled.into()]);
+            self.builder.switch_to_block(ready);
+            let code = self.builder.block_params(ready)[0];
+            let signature = self.jit.signature(self.entry_args.len() - 1);
+            let signature = self.builder.import_signature(signature);
+            let args = self.entry_args.clone();
+            let call = self.builder.ins().call_indirect(signature, code, &args);
+            let result = self.builder.inst_results(call)[0];
+            self.builder.ins().return_(&[result]);
+        }
+        Ok(())
+    }
+
+    /// #1113: the small-int version's restart in the general version (cold, made once).
+    fn restart(&mut self) -> Block {
+        *self.restart.get_or_insert_with(|| {
+            let block = self.builder.create_block();
+            self.builder.set_cold_block(block);
+            block
+        })
     }
 
     /// Emit the instructions of the current function (the compiled one, or an inlined callee).
@@ -2021,6 +2171,12 @@ impl Emitter<'_, '_> {
             return Ok(false);
         }
         match instruction {
+            I::Const { dst, value: Constant::Int(text) } if self.small.is_some() => {
+                // #1113: the small-int version's ints are untagged (eligibility saw that it fits).
+                let n: i64 = text.parse().map_err(|_| Error("invalid integer constant".into()))?;
+                let value = self.iconst(n);
+                self.set(&dst.0, value);
+            }
             I::Const { dst, value } => {
                 let value = match value {
                     Constant::Int(text) => {
@@ -2042,6 +2198,46 @@ impl Emitter<'_, '_> {
             }
             I::Move { dst, source } => {
                 let value = self.get(source);
+                self.set(&dst.0, value);
+            }
+            I::IntAdd { dst, left, right }
+            | I::IntSub { dst, left, right }
+            | I::IntMul { dst, left, right }
+            | I::IntMod { dst, left, right }
+                if self.small.is_some() =>
+            {
+                // #1113: the small-int version's ints are untagged machine words in −2^62..2^62−1; a result
+                // outside it, a divisor 0 or −1, restarts the call in the general version.
+                let (l, r) = (self.get(left), self.get(right));
+                let restart = self.restart();
+                let value = match instruction {
+                    I::IntAdd { .. } => self.builder.ins().iadd(l, r),
+                    I::IntSub { .. } => self.builder.ins().isub(l, r),
+                    I::IntMul { .. } => {
+                        let (product, overflow) = self.builder.ins().smul_overflow(l, r);
+                        let next = self.builder.create_block();
+                        self.builder.ins().brif(overflow, restart, &[], next, &[]);
+                        self.builder.switch_to_block(next);
+                        product
+                    }
+                    _ => {
+                        let shifted = self.builder.ins().iadd_imm_s(r, 1);
+                        let special = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThanOrEqual, shifted, 1);
+                        let next = self.builder.create_block();
+                        self.builder.ins().brif(special, restart, &[], next, &[]);
+                        self.builder.switch_to_block(next);
+                        self.builder.ins().srem(l, r)
+                    }
+                };
+                if !matches!(instruction, I::IntMod { .. }) {
+                    // In range when dropping the top bit keeps the value.
+                    let doubled = self.builder.ins().ishl_imm_u(value, 1);
+                    let back = self.builder.ins().sshr_imm_u(doubled, 1);
+                    let outside = self.builder.ins().icmp(IntCC::NotEqual, back, value);
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(outside, restart, &[], next, &[]);
+                    self.builder.switch_to_block(next);
+                }
                 self.set(&dst.0, value);
             }
             I::IntAdd { dst, left, right }
@@ -2101,6 +2297,13 @@ impl Emitter<'_, '_> {
                 self.builder.switch_to_block(done);
                 let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
+            }
+            I::IntCmp { op, dst, left, right } if self.small.is_some() => {
+                // #1113: untagged small ints order as machine words.
+                let (l, r) = (self.get(left), self.get(right));
+                let flag = self.builder.ins().icmp(int_condition(*op), l, r);
+                let flag = self.builder.ins().uextend(types::I64, flag);
+                self.set(&dst.0, flag);
             }
             I::IntCmp { op, dst, left, right } => {
                 let (l, r) = (self.get(left), self.get(right));
@@ -2536,6 +2739,12 @@ impl Emitter<'_, '_> {
             }
             I::Return { value } => {
                 let value = match value {
+                    // #1113: the small-int version tags its int result.
+                    Some(register) if self.small.is_some() && self.kinds[register.0 as usize] == Kind::Int => {
+                        let raw = self.word(register);
+                        let doubled = self.builder.ins().ishl_imm_u(raw, 1);
+                        self.builder.ins().bor_imm_u(doubled, 1)
+                    }
                     Some(register) => self.word(register),
                     None => self.iconst(0),
                 };

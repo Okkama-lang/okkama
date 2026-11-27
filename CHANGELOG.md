@@ -6,6 +6,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Small-int versions of pure int functions (#1113).** A synchronous function made only of int arithmetic and
+  comparisons, moves, small constants, branches and returns (a receiver only passed on) is compiled as a small-int
+  version: its ints are untagged machine words without tag checks or stack maps. A result outside −2^62..2^62−1, a
+  divisor 0 or −1, or a big int argument restarts the call from its entry in the general version, which is
+  compiled at the first restart; the function has no effects, so nothing observable repeats, and results,
+  failures and traces are the general version's. Off under `--max-steps` and other budgets (a restart would count
+  steps twice) and with `SPARROW_CORE_SMALL_INTS=0`. Micro A/B against #1112: baseline 2.14 → 0.85 ns (−60%),
+  constructor −57%, successor −53%, compare −47%, int-small −40%, the rest within ±1% (int-big, recursion,
+  method-call, for-loop, match); 01-arith steady 20.1 → 10.8 ms; Lcg.run's code 964 → 464 bytes. examples/ and
+  t/ give the same output with the versions on and off under the ownership verifier (364 programs).
 - **Objects that never leave a function are not made (#1112).** Two OIR passes: `inline` puts small callees that
   cannot fail (constructors, successors, accessors; branched ones without loops up to 64 instructions) into their
   callers, and `scalars` replaces plain objects (no destroy, no `once`, not in a region) that never leave the

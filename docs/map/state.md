@@ -7,6 +7,13 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1113 small-int function versions (feature/1110; toolchains micro-tc/f1113a tagged, f1113b untagged):
+  `jit::{small_eligible, Version, GENERAL_VERSION}`, `Jit::{general, general_ids, small_ints}`, Emitter
+  `small`/`entry_args`/`restart`; `compile` makes the small version as the code, `rt_compile(f | GENERAL_VERSION)`
+  the general one at the first restart. Test `okkama-cli/tests/small_ints.rs` (exact results at the boundaries,
+  `% 0` trace, on = off; mutations: no overflow check, no entry guard, no range check — all caught). Sweep
+  scratchpad sweep1113.py: 364/364. Micro baseline −60%, int-small −40%; 01-arith 10.8 ms. Not done: mid-function
+  transfer (restart from the entry instead), versions of functions with calls or allocations.
 - [x] #1112 OIR `inline` + `scalars` (feature/1110 line; design Fable; owner: accept the step-count shift):
   `ir/inline.rs` (`inline_leaves`, `inline_branched`, `has_cycle`, `INLINE_INSTRUCTIONS` 24 /
   `INLINE_BRANCHED` 64 / `CALLER_INSTRUCTIONS` 400, `Attr::Inlined` + verifier `grants`), `ir/scalars.rs`

@@ -1298,6 +1298,18 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## Small-int function versions (#1113, 2026-11-28; owner: a guarded prototype; #1107's spill prerequisite rejected)
+
+- Only functions without effects get one: the instructions are int add/sub/mul/mod/cmp, bool not/cmp, moves,
+  constants that fit small, jump/branch/return; registers are ints, raw words and references only passed on.
+- The fallback restarts the whole call in the general version with the entry's original (tagged) arguments,
+  instead of a transfer at the same pc: no state to reconstruct, and nothing observable repeats.
+- The general version is compiled at the first restart (a slot per function), so a function that stays small
+  costs one compilation, smaller than before.
+- Inside, ints are untagged; add/sub check the range by `(v << 1) >> 1 == v`, mul also the i64 overflow, mod
+  restarts on divisors 0 and −1. Tagged small ints (the first variant) gave baseline −46%, untagged −60%.
+- Off while the runtime polls (budgets): a restart would count the entry and loop steps again.
+
 ## OIR inlining and scalar replacement (#1112, 2026-11-27; owner revisited "inlining lives in the JIT"; design Fable)
 
 - `inline` takes direct callees that cannot fail: no loop in their blocks, no unwind, terminators br/cond/ret,
