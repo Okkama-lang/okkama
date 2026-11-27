@@ -519,8 +519,8 @@ fn an_early_self_inside_a_loop_or_branch_is_built_once_before_its_statement() {
         let listing = module.to_string();
         let start = listing.find("func @Tree.new").expect("the constructor is printed");
         let end = listing[start..].find("\n}\n").map_or(listing.len(), |end| start + end);
-        // One object per call, never one per iteration.
-        assert_eq!(listing[start..end].matches("obj.new").count(), 1, "{body}");
+        // One Tree per call, never one per iteration (since #1112 the Leaf constructor is inlined here too).
+        assert_eq!(listing[start..end].matches("obj.new Tree").count(), 1, "{body}");
     }
 }
 

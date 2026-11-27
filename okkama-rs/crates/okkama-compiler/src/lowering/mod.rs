@@ -553,6 +553,17 @@ fn lower_analyzed(
         let _span = okkama_devtrace::span!("lower", "pass tail-calls");
         ir::recursion::eliminate_tail_calls(&mut module);
     }
+    // #1112: small leaf callees that cannot fail are inlined, so that constructors, successors and accessors meet
+    // in one function (after tail-calls: self-recursion is a loop already, and regions are elided).
+    if passes.on("inline") {
+        let _span = okkama_devtrace::span!("lower", "pass inline");
+        ir::inline::inline_leaves(&mut module);
+    }
+    // #1112: plain objects that never leave the function are their fields: no allocation.
+    if passes.on("scalars") {
+        let _span = okkama_devtrace::span!("lower", "pass scalars");
+        ir::scalars::replace_scalars(&mut module);
+    }
     // Constant arithmetic is computed once, exactly, at build time.
     if passes.on("fold") {
         ir::fold::fold_constants(&mut module);
@@ -886,7 +897,7 @@ struct Passes {
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 8] = ["statics", "regions", "tail-calls", "fold", "hoist", "dce", "undef", "jumps"];
+pub const PASSES: [&str; 10] = ["statics", "regions", "tail-calls", "inline", "scalars", "fold", "hoist", "dce", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
@@ -1073,7 +1084,7 @@ mod pass_list_tests {
         assert!(unknown_passes("").is_empty());
         assert!(unknown_passes(&PASSES.join(",")).is_empty());
         assert_eq!(unknown_passes_warning("fold,hoistt", "OKKAMA_IR_PASSES").as_deref(),
-            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, fold, hoist, dce, undef, jumps)"));
+            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, inline, scalars, fold, hoist, dce, undef, jumps)"));
         assert!(unknown_passes_warning("fold,hoistt", "lowering::select_passes").unwrap().starts_with("lowering::select_passes: unknown pass hoistt "));
         assert_eq!(unknown_passes_warning("all", "OKKAMA_IR_PASSES"), None);
     }

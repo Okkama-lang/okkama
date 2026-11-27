@@ -370,6 +370,7 @@ fn check_signature(module: &Module, function: &Function) -> std::result::Result<
                 attr,
                 Attr::Entry
                     | Attr::Hidden
+                    | Attr::Inlined(_)
                     | Attr::Extern(_)
                     | Attr::Lambda { .. }
                     | Attr::Async
@@ -754,8 +755,21 @@ impl<'a> FunctionVerifier<'a> {
     }
 
     /// Функции владельца объекта (`method`, `ctor`, `successor`, `default`).
+    /// Does this function hold `attr`, itself or through a function inlined into it (#1112)?
+    fn grants(&self, attr: &Attr) -> bool {
+        self.function.attrs.contains(attr) || self.inlined().any(|callee| callee.attrs.contains(attr))
+    }
+
+    /// The functions whose bodies were inlined into this one (#1112).
+    fn inlined(&self) -> impl Iterator<Item = &'a super::Function> + '_ {
+        self.function.attrs.iter().filter_map(|attr| match attr {
+            Attr::Inlined(func) => self.module.function(*func),
+            _ => None,
+        })
+    }
+
     fn require_owner(&self, object: ObjectId, what: &str) -> std::result::Result<(), String> {
-        if self.function.owner() == Some(object) {
+        if self.function.owner() == Some(object) || self.inlined().any(|callee| callee.owner() == Some(object)) {
             Ok(())
         } else {
             Err(format!("{what} is allowed only in functions of its object"))
@@ -1011,7 +1025,7 @@ impl<'a> FunctionVerifier<'a> {
                         "values of a builtin object are created only by the runtime".to_string()
                     );
                 }
-                if !self.function.attrs.contains(&Attr::Ctor(*object)) {
+                if !self.grants(&Attr::Ctor(*object)) {
                     return Err("obj.new is allowed only in constructors of its object".to_string());
                 }
                 let declared = self
@@ -1103,7 +1117,7 @@ impl<'a> FunctionVerifier<'a> {
             }
             InstKind::ObjNext { object, updates } => {
                 let owner = self.object_of(*object)?;
-                if !self.function.attrs.contains(&Attr::Successor(owner)) {
+                if !self.grants(&Attr::Successor(owner)) {
                     return Err(
                         "obj.next is allowed only in successor actions of its object".to_string(),
                     );

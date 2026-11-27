@@ -13,9 +13,11 @@
 pub mod cfg;
 pub mod fold;
 pub mod hoist;
+pub mod inline;
 pub mod ownership;
 pub mod param_adopts;
 pub mod regions;
+pub mod scalars;
 pub mod statics;
 pub mod linearity;
 pub mod print;
@@ -577,6 +579,9 @@ pub enum Attr {
     Extern(String),
     /// `hidden` (#365): вызов разрешён только функциям того же владельца.
     Hidden,
+    /// #1112: the body of this function was inlined here; the verifier grants its rights (`obj.new` of a
+    /// constructor, `obj.next` of a successor, `obj.get` of its object) to the instructions it brought.
+    Inlined(FuncId),
     /// Intrinsic (§14.2): тела нет, его даёт рантайм. `objects` — объекты
     /// модуля, которые рантайм создаёт (результаты, Error std); `helpers` —
     /// функции программы, которые рантайм вызывает (действия значений
@@ -636,6 +641,7 @@ impl Function {
             Attr::Lambda { owner, .. } => *owner,
             Attr::Entry
             | Attr::Hidden
+            | Attr::Inlined(_)
             | Attr::Extern(_)
             | Attr::Async
             | Attr::Intrinsic { .. } => None,
