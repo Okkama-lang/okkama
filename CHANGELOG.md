@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Faster collections (#1150).** Small ints sort by their tagged words without a comparison call when no budget
+  polls (equal ints are indistinguishable, so the unstable sort of words is the stable sort of values), and a
+  builder push reaches its items without a virtual downcast. 06-collections steady 10.9 → 7.4 ms (−32%), 10-app
+  −3%, 08-roles −4%.
 - **Strings look at their bytes less (#1149, part).** Pieces and flat concatenations of ASCII strings are flagged
   ASCII without a scan; split by one character searches the character; split and replace search line-sized texts
   directly instead of building a two-way searcher per call; replace copies its pieces once. 05-strings steady −5%.
@@ -15,11 +19,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   burst −9%, 11-ownership −4%, 08-roles −2%.
 - **Less to compile on the first run (#1147, step 1).** cranelift-frontend builds without std (its safepoint
   spiller's sets in hashbrown); handlers with the same target share one failure exit and a function's later failure
-  exits one cold return; branch edges that move nothing go straight to their blocks; int add, subtract and multiply
-  check no status without a memory budget or polling. Compile time −7…−11% and machine code −8…−18% on 06, 08, 10
-  and 11; first repetition 11-ownership −8%, 06 −2%, 08 −5%, 10-app −2%; steady unchanged or better (09-closures
-  20.6 → 18.8 ms). Dropping the status check after a lazy call's compile and reusing compile contexts were measured
-  and not kept (a register-allocation loss on 09-closures; no gain).
+  exits one cold return; int add, subtract and multiply check no status without a memory budget or polling.
+  Compile time and machine code down on 06, 08, 10 and 11; first repetition 11-ownership −8%. Measured and not kept:
+  dropping the status check after a lazy call's compile (a register-allocation loss on 09-closures), branch edges
+  straight to their blocks (07-objects +32%), compile-context reuse (no gain).
 - **A safepoint that is not due costs almost nothing (#1175).** Every allocating helper asked the heap whether a
   collection was due through a huge out-of-line function (its prologue ran before the check) and a thread-local
   lookup in another crate (a call on macOS) for the map-node count. The check is now inline, the collection out

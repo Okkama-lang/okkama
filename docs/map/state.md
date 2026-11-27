@@ -7,6 +7,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`),
+  `Heap::payload_mut_unchecked` for builder pushes; 06-collections 10.9 → 7.4 ms. Target ≤ 6 ms: builders as a heap
+  kind (#1171, POSTPONED) is the rest.
 - [~] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
   search ≤ 256 bytes), one-copy replace; tests `ops::strings_1149_tests` (4, mutations caught). 05-strings −5%; the rest
   is copying the pieces (views over flat strings need care: concat grows SHARED buffers in place) — open.
@@ -14,9 +17,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   `heap::tests::leaves_are_marked_without_tracing_and_containers_still_trace_1174` (mutation caught); corpus under
   GC stress unchanged (457/457).
 - [~] #1147 first-run compile: step 1 done (A5 no-std frontend, A1 exits by handler target + shared cold return
-  from the second exit, A3 direct branch edges, A4 no check after int add/sub/mul without budget/polling); A2
-  (no check after rt_compile) reverted: regalloc loss on 09-closures; A6 (context reuse) no gain, dropped. Tests:
-  ready_callees_tests::{handlers_with_one_target_share_one_failure_exit, branch_edges_without_moves_need_no_jump_blocks},
+  from the second exit, A4 no check after int add/sub/mul without budget/polling); reverted: A2 (no check after
+  rt_compile: regalloc loss on 09-closures), A3 (direct branch edges: 07-objects +32%); A6 (context reuse) no gain.
+  Tests: ready_callees_tests::handlers_with_one_target_share_one_failure_exit,
   budgets SQUARE (mutations caught). Step 2 (background codegen, Fable's design on the ticket) next.
 - [x] #1175 safepoint not-due check: `Runtime::safepoint` inline + `collect_at_safepoint` cold; `Heap.node_counters`
   (`pmap::memory_cell`, Heap !Send by the pointer); test `heap::tests::map_nodes_of_this_thread_bring_a_collection_due_1175`

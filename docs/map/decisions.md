@@ -1302,9 +1302,10 @@ every declaration is open (#1005, owner decision).
 
 - Mixed mode (interpret first, JIT later) rejected: most compile time is in once-called functions with long loops,
   which need OSR. Cheap Cranelift settings rejected (single_pass, opt_level none: steady losses).
-- Step 1 hygiene kept where measured: no-std frontend, exits by handler target, direct branch edges, no status check
-  after int add/sub/mul without budget/polling. Not kept: dropping the check after rt_compile (regalloc loss on a hot
-  closure), compile-context reuse (no gain).
+- Step 1 hygiene kept where measured: no-std frontend, exits by handler target, no status check after int
+  add/sub/mul without budget/polling. Not kept: dropping the check after rt_compile (regalloc loss on a hot closure),
+  direct branch edges (07-objects +32%: block layout), compile-context reuse (no gain). Lesson: measure the whole
+  ladder, not only the programs a change aims at.
 - Step 2: background codegen with demand-driven speculation of static callees (deterministic publication order).
 
 ## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
