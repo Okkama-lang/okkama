@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Small array literals and closures allocated inline (#1167, part of #1106).** Array literals of up to 16
+  elements (byte arrays packed) and closures are allocated by the JIT's own allocator in the layouts the runtime
+  writes, instead of a call into the runtime. Micro A/B against the previous step: closure-create 14.32 → 5.49 ns
+  (−62%), array-literal 12.42 → 8.22 ns (−34%), map-reduce −5%, filter-map −4%; controls within ±0.6%.
 - **Byte bit operations, `>>>`, `abs`, `sign`, `sqrt` and bit actions inline (#1166, part of #1106).** They ran
   through the runtime's shared path on every use; the JIT now does them in machine code when the operands allow it
   (bytes always, tagged-small ints, valid shift counts, a non-negative `sqrt`), and the rest keeps the exact path.

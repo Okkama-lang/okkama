@@ -7,6 +7,12 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1167 (#1106 stage 2) inline array literals ≤ 16 (`INLINE_ARRAY_LITERAL`, `Emit::array_literal`, byte arrays
+  PACKED eight to a word) and closures (`Heap::closure_words`, the `closure_new` layout; rt_closure's checks are a
+  guard, else the helper). Tests `interp::tests::inline_array_literals_match_the_interpreter` (int with a BigInt,
+  str, byte × sizes 0–17, JIT with GC stress too), `inline_closures_keep_their_captures_under_collection`;
+  mutations (byte packing, a skipped capture) caught. Micro closure-create 14.32 → 5.49 ns, array-literal 12.42 →
+  8.22 ns (the cell also pays two `%` and an index). Toolchains micro-tc/f1167-s{1,2}.
 - [x] #1166 (#1106 stage 1) scalar inlining (feature/1106; worktree okkama-work/p-1106, target t-1106; toolchains
   micro-tc/f1166-s{1,2}): byte `& | ^ ~ << >> >>>`, `int.ushr`, `int.abs`, `sign` (int, float), `float.sqrt`,
   `bits` actions inline (`Emit::{small_count, tag_if_small, tagged_sign, slow_generic, fail_generic, bits}`, trap

@@ -121,18 +121,18 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 70 files, 37908 lines
+## sparrow — 70 files, 37966 lines
 
 - `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/heap.rs` 2327 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/heap.rs` 2330 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1103 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 3227 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/jit.rs` 3282 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 848 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's

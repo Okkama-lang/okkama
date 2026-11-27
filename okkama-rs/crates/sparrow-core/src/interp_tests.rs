@@ -1296,3 +1296,96 @@ fn the_interpreter_loads_without_pointer_free_proofs() {
     let frame = &runtime.heap.layouts().frames[0];
     assert!(frame[crate::tasks::FIXED_WORDS..crate::tasks::FIXED_WORDS + 3].iter().all(|repr| *repr == Repr::Int), "{frame:?}");
 }
+
+/// #1167: array literals up to 16 elements are allocated inline by the JIT, longer ones by the helper; both must
+/// give what the interpreter's heap builds, for int (a BigInt among them), string and byte elements, sizes around
+/// the packing and inline limits, with and without GC stress on the JIT too.
+#[test]
+fn inline_array_literals_match_the_interpreter() {
+    for (element, ty) in [("int", "t0"), ("str", "t1"), ("byte", "t2")] {
+        for size in [0usize, 1, 7, 8, 9, 15, 16, 17] {
+            let array_type = if element == "byte" { "t3".to_string() } else { "t5".to_string() };
+            let types = if element == "byte" { String::new() } else { format!("type t5 array {ty}") };
+            // Registers: elements r0..size-1, the array, its length, an index, an element, a scratch int.
+            let mut registers: Vec<String> = (0..size).map(|_| ty.to_string()).collect();
+            let (array, length, index, item, scratch) = (size, size + 1, size + 2, size + 3, size + 4);
+            registers.extend([array_type.clone(), "t0".into(), "t0".into(), ty.into(), "t0".into()]);
+            let mut code = Vec::new();
+            for i in 0..size {
+                code.push(match element {
+                    "int" if i == 3 => format!("const r{i}, int 1234567890123456789012345"),
+                    "int" => format!("const r{i}, int {}", i as i64 * 7 - 20),
+                    "str" => format!("const r{i}, str \"s{i}\""),
+                    _ => format!("const r{scratch}, int {}\n    byte.from r{i}, r{scratch}, _", (i * 37 + 5) % 256),
+                });
+            }
+            let list: Vec<String> = (0..size).map(|i| format!("r{i}")).collect();
+            code.push(format!("arr.new r{array}, [{}]", list.join(", ")));
+            code.push(format!("arr.len r{length}, r{array}"));
+            code.push(format!("call _, f1, [r{length}]"));
+            for i in 0..size {
+                code.push(format!("const r{index}, int {i}"));
+                code.push(format!("arr.get r{item}, r{array}, r{index}"));
+                code.push(match element {
+                    "int" => format!("call _, f1, [r{item}]"),
+                    "str" => format!("call _, f2, [r{item}]"),
+                    _ => format!("cvt r{scratch}, r{item}\n    call _, f1, [r{scratch}]"),
+                });
+            }
+            code.push(format!("ret r{length}"));
+            let body: String = code.join("\n").lines().enumerate().map(|(pc, line)| format!("    {pc}: {}\n", line.trim())).collect();
+            let source = program(&types, "", &format!(
+                "function f4 \"main\" {{\n    registers [{}]\n    params []\n    result t0\n{body}}}\nentry f4\n",
+                registers.join(", ")
+            ));
+            let outcome = engines(&source);
+            assert_eq!(outcome.result, Ok(size as i64), "{element} × {size}: {outcome:?}");
+            assert_eq!(outcome.output.lines().count(), size + 1, "{element} × {size}");
+            #[cfg(feature = "jit")]
+            assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome, "{element} × {size} under GC stress");
+        }
+    }
+}
+
+/// #1167: closures are allocated inline by the JIT: captures fill a prefix of the function's layout and the rest
+/// stays unbound until the call supplies it; a closure built while collections run keeps its captures.
+#[test]
+fn inline_closures_keep_their_captures_under_collection() {
+    let source = program("type t5 fn [t0, t1] -> t0\ntype t6 fn [t1] -> t0\ntype t7 fn [] -> t0\ntype t8 array t1", "", r#"
+function f4 "mix" {
+    registers [t0, t0, t0, t1, t0]
+    params [r0, r1, r2, r3]
+    result t0
+    0: int.mul r4, r0, r1
+    1: int.add r4, r4, r2
+    2: str.len r0, r3
+    3: int.add r4, r4, r0
+    4: ret r4
+}
+function f5 "main" {
+    registers [t0, t0, t0, t1, t5, t6, t7, t0, t8, t0]
+    params []
+    result t0
+    0: const r0, int 1000000000000000000000
+    1: const r1, int 3
+    2: const r3, str "four"
+    3: fn.closure r4, f4, [r0, r1]
+    4: fn.closure r5, f4, [r1, r1, r0]
+    5: fn.closure r6, f4, [r1, r0, r1, r3]
+    6: arr.new r8, [r3, r3, r3]
+    7: const r2, int 5
+    8: call.fn r7, r4, [r2, r3]
+    9: call _, f1, [r7]
+    10: call.fn r7, r5, [r3]
+    11: call _, f1, [r7]
+    12: call.fn r7, r6, []
+    13: call _, f1, [r7]
+    14: ret r1
+}
+entry f5
+"#);
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&["3000000000000000000009", "1000000000000000000013", "3000000000000000000007"]));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}

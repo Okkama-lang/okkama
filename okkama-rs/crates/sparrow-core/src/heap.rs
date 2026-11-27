@@ -1551,6 +1551,11 @@ impl Heap {
 
     /// A closure has one word per parameter of its function (its layout);
     /// captures fill a prefix and the remaining words are unbound.
+    /// The words a closure of `function` holds after its header (#1167: the JIT allocates closures inline).
+    pub(crate) fn closure_words(&self, function: u32) -> usize {
+        self.layouts.closures[function as usize].len().max(1)
+    }
+
     pub fn closure_new(&mut self, function: u32, captures: &[Word]) -> Word {
         let words = self.layouts.closures[function as usize].len();
         debug_assert!(captures.len() <= words);

@@ -925,6 +925,9 @@ const FLOAT_SLOW_PATH_RETURNED: u8 = 1;
 /// count outside 0..7, sqrt of a negative float).
 const GENERIC_SLOW_PATH_RETURNED: u8 = 2;
 
+/// Array literals of at most this many elements are allocated inline (#1167); longer ones keep the helper.
+const INLINE_ARRAY_LITERAL: usize = 16;
+
 /// A shift or rotation count checked inline (#1106).
 #[derive(Clone, Copy)]
 struct Count {
@@ -2043,6 +2046,11 @@ impl Emitter<'_, '_> {
                     Some(Type::Array(element)) => Kind::of(program, *element).repr() as u64,
                     _ => return Err(unsupported()),
                 };
+                if elements.len() <= INLINE_ARRAY_LITERAL {
+                    let array = self.array_literal(repr, elements);
+                    self.set(&dst.0, array);
+                    return Ok(false);
+                }
                 let address = self.spill(elements);
                 let repr = self.iconst(repr as i64);
                 let count = self.iconst(elements.len() as i64);
@@ -2444,6 +2452,28 @@ impl Emitter<'_, '_> {
                 self.builder.switch_to_block(miss);
                 self.jump(missing);
                 return Ok(true);
+            }
+            I::Closure { dst, function, captures }
+                if self.heap.closure_words(function.0) >= captures.len()
+                    && captures.len() <= self.loaded.program.functions[function.0 as usize].params.len() =>
+            {
+                // #1167: the layout `Heap::closure_new` writes, allocated inline: the header, the captures, then
+                // unbound words up to the function's layout. rt_closure's checks are static facts here.
+                let words = self.heap.closure_words(function.0);
+                let pointer = self.allocate(words + 1);
+                let header = self.iconst(heap::header(heap::CLOSURE, Repr::Raw, function.0) as i64);
+                self.builder.ins().store(MEMORY, header, pointer, 0);
+                for (i, capture) in captures.iter().enumerate() {
+                    let value = self.word(capture);
+                    self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
+                }
+                if words > captures.len() {
+                    let unbound = self.iconst(0);
+                    for i in captures.len()..words {
+                        self.builder.ins().store(MEMORY, unbound, pointer, ((i + 1) * 8) as i32);
+                    }
+                }
+                self.set(&dst.0, pointer);
             }
             I::Closure { dst, function, captures } => {
                 let address = self.spill(captures);
@@ -3203,6 +3233,39 @@ impl Emitter<'_, '_> {
         }
     }
 
+
+    /// An array literal of at most [`INLINE_ARRAY_LITERAL`] elements, allocated inline in the layouts the
+    /// `array` helper writes (#1167): a header and one word per element, or for a byte array the PACKED header and
+    /// its bytes packed eight to a word. Every word is written before the array is published.
+    fn array_literal(&mut self, repr: u64, elements: &[okkama_sparrow::Register]) -> Value {
+        if repr == runtime::ARRAY_BYTES {
+            let words = elements.len().div_ceil(8);
+            let pointer = self.allocate(1 + words);
+            let header = heap::header(heap::ARRAY, Repr::Raw, heap::length(elements.len())) | heap::PACKED;
+            let header = self.iconst(header as i64);
+            self.builder.ins().store(MEMORY, header, pointer, 0);
+            for (index, chunk) in elements.chunks(8).enumerate() {
+                let mut packed = self.iconst(0);
+                for (position, element) in chunk.iter().enumerate() {
+                    let byte = self.get(element);
+                    let byte = self.builder.ins().band_imm_u(byte, 0xFF);
+                    let byte = self.builder.ins().ishl_imm_u(byte, (position * 8) as i64);
+                    packed = self.builder.ins().bor(packed, byte);
+                }
+                self.builder.ins().store(MEMORY, packed, pointer, ((index + 1) * 8) as i32);
+            }
+            return pointer;
+        }
+        let pointer = self.allocate(elements.len() + 1);
+        let header = heap::header(heap::ARRAY, Repr::from_bits(repr), heap::length(elements.len()));
+        let header = self.iconst(header as i64);
+        self.builder.ins().store(MEMORY, header, pointer, 0);
+        for (i, element) in elements.iter().enumerate() {
+            let value = self.word(element);
+            self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
+        }
+        pointer
+    }
 
     /// A shift or rotation count (#1106): `valid` when the int word is tagged-small and in 0..limit, `value` the
     /// untagged count (meaningful only when valid).
