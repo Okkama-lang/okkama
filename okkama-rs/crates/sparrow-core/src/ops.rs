@@ -1965,6 +1965,9 @@ fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
     if let crate::heap::Integer::Small(n) = runtime.heap.integer(word) {
         let mut buffer = [0u8; 20];
         let digits = small_decimal_text(n, &mut buffer);
+        if crate::heap::passes_length_limit(digits.len()) {
+            return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
+        }
         // SAFETY: ASCII digits and an optional minus sign.
         return Ok(runtime.text_new(unsafe { std::str::from_utf8_unchecked(digits) }));
     }
