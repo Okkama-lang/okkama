@@ -1,9 +1,13 @@
 //! `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 //! `tools/generate-cldr*.py` пишут их в `cldr-<семейство>.dat` (gzip текста,
-//! из `data/`); файл распаковывается и индексируется при первом обращении к
-//! любой его таблице. Строка файла — таблица, ключ и поля через табуляцию;
-//! имя таблицы начинается с семейства и точки (`numbers.row`). Sparrow берёт
-//! этот native через мост (`native_origin`).
+//! в `data/`). Строка файла — таблица, ключ и поля через табуляцию; имя
+//! таблицы начинается с семейства и точки (`numbers.row`).
+//!
+//! С особенностью `cldr` файлы вшиты в бинарник: семейство распаковывается и
+//! индексируется при первом обращении к любой его таблице. Без неё (песочница,
+//! #1125) текст семейства даёт встраивающий (`native::provide_cldr`), а
+//! обращение к семейству, которого не дали, отказывает с `unavailable`.
+//! Sparrow берёт этот native через мост (`native_origin`).
 use super::Error;
 use super::support::{failure, int, int_value, string, string_array, text};
 #[cfg(feature = "cldr")]
@@ -105,7 +109,9 @@ fn index(at: usize) -> Option<&'static Index> {
     Some(INDEXES[at].get_or_init(|| build(text)))
 }
 
-/// See [`super::provide_cldr`]. A text that is not gzip, not UTF-8, or not CLDR records is refused.
+/// Give the family of `file` its text ([`super::provide_cldr`]). A text that is not gzip, not UTF-8, or has a line
+/// that is not three tab-separated fields is refused; a family already there (unpacked or given before) keeps its
+/// text and the call still succeeds.
 pub(super) fn provide(file: &str, gzip: &[u8]) -> Result<(), String> {
     let at = FILES.iter().position(|(_, name)| *name == file).ok_or_else(|| format!("{file} is not a CLDR file"))?;
     let text = gunzip_checked(gzip).and_then(|bytes| String::from_utf8(bytes).ok()).ok_or_else(|| format!("{file} is not gzip UTF-8 text"))?;

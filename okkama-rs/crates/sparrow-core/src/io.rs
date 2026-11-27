@@ -9,7 +9,7 @@
 //! host it blocks in Tokio, turning the reactor (`wait_tokio`); natively without
 //! the host it sleeps on a condition variable until a waker or the earliest
 //! timer (`wait_sleeping`); on wasm32, which must not block, it moves the
-//! clock to the earliest timer (`wait_skipping`, see `clock`).
+//! clock to the earliest timer (`skipping` with `clock::skip_to`).
 use crate::clock::Instant;
 use crate::runtime::Runtime;
 use crate::word::Word;

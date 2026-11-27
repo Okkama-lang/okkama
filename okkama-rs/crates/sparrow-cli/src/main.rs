@@ -33,6 +33,8 @@ run          Verify and execute bytecode; ARGS are the program's arguments.
              stack in Sparrow terms (OKKAMA_TRACE=off: without). `--stats` prints
              counts of runtime events at exit (also SPARROW_CORE_STATS=1),
              with the compile time and machine-code size of each function.
+             SPARROW_CORE_INTERPRET=1 runs on Sparrow's interpreter instead of
+             compiling functions to machine code (also for `test`).
              DEBUGGING the compiled code (SYMBOLS: comma-separated, or *):
                SPARROW_CORE_DUMP=SYMBOLS         CLIF and machine code to stderr
                SPARROW_CORE_UNOPTIMIZED=SYMBOLS  compile without Cranelift's passes

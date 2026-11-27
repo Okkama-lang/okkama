@@ -13,7 +13,19 @@
 //! - no preemption inside synchronous code; under execution budgets
 //!   (`budget`) function entries and loop back-edges poll a fuel cell, so
 //!   step, memory and output budgets and the host's interrupt flag stop
-//!   runaway code (async cancellation still cannot stop a synchronous loop).
+//!   runaway code (async cancellation still cannot stop a synchronous loop);
+//! - two engines execute function bodies on the same runtime, behind one seam
+//!   (`Runtime::invoke`, `Runtime::resume`): the Cranelift JIT (feature `jit`)
+//!   and an interpreter (`interp`, #1120), chosen when a runtime is made
+//!   (`SPARROW_CORE_INTERPRET=1`, or `Runtime::use_engine`); the interpreter's
+//!   roots are its registers, not stack maps;
+//! - feature `host` adds the operating system: files, sockets, processes,
+//!   process workers, Tokio's reactor and aws-lc. Without `jit` and `host`
+//!   the crate builds for wasm32-unknown-unknown (#1124): the interpreter is
+//!   the only engine, only the pure providers remain, the scheduler skips a
+//!   virtual clock to the earliest timer instead of waiting, and workers are
+//!   emulated in the same instance (#1127); the playground (`sparrow-wasm`,
+//!   #1125) runs it so.
 //!
 //! The `sparrow` binary (`sparrow-cli`) and `okkama run` drive this crate.
 
@@ -206,7 +218,8 @@ pub enum Batching {
 /// The most bytes [`Batching::Window`] joins into one piece.
 pub const BATCH_BYTES: usize = 64 << 10;
 
-/// The receiver of an embedded run's writes, one [`Piece`] per write, on the VM thread.
+/// The receiver of an embedded run's writes, on the VM thread: one [`Piece`] per write, or per batch of writes under
+/// [`Batching::Window`].
 pub type PieceSink = Box<dyn FnMut(Piece) + Send>;
 
 impl std::fmt::Debug for Embedding {

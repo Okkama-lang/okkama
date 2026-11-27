@@ -78,8 +78,9 @@ impl Default for Workspace {
 }
 
 impl Workspace {
-    /// The bundled std under `std_root`: `std` in the playground; the native parity test names the
-    /// repository's std directory, so the files are named as the CLI names them.
+    /// The bundled std under `std_root`: [`STD_ROOT`] in the playground ([`Workspace::default`]); the native
+    /// parity test (`okkama-cli/tests/playground_run.rs`) passes std's path as the CLI in the case's directory
+    /// names it, so file names in diagnostics and stacks are the CLI's.
     pub fn new(std_root: &str) -> Self {
         let std_root = normalize(std_root);
         let std = bundle::FILES.iter().map(|(path, text)| (join(&std_root, path), *text)).collect();
@@ -253,8 +254,9 @@ impl Workspace {
     }
 
     /// The text `okkama run` prints for a failed run of the last build (#1125): request `{report, uncaught?,
-    /// cwd?}`, where `report` and `uncaught` are what sparrow-wasm's `run` answered and `cwd` is the directory file
-    /// names are shown relative to; `{ok, text}`: the report with the failure's place and stack in the sources.
+    /// cwd?}`, where `report` and `uncaught` are what sparrow-wasm's `run` answered (streamed or not, #1134) and
+    /// `cwd` is the directory file names are shown relative to; `{ok, text}`: the report with the failure's place
+    /// and stack in the sources (`commands::trace::render_trace`).
     pub fn failure_text(&self, request: &Value) -> Value {
         let report = text_field(request, "report").unwrap_or_default();
         let uncaught = match request.get("uncaught") {

@@ -1035,8 +1035,9 @@ fn ordered_sites(trace: &[(u32, u32)], omitted: u64, tail: usize) -> Vec<crate::
 }
 
 /// Record that the pending failure reaches `function` at `pc` in the
-/// activation with frame pointer `frame`; each activation is recorded once, at
-/// the pc where the failure first reached it (a rethrow does not add it again).
+/// activation `frame` names (the JIT's frame pointer, the interpreter's
+/// register base); each activation is recorded once, at the pc where the
+/// failure first reached it (a rethrow does not add it again).
 #[inline(never)]
 pub extern "C" fn rt_trace(ctx: *mut Ctx, function: u64, pc: u64, frame: u64) {
     let (ctx, runtime) = unsafe { runtime(ctx) };

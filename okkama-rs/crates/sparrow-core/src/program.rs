@@ -325,7 +325,8 @@ pub(crate) fn role_slot_is_async(program: &Program, role: okkama_sparrow::RoleRe
 
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
-/// The JIT's; the interpreter's async part (#1122) will read it too.
+/// The JIT's: the interpreter (#1122) handles each of these in its own dispatch
+/// and executes the instruction again on resumption, without asking this.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) fn suspends(instruction: &Instruction) -> bool {
     matches!(

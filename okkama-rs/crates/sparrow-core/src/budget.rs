@@ -81,7 +81,9 @@ pub struct Profile {
 /// randomness come from the page; standard input is a buffer given before the run; workers are emulated in the same
 /// instance (#1127, owner's decision 8); what reaches files, sockets, processes, the environment or the terminal is
 /// refused, and so are the pure providers left out of the wasm build: zstd and Brotli (`compression` codecs 3 and 4
-/// fail inside the codec instead), collation (the system's ICU), X.509 and RSA/ECC/AEAD (aws-lc). Its budgets are
+/// fail inside the codec instead), collation (the system's ICU) and X.509 (aws-lc). RSA and ECDSA verification, also
+/// aws-lc's, are not refused by the profile: they fail inside the operation as unsupported, while the rest of the
+/// cryptography (digests, AEAD, ECDSA signing) runs on RustCrypto (#1124). Its budgets are
 /// the starting ones of §5.5. The owner's decisions 4, 6, 7, 9 and 10 of §9 are taken as recommended there and
 /// await the owner; 8 (workers) and 3 (time fast-forward) are decided.
 pub const PLAYGROUND: Profile = Profile {

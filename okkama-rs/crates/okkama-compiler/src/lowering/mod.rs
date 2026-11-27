@@ -535,8 +535,8 @@ fn lower_analyzed(
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
     dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
-    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); their emptied
-    // regions go with the next pass.
+    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); the pass removes
+    // the regions it empties itself (#1093).
     if passes.on("statics") {
         let _span = okkama_devtrace::span!("lower", "pass statics");
         ir::statics::make_static(&mut module, census.take());

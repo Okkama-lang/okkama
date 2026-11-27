@@ -36,7 +36,7 @@ pub struct Uncaught {
     pub error_type: Option<String>,
     pub message: String,
     /// Function and instruction numbers; they are shared with OIR, so a
-    /// compiler can map them to source (`okkama_compiler::commands::render_trace`).
+    /// compiler can map them to source (`okkama_compiler::commands::trace::render_trace`).
     pub trace: Vec<Site>,
     /// Activations of the root's unwind past the recorded limit (#1009),
     /// missing between the innermost and the outermost ones of `trace` (#1034).
