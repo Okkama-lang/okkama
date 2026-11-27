@@ -143,8 +143,8 @@ fn batched(slice: u64, batching: crate::Batching) -> Vec<String> {
     let program = okkama_sparrow::assemble(&format!("{source}{COUNT}")).unwrap();
     let run = run_embedded(okkama_sparrow::encode(&program).unwrap(), embedding).unwrap();
     assert_eq!((run.result, run.output), (Ok(0), Vec::new()));
-    let texts = pieces.lock().unwrap().iter().map(|piece| String::from_utf8(piece.bytes.clone()).unwrap()).collect();
-    texts
+    let pieces = pieces.lock().unwrap();
+    pieces.iter().map(|piece| String::from_utf8(piece.bytes.clone()).unwrap()).collect()
 }
 
 /// #1136: a window joins a stream's writes until a budget poll hands them over: with polls every 100 steps the
@@ -168,8 +168,8 @@ fn streamed_pieces(main: &str) -> Vec<(Stream, usize)> {
         ..Embedding::default()
     };
     assert_eq!(run_embedded(spb(main), embedding).unwrap().result, Ok(0));
-    let shape = pieces.lock().unwrap().iter().map(|piece| (piece.stream, piece.bytes.len())).collect();
-    shape
+    let pieces = pieces.lock().unwrap();
+    pieces.iter().map(|piece| (piece.stream, piece.bytes.len())).collect()
 }
 
 /// #1136: a window joins only one stream's writes, and at most `BATCH_BYTES` of them.
