@@ -1960,6 +1960,14 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
 /// Decimal text of an integer word (inline integers without a BigInt). An integer of more than
 /// 4 GiB of digits fails the program, before the heap's length check would panic (#1033).
 fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
+    // #1111: a tagged-small int is written into a stack buffer and copied once into the heap, without the Rust
+    // String `to_string` allocates and frees for every number.
+    if let crate::heap::Integer::Small(n) = runtime.heap.integer(word) {
+        let mut buffer = [0u8; 20];
+        let digits = small_decimal_text(n, &mut buffer);
+        // SAFETY: ASCII digits and an optional minus sign.
+        return Ok(runtime.text_new(unsafe { std::str::from_utf8_unchecked(digits) }));
+    }
     let text = match runtime.heap.integer(word) {
         crate::heap::Integer::Small(n) => n.to_string(),
         crate::heap::Integer::Big(n) => n.to_string(),
@@ -1968,6 +1976,55 @@ fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
         return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
     }
     Ok(runtime.text_new(&text))
+}
+
+/// The decimal text of `n` in the tail of `buffer` (#1111): two digits per step from a table, then the sign; what
+/// `i64::to_string` gives, for every i64 (a tagged-small int has at most 19 digits and a sign).
+pub(crate) fn small_decimal_text(n: i64, buffer: &mut [u8; 20]) -> &[u8] {
+    const PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819202122232425262728293031323334353637383940414243444546474849\
+5051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+    let mut value = n.unsigned_abs();
+    let mut at = buffer.len();
+    while value >= 100 {
+        let pair = (value % 100) as usize * 2;
+        value /= 100;
+        at -= 2;
+        buffer[at..at + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    }
+    if value >= 10 {
+        let pair = value as usize * 2;
+        at -= 2;
+        buffer[at..at + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    } else {
+        at -= 1;
+        buffer[at] = b'0' + value as u8;
+    }
+    if n < 0 {
+        at -= 1;
+        buffer[at] = b'-';
+    }
+    &buffer[at..]
+}
+
+#[cfg(test)]
+mod small_decimal_text_tests {
+    /// #1111: the stack formatter gives what `to_string` gives, on edges and a spread of values.
+    #[test]
+    fn small_decimal_text_equals_to_string() {
+        let mut values = vec![0, 1, -1, 9, 10, -10, 99, 100, -100, 101, 999, 1000, i64::MAX, i64::MIN, i64::MAX - 1, i64::MIN + 1];
+        values.extend([crate::word::SMALL_MAX, crate::word::SMALL_MIN]);
+        let mut x: i64 = 0x2545_f491_4f6c_dd1d;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            values.push(x >> (x as u64 % 60));
+        }
+        for n in values {
+            let mut buffer = [0u8; 20];
+            assert_eq!(super::small_decimal_text(n, &mut buffer), n.to_string().as_bytes(), "{n}");
+        }
+    }
 }
 
 /// `cvt` of an int to a string.
