@@ -112,7 +112,6 @@ helpers! {
     native = runtime::rt_native as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     float = runtime::rt_float as (ctx, op: u64, left: u64, right: u64) -> u64; [Allocates, Fails];
     exec = crate::ops::rt_exec as (ctx, function: u64, pc: u64, uses: *const Word, registers: *const okkama_sparrow::Register, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
-    closure = runtime::rt_closure as (ctx, function: u64, captures: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     call_closure = runtime::rt_call_closure as (ctx, closure: Word, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     map_find = runtime::rt_map_find as (ctx, function: u64, pc: u64, map: Word, key: Word) -> u64; [];
     intrinsic = crate::intrinsics::rt_intrinsic as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
@@ -2481,13 +2480,14 @@ impl Emitter<'_, '_> {
                 self.jump(missing);
                 return Ok(true);
             }
-            I::Closure { dst, function, captures }
-                if self.heap.closure_words(function.0) >= captures.len()
-                    && captures.len() <= self.loaded.program.functions[function.0 as usize].params.len() =>
-            {
+            I::Closure { dst, function, captures } => {
                 // #1167: the layout `Heap::closure_new` writes, allocated inline: the header, the captures, then
-                // unbound words up to the function's layout. rt_closure's checks are static facts here.
+                // unbound words up to the function's layout. rt_closure's checks are static facts of verified code,
+                // so the JIT has no helper call for a closure (the interpreter keeps rt_closure).
                 let words = self.heap.closure_words(function.0);
+                if words < captures.len() || captures.len() > self.loaded.program.functions[function.0 as usize].params.len() {
+                    return Err(Error(format!("{}:{pc}: closure capture count exceeds parameter count", source.symbol)));
+                }
                 let pointer = self.allocate(words + 1);
                 let header = self.iconst(heap::header(heap::CLOSURE, Repr::Raw, function.0) as i64);
                 self.builder.ins().store(MEMORY, header, pointer, 0);
@@ -2502,14 +2502,6 @@ impl Emitter<'_, '_> {
                     }
                 }
                 self.set(&dst.0, pointer);
-            }
-            I::Closure { dst, function, captures } => {
-                let address = self.spill(captures);
-                let index = self.iconst(i64::from(function.0));
-                let count = self.iconst(captures.len() as i64);
-                let closure = self.helper(|h| h.closure, &[ctx, index, address, count]).expect("result");
-                self.check(pc);
-                self.set(&dst.0, closure);
             }
             I::CallFn { dst, callee, args } => {
                 let result = if self.plain || self.count_helpers || self.closure_reference {

@@ -384,7 +384,7 @@ impl Runtime {
         // would leave its shared instance where a fresh one is required.
         let held = held_objects(new);
         let shareable = shareable_objects(new, &held, &layouts);
-        let published = shareable_objects(old, &self.held, &self.heap.layouts());
+        let published = shareable_objects(old, &self.held, self.heap.layouts());
         prefix("object sharing", shareable.starts_with(&published))?;
         let (functions, objects) = (new.functions.len(), new.objects.len());
         if functions > capacities.functions {
