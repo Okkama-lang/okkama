@@ -1300,8 +1300,8 @@ every declaration is open (#1005, owner decision).
 
 ## Vendored num-bigint (#1148, 2026-11-28; owner: vendor + upstream PR)
 
-- num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with one change (aarch64 ADCS addition); it is not a
-  workspace member. Drop it and the patch entry when upstream ships an equivalent.
+- num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with a Rust-native change (`|` carries, 4-digit add
+  step), not inline assembly, so it can go upstream as is; not a workspace member. Drop it when upstream has it.
 
 ## Sweep by page (#1114, 2026-11-28; owner: measured prototype; design Fable)
 
