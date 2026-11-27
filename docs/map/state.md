@@ -7,6 +7,14 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1109 binary diet, closed by the owner with its first parts ("not a top priority"; the rest in #1170,
+  POSTPONED): strip + symbols archive in tools/package.sh (771a3f470), core tables re-exported from runtime-core
+  (8b52c1f24; −16 KB only: LTO had merged the copies), opt-level "s" for rustyline, pulldown-cmark, toml,
+  libsqlite3-sys, brotli, brotli-decompressor, regex-syntax (−0.80 MB on Linux; SQLite alone −0.75 MB). The micro
+  ABBA at N=4M does not fit std cells of milliseconds per iteration (the B campaigns failed): probe with --n 4000
+  --runs 3 instead. Toolchains micro-tc/f1109{a,s,u}-s*. Slim build: no, it is #1154.
+- [x] #1169 flaky listen-backlog test (feature/1169 0ba0eef5e): macOS reads SO_LISTENQLIMIT instead of counting
+  peers (8 of 8 completed under parallel load); an Opus agent's first fix (1 s patience) failed under load.
 - [x] #1108 shared failure exits + map registration (feature/1108; worktree okkama-work/p-1108, target t-1108;
   toolchains micro-tc/f1108m-s1 maps only, f1108x-s{1,2} both): `Emit::exits` keyed (function, inline fail block,
   handler index), `failure_exit`, `record_and_handle`; async bodies with explicit roots keep an exit per call.

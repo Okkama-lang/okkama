@@ -26,6 +26,24 @@ unimplemented = "warn"
 lto = "fat"
 codegen-units = 1
 
+# #1109: crates whose code size matters more than their speed: the REPL's line editor, Markdown and TOML of the CLI,
+# Brotli, regex-syntax (the parser of path patterns) and SQLite's bundled C (−0.75 MB of the −0.8 MB; its std cells
+# moved −1% to +10% in a short probe, and server databases come before SQLite's speed). Linux okkama 25.49 → 24.69 MB.
+[profile.release.package.rustyline]
+opt-level = "s"
+[profile.release.package.pulldown-cmark]
+opt-level = "s"
+[profile.release.package.toml]
+opt-level = "s"
+[profile.release.package.libsqlite3-sys]
+opt-level = "s"
+[profile.release.package.brotli]
+opt-level = "s"
+[profile.release.package.brotli-decompressor]
+opt-level = "s"
+[profile.release.package.regex-syntax]
+opt-level = "s"
+
 # Gate tests (`cargo test --profile gate`): release optimizations without
 # fat LTO, with parallel code generation to avoid full LTO for each test binary.
 # The gate build step produces fat-LTO release binaries for std and t/ tests.

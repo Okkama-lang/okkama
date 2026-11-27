@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Smaller binaries (#1109).** Release packages ship stripped binaries (re-signed on macOS) with a separate
+  `-symbols.tar.gz` for crash addresses; the REPL's line editor, Markdown, TOML, Brotli, regex-syntax and SQLite's
+  bundled C are optimised for size; the core reads the runtime tables from one module instead of a second copy.
+  macOS okkama 22.8 → 20.1 MB stripped; Linux okkama 25.49 → 24.69 MB before stripping (stripping saves about
+  3.9 MB more). One crypto provider and fancy-regex out of the binary wait in #1170.
 - **Smaller machine code: one failure exit per function (#1108).** The calls of a function share one cold exit per
   inlined activation and handler, entered with the instruction's position from a two-instruction trampoline,
   instead of a copy of the trace-and-exit code after every call; failure reports are unchanged. Stack maps of a
