@@ -1,0 +1,27 @@
+module workers/bound v1.0.0;
+
+// A bound action value is a spawn target: its receiver is rebuilt from its fields in the worker.
+
+import "io/stdout" take Stdout;
+
+object Scaler {
+    has factor is int;
+    has names is @string;
+
+    Scaler(factor is int, names is @string) {
+        self.factor = factor;
+        self.names = names;
+    }
+
+    scale(value is int) is string {
+        names[0] + "=" + (value * factor).string();
+    }
+}
+
+async main() is int {
+    let action is (int) is string = Scaler(factor: 3, names: ["x", "y"]).scale;
+    let first = spawn action(5);
+    let second = spawn action(7);
+    Stdout().writeln((await first) + " " + (await second));
+    0;
+}

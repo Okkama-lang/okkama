@@ -1,0 +1,9 @@
+module app v1.0.0;
+
+import "counter" take Counter;
+
+test "fake" {
+    test.is(Counter.fake().count(), 3);
+}
+
+main() is int { 0; }

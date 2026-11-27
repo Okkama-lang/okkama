@@ -18,6 +18,9 @@ pub(crate) struct Input {
 pub(crate) struct Stdin {
     bytes: VecDeque<u8>,
     eof: bool,
+    /// An embedding's standard input (#1125: the playground's field, given before the run), read instead of the
+    /// process's; after it, end of input.
+    buffer: Option<std::io::Cursor<Vec<u8>>>,
 }
 fn fail(n: Native, code: &str, message: &str) -> ProviderError {
     ProviderError::Native(NativeFailure {
@@ -84,6 +87,11 @@ impl Stdin {
     }
 }
 impl Heap {
+    /// Standard input is `bytes`, then end of input (#1125).
+    pub(crate) fn set_stdin(&mut self, bytes: Vec<u8>) {
+        self.stdin = Some(Box::new(Stdin { buffer: Some(std::io::Cursor::new(bytes)), ..Stdin::default() }));
+    }
+
     pub(crate) fn native_input(&mut self, n: Native, a: &[Slot]) -> Result<Outcome, Error> {
         match self.input_execute(n, a) {
             Ok(v) => Ok(Outcome::Value(v)),
@@ -115,7 +123,13 @@ impl Heap {
                 0
             };
             let state = self.stdin.get_or_insert_with(Default::default);
-            let bytes = state.read(n, &mut std::io::stdin().lock(), count)?;
+            let mut buffer = state.buffer.take();
+            let bytes = match buffer.as_mut() {
+                Some(buffer) => state.read(n, buffer, count),
+                None => state.read(n, &mut std::io::stdin().lock(), count),
+            };
+            state.buffer = buffer;
+            let bytes = bytes?;
             return Ok(self.native_byte_array(bytes)?);
         }
         if n == InputStateInputStateCreate {

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace"]
+members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace", "crates/okkama-wasm", "crates/sparrow-wasm"]
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-only"

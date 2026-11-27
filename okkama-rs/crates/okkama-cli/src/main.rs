@@ -34,21 +34,19 @@ mod lsp;
 mod man;
 mod ocs;
 mod repl;
-mod trace;
 mod workers;
 
 use blade::manifest;
-use okkama_compiler::codegen::{self, Backend, Options as CodegenOptions};
-use okkama_compiler::diagnostics::{Diagnostic, render_all};
-use okkama_compiler::ide::{Inspection, Severity};
+use okkama_compiler::codegen;
+use okkama_compiler::commands;
+use okkama_compiler::diagnostics::render_all;
+use okkama_compiler::ide::Inspection;
 use okkama_compiler::ir;
 use okkama_compiler::lowering::{
-    self, LinkError, LoadedModule, LoweringError, ModuleLoader, RootFile,
+    self, LinkError, LoadedModule, ModuleLoader, RootFile,
 };
 use okkama_compiler::source::{SourceFile, Span};
-use okkama_compiler::syntax::print::{
-    Format, PrintOptions, print_program, tokens_json, tokens_text,
-};
+use okkama_compiler::syntax::print::{Format, PrintOptions};
 use okkama_compiler::syntax::{self, ParseMode, ParseOptions, ast, lexer, prune};
 
 const EXIT_DIAGNOSTICS: u8 = 1;
@@ -409,13 +407,9 @@ fn watchdog(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 
 /// main's result on the core: the exit status, or the failure report (exit 1).
 fn core_outcome(result: Result<i64, sparrow_core::Error>) -> Outcome {
-    match result {
-        Ok(value) => match u8::try_from(value) {
-            Ok(code) => Outcome { stdout: String::new(), stderr: String::new(), code },
-            Err(_) => Outcome::failure(format!("main() must return an int in 0..255, got {value}\n"), 1),
-        },
-        Err(error) => Outcome::failure(core::report(error), 1),
-    }
+    // One rule with the playground (#1125).
+    let (code, stderr) = okkama_runtime_core::failure::main_outcome(result.as_ref().copied().map_err(|error| error.0.as_str()));
+    Outcome { stdout: String::new(), stderr, code }
 }
 
 /// Диагностика отказа программы (код 1) и его место со стеком вызовов;
@@ -706,28 +700,12 @@ fn parse_raw(sources: &[SourceFile]) -> Result<Vec<ast::Program>, Outcome> {
 }
 
 fn parse_raw_in(sources: &[SourceFile], mode: ParseMode) -> Result<Vec<ast::Program>, Outcome> {
-    let options = ParseOptions { mode, ..ParseOptions::default() };
-    sources
-        .iter()
-        .map(|source| {
-            syntax::parse(source, &options)
-                .map_err(|diagnostics| diagnostics_outcome(&diagnostics, source))
-        })
-        .collect()
+    commands::parse(sources, mode).map_err(report_failure)
 }
 
 /// Профиль программы: производственный (тесты и fakes убраны) или тестовый.
 fn prune_all(programs: Vec<ast::Program>, tests: bool) -> Vec<ast::Program> {
-    programs
-        .into_iter()
-        .map(|program| {
-            if tests {
-                syntax::prune::desugar_test_items(program)
-            } else {
-                syntax::prune::strip_test_items(program)
-            }
-        })
-        .collect()
+    commands::profile(programs, tests)
 }
 
 fn loader(tests: bool) -> FileLoader {
@@ -736,15 +714,12 @@ fn loader(tests: bool) -> FileLoader {
 }
 
 fn root_files<'a>(sources: &'a [SourceFile], programs: &'a [ast::Program]) -> Vec<RootFile<'a>> {
-    sources
-        .iter()
-        .zip(programs)
-        .map(|(source, program)| RootFile { program, source })
-        .collect()
+    commands::roots(sources, programs)
 }
 
-fn diagnostics_outcome(diagnostics: &[Diagnostic], source: &SourceFile) -> Outcome {
-    Outcome::failure(render_all(diagnostics, source), EXIT_DIAGNOSTICS)
+/// A command's failing report: its text on standard error.
+fn report_failure(report: commands::Report) -> Outcome {
+    Outcome::failure(report.text, EXIT_DIAGNOSTICS)
 }
 
 fn tokens_command(args: &[String]) -> Outcome {
@@ -768,16 +743,10 @@ fn tokens_command(args: &[String]) -> Outcome {
         Ok(source) => source,
         Err(outcome) => return outcome,
     };
-    let lexed = lexer::lex(source.text());
-    if lexed.has_errors() {
-        return diagnostics_outcome(&lexed.diagnostics, &source);
+    match commands::tokens(&source, json) {
+        Ok(out) => Outcome::success(out),
+        Err(report) => report_failure(report),
     }
-    let out = if json {
-        tokens_json(&lexed.tokens, &source)
-    } else {
-        tokens_text(&lexed.tokens, &source)
-    };
-    Outcome::success(out)
 }
 
 fn ast_command(args: &[String]) -> Outcome {
@@ -806,21 +775,11 @@ fn ast_command(args: &[String]) -> Outcome {
         Ok(source) => source,
         Err(outcome) => return outcome,
     };
-    let options = ParseOptions {
-        mode,
-        ..ParseOptions::default()
-    };
-    let program = match syntax::parse(&source, &options) {
-        Ok(program) => program,
-        Err(diagnostics) => return diagnostics_outcome(&diagnostics, &source),
-    };
-    let program = if line.prune_tests {
-        prune::strip_test_items(program)
-    } else {
-        program
-    };
     let options = PrintOptions { spans: line.spans };
-    Outcome::success(print_program(&program, &source, format, options))
+    match commands::ast(&source, mode, line.prune_tests, format, options) {
+        Ok(out) => Outcome::success(out),
+        Err(report) => report_failure(report),
+    }
 }
 
 fn ir_command(args: &[String]) -> Outcome {
@@ -834,21 +793,14 @@ fn ir_command(args: &[String]) -> Outcome {
                     return Outcome::usage(&format!("{arg} needs a value"));
                 };
                 let spec = if arg == "--passes" {
-                    // A name that selects nothing is refused, as for `--after` (#1044).
-                    let unknown = lowering::unknown_passes(value);
-                    if !unknown.is_empty() {
-                        return Outcome::usage(&format!("unknown pass `{}` (passes: all, none, {})",
-                            unknown.join("`, `"), lowering::PASSES.join(", ")));
-                    }
-                    value.clone()
+                    commands::passes_named(value)
                 } else {
-                    let Some(at) = lowering::PASSES.iter().position(|pass| pass == value) else {
-                        return Outcome::usage(&format!("unknown pass `{value}` (passes: {})", lowering::PASSES.join(", ")));
-                    };
-
-                    lowering::PASSES[..=at].join(",")
+                    commands::passes_after(value)
                 };
-                lowering::select_passes(&spec);
+                match spec {
+                    Ok(spec) => lowering::select_passes(&spec),
+                    Err(message) => return Outcome::usage(&message),
+                }
             }
             _ => rest.push(arg.clone()),
         }
@@ -989,31 +941,9 @@ fn lint_command(args: &[String]) -> Outcome {
     }
 }
 
-/// Диагностики файла для `okkama lint` и `okkama lsp`. Файл с тестами или
-/// fakes проверяется в тестовом режиме, чтобы их тела тоже анализировались;
-/// тестовый режим разрешает `Role.fake()`, поэтому ошибки, которые находит
-/// только производственный режим, добавляются вторым проходом без повторов
-/// (#649). Предупреждения и находки линтера — только тестового прохода: без
-/// тестов импорт или `hidden`, нужные лишь тестам, выглядели бы лишними.
+/// Диагностики файла для `okkama lint` и `okkama lsp` (`commands::inspect`).
 fn inspect_file(source: &SourceFile, loader_for: impl Fn(bool) -> FileLoader) -> Inspection {
-    // One full parse decides the mode and is the first pass's parse (#472):
-    // without test items it is also the production parse.
-    let full = okkama_compiler::syntax::parse(source, &okkama_compiler::syntax::ParseOptions::default()).ok();
-    let test_mode = full.as_ref().is_none_or(okkama_compiler::ide::program_has_tests);
-    let mut loader = loader_for(test_mode);
-    let mut inspection = lowering::inspect_parsed(source, full, &mut loader, test_mode);
-    if !test_mode || !inspection.parsed {
-        return inspection;
-    }
-    let mut loader = loader_for(false);
-    let production = lowering::inspect(source, &mut loader, false);
-    for found in production.diagnostics {
-        let error = found.severity == Severity::Error;
-        if error && !inspection.diagnostics.contains(&found) {
-            inspection.diagnostics.push(found);
-        }
-    }
-    inspection
+    commands::inspect(source, &mut |test_mode| loader_for(test_mode))
 }
 
 fn fmt_command(args: &[String]) -> Outcome {
@@ -1080,17 +1010,10 @@ fn fmt_command(args: &[String]) -> Outcome {
                 continue;
             }
         };
-        let formatted = match okkama_compiler::syntax::format::format(&source) {
+        let formatted = match commands::format(&source) {
             Ok(formatted) => formatted,
-            Err(okkama_compiler::syntax::format::FormatError::Syntax(diagnostics)) => {
-                stderr.push_str(&render_all(&diagnostics, &source));
-                failed = true;
-                continue;
-            }
-            Err(okkama_compiler::syntax::format::FormatError::Internal(message)) => {
-                stderr.push_str(&format!(
-                    "{name}: formatter error (file left unchanged): {message}\n"
-                ));
+            Err(report) => {
+                stderr.push_str(&report.text);
                 failed = true;
                 continue;
             }
@@ -1141,97 +1064,15 @@ fn check_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
-    if let Err(outcome) = doctest::gate(&sources) { return outcome; }
-    let parsed = match parse_raw(&sources) {
-        Ok(parsed) => parsed,
-        Err(outcome) => return outcome,
-    };
-    // Code that exists only in test mode — tests and fakes — is checked too
-    // (#649): a second pass in test mode. Test mode is not a superset of
-    // production (`Role.fake()` is allowed there), so production keeps its
-    // own pass; diagnostics found by both are reported once.
-    let test_profile = !line.tests && parsed.iter().any(okkama_compiler::ide::program_has_tests);
-    let tested = test_profile.then(|| parsed.clone());
-    let mut report = check_profile(&sources, prune_all(parsed, line.tests), line.tests);
-    if let Some(parsed) = tested {
-        report.merge(check_profile(&sources, prune_all(parsed, true), true));
+    let report = commands::check(&sources, line.tests, &mut loader);
+    if report.failed() {
+        return report_failure(report);
     }
-    report.outcome()
-}
-
-/// Итог `okkama check` в одном профиле: строки ошибок и предупреждений.
-#[derive(Default)]
-struct CheckReport {
-    errors: Vec<String>,
-    warnings: Vec<String>,
-}
-
-impl CheckReport {
-    /// Добавляет диагностики другого профиля, которых ещё нет.
-    fn merge(&mut self, other: CheckReport) {
-        for error in other.errors {
-            if !self.errors.contains(&error) {
-                self.errors.push(error);
-            }
-        }
-        for warning in other.warnings {
-            if !self.warnings.contains(&warning) {
-                self.warnings.push(warning);
-            }
-        }
+    Outcome {
+        stdout: String::new(),
+        stderr: report.text,
+        code: 0,
     }
-
-    /// Ошибки — код 1 и только они; без ошибок — предупреждения и код 0.
-    fn outcome(self) -> Outcome {
-        if self.errors.is_empty() {
-            return Outcome {
-                stdout: String::new(),
-                stderr: self.warnings.concat(),
-                code: 0,
-            };
-        }
-        Outcome::failure(self.errors.concat(), EXIT_DIAGNOSTICS)
-    }
-}
-
-/// Анализ программы в одном профиле (производственном или тестовом).
-fn check_profile(sources: &[SourceFile], programs: Vec<ast::Program>, tests: bool) -> CheckReport {
-    let source = &sources[0];
-    let mut loader = loader(tests);
-    let roots = root_files(sources, &programs);
-    let checked = if tests {
-        lowering::check_linked_tests(&roots, &mut loader)
-    } else {
-        lowering::check_linked_files(&roots, &mut loader)
-    };
-    let mut report = CheckReport::default();
-    match checked {
-        Ok(warnings) => {
-            for found in &warnings {
-                report.warnings.push(render_warnings(source, std::slice::from_ref(found)));
-            }
-        }
-        Err(Err(text)) => report.errors.push(text),
-        Err(Ok(errors)) => {
-            for found in errors {
-                let file = found.source.as_ref().unwrap_or(source);
-                let location = file.location(found.error.span.start);
-                let kind = if found.error.unsupported {
-                    "analysis limitation"
-                } else {
-                    "semantic error"
-                };
-                report.errors.push(format!(
-                    "{}:{}:{}: {kind}: {}\n",
-                    file.name(),
-                    location.line,
-                    location.column,
-                    found.error.message
-                ));
-            }
-        }
-    }
-    report
 }
 
 /// The same source-to-IR pipeline serves both inspection and artifact builds.
@@ -1239,37 +1080,9 @@ fn check_profile(sources: &[SourceFile], programs: Vec<ast::Program>, tests: boo
 /// IR describes the production program: test and fake declarations are removed
 /// by the explicit pruning pass before lowering, never skipped by it.
 fn lower_source(sources: &[SourceFile], tests: bool) -> Result<(ir::Module, String), Outcome> {
-    doctest::gate(sources)?;
-    let programs = parse_all(sources, tests)?;
-    let source = &sources[0];
-    let mut loader = loader(tests);
-    let roots = root_files(sources, &programs);
-    let lowered = if tests {
-        lowering::lower_linked_tests(&roots, &mut loader)
-    } else {
-        lowering::lower_linked_files(&roots, &mut loader)
-    };
-    lowered
-        .map(|(module, warnings)| (module, render_warnings(source, &warnings)))
-        .map_err(|error| match error {
-            LinkError::Lowering {
-                source: imported,
-                error,
-            } => {
-                let kind = match error {
-                    LoweringError::Unsupported { .. } => "lowering error",
-                    LoweringError::Invalid { .. } => "semantic error",
-                    LoweringError::Internal { .. } => "internal compiler error",
-                };
-                ir_error_outcome(
-                    imported.as_ref().unwrap_or(source),
-                    error.span(),
-                    kind,
-                    error.message(),
-                )
-            }
-            LinkError::Load(text) => Outcome::failure(text, EXIT_DIAGNOSTICS),
-        })
+    commands::lower(sources, tests, &mut loader)
+        .map(|(module, warnings)| (module, warnings.text))
+        .map_err(report_failure)
 }
 
 /// Импорты из файлов, как в Perl: сначала рядом с импортирующим файлом и в
@@ -1285,6 +1098,10 @@ struct FileLoader {
     /// Несохранённые тексты открытых в редакторе файлов (`okkama lsp`), по
     /// каноническому пути.
     overlay: std::collections::HashMap<PathBuf, std::rc::Rc<str>>,
+    /// The directory diagnostics name found files relative to (#1119): the current one, canonical. `None`
+    /// names them by their canonical path: the language server, whose names are files' URIs, and
+    /// `okkama man`, whose export records them.
+    base: Option<String>,
 }
 
 impl FileLoader {
@@ -1302,6 +1119,7 @@ impl FileLoader {
             stdlib: stdlib_dir(),
             test_mode: false,
             overlay: std::collections::HashMap::new(),
+            base: current_dir(),
         }
     }
 
@@ -1360,6 +1178,17 @@ impl ModuleLoader for FileLoader {
         let stdlib = self.stdlib.clone();
         self.load_from(&format!("{path}.ok"), &[stdlib])
     }
+
+    /// A file is the file system's: `std/json.ok` typed from the repository and the found std file are one.
+    fn identity(&mut self, file: &str) -> String {
+        std::fs::canonicalize(file).map_or_else(|_| file.to_string(), |path| path.display().to_string())
+    }
+}
+
+/// The current directory, canonical, as found files are named (#1119).
+fn current_dir() -> Option<String> {
+    let dir = std::env::current_dir().ok()?;
+    Some(std::fs::canonicalize(&dir).unwrap_or(dir).display().to_string())
 }
 
 /// Путь импортирующего файла; у виртуальных (`<stdin>`, `<repl>`) — в текущем каталоге.
@@ -1435,35 +1264,14 @@ impl FileLoader {
     /// Первый файл `file` из каталогов `dirs`, разобранный как модуль.
     fn load_from(&mut self, file: &str, dirs: &[PathBuf]) -> Result<Option<LoadedModule>, String> {
         if let Some(canonical) = locate(file, dirs) {
-            let name = canonical.display().to_string();
+            let id = canonical.display().to_string();
+            let name = self.base.as_deref().map_or_else(|| id.clone(), |base| okkama_compiler::source::display_name(&id, base));
             let text = match self.overlay.get(&canonical) {
                 Some(text) => text.to_string(),
                 None => std::fs::read_to_string(&canonical)
                     .map_err(|error| format!("okkama: cannot read import `{name}`: {error}\n"))?,
             };
-            let source = SourceFile::new(name.clone(), text)
-                .map_err(|error| format!("okkama: {error}\n"))?;
-            // Production — без тестов (§14); тестовый режим — с fakes импортов.
-            let options = ParseOptions {
-                mode: if self.test_mode {
-                    ParseMode::Full
-                } else {
-                    ParseMode::Production
-                },
-                ..ParseOptions::default()
-            };
-            let program = syntax::parse(&source, &options)
-                .map_err(|diagnostics| render_all(&diagnostics, &source))?;
-            let program = if self.test_mode {
-                prune::desugar_test_items(program)
-            } else {
-                prune::strip_test_items(program)
-            };
-            return Ok(Some(LoadedModule {
-                id: name,
-                program,
-                source,
-            }));
+            return commands::module(id, name, text, self.test_mode).map(Some);
         }
         Ok(None)
     }
@@ -1477,7 +1285,6 @@ fn build_command(args: &[String]) -> Outcome {
     if line.help {
         return Outcome::success(BUILD_HELP.to_string());
     }
-    let backend = Backend::Sparrow;
     let output = match line.output.as_deref() {
         Some("") => return Outcome::usage("output file path must not be empty"),
         Some(output) => output,
@@ -1490,21 +1297,9 @@ fn build_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
-    let (module, warnings) = match lower_source(&sources, line.tests) {
-        Ok(lowered) => lowered,
-        Err(outcome) => return outcome,
-    };
-    let options = CodegenOptions {
-        artifact_name: artifact_name.to_string(),
-    };
-    let artifact = match codegen::generate(&module, backend, &options) {
-        Ok(artifact) => artifact,
-        Err(error) => {
-            return Outcome::failure(
-                format!("okkama: codegen error: {error}\n"),
-                EXIT_DIAGNOSTICS,
-            );
-        }
+    let (artifact, warnings) = match commands::build(&sources, line.tests, &mut loader, artifact_name) {
+        Ok(built) => built,
+        Err(report) => return report_failure(report),
     };
     // Open the destinations only after generation succeeds. Backend errors must
     // leave a previous artifact intact and must not create an empty bytecode file.
@@ -1531,7 +1326,7 @@ fn build_command(args: &[String]) -> Outcome {
     }
     Outcome {
         stdout: String::new(),
-        stderr: warnings,
+        stderr: warnings.text,
         code: 0,
     }
 }
@@ -1841,7 +1636,7 @@ fn run_command(args: &[String]) -> Outcome {
     }
     // Номера функций и инструкций ядра совпадают с OIR: место — по исходнику.
     let (outcome, trace) = core_described(sparrow_core::run_described(bytes, arguments, false, command, limits));
-    with_trace(outcome, trace, |sites| trace::render_trace(&module, sites))
+    with_trace(outcome, trace, |sites| okkama_compiler::commands::trace::render_trace(&module, sites, current_dir().as_deref()))
 }
 
 /// The system import directories, in search order: `OKKAMA_IMPORT_DIRS`
@@ -1958,36 +1753,6 @@ fn pinned_icu() -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|dir| dir.is_dir())
-}
-
-/// Предупреждения анализа (`file:line:col: warning: …`).
-fn render_warnings(source: &SourceFile, warnings: &[lowering::CheckError]) -> String {
-    let mut text = String::new();
-    for found in warnings {
-        let file = found.source.as_ref().unwrap_or(source);
-        let location = file.location(found.error.span.start);
-        text.push_str(&format!(
-            "{}:{}:{}: warning: {}\n",
-            file.name(),
-            location.line,
-            location.column,
-            found.error.message
-        ));
-    }
-    text
-}
-
-fn ir_error_outcome(source: &SourceFile, span: Span, kind: &str, message: &str) -> Outcome {
-    let location = source.location(span.start);
-    Outcome::failure(
-        format!(
-            "{}:{}:{}: {kind}: {message}\n",
-            source.name(),
-            location.line,
-            location.column,
-        ),
-        EXIT_DIAGNOSTICS,
-    )
 }
 
 #[cfg(test)]

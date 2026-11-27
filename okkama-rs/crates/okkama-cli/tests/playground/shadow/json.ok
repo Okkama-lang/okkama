@@ -1,0 +1,8 @@
+module shadow/json v1.0.0;
+
+import "json" take JsonKind;
+
+object Local {
+    Local();
+    number() is int { 0; }
+}

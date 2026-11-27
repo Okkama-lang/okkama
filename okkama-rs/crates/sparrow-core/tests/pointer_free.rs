@@ -9,7 +9,6 @@ fn encode(source: &str) -> Vec<u8> {
 fn pointer_free_sync_public_loader() {
     assert_eq!(sparrow_core::run(encode(include_str!("pointer_free.spa"))).unwrap(), 42);
 }
-
 #[test]
 fn pointer_free_async_public_loader() {
     let source = include_str!("all_futures.spa").replace("bool true", "bool false");

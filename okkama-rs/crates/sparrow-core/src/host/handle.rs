@@ -5,19 +5,26 @@ use okkama_runtime_abi::{Native, NativeFailure};
 #[derive(Debug)]
 pub(crate) enum Handle {
     Input(crate::host::native_input::Input),
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Process(crate::host::native_process::ProcessHandle),
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Rooted(Box<crate::host::native_root::Rooted>),
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host"))]
     Watch(std::rc::Rc<crate::host::native_watch::Watch>),
+    #[cfg(feature = "host")]
     TemporaryDirectory(Box<crate::host::native_temporary::TemporaryDirectory>),
+    #[cfg(feature = "host")]
     FileState(std::rc::Rc<std::cell::RefCell<crate::host::native_file_state::FileState>>),
+    #[cfg(feature = "host")]
     FileLock(std::rc::Rc<crate::host::native_file_state::FileLock>),
+    #[cfg(feature = "host")]
     File(crate::host::native_file::RawFile),
+    #[cfg(feature = "host")]
     Network(crate::host::native_network::NetworkHandle),
     Db(crate::host::native_db::DbHandle),
+    #[cfg(feature = "host")]
     Sqlite(std::rc::Rc<std::cell::RefCell<crate::host::native_sqlite::Connection>>),
+    #[cfg(feature = "host")]
     SqliteReply(std::rc::Rc<crate::host::native_sqlite::Reply>),
     Json(crate::host::native_json::JsonHandle),
     Regex(crate::host::native_regex::RegexHandle),
@@ -33,6 +40,7 @@ pub(crate) enum Handle {
     /// A `native object` of a bridged origin provider (`native_origin`).
     Origin(okkama_runtime_core::Value),
     PgPage(Box<crate::host::native_postgres::PgPage>),
+    #[cfg(feature = "host")]
     Tls(std::rc::Rc<crate::host::native_tls::Tls>),
 }
 impl Handle {
@@ -42,14 +50,7 @@ impl Handle {
         match self {
             Self::Json(json) => json.roots(roots),
             Self::Input(_)
-            | Self::TemporaryDirectory(_)
-            | Self::FileState(_)
-            | Self::FileLock(_)
-            | Self::File(_)
-            | Self::Network(_)
             | Self::Db(_)
-            | Self::Sqlite(_)
-            | Self::SqliteReply(_)
             | Self::Regex(_)
             | Self::Secret(_)
             | Self::Buffer(_)
@@ -57,9 +58,17 @@ impl Handle {
             | Self::Digest(_)
             | Self::TestState { .. }
             | Self::Origin(_)
-            | Self::PgPage(_)
+            | Self::PgPage(_) => {}
+            #[cfg(feature = "host")]
+            Self::TemporaryDirectory(_)
+            | Self::FileState(_)
+            | Self::FileLock(_)
+            | Self::File(_)
+            | Self::Network(_)
+            | Self::Sqlite(_)
+            | Self::SqliteReply(_)
             | Self::Tls(_) => {}
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "host"))]
             Self::Process(_) | Self::Rooted(_) | Self::Watch(_) => {}
         }
     }

@@ -119,6 +119,7 @@ impl Invocation {
 pub struct Runtime {
     pub heap: Heap,
     pub loaded: Loaded,
+    #[cfg(feature = "jit")]
     pub jit: crate::jit::Jit,
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
@@ -145,7 +146,7 @@ pub struct Runtime {
     pub spawned: Vec<Word>,
     pub running: Vec<Word>,
     /// Sleeping drivers by deadline; roots.
-    pub timers: Vec<(std::time::Instant, Word)>,
+    pub timers: Vec<(crate::clock::Instant, Word)>,
     /// Async primitive state by owning object (see `primitives`).
     pub states: crate::word::FastMap<Word, crate::primitives::State>,
     /// Native provider of each function, resolved once.
@@ -161,15 +162,22 @@ pub struct Runtime {
     pub stats: Option<Box<std::collections::HashMap<String, u64>>>,
     /// When this runtime was made: `--stats` reports the run's wall time, so
     /// machine code ≈ run − compile − collection (#55).
-    created: std::time::Instant,
+    created: crate::clock::Instant,
     /// The command (`sparrow`, FILE.spb) process workers run; empty
     /// when the embedder configured none.
     pub worker_command: Vec<std::ffi::OsString>,
+    /// Workers run in this instance, each on a runtime of its own (#1127: `worker_emulated`): always without the
+    /// host; with it, for an embedding that asks (the playground's native run), instead of processes.
+    pub emulated_workers: bool,
     /// Budgets of the next run (`budget::Limits`); set before it starts.
     pub limits: crate::budget::Limits,
     /// A native panicked: the runtime's state is unknown and it runs nothing more.
     pub poisoned: bool,
     pub(crate) budget: Budget,
+    /// #1120: the interpreter, when `SPARROW_CORE_INTERPRET` chose it at construction; then no function is ever
+    /// compiled, every code address stays 0, and the collector finds the roots of active frames in its register
+    /// stack instead of machine frames. One engine per runtime: stacks are never mixed.
+    pub(crate) interp: Option<Box<crate::interp::Interp>>,
 }
 
 /// Budget state of the current run.
@@ -186,9 +194,15 @@ pub(crate) struct Budget {
     /// The memory budget caps the machine stack: overflowing it is running
     /// out of memory (#241).
     pub stack_capped: bool,
+    /// #1129: whether code polls the fuel cell (entries and back-edges), fixed at this runtime's first run. The
+    /// JIT compiles it into each function and the interpreter reads it at each step, so both take it from here.
+    pub polled: Option<bool>,
 }
 
-/// Frame pointer of the calling function's own frame record.
+/// Frame pointer of the calling function's own frame record. The JIT's root walk
+/// follows frame records from a helper; without the JIT nothing reads it (0, #1124:
+/// the `asm!` exists for aarch64 and x86_64 only).
+#[cfg(feature = "jit")]
 macro_rules! frame_pointer {
     () => {{
         let frame: u64;
@@ -203,6 +217,12 @@ macro_rules! frame_pointer {
         };
         frame
     }};
+}
+#[cfg(not(feature = "jit"))]
+macro_rules! frame_pointer {
+    () => {
+        0u64
+    };
 }
 
 impl Runtime {
@@ -228,9 +248,36 @@ impl Runtime {
         let mut invocations = vec![empty; capacities.functions];
         invocations[..functions].copy_from_slice(&runtime.invocations);
         runtime.invocations = invocations.into_boxed_slice();
-        runtime.jit.object_capacity = capacities.objects;
+        #[cfg(feature = "jit")]
+        {
+            runtime.jit.object_capacity = capacities.objects;
+        }
         runtime.capacities = Some(capacities);
         Ok(runtime)
+    }
+
+    /// #1121: run on `engine` from now on, whatever `SPARROW_CORE_INTERPRET` said; before anything ran (a runtime
+    /// never mixes the two engines' frames).
+    pub fn use_engine(&mut self, engine: crate::Engine) {
+        debug_assert!(self.invocations.iter().all(|entry| entry.code == 0), "an engine is chosen before code runs");
+        self.interp = match engine {
+            #[cfg(feature = "jit")]
+            crate::Engine::Jit => None,
+            crate::Engine::Interpreter => {
+                // #1122: its frames trace every register; nothing has been allocated with the old layouts' frames.
+                self.loaded.without_pointer_free();
+                self.heap.relayout(self.loaded.layouts());
+                Some(Box::new(crate::interp::Interp::new(self.loaded.program.functions.len())))
+            }
+        };
+    }
+
+    /// A new closure of `closure`'s function over the same captures (`worker.bind`).
+    pub(crate) fn closure_copy(&mut self, closure: Word) -> Word {
+        let function = heap::payload(self.heap.header_of(closure));
+        let words = self.heap.layouts().closures[function as usize].len();
+        let captures: Vec<Word> = (0..words).map(|i| self.heap.field(closure, i)).collect();
+        self.heap.closure_new(function, &captures)
     }
 
     /// The root Future of an async entry leaves the GC roots once its run is over.
@@ -304,6 +351,11 @@ impl Runtime {
         // ---- prepare: nothing live changes ----
         program.verify().map_err(|error| Error(error.to_string()))?;
         let mut loaded = Loaded::new(program);
+        // #1122: the interpreter's runtime loaded without the pointer-free proofs, and so does its extension, or
+        // its function metadata and frame layouts would differ from the published ones in every function.
+        if self.interp.is_some() {
+            loaded.without_pointer_free();
+        }
         loaded.check_every_field();
         crate::contracts::check(&loaded)?;
         let (old, new) = (&self.loaded.program, &loaded.program);
@@ -358,7 +410,13 @@ impl Runtime {
         self.intrinsics.extend(intrinsics);
         self.held = held_objects(&loaded.program);
         self.globals.resize(globals, None);
+        #[cfg(feature = "jit")]
         self.jit.extend_dispatch(&loaded.program, objects_before);
+        #[cfg(not(feature = "jit"))]
+        let _ = objects_before;
+        if let Some(interp) = &mut self.interp {
+            interp.extend(functions);
+        }
         if let Some(host) = &mut self.host {
             host.extend(&loaded.program);
         }
@@ -367,7 +425,12 @@ impl Runtime {
     }
 
 
-    fn assemble(loaded: Loaded) -> Result<Self, Error> {
+    fn assemble(mut loaded: Loaded) -> Result<Self, Error> {
+        // #1124: a build without the JIT has only the interpreter.
+        let interpret = !cfg!(feature = "jit") || crate::env_switch::enabled("SPARROW_CORE_INTERPRET");
+        if interpret {
+            loaded.without_pointer_free();
+        }
         let mut heap = Heap::new(loaded.layouts());
         heap.set_stress(crate::env_switch::enabled("SPARROW_CORE_GC_STRESS"));
         if crate::env_switch::enabled("SPARROW_CORE_STATS") {
@@ -406,12 +469,15 @@ impl Runtime {
             host: Some(Box::new(crate::host::Heap::new(&loaded.program))),
             io: crate::io::Io::default(),
             stats: crate::env_switch::enabled("SPARROW_CORE_STATS").then(Box::default),
-            created: std::time::Instant::now(),
+            created: crate::clock::Instant::now(),
             worker_command: Vec::new(),
+            emulated_workers: !cfg!(feature = "host"),
             limits: crate::budget::Limits::default(),
             poisoned: false,
             budget: Budget::default(),
+            interp: interpret.then(|| Box::new(crate::interp::Interp::new(loaded.program.functions.len()))),
             heap,
+            #[cfg(feature = "jit")]
             jit: crate::jit::Jit::new()?,
             invocations,
             capacities: None,
@@ -434,9 +500,11 @@ impl Runtime {
             return;
         }
         self.count(|_| "gc collection".into());
-        let started = self.heap.allocations.is_some().then(std::time::Instant::now);
+        let started = self.heap.allocations.is_some().then(crate::clock::Instant::now);
         self.prune_spawned();
+        #[cfg(feature = "jit")]
         let jit = &self.jit;
+        let interp = self.interp.as_deref();
         let constants = &self.constants;
         let roots = &self.roots;
         // The scheduler's roots are visited where they live, without a
@@ -458,9 +526,20 @@ impl Runtime {
                     state.trace(visit);
                 }
             }
-            // SAFETY: frame records above a helper called from machine code
-            // lead through JIT frames to the Rust entry.
-            unsafe { jit.frame_roots(frame, ctx.entry_frame, visit) };
+            match interp {
+                // #1120: the interpreter's active frames are its register stack; `frame` is a Rust frame.
+                Some(interp) => interp.roots(visit),
+                // SAFETY: frame records above a helper called from machine code
+                // lead through JIT frames to the Rust entry.
+                #[cfg(feature = "jit")]
+                None => unsafe { jit.frame_roots(frame, ctx.entry_frame, visit) },
+                // #1124: without the JIT every runtime interprets (`assemble`).
+                #[cfg(not(feature = "jit"))]
+                None => {
+                    let _ = (frame, ctx.entry_frame);
+                    unreachable!("a runtime without the JIT always has its interpreter")
+                }
+            }
             for &(word, repr) in constants.iter().chain(roots).chain(extra) {
                 visit(word, repr);
             }
@@ -517,7 +596,10 @@ impl Runtime {
             ("owned Rust bytes live after the last collection, estimate".to_string(), heap.external_live_bytes as u64),
             ("collections triggered by owned Rust memory".to_string(), heap.external_collections as u64),
         ];
+        #[cfg(feature = "jit")]
         let helpers = self.jit.helper_calls();
+        #[cfg(not(feature = "jit"))]
+        let helpers: Vec<(String, u64)> = Vec::new();
         // Runtime allocations by kind (objects by type) and collection time.
         let program = &self.loaded.program;
         let allocations: Vec<(String, u64)> = self
@@ -627,7 +709,7 @@ pub extern "C" fn rt_allocate(ctx: *mut Ctx, words: u64) -> Word {
             Some(_) => crate::heap::PAGE_BYTES,
             None => words as usize * 8,
         };
-        if used.saturating_add(bytes as isize) > limit as isize {
+        if used.saturating_add(bytes as i64) > limit as i64 {
             return runtime.exhaust(ctx, Exhausted::Memory);
         }
     }
@@ -640,6 +722,8 @@ pub extern "C" fn rt_allocate(ctx: *mut Ctx, words: u64) -> Word {
 #[inline(never)]
 pub extern "C" fn rt_poll(ctx: *mut Ctx) {
     let (ctx, runtime) = unsafe { runtime(ctx) };
+    // #1136: an embedding that batches output hands it over here, so none waits while the program computes.
+    okkama_runtime_core::stdout::tick();
     if let Some(what) = runtime.over_budget() {
         runtime.exhaust(ctx, what);
         return;
@@ -663,19 +747,20 @@ impl Runtime {
     }
 
     /// What the memory budget measures now (#269): the process allocator's
-    /// bytes beyond the start of the run, or this runtime's heap.
-    pub(crate) fn memory_used(&self) -> Option<isize> {
+    /// bytes beyond the start of the run, or this runtime's heap. In `i64` on
+    /// every target (#1124: `isize` is 32 bits on wasm32).
+    pub(crate) fn memory_used(&self) -> Option<i64> {
         self.limits.memory?;
         match self.limits.memory_scope {
             crate::budget::MemoryScope::Process => self.budget.meter.as_ref().map(crate::budget::Meter::used),
-            crate::budget::MemoryScope::Runtime => Some(self.heap.held_bytes() as isize),
+            crate::budget::MemoryScope::Runtime => Some(self.heap.held_bytes() as i64),
         }
     }
 
     /// Would `bytes` more cross the memory budget?
     pub(crate) fn would_exceed(&self, bytes: u64) -> bool {
         match (self.limits.memory, self.memory_used()) {
-            (Some(limit), Some(used)) => used.saturating_add(bytes.min(isize::MAX as u64) as isize) > limit as isize,
+            (Some(limit), Some(used)) => used.saturating_add(bytes.min(i64::MAX as u64) as i64) > limit as i64,
             _ => false,
         }
     }
@@ -689,7 +774,7 @@ impl Runtime {
             return Some(Exhausted::Interrupted);
         }
         match (self.limits.memory, self.memory_used()) {
-            (Some(limit), Some(used)) if used > limit as isize => Some(Exhausted::Memory),
+            (Some(limit), Some(used)) if used > limit as i64 => Some(Exhausted::Memory),
             _ => None,
         }
     }
@@ -697,19 +782,27 @@ impl Runtime {
     /// Charge the slice just used and size the next; None when the step
     /// budget is spent.
     fn refill(&mut self) -> Option<i64> {
+        let slice = self.limits.slice();
         let Some(left) = &mut self.budget.steps_left else {
-            return Some(crate::budget::SLICE as i64);
+            return Some(slice as i64);
         };
         *left = left.saturating_sub(self.budget.slice);
         if *left == 0 {
             return None;
         }
-        self.budget.slice = (*left).min(crate::budget::SLICE);
+        self.budget.slice = (*left).min(slice);
         Some(self.budget.slice as i64)
     }
 
     /// Start the budgets of a run: the first slice of steps.
     fn start_budget(&mut self) -> Result<i64, Error> {
+        // #1129: a run whose budgets would poll where earlier runs compiled code that does not (or the other way)
+        // is refused: the code would keep the first runs' choice, and the engines must agree on it.
+        let polled = self.limits.polled();
+        match self.budget.polled {
+            Some(fixed) if fixed != polled => return Err(Error(polling_fixed(fixed))),
+            _ => self.budget.polled = Some(polled),
+        }
         if let Some(limit) = self.limits.memory {
             // A budget of the runtime reads its heap and needs no probe.
             let meter = match self.limits.memory_scope {
@@ -723,14 +816,21 @@ impl Runtime {
             };
             self.heap.watch = Some(crate::budget::Watch::new(meter, limit, &self.budget.fuel));
         }
+        let slice = self.limits.slice();
         Ok(match self.limits.steps {
-            None => crate::budget::SLICE as i64,
+            None => slice as i64,
             Some(steps) => {
                 self.budget.steps_left = Some(steps);
-                self.budget.slice = steps.min(crate::budget::SLICE);
+                self.budget.slice = steps.min(slice);
                 self.budget.slice as i64
             }
         })
+    }
+
+    /// #1129: do this runtime's code and its interpreter poll the fuel cell? Fixed at the first run; before it,
+    /// what the budgets say now.
+    pub(crate) fn polled(&self) -> bool {
+        self.budget.polled.unwrap_or_else(|| self.limits.polled())
     }
 
     /// The report of an exhausted run.
@@ -741,7 +841,19 @@ impl Runtime {
     }
 }
 
+/// #1129: the refusal of a run whose step, memory or interrupt budgets differ, in being set at all, from the first
+/// run of the runtime.
+#[cold]
+fn polling_fixed(fixed: bool) -> String {
+    let (first, now) = if fixed { ("with", "without") } else { ("without", "with") };
+    format!(
+        "this runtime first ran {first} a step, memory or interrupt budget and now runs {now} one: \
+         its code keeps polling as it was compiled; set the budgets before the first run"
+    )
+}
+
 /// Compile a function on its first call; returns its code address.
+#[cfg(feature = "jit")]
 #[inline(never)]
 pub extern "C" fn rt_compile(ctx: *mut Ctx, function: u64) -> u64 {
     let (ctx, runtime) = unsafe { runtime(ctx) };
@@ -1060,12 +1172,17 @@ impl Runtime {
             self.drop_root(root);
             result
         } else {
-            let code = rt_compile(&mut ctx, entry as u64);
-            if ctx.status != OK {
-                return Err(Error(self.fatal.clone().unwrap_or_default()));
+            if let Some(interp) = &mut self.interp {
+                // #1120: the register stack is bounded as the machine stack is.
+                interp.limit(stack);
             }
-            // SAFETY: compiled functions take the context and their parameters.
-            unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
+            match self.invoke(&mut ctx, entry, arguments) {
+                Ok(result) => result,
+                Err(error) => {
+                    fatal(&mut ctx, self, error.0);
+                    return Err(Error(self.fatal.clone().unwrap_or_default()));
+                }
+            }
         };
         match ctx.status {
             OK => Ok(result),
@@ -1081,6 +1198,80 @@ impl Runtime {
 }
 
 pub(crate) use frame_pointer;
+
+// ---- the engine seam (#1120) ----
+//
+// Rust enters Okkama code in six places: a synchronous entry, a closure called by its helper, an async body
+// started or resumed, a function an intrinsic calls, a destroy, and `Error.text` of a failure report. All of them
+// go through these two methods, and the collector's one root walk (`safepoint`) asks the same engine for the
+// roots of its frames. The JIT's published code is read first, as before; only a function without code takes the
+// cold branch, where the interpreter (every function has no code there) or the JIT's compiler runs.
+
+impl Runtime {
+    /// Run synchronous `function` over `words` (its parameters) on this runtime's engine; its result word, with
+    /// a failure or a stop in `ctx.status`. `Err` only when the JIT could not compile the function: each caller
+    /// reports that as it did before the seam.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn invoke(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        let code = match self.invocations[function].code {
+            0 => return self.invoke_cold(ctx, function, words),
+            code => code,
+        };
+        // SAFETY: compiled functions take the context and their parameters.
+        Ok(unsafe { crate::jit::invoke(code, ctx, words) })
+    }
+
+    /// Start or resume the async body of `frame` (a RUNNING frame of `function`): true while it is pending.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn resume(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        let code = match self.invocations[function].code {
+            0 => return self.resume_cold(ctx, function, frame),
+            code => code,
+        };
+        // SAFETY: async bodies take their frame.
+        Ok(unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0)
+    }
+
+    /// A function without code: the interpreter runs it, or the JIT compiles it first.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn invoke_cold(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        if self.interp.is_some() {
+            return Ok(crate::interp::invoke(ctx, function, words));
+        }
+        let code = crate::jit::compile(self, function)?;
+        // SAFETY: compiled functions take the context and their parameters.
+        Ok(unsafe { crate::jit::invoke(code, ctx, words) })
+    }
+
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn resume_cold(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        if self.interp.is_some() {
+            return Ok(crate::interp::resume(ctx, function, frame));
+        }
+        let code = crate::jit::compile(self, function)?;
+        // SAFETY: async bodies take their frame.
+        Ok(unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0)
+    }
+
+    /// Without the JIT (#1124) the interpreter runs every function: no code is ever published.
+    #[cfg(not(feature = "jit"))]
+    #[inline]
+    pub(crate) fn invoke(&mut self, ctx: *mut Ctx, function: usize, words: &[Word]) -> Result<Word, Error> {
+        Ok(crate::interp::invoke(ctx, function, words))
+    }
+
+    #[cfg(not(feature = "jit"))]
+    #[inline]
+    pub(crate) fn resume(&mut self, ctx: *mut Ctx, function: usize, frame: Word) -> Result<bool, Error> {
+        Ok(crate::interp::resume(ctx, function, frame))
+    }
+}
 
 /// Representation of an argument or result kind for root reporting.
 pub fn repr_of(kind: Option<Kind>) -> Repr {
@@ -1169,15 +1360,10 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
         // Calling an async action makes its cold Future.
         return runtime.future_new(function, &words[..params]);
     }
-    let code = match entry.code {
-        0 => match crate::jit::compile(runtime, function) {
-            Ok(code) => code,
-            Err(error) => return fatal(ctx_ref, runtime, error.0),
-        },
-        code => code,
-    };
-    // SAFETY: compiled functions take the context and `params` words.
-    unsafe { crate::jit::invoke(code, ctx, &words[..params]) }
+    match runtime.invoke(ctx, function, &words[..params]) {
+        Ok(result) => result,
+        Err(error) => fatal(ctx_ref, runtime, error.0),
+    }
 }
 
 /// Look a key up: 1 and the value in `scratch` when present, else 0.
@@ -1311,6 +1497,7 @@ mod embedding_tests {
         }
     }
 
+    #[cfg(feature = "jit")]
     #[test]
     fn closure_bridge_invocation_publication_is_stable() {
         let mut runtime = bridge_runtime();
@@ -1330,6 +1517,7 @@ mod embedding_tests {
         }
     }
 
+    #[cfg(feature = "jit")]
     #[test]
     fn closure_bridge_compilation_failure_does_not_publish_code() {
         let mut runtime = bridge_runtime();

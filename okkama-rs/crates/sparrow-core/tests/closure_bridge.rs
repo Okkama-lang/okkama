@@ -254,7 +254,6 @@ entry f1
 "#;
     assert_eq!(run(source).unwrap(), 10);
 }
-
 #[test]
 fn closure_bridge_async_captures_survive_suspension_and_cancellation() {
     let source = include_str!("closure_bridge_async.spa");

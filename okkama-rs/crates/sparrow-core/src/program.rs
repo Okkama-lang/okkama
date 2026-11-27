@@ -3,7 +3,7 @@
 //! with the runtime (`runtime.rs`).
 use crate::heap::Layouts;
 use crate::word::Repr;
-use okkama_sparrow::{Program, Type, TypeRef};
+use okkama_sparrow::{Instruction, Program, Type, TypeRef};
 
 /// Machine kind of a register: how the JIT holds it and how the collector sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +44,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionInfo {
     pub kinds: Vec<Kind>,
     /// Proven pointer-free for every definition of this SPB register (#535).
@@ -61,7 +61,8 @@ pub struct FunctionInfo {
     pub held_at: Option<u64>,
 }
 
-#[derive(Debug)]
+/// Clone: an emulated worker (#1127) runs the parent's program on a runtime of its own, without loading it again.
+#[derive(Debug, Clone)]
 pub struct Loaded {
     pub program: Program,
     pub functions: Vec<FunctionInfo>,
@@ -71,6 +72,8 @@ pub struct Loaded {
     workers: Vec<(Option<TypeRef>, usize)>,
     /// Native process launches can leave descendants outside VM ownership.
     /// Keep spawn's per-item process-group teardown for such programs.
+    // A fact of the program that only the host's worker pools read (#1124).
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     pub(crate) worker_reuse_safe: bool,
     /// Per descriptor, the fields a stub of `undef` may reach (#1076, `Program::stub_fields`): the JIT
     /// checks every read of such a field and only those.
@@ -154,7 +157,7 @@ impl Loaded {
             .map(|f| {
                 let kinds: Vec<Kind> = f.registers.iter().map(|t| Kind::of(&program, *t)).collect();
                 // This work happens at load time, outside jit::compile's timer.
-                let started = profile.then(std::time::Instant::now);
+                let started = profile.then(crate::clock::Instant::now);
                 let pointer_free = if !pointer_free {
                     vec![false; kinds.len()]
                 } else if int_ranges {
@@ -200,6 +203,14 @@ impl Loaded {
     /// program never does.
     pub(crate) fn check_every_field(&mut self) {
         self.every_field_checked = true;
+    }
+
+    /// #1122: no register is proven pointer-free, so a suspended frame traces every register of a traced kind. The
+    /// interpreter runs so: an oracle must not depend on the analyses it checks (design #1079 §2.4).
+    pub(crate) fn without_pointer_free(&mut self) {
+        for function in &mut self.functions {
+            function.pointer_free.iter_mut().for_each(|free| *free = false);
+        }
     }
 
     /// The worker Future function for results of type `result`.
@@ -286,6 +297,148 @@ impl Loaded {
                 .collect(),
         }
     }
+}
+
+// ---- how the executors run each instruction (#1120: shared by the JIT and the interpreter) ----
+
+/// The implementation of role `role`'s slot `slot` per descriptor (`u64::MAX`: none), `length` entries long.
+pub(crate) fn dispatch_table(program: &okkama_sparrow::Program, role: u32, slot: u32, length: usize) -> Box<[u64]> {
+    let mut table = vec![u64::MAX; length];
+    for (entry, object) in table.iter_mut().zip(&program.objects) {
+        if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
+            *entry = u64::from(witness.slots[slot as usize].0);
+        }
+    }
+    table.into_boxed_slice()
+}
+
+/// Does a `call.role` of `role`'s slot `slot` make a cold Future? It does when any witness of the slot is async:
+/// one static answer for the call site, whatever the receiver (the JIT's emitter and the interpreter, #1120).
+pub(crate) fn role_slot_is_async(program: &Program, role: okkama_sparrow::RoleRef, slot: u32) -> bool {
+    program
+        .objects
+        .iter()
+        .flat_map(|o| &o.does)
+        .filter(|w| w.role == role)
+        .any(|w| program.functions[w.slots[slot as usize].0 as usize].is_async)
+}
+
+/// An instruction that may suspend its async frame and is re-entered on
+/// resumption: `await` and the region closes that await async destroys (#154).
+/// The JIT's; the interpreter's async part (#1122) will read it too.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) fn suspends(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Await { .. }
+            | Instruction::AwaitTake { .. }
+            | Instruction::RegionSettle { .. }
+            | Instruction::RegionSettleUnwind { .. }
+            | Instruction::ResourceSettle { .. }
+            | Instruction::ResourceSettleUnwind { .. }
+    )
+}
+
+/// Instructions executed by `failures::rt_failure_op` (the JIT's emitter and the interpreter, #1120).
+pub(crate) fn failure_or_region(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::RegionEnter { .. }
+            | Instruction::RegionAdopt { .. }
+            | Instruction::RegionTrack { .. }
+            | Instruction::RegionTransfer { .. }
+            | Instruction::RegionLeave { .. }
+            | Instruction::RegionUnwind { .. }
+            | Instruction::ResourceUnwind { .. }
+            | Instruction::FailSecondary { .. }
+            | Instruction::FailCaused { .. }
+            | Instruction::Raise { .. }
+            | Instruction::Panic { .. }
+            | Instruction::RoleNarrow { .. }
+    )
+}
+
+/// Instructions executed by `ops::rt_exec`: every one under `SPARROW_CORE_PLAIN` and in the interpreter (#1120),
+/// the rest of them past an inline fast path of the JIT.
+pub(crate) fn generic(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::ByteAnd { .. }
+            | Instruction::ByteOr { .. }
+            | Instruction::ByteXor { .. }
+            | Instruction::ByteShl { .. }
+            | Instruction::ByteShr { .. }
+            | Instruction::ByteUshr { .. }
+            | Instruction::ByteNot { .. }
+            | Instruction::Bits { .. }
+            | Instruction::RangeNew { .. }
+            | Instruction::RangePart { .. }
+            | Instruction::StrUtf8 { .. }
+            | Instruction::StrFn { .. }
+            | Instruction::GlobalGet { .. }
+            | Instruction::StrReplaceFirst { .. }
+            | Instruction::IntAnd { .. }
+            | Instruction::IntOr { .. }
+            | Instruction::IntXor { .. }
+            | Instruction::IntShl { .. }
+            | Instruction::IntShr { .. }
+            | Instruction::IntUshr { .. }
+            | Instruction::IntNot { .. }
+            | Instruction::IntNeg { .. }
+            | Instruction::IntAbs { .. }
+            | Instruction::Sign { .. }
+            | Instruction::FloatMod { .. }
+            | Instruction::FloatPow { .. }
+            | Instruction::FloatSqrt { .. }
+            | Instruction::Convert { .. }
+            | Instruction::ByteFrom { .. }
+            | Instruction::RatNew { .. }
+            | Instruction::RatAdd { .. }
+            | Instruction::RatSub { .. }
+            | Instruction::RatMul { .. }
+            | Instruction::RatDiv { .. }
+            | Instruction::RatMod { .. }
+            | Instruction::RatNeg { .. }
+            | Instruction::RatAbs { .. }
+            | Instruction::RatCmp { .. }
+            | Instruction::RatPart { .. }
+            | Instruction::StrCmp { .. }
+            | Instruction::StrLen { .. }
+            | Instruction::StrSlice { .. }
+            | Instruction::StrSplit { .. }
+            | Instruction::StrReplace { .. }
+            | Instruction::StrTrim { .. }
+            | Instruction::StrChomp { .. }
+            | Instruction::EnumCase { .. }
+            | Instruction::EnumCmp { .. }
+            | Instruction::ValCmp { .. }
+            | Instruction::Undef { .. }
+            | Instruction::AnyBox { .. }
+            | Instruction::ArraySlice { .. }
+            | Instruction::ArrayReplace { .. }
+            | Instruction::ArrayRemove { .. }
+            | Instruction::ArrayJoin { .. }
+            | Instruction::ArrayConcat { .. }
+            | Instruction::ArrayDiff { .. }
+            | Instruction::MapMerge { .. }
+            | Instruction::MapDiff { .. }
+            | Instruction::BuilderNew { .. }
+            | Instruction::BuilderPush { .. }
+            | Instruction::BuilderAppend { .. }
+            | Instruction::BuilderRange { .. }
+            | Instruction::BuilderFinish { .. }
+            | Instruction::MapNew { .. }
+            | Instruction::MapLen { .. }
+            | Instruction::MapHas { .. }
+            | Instruction::MapGet { .. }
+            | Instruction::MapKeys { .. }
+            | Instruction::MapValues { .. }
+            | Instruction::MapBuilderNew { .. }
+            | Instruction::MapBuilderPut { .. }
+            | Instruction::MapBuilderFinish { .. }
+            | Instruction::WorkerSpawn { .. }
+            | Instruction::WorkerBind { .. }
+    )
 }
 
 #[cfg(test)]

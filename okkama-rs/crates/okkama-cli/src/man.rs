@@ -131,6 +131,8 @@ pub(crate) fn command(args: &[String]) -> Outcome {
             && std::env::var("TERM").map_or(true, |term| term != "dumb"),
     };
     let mut loader = FileLoader::from_env();
+    // The export records each page's file: names stay whole (#1119).
+    loader.base = None;
     let mut warnings = String::new();
     if query.is_some() && !positional.is_empty() {
         return Outcome::usage("-k QUERY cannot be combined with a module or declaration");
@@ -205,7 +207,7 @@ fn index(loader: &FileLoader, format: Format, style: &Style) -> Result<String, S
     let entries: Vec<IndexEntry> = paths
         .into_iter()
         .map(|path| {
-            let summary = ModuleDoc::load(&loader.stdlib.join(format!("{path}.ok")))
+            let summary = load_doc(&loader.stdlib.join(format!("{path}.ok")))
                 .map(|doc| doc.summary())
                 .unwrap_or_default();
             IndexEntry { path, summary }
@@ -218,6 +220,12 @@ fn index(loader: &FileLoader, format: Format, style: &Style) -> Result<String, S
         Format::Html => publish::index_html(&entries),
         Format::Json => unreachable!("JSON index loads the full model"),
     })
+}
+
+/// The documentation of the std file `path`, read and parsed (tests skipped).
+fn load_doc(path: &Path) -> Result<ModuleDoc, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    ModuleDoc::parse(path.display().to_string(), text)
 }
 
 /// Module paths (`io/stdout`) below `dir`.
@@ -250,7 +258,7 @@ fn search(loader: &FileLoader, query: &str, format: Format, style: &Style) -> Re
     paths.sort();
     let mut entries = Vec::new();
     for path in paths {
-        let doc = ModuleDoc::load(&loader.stdlib.join(format!("{path}.ok")))?;
+        let doc = load_doc(&loader.stdlib.join(format!("{path}.ok")))?;
         entries.extend(doc.search(query));
     }
     Ok(match format {
@@ -377,7 +385,8 @@ fn all_documents(loader: &mut FileLoader, warnings: &mut String) -> Result<Vec<M
         let source = okkama_compiler::SourceFile::new(doc.file.clone(), text).map_err(|_| format!("{}: the file is too large", doc.file))?;
         for warning in &doc.link_warnings {
             let location = source.location(warning.span.start);
-            warnings.push_str(&format!("{}:{}:{}: warning: unresolved documentation link [{}]\n", doc.file, location.line, location.column, warning.name));
+            let file = super::current_dir().map_or_else(|| doc.file.clone(), |base| okkama_compiler::source::display_name(&doc.file, &base));
+            warnings.push_str(&format!("{file}:{}:{}: warning: unresolved documentation link [{}]\n", location.line, location.column, warning.name));
         }
     }
     Ok(docs)

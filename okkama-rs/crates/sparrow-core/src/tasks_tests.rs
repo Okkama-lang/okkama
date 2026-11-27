@@ -118,7 +118,6 @@ function f10 "cancel after await settled" async {
 }
 tests { test "a task cancelled after its await settled keeps the outcome" f10 }
 "#;
-
 #[test]
 fn cancel_after_settle_keeps_outcome_and_waits_for_next_await() {
     assert!(passes(CANCEL_AFTER_SETTLE));
@@ -178,7 +177,6 @@ tests { test "a task cancelled before its await settled raises there" f10 }
     let functions = functions.replace("type t5 future t2\n", "type t5 future t2\ntype t6 future void\n");
     format!("{functions}{rest}")
 }
-
 #[test]
 fn cancel_before_settle_raises_at_the_reentered_await() {
     assert!(passes(&cancel_before_settle()));
@@ -206,7 +204,6 @@ fn nested_cancel_after_settle() -> String {
     let main = main.replace("cancel after await settled", "nested cancel after await settled");
     format!("{head}{worker}function f10 {main}{inner}tests {{{tests}")
 }
-
 #[test]
 fn nested_frame_cancel_after_settle_is_delivered_at_its_next_await() {
     assert!(passes(&nested_cancel_after_settle()));
@@ -260,12 +257,10 @@ fn structured_cancel_after_settle(take: bool) -> String {
     let source = source.replace("    1: await r7, r6\n    2: ret r7\n", "    1: await.take r7, r6\n    2: ret r7\n");
     source.replace("    3: await r8, r3\n", "    3: await.take r8, r3\n")
 }
-
 #[test]
 fn structured_child_settled_before_cancel_is_delivered_at_the_next_await() {
     assert!(passes(&structured_cancel_after_settle(false)));
 }
-
 #[test]
 fn await_take_in_a_nested_frame_delivers_a_later_cancellation_at_the_next_await() {
     let source = structured_cancel_after_settle(true);

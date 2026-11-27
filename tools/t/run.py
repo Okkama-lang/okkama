@@ -9,6 +9,13 @@ Every file under t/ (or the ones given) runs on every configuration:
     sparrow-passes-off Sparrow with OKKAMA_IR_PASSES=none
     sparrow-gc-stress  Sparrow with SPARROW_CORE_GC_STRESS=1 (a collection
                     at every safepoint, freed cells poisoned)
+    sparrow-interp     Sparrow's interpreter (SPARROW_CORE_INTERPRET=1, #1123)
+    sparrow-interp-gc-stress  the interpreter under GC stress (ten times the
+                    timeout: it collects far more often)
+
+A run of an interpreter configuration that okkama-rs/tools/engines/interp-exceptions.txt
+explains (a known divergence of the design, each line with its ticket) is
+reported as skipped with its reason, not compared.
 
 Before the run, tools/t/gen.py writes the generated families to t/gen
 (`--no-generate` keeps what is there). A file prints `1..N`, then `ok K - name` or `not ok K - name` for K = 1..N in
@@ -43,7 +50,24 @@ CONFIGS = {
     "sparrow": ("sparrow", {}, "okkama"),
     "sparrow-passes-off": ("sparrow", {"OKKAMA_IR_PASSES": "none"}, "okkama"),
     "sparrow-gc-stress": ("sparrow", {"SPARROW_CORE_GC_STRESS": "1"}, "okkama"),
+    "sparrow-interp": ("sparrow", {"SPARROW_CORE_INTERPRET": "1"}, "okkama"),
+    "sparrow-interp-gc-stress": ("sparrow", {"SPARROW_CORE_INTERPRET": "1", "SPARROW_CORE_GC_STRESS": "1"}, "okkama"),
 }
+# Timeout multiples: the interpreter under GC stress took 105 s on a file the JIT runs in 31 s (#1123). On the
+# Wave's debug adapter t/gen/persistence/04 takes 121 s locally under it (the JIT under GC stress 57 s, either
+# engine without stress 16-19 s) and ran out of 240 s on CI at 520 of 618 checks; a slow runner adds up to x1.86
+# (#843), so ten times, 600 s, was the first guess; t/gen/persistence/06, the heaviest, still ran out of it on the
+# Wave, so twenty, 1200 s: the whole suite stays in the Wave and the gate, and only a hang waits that long.
+TIMEOUT_SCALE = {"sparrow-interp-gc-stress": 20}
+
+
+def exceptions():
+    """The interpreter's exceptions and their matcher (okkama-rs/tools/engines/differ.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("differ", os.path.join(ROOT, "okkama-rs", "tools", "engines", "differ.py"))
+    differ = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(differ)
+    return differ, differ.load()
 
 PLAN = re.compile(r"^1\.\.(\d+)$")
 CHECK = re.compile(r"^(not )?ok (\d+)(?: - (.*))?$")
@@ -87,23 +111,28 @@ def tap(stdout):
 def run(job, args):
     path, config = job
     engine, extra, binary = CONFIGS[config]
-    command = [getattr(args, binary), "run", "--timeout", str(args.timeout),
+    timeout = args.timeout * TIMEOUT_SCALE.get(config, 1)
+    command = [getattr(args, binary), "run", "--timeout", str(timeout),
                "--max-memory", args.max_memory, path]
     if args.cage:
-        command = [sys.executable, CAGE, "--cpu-seconds", str(args.timeout), "--timeout", str(args.timeout + 30),
+        command = [sys.executable, CAGE, "--cpu-seconds", str(timeout), "--timeout", str(timeout + 30),
                    "--memory-mb", "2048", "--writable", os.path.dirname(path), "--"] + command
     env = dict(os.environ, OKKAMA_IMPORT_DIRS=SUPPORT, OKKAMA_STDLIB_DIR=os.path.join(ROOT, "std"),
                OKKAMA_TRACE="off", **extra)
     try:
         result = subprocess.run(command, cwd=os.path.dirname(path), env=env, capture_output=True, text=True,
-                                timeout=args.timeout + 60)
+                                timeout=timeout + 60)
         stdout, code, stderr = result.stdout, result.returncode, result.stderr
     except subprocess.TimeoutExpired:
         stdout, code, stderr = "", None, "timeout"
+    if "SPARROW_CORE_INTERPRET" in extra:
+        reason = args.differ.excepted(args.exceptions, path, None, (code, stdout + stderr))
+        if reason:
+            return path, config, None, [], 0, reason
     problems, ran = tap(stdout)
     if code != 0:
         problems.append(f"exit {code}: {stderr.strip().splitlines()[-1][:160] if stderr.strip() else ''}")
-    return path, config, stdout, problems, ran
+    return path, config, stdout, problems, ran, None
 
 
 def main():
@@ -128,29 +157,37 @@ def main():
         setattr(args, binary, os.path.abspath(getattr(args, binary)))
         if not os.access(getattr(args, binary), os.X_OK):
             parser.error(f"no okkama binary at {getattr(args, binary)} (build it or pass {option})")
+    args.differ, args.exceptions = exceptions() if any("SPARROW_CORE_INTERPRET" in CONFIGS[config][1] for config in configs) else (None, [])
     if not args.no_generate:
         subprocess.run([sys.executable, os.path.join(HERE, "gen.py")], check=True, stdout=subprocess.DEVNULL)
     tests = files(args.paths)
     started = time.time()
     results = {}
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for path, config, stdout, problems, ran in pool.map(lambda job: run(job, args),
-                                                            [(path, config) for path in tests for config in configs]):
-            results[(path, config)] = (stdout, problems, ran)
+        for path, config, stdout, problems, ran, skipped in pool.map(lambda job: run(job, args),
+                                                                     [(path, config) for path in tests for config in configs]):
+            results[(path, config)] = (stdout, problems, ran, skipped)
 
     width = max((len(os.path.relpath(path, ROOT)) for path in tests), default=0) + 4
-    failed, checks = [], 0
+    failed, checks, skips = [], 0, {}
     for path in tests:
         name = os.path.relpath(path, ROOT)
-        reference = results[(path, configs[0])][0]
-        problems = []
+        # The first configuration that ran the file is the reference of the others.
+        ran_by = [config for config in configs if results[(path, config)][3] is None]
+        reference = results[(path, ran_by[0])][0] if ran_by else None
+        problems, skipped = [], []
         for config in configs:
-            stdout, found, ran = results[(path, config)]
+            stdout, found, ran, reason = results[(path, config)]
+            if reason:
+                skipped.append(config)
+                skips.setdefault(reason, []).append(f"{name} ({config})")
+                continue
             problems += [f"{config}: {problem}" for problem in found]
             if stdout != reference:
-                problems.append(f"{config}: TAP differs from {configs[0]}")
-        checks += results[(path, configs[0])][2]
-        print(f"{name} {'.' * (width - len(name))} {'ok' if not problems else 'FAILED'}")
+                problems.append(f"{config}: TAP differs from {ran_by[0]}")
+        checks += results[(path, ran_by[0])][2] if ran_by else 0
+        verdict = "FAILED" if problems else "ok" if not skipped else f"ok, skipped on {', '.join(skipped)}"
+        print(f"{name} {'.' * (width - len(name))} {verdict}")
         if problems:
             failed.append((name, problems))
             for problem in problems[:12]:
@@ -160,6 +197,12 @@ def main():
                     print(f"  --- {config}\n{results[(path, config)][0]}")
     elapsed = time.time() - started
     print()
+    if skips:
+        print("Skipped by interp-exceptions.txt:")
+        for reason, names in skips.items():
+            print(f"  {len(names):4}  {reason}")
+            print(f"        {', '.join(names[:4])}{', ...' if len(names) > 4 else ''}")
+        print()
     if failed:
         # The first reason of a file, numbers folded, so files that stop at the same rule count together.
         reasons = {}

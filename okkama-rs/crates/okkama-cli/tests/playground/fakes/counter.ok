@@ -1,0 +1,9 @@
+module fakes/counter v1.0.0;
+
+role Counter {
+    count() is int;
+    fake {
+        has value is int = 3;
+        count() is int { value; }
+    }
+}

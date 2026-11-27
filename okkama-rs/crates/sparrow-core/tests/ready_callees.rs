@@ -1,5 +1,6 @@
 //! Bounded, in-process #542 regressions; run this file in normal, old-dispatch
 //! and GC-stress configurations. No workers, external services or deep recursion.
+#![cfg(feature = "jit")]
 use sparrow_core::{jit, program::Loaded, runtime::Runtime};
 
 fn runtime() -> Box<Runtime> {

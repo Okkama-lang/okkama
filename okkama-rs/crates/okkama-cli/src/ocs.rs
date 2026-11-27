@@ -261,20 +261,7 @@ fn handle(request: &Json) -> Reply {
                 .iter()
                 .find(|found| !found.error.unsupported)
                 .unwrap_or(&errors[0]);
-            let file = first.source.as_ref().unwrap_or(source);
-            let location = file.location(first.error.span.start);
-            let kind = if first.error.unsupported {
-                "analysis limitation"
-            } else {
-                "semantic error"
-            };
-            let text = format!(
-                "{}:{}:{}: {kind}: {}\n",
-                file.name(),
-                location.line,
-                location.column,
-                first.error.message
-            );
+            let text = okkama_compiler::commands::Finding::semantic(first, source).text;
             if first.error.unsupported {
                 return Reply::unsupported(&mode, "check", text.trim_end().to_string());
             }
@@ -305,20 +292,7 @@ fn handle(request: &Json) -> Reply {
             source: imported,
             error,
         }) => {
-            let file = imported.as_ref().unwrap_or(source);
-            let location = file.location(error.span().start);
-            let kind = match error {
-                LoweringError::Unsupported { .. } => "lowering error",
-                LoweringError::Invalid { .. } => "semantic error",
-                LoweringError::Internal { .. } => "internal compiler error",
-            };
-            let text = format!(
-                "{}:{}:{}: {kind}: {}\n",
-                file.name(),
-                location.line,
-                location.column,
-                error.message()
-            );
+            let text = okkama_compiler::commands::Finding::lowering(&error, imported.as_ref().unwrap_or(source)).text;
             return match error {
                 // Программа прошла анализ: ограничение lowering — не её ошибка.
                 LoweringError::Unsupported { .. } if mode == "check" => {

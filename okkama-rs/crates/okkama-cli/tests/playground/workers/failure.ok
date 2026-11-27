@@ -1,0 +1,19 @@
+module workers/failure v1.0.0;
+
+// A worker's failure comes back as text: the parent's await fails with it.
+
+import "io/stdout" take Stdout;
+
+object Parser {
+    Parser() {}
+
+    parse(text is string) is int {
+        confirm text.length() > 3;
+        text.length();
+    }
+}
+
+async main() is int {
+    Stdout().writeln("parsing");
+    await spawn Parser().parse(text: "ab");
+}

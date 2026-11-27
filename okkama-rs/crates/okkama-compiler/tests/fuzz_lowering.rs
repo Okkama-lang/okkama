@@ -139,3 +139,25 @@ fn a_native_unlike_the_table_is_a_diagnostic() {
     let unknown = "module app;\nnative nothing_here() is int;\nmain() is int { nothing_here(); }";
     assert!(run(unknown.as_bytes()).is_some_and(|outcome| outcome.is_err()), "an unknown native fails the run");
 }
+
+/// #1123: the `exec` target's differential mode (`OKKAMA_FUZZ_DIFFERENTIAL=1`) runs a program on the JIT and on
+/// the interpreter and requires one observation; the design's divergences pass with their reason.
+#[test]
+fn the_differential_mode_compares_the_engines_and_passes_the_known_divergences() {
+    set_memory_probe(counted_bytes);
+    let same = [
+        include_str!("../../../fuzz/seeds/sum.ok"),
+        "module app;\nenum Oops is Error = (code(n is int));\nobject Thrower {\n    Thrower();\n    \
+         raise(n is int) is int { if n > 2 { throw Oops.code(n); } n; }\n}\nmain() is int {\n    \
+         let thrower = Thrower();\n    let a = try { thrower.raise(5); } catch Oops.code(n) { n + 1; };\n    a + thrower.raise(9);\n}\n",
+        "module app;\nmain() is int { let xs = [1, 2, 3]; xs[5]; }\n",
+    ];
+    for text in same {
+        assert_eq!(linking::differ(text.as_bytes()), Some(linking::Difference::Same), "{text}");
+    }
+    let deep = "module app;\nobject Down {\n    Down();\n    go(n is int) is int { if n < 0 { 0; } else { 1 + self.go(n + 1); } }\n}\nmain() is int { Down().go(0); }\n";
+    let found = linking::differ(deep.as_bytes());
+    assert!(matches!(found, Some(linking::Difference::Excepted(reason)) if reason.contains("6.3")), "{found:?}");
+    let not_a_program = b"module app; main() is int { unknown; }";
+    assert_eq!(linking::differ(not_a_program), None);
+}

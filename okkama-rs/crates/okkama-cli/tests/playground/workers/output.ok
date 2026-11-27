@@ -1,0 +1,29 @@
+module workers/output v1.0.0;
+
+// A worker's output reaches the parent whole, when the parent takes its result, before the result.
+
+import "io/stdout" take Stdout, Stderr;
+
+object Reporter {
+    has name is string;
+
+    Reporter(name is string) {
+        self.name = name;
+    }
+
+    report(lines is int) is int {
+        for 0..lines -> n {
+            Stdout().writeln(name + " line " + n.string());
+        }
+        Stderr().writeln(name + " done");
+        lines;
+    }
+}
+
+async main() is int {
+    let worker = spawn Reporter(name: "w").report(lines: 3);
+    Stdout().writeln("parent waits");
+    let lines = await worker;
+    Stdout().writeln("parent got " + lines.string());
+    0;
+}

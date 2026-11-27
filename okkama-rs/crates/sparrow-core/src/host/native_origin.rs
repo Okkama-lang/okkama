@@ -16,7 +16,10 @@ use okkama_runtime_core::{IntValue, Value, sched};
 use std::rc::Rc;
 
 pub(crate) fn handles(native: Native) -> bool {
-    !native.signature().is_async || native.module() == "runtime/application" || native.module() == "runtime/signal"
+    (!native.signature().is_async || native.module() == "runtime/application" || native.module() == "runtime/signal")
+        // #1124: without the host runtime-core has only its pure providers; a native none of them provides is
+        // unsupported here, not routed to the bridge's refusal.
+        && (cfg!(feature = "host") || okkama_runtime_core::native::provides(native))
 }
 
 /// Core wakers of pending origin promises; origin deliveries wake them all.

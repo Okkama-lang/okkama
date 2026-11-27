@@ -35,6 +35,7 @@ fn invalid_spb_preserves_decode_and_verification_errors() {
             .unwrap_err().0, expected);
         assert_eq!(sparrow_core::run_tests(bytes.clone(), Box::new(std::io::sink())).unwrap_err().0, expected);
         // Invalid bytes are refused before even parsing a worker request.
+        #[cfg(feature = "host")]
         assert_eq!(sparrow_core::run_worker(bytes, Vec::new(), Vec::new()).unwrap_err().0, expected);
     }
 }

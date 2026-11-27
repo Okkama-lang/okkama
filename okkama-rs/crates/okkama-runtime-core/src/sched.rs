@@ -184,15 +184,19 @@ pub fn pump() {
     }
 }
 
-/// Run the continuations of timers that are due; true when one ran.
+/// Run the continuations of timers that are due; true when one ran. The clock
+/// is read only when a timer exists: a build without one (wasm32, where only
+/// host providers, absent there, make timers) pumps promises too (#1124).
 fn fire_due_timers() -> bool {
-    let now = std::time::Instant::now();
+    let mut now = None;
     let mut fired = false;
     loop {
         let due = with(|s| {
             let mut timers = s.timers.borrow_mut();
             match timers.peek() {
-                Some(entry) if entry.0.0 <= now => timers.pop().map(|entry| entry.0.1),
+                Some(entry) if entry.0.0 <= *now.get_or_insert_with(std::time::Instant::now) => {
+                    timers.pop().map(|entry| entry.0.1)
+                }
                 _ => None,
             }
         });

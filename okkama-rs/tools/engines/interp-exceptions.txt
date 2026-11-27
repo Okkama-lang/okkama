@@ -1,0 +1,20 @@
+# Where Sparrow's interpreter may differ from the JIT (#1123; design okkama-docs/runtime/sparrow-interpreter-1079.md,
+# §6.3). Read by okkama-rs/tools/engines/differ.py, tools/t/run.py and the Wave. One exception per line:
+#
+#     SELECTOR    REASON
+#
+# separated by a tab or two or more spaces. REASON names its ticket (#NNNN) or the design's section (6.3).
+# SELECTOR is one of
+#     refusal:TEXT   the interpreter refused the program ("… is not supported by the interpreter yet") and its
+#                    report contains TEXT
+#     both:TEXT      both engines' output contains TEXT: only the exit status is compared
+#     either:TEXT    either engine's output contains TEXT: the runs are not compared
+#     jit:TEXT       the JIT's output contains TEXT: the interpreter's run is not compared
+#     path:GLOB      a file, relative to the repository root (fnmatch)
+# A divergence outside this file is a defect: a fix, or a ticket and a line here.
+
+both:Stack overflow                          the depth a stack overflow is reached at is each engine's frame size, and so the activations a trace omits (design 6.3)
+either:Execution budget exhausted: memory    the moment a memory budget runs out: the interpreter roots every register and its register stack is allocated memory, the JIT's machine stack is apart, so one may run out where the other stops at another budget (design 6.3)
+jit:compiling it would take more than        the JIT's compile cost limit (#73); the interpreter compiles nothing (design 6.3)
+jit:too large to compile                     the same limit, from the liveness analysis (#73, design 6.3)
+jit:exceeds the 256 KiB limit                a machine frame past MAX_FRAME (#25): a JIT limit (design 6.3)

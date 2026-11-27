@@ -111,8 +111,9 @@ const PURE: &[&str] = &[
     "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation",
     "runtime/collections", "runtime/compression", "runtime/crypto", "runtime/db",
     "runtime/debug", "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex",
-    "runtime/host_crypto", "runtime/hpack", "runtime/idna", "runtime/io_decorators",
-    "runtime/json", "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
+    "runtime/host_crypto", "runtime/hpack", "runtime/idna", "runtime/input_state", "runtime/io_decorators",
+    "runtime/json", "runtime/layout", "runtime/math_aggregate", "runtime/net", "runtime/number_text", "runtime/pem",
+    "runtime/postgres",
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution", "runtime/regex",
     "runtime/secret", "runtime/single_byte", "runtime/statistics", "runtime/template", "runtime/testing",
     "runtime/time_zone", "runtime/unicode_character",
@@ -122,8 +123,8 @@ const PURE: &[&str] = &[
 /// Modules whose operations reach the host.
 const HOST: &[&str] = &[
     "runtime/account", "runtime/application", "runtime/database", "runtime/environment", "runtime/fs",
-    "runtime/fs_root", "runtime/input_state", "runtime/locale", "runtime/net", "runtime/network",
-    "runtime/postgres", "runtime/process", "runtime/random", "runtime/signal", "runtime/snapshot",
+    "runtime/fs_root", "runtime/locale", "runtime/network",
+    "runtime/process", "runtime/random", "runtime/signal", "runtime/snapshot",
     "runtime/system", "runtime/time", "runtime/tls_transport",
 ];
 
@@ -133,7 +134,8 @@ fn effect(native: Native) -> Option<Effect> {
     Some(match module {
         "runtime/stdio" if name.starts_with("stdin") => Effect::Host,
         "runtime/stdio" => Effect::Stdio,
-        "runtime/time_zone" if name.starts_with("timezone_local") => Effect::Host,
+        // What the build is: constants of the binary (#1133).
+        "runtime/system" if matches!(name, "system_platform" | "system_architecture" | "system_byte_order") => Effect::Pure,
         "runtime/x509" if name.starts_with("system_certificates") => Effect::Host,
         _ if HOST.contains(&module) => Effect::Host,
         _ if PURE.contains(&module) => Effect::Pure,
@@ -278,7 +280,9 @@ mod tests {
         let roles_expected = [(HandleRole::None, 209), (HandleRole::Uses, 219), (HandleRole::Publishes, 91),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 252), (Effect::Stdio, 3), (Effect::Host, 287)];
+        // #1133: 23 natives that compute without the host (input_state, net, postgres pages, the zone-local
+        // date-times, the build's platform, architecture and byte order) moved from host to pure.
+        let effects_expected = [(Effect::Pure, 275), (Effect::Stdio, 3), (Effect::Host, 264)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 

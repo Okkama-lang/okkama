@@ -42,11 +42,11 @@ use super::FileLoader;
 /// Открытый файл.
 struct Document {
     path: PathBuf,
-    /// Shared, not copied, with the loaders' overlays and `good` (#472).
+    /// Shared, not copied, with the loaders' overlays and `answers` (#472).
     text: Rc<str>,
     inspection: Rc<Inspection>,
-    /// Последний разобранный текст и его результат (наведение при ошибке разбора).
-    good: Option<(Rc<str>, Rc<Inspection>)>,
+    /// The inspection the editor's answers use: the last analysed one (`ide::Answering`, #1128).
+    answers: ide::Answering,
     /// Пути, в которые публиковались диагностики этого файла.
     published: Vec<String>,
     /// Версия текста от клиента: диагностики публикуются с ней (#48).
@@ -242,7 +242,7 @@ impl Server {
                         path,
                         text: Rc::from(text),
                         inspection: Rc::default(),
-                        good: None,
+                        answers: ide::Answering::default(),
                         published: Vec::new(),
                         version: document.get("version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok()),
                     },
@@ -294,6 +294,8 @@ impl Server {
 
     fn loader(&self, test_mode: bool) -> FileLoader {
         let mut loader = FileLoader::from_env();
+        // A file is published by its URI: names stay whole (#1119).
+        loader.base = None;
         if let Some(stdlib) = &self.stdlib {
             loader.stdlib = stdlib.clone();
         }
@@ -319,6 +321,7 @@ impl Server {
             return;
         };
         let inspection = Rc::new(super::inspect_file(&source, |test_mode| self.loader(test_mode)));
+        let directory = Path::new(source.name()).parent().map(|dir| dir.display().to_string()).unwrap_or_default();
 
         // Диагностики по файлам; ошибки других файлов — ещё и на первом импорте корня.
         let mut by_path: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
@@ -338,11 +341,8 @@ impl Server {
             }
             if found.path != source.name()
                 && let Some(range) = import_range {
-                    let file = Path::new(&found.path)
-                        .file_name()
-                        .map_or(found.path.clone(), |name| {
-                            name.to_string_lossy().into_owned()
-                        });
+                    // Named as diagnostics name a found file (#1119), from where the checked file is.
+                    let file = okkama_compiler::source::display_name(&found.path, &directory);
                     by_path
                         .entry(source.name().to_string())
                         .or_default()
@@ -378,9 +378,7 @@ impl Server {
             self.publish(&path, diagnostics, if own { version } else { None });
         }
         if let Some(document) = self.documents.get_mut(uri) {
-            if inspection.parsed {
-                document.good = Some((Rc::clone(&document.text), Rc::clone(&inspection)));
-            }
+            document.answers.record(&document.text, &inspection);
             document.inspection = inspection;
             document.published = published;
         }
@@ -491,12 +489,8 @@ impl Server {
         let character = params.pointer("/position/character")?.as_u64()? as u32;
         let document = self.documents.get(uri)?;
         let position = ide::Position { line, character };
-        let (text, inspection) = if document.inspection.parsed {
-            (&*document.text, &*document.inspection)
-        } else {
-            let (text, inspection) = document.good.as_ref()?;
-            (&**text, &**inspection)
-        };
+        let (text, inspection) = document.answers.answering()?;
+        let (text, inspection) = (&**text, &**inspection);
         let offset = LineIndex::new(text).offset(position);
         inspection.symbol_at(offset).cloned()
     }
@@ -509,12 +503,8 @@ impl Server {
         let character = params.pointer("/position/character")?.as_u64()? as u32;
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
-        let (text, inspection) = if document.inspection.parsed {
-            (&*document.text, &*document.inspection)
-        } else {
-            let (text, inspection) = document.good.as_ref()?;
-            (&**text, &**inspection)
-        };
+        let (text, inspection) = document.answers.answering()?;
+        let (text, inspection) = (&**text, &**inspection);
         Some((document, offset, text, inspection))
     }
 
@@ -528,7 +518,7 @@ impl Server {
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
         let loader = self.loader(false);
-        let found = ide::std_completions_with_overlay(&document.text, offset, &loader.stdlib, &loader.overlay)?;
+        let found = ide::std_completions(&document.text, offset, &ide::DiskStd::with_overlay(&loader.stdlib, &loader.overlay))?;
         let items = found
             .into_iter()
             .map(|found| lsp_types::CompletionItem {
@@ -867,10 +857,11 @@ impl Server {
     fn outline(&self, params: &Value) -> Option<DocumentSymbolResponse> {
         let uri = params.pointer("/textDocument/uri")?.as_str()?;
         let document = self.documents.get(uri)?;
+        // The outline is syntax: the current text's when it parses (#1128).
         let inspection = if document.inspection.parsed {
             &document.inspection
         } else {
-            &document.good.as_ref()?.1
+            document.answers.answering()?.1
         };
         Some(DocumentSymbolResponse::Nested(
             inspection.outline.iter().map(document_symbol).collect(),

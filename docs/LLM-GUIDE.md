@@ -143,10 +143,16 @@ okkama-new/
 ├── okkama-rs/                  Rust workspace (version in okkama-rs/Cargo.toml)
 │   ├── crates/
 │   │   ├── okkama-compiler     lexer, parser, AST, checker (THIR), lowering to OIR,
-│   │   │                       IR verifier, codegen: sparrow (SPB); LSP/ide
+│   │   │                       IR verifier, codegen: sparrow (SPB); LSP/ide; `commands`: what
+│   │   │                       check/fmt/tokens/ast/ir/build report (one text for CLI and playground)
 │   │   ├── okkama-cli          `okkama`: run/build/exec/check/fmt/lint/lsp, OCS adapter
-│   │   ├── okkama-runtime-core native providers, bridge values, scheduler `sched`;
-│   │   │                       also compiler constants and shared exact arithmetic
+│   │   ├── okkama-wasm         the playground (#1078): the compiler in wasm32, JSON API, bundled std,
+│   │   │                       builds what sparrow-wasm runs; parity test okkama-cli/tests/playground.rs
+│   │   ├── sparrow-wasm        the playground's runtime (#1125): Sparrow's interpreter without jit/host
+│   │   │                       under `Limits::playground()`; parity test okkama-cli/tests/playground_run.rs
+│   │   ├── okkama-runtime-core native providers (feature `native`, default), bridge values, scheduler
+│   │   │                       `sched`; also compiler constants and shared exact arithmetic (the
+│   │   │                       compiler takes it without `native`, so it builds for wasm32)
 │   │   ├── okkama-runtime-abi  native identities and signatures: src/table.rs (≈620 natives)
 │   │   ├── okkama-sparrow      SPB format: Program, Instruction, encode/decode, assembler
 │   │   ├── sparrow-core        Sparrow, THE runtime (version Tomato): JIT (Cranelift), heap, GC, async, natives
@@ -185,8 +191,62 @@ make gate                  # release gate in Docker (§5)
 and ICU into `<prefix>/lib/okkama`; `okkama` finds them next
 to itself. Without installing, set `OKKAMA_STDLIB_DIR=<repo>/std`.
 
+Features of the runtime crates (#1078, #1124). Every binary (okkama, sparrow, blade) and every test of the
+other crates builds the defaults; the other builds exist for wasm32 (the playground) and are checked by the
+Wave's `wasm` part and CI's "Playground wasm" job:
+
+| Crate | Feature | What it gates |
+|---|---|---|
+| `sparrow-core` | `jit` (default) | `jit.rs`, `jit/`, `code_memory.rs`, Cranelift, `Runtime.jit`, `rt_compile`, `frame_pointer!`; without it every function runs on the interpreter (`interp.rs`) and no code is published |
+| `sparrow-core` | `host` (default) | Tokio and the Tokio wait (`io.rs`), files, sockets, DNS, TLS, SQLite, processes, the environment (`host/native_{directory,dns,environment,file,file_state,fs,glob,multicast,network,process,root,sqlite,temporary,tls,udp,unix,watch}.rs`, `path_regex.rs`, `path_syntax.rs`, `process_host.rs`, `file_lock.rs`), process workers (`worker.rs`, `worker_process.rs`; without the host `worker_emulated.rs` runs each worker on a runtime of its own in the same instance, #1127), the VM thread's host session, `run_worker`/`serve_worker`/`default_environment`, runtime-core's `native` and okkama-native's `aws-lc` |
+| `okkama-runtime-core` | `native` (default) = `providers` + `host` + `zstd` + `brotli` + `crypto` + `cldr` | `providers`: `data` and the pure providers of `native` (text, numbers, JSON splitting, Unicode, formats, time zones, CLDR, diff and layout, DEFLATE, UUIDs); `crypto`: digests (okkama-native's RustCrypto); `host`: the `host` module (cwd and environment), `native::{application, collation, fs, host, idna, net, signal, x509}` and aws-lc; `zstd`, `brotli`: the codecs (without them the format is refused as unsupported); `cldr` (#1125): the CLDR tables in the binary, without it a family is there once `native::provide_cldr` gave its file (the playground fetches them, 0.9 MB gzip) and is a `core.cldr` `unavailable` failure before. The compiler takes none |
+| `okkama-native` | `aws-lc` (default) | `rsa_public`, `x509`, the RSA operations and the ECDSA verification fast path; without it they are refused as unsupported and the rest is pure RustCrypto. On wasm32 `getrandom` uses its `wasm_js` backend |
+
+```sh
+cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown   # the playground's runtime
+cargo test -p sparrow-core --no-default-features --lib <filter>      # natively: the interpreter is the only engine
+cargo test -p sparrow-core --no-default-features --features jit --test timer_wait   # the sleeping wait
+# 32 bits, wasm32's pointer width (#1131): a static i686 build, run in a linux/386 container (or the Wave's runner)
+CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_LINKER=rust-lld cargo test -p sparrow-core --no-default-features \
+    --target i686-unknown-linux-musl --lib <filter> --no-run
+docker run --rm --platform linux/386 --network none -v $PWD:$PWD:ro -v BIN:/t/bin:ro -w $PWD/okkama-rs/crates/sparrow-core alpine /t/bin <filter>
+```
+
+Without `jit` every test runs on the interpreter (async bodies and handlers too since #1121/#1122), and the
+JIT's own tests are compiled out. Time on wasm32 is `sparrow_core::clock`'s virtual timeline (the embedder's clock
+plus what the scheduler skipped instead of waiting).
+
 Builds for experiments go to the scratchpad, not to `okkama-rs/target`:
 `CARGO_TARGET_DIR=$SCRATCH/target cargo build --release -p okkama-cli -p sparrow-cli`.
+
+The playground's wasm (#1078; `rustup target add wasm32-unknown-unknown`, `wasm-bindgen-cli` of the version
+in `Cargo.lock`):
+
+```sh
+cargo build -p okkama-wasm --release --target wasm32-unknown-unknown
+wasm-bindgen --target web --remove-name-section --remove-producers-section \
+    --out-dir OUT target/wasm32-unknown-unknown/release/okkama_wasm.wasm
+```
+
+`OUT/okkama_wasm.js` exports `check`, `fmt`, `tokens`, `ast`, `ir`, `spa`, `hover`, `complete`, `definition`,
+`signature`, `build`, `failureText` (each takes and returns JSON text), `builtSpb`, `setFiles` and `version`.
+`cargo check -p okkama-compiler --target wasm32-unknown-unknown` keeps the compiler wasm-clean.
+
+The playground's runtime (#1125) is a second module, built alone (with okkama-wasm in one invocation the features
+of okkama-runtime-core unify): `cargo build -p sparrow-wasm --release --target wasm32-unknown-unknown`, then the
+same `wasm-bindgen`. It exports `run(spb, request, sink?)`, `test(spb, request, sink?)` (a build with `tests: true`
+reported as `okkama run -t` reports it, #1127), `requirements(spb)`, `provide(name, bytes)`, `version` and
+`lastPanic` (JSON shapes in decisions.md, #1125 section). A run: `okkama_wasm.build({source, path})` →
+`builtSpb()` → `sparrow_wasm.requirements` (refused natives a run can reach, CLDR files to `provide`) →
+`sparrow_wasm.run(spb, {stdin}, sink)` (the writes to `sink` as chunks `{stream, text, t}` while it runs, #1134,
+batched by a 16 ms window and handed over at each budget poll, #1136)
+→ `{exit, report, uncaught}` → for a failure `okkama_wasm.failureText({report, uncaught})`, the text `okkama run`
+prints; on Stop the page writes `version().profile.stopped`, on its watchdog `profile.interrupted`.
+Budget: 2.0 MB gzip (CI checks it). `node okkama-rs/tools/playground/smoke.mjs DIR` runs both modules built with
+`wasm-bindgen --target nodejs --out-dir DIR`. The playground's profile is data (`sparrow_core::budget::PLAYGROUND`):
+natively `Limits::playground()` refuses the same natives with the same text; a native added to the ABI must fit
+the profile's consistency test (`budget::tests::the_playground_profile_is_what_the_pure_build_provides`, build
+without default features).
 
 Running programs:
 
@@ -259,6 +319,12 @@ Under `SPARROW_CORE_PROFILE_COMPILE`, `pointer-free analysis` lines separately
 report its load-time cost; `roots` lines under profiling or `SPARROW_CORE_DUMP`
 report traced/omitted registers and the sum of root words across stack maps.
 The same root counts appear under `--stats`.
+`SPARROW_CORE_INTERPRET=1` (#1120–#1122: Sparrow's interpreter instead of the JIT, chosen when a runtime is
+made, for `okkama run`/`exec` and `sparrow` alike; the same runtime, helpers, failure texts, handlers, async
+protocol and traces; sync roots read from its register stack, an async body's registers in its Future's frame,
+loaded without pointer-free proofs; see `sparrow-core/src/interp.rs`; in a test,
+`sparrow_core::observe(Engine, …)` runs one SPB on either engine with both streams captured,
+`okkama-cli/tests/differential.rs`),
 `SPARROW_CORE_GC_STRESS=1` (collect at every
 safepoint and poison reclaimed cells: values kept alive by mistake fail at
 once), `OKKAMA_ARRAYS=flat|shared|trie`, `OKKAMA_MAPS=btree`,
@@ -341,7 +407,7 @@ For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/owne
 | One std module | `okkama build --tests std/X.ok -o t.spb` then `sparrow --test t.spb` (in the cage) | `okkama run -t std/X.ok` on Sparrow |
 | Conformance (OCS) | `cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-release -j 6 --adapter-env OCS_RUST_ENGINE=sparrow` | Docker only; the adapter builds its own debug `okkama` in `adapters/rust/.target` |
 | Dependency advisories | `cd okkama-rs && cargo audit --deny warnings` (and `--file fuzz/Cargo.lock`) | RustSec against both lockfiles (#960); CI `audit.yml` on every change and weekly. Exceptions with reason and ticket in `okkama-rs/.cargo/audit.toml` (none since #70) |
-| t/ suite (#245) | `python3 tools/t/run.py --configs sparrow --cage [--okkama BIN] [t/op t/gen/strings …]` | self-checking Okkama programs printing TAP: hand-written `t/base`, `t/op`, `t/lang` and families generated by `tools/t/gen.py` into `t/gen` (not committed; the runner regenerates it) with a Python oracle. Every configuration (sparrow, sparrow-passes-off, sparrow-gc-stress) must give the same stream. Locally use `--cage`. A check blocked by an open issue goes through `skip(issue)` and is listed in the file. A gate step |
+| t/ suite (#245) | `python3 tools/t/run.py --configs sparrow --cage [--okkama BIN] [t/op t/gen/strings …]` | self-checking Okkama programs printing TAP: hand-written `t/base`, `t/op`, `t/lang` and families generated by `tools/t/gen.py` into `t/gen` (not committed; the runner regenerates it) with a Python oracle. Every configuration (sparrow, sparrow-passes-off, sparrow-gc-stress; and Sparrow's interpreter, sparrow-interp and sparrow-interp-gc-stress, #1123, blocking in the gate and the Wave since #1122) must give the same stream; an interpreter run `okkama-rs/tools/engines/interp-exceptions.txt` explains is reported skipped with its reason. Locally use `--cage`. A check blocked by an open issue goes through `skip(issue)` and is listed in the file. A gate step |
 | Tooling (Python) | `tools/test-python.sh` | every tracked `test_*.py` (fuzz orchestration, t/ generator, ownership oracle, micro harness, conformance runner), dry: no toolchain or Docker; CI job "Tool tests" and the Wave's maps job run it (#1092) |
 | Generated programs | `tools/gen/okgen.py run --seeds N` (`show SEED`) | terminating deterministic programs (BigInt, strings, arrays, objects, roles, closures, try/catch, recursion) on Sparrow configurations; a disagreement is minimized (ddmin over `main`) into `conformance/reports/runs/okgen/<seed>`; `tools/gen/mutants.sh` checks it finds a seeded defect in each engine. Containers only |
 | Release gate | `make gate` (= `tools/gate/docker.sh`, ~15 min) | Rust tests (profile `gate`: release optimizations without fat LTO; and debug), clippy with `-D warnings`, conformance sparrow/sparrow-passes-off/sparrow-gc-stress, std inventory, natives (`gen-abi.py --check` and `native-callers.py`), std fmt (`fmt --check`), std tests Sparrow vs `tools/gate/known-failures.txt`, the t/ suite on all three configurations; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `packages.yml` calls `gate.yml` for release tags and every push to develop (nightly), and publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO for the release binaries only) |
@@ -542,21 +608,23 @@ not needed (#292).
 
 | File | Role |
 |---|---|
-| `lib.rs` | entry points: `run_configured`, `run_reported` (OCS: `Uncaught`), `run_tests`, `run_worker`, `default_environment`; VM thread with a 1 GiB stack |
+| `lib.rs` | entry points: `run_configured`, `run_reported` (OCS: `Uncaught`), `run_tests`, `run_worker`, `default_environment`; VM thread with a 1 GiB stack (wasm32: the caller's stack, #1124) |
 | `program.rs` | loaded program facts: machine representation (`Kind`) of every type; Atomic and Event cells (descriptors their constructor intrinsics name) |
-| `budget.rs` | execution budgets and embedding policy (`Limits`: steps, memory, output, interrupt, native groups `NativeGroup` — checked in `natives::call` and the async native driver): fuel cell polled at entries and back-edges only when a budget is set, `EXHAUSTED` status, memory probe set by the embedder (CLIs: mimalloc committed), or `MemoryScope::Runtime`: the runtime's own heap (`Heap::held_bytes`, #269) |
+| `budget.rs` | execution budgets and embedding policy (`Limits`: steps, memory, output, interrupt, native groups `NativeGroup` — checked in `natives::call` and the async native driver): fuel cell polled at entries and back-edges only when a budget is set (fixed at a runtime's first run for the JIT and the interpreter alike, `Runtime::polled`; a later run that would change it is refused, #1129), `EXHAUSTED` status, memory probe set by the embedder (CLIs: mimalloc committed), or `MemoryScope::Runtime`: the runtime's own heap (`Heap::held_bytes`, #269) |
 | `contracts.rs` | load-time intrinsic contracts: arity, kinds, receiver layouts, related objects, timeout helpers (`sparrow check` runs them too) |
 | `word.rs` | one word per value; reprs Int/Raw/Ref |
 | `jit.rs` | whole-function Cranelift compilation on first call; stack maps (`maps`: frame-to-SP offset + live slots); safepoints; frames up to `MAX_FRAME` (a quarter of `runtime::STACK_HEADROOM`; one shared `spill` area per function); runtime helpers in one `helpers!` table: Rust signature checked at compile time, Cranelift signature derived from it, effects (`HELPERS`); a new helper needs a test reaching it (`okkama-cli/tests/helpers.rs`) |
 | `code_memory.rs` | JIT memory: one reservation per kind, no membarrier |
 | `heap.rs` | non-moving precise mark-sweep heap, size classes up to 128 words, object/array/closure/payload kinds |
-| `runtime.rs` | runtime state shared with machine code, helpers (`rt_*`), `run_function_with`, stats |
+| `runtime.rs` | runtime state shared with machine code, helpers (`rt_*`), `run_function_with`, stats; the engine seam (#1120): every entry from Rust into Okkama code (a synchronous entry, a closure's helper, an async body, an intrinsic's callback, a destroy, `Error.text`) goes through `Runtime::invoke`/`Runtime::resume`, which read the published code first and take a cold branch (the interpreter, or the JIT's compile) only without it; `safepoint` asks the same engine for its frames' roots |
+| `interp.rs` | the interpreter (#1120, `SPARROW_CORE_INTERPRET=1`): a `match` over decoded instructions, frames on a register stack of fixed chunks (a call of an Okkama body is a new activation, not a Rust call), a plan per function made at its first call; every instruction the JIT runs through a helper (`program::generic`, `program::failure_or_region`, natives, intrinsics, closures, Futures) calls that helper, the rest are its own branches with the JIT's texts (`texts.rs`); every register is a root by its kind; a failure follows the JIT's `check` (trace, then the first covering handler). A new instruction needs a rule in `okkama-sparrow` `typing.rs`, a branch in `jit.rs`, a branch here and a program in `sparrow-core/tests/mnemonics/` (`interp::tests::every_synchronous_mnemonic_runs_on_both_engines` fails until one executes it) |
 | `tasks.rs`, `drivers.rs` | stackless async: an async call's heap frame is its Future; drivers are bodies of async natives/intrinsics |
-| `io.rs` | external waits: native I/O requests (Rust futures), timers; single-thread Tokio reactor polled while spinning (`wait_external`) |
+| `io.rs` | external waits: native I/O requests (Rust futures), timers; `wait_external` waits in one of three bodies (#1124): the single-thread Tokio reactor polled while spinning (`host`), a sleep on a condition variable (natively without the host), a skip of the clock to the earliest timer (wasm32) |
+| `clock.rs` | `Instant`, the wall and monotonic clocks of the time natives, the clock domain's process number; `std::time` natively, a virtual timeline on wasm32 (`install`, `skip_to`, #1124) |
 | `failures.rs` | failures, cleanup regions, resource identities and graph walks (`descriptor_flags`: closed-world reachability of `destroy`), failure reports |
 | `intrinsics.rs`, `primitives.rs` | runtime-provided functions; Atomic, Event, Lock, channels, groups |
 | `natives.rs` + `host/` | native providers: `host/mod.rs` classifies each ABI native to a provider (`native_network`, `native_tls`, `native_sqlite`, `native_postgres`, `native_db`, `native_json`, …); `native_origin.rs` bridges the rest to `okkama-runtime-core` (sync, plus terminal promises pumped through `sched::pump`) |
-| `worker.rs`, `worker_process.rs` | process workers (OKW2 format), child `--worker FILE.spb` |
+| `worker.rs`, `worker_process.rs`, `worker_wire.rs`, `worker_emulated.rs` | process workers (OKW2 format, `worker_wire`), child `--worker FILE.spb`; emulated in the same instance without the host or when `Runtime::emulated_workers` (the playground's embedding, #1127) |
 
 ### Форматы с явной версией
 
@@ -655,7 +723,19 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
   `SPARROW_CORE_GC_STRESS=1` and compare with an ordinary Sparrow run
   (`okkama-cli/tests/handlers.rs`, `sparrow-cli/tests/handlers/*.spa`).
 - Bytecode: `sparrow --disassemble x.spb`.
-- A wrong result on Sparrow only (#44): run with `SPARROW_CORE_UNOPTIMIZED=*`
+- **Three runs for a disagreement of the engines** (#1123: the interpreter as an oracle, design #1079 §6.2): the
+  interpreter (`SPARROW_CORE_INTERPRET=1`), the JIT with `SPARROW_CORE_PLAIN=* SPARROW_CORE_UNOPTIMIZED=*`, and the
+  ordinary JIT.
+  - PLAIN ≠ the ordinary JIT: an inline fast path or a Cranelift optimization; bisect the symbol lists below.
+  - the interpreter ≠ PLAIN: the emitter's core (calls, roots, edges, suspension) or the interpreter itself.
+  - all three agree and the result is wrong: a shared helper (`ops`, `failures`, natives), which the
+    interpreter cannot see.
+  The tools: `okkama-rs/tools/engines/differ.py run PATH…` (stdout, stderr and status byte for byte, exceptions
+  in `interp-exceptions.txt`, each with its reason), `differ.py ocs RESULTS.jsonl` for a conformance run with
+  `--adapter-env SPARROW_CORE_INTERPRET=1`, `tools/gen/okgen.py run --engines sparrow,sparrow-interp`, the fuzz
+  `exec` target with `OKKAMA_FUZZ_DIFFERENTIAL=1`, and in tests `sparrow_core::observe`.
+- A wrong result on Sparrow only (#44): compare with `SPARROW_CORE_INTERPRET=1` (#1120; it shares the helpers,
+  not the emitter, the stack maps or the analyses), then run with `SPARROW_CORE_UNOPTIMIZED=*`
   (no Cranelift passes) and `SPARROW_CORE_PLAIN=*` (no inline fast paths:
   those instructions take the shared slow path). If either fixes it, bisect
   the symbol list (symbols as in `--disassemble`) down to one function, then

@@ -6,7 +6,9 @@
 //! этот native через мост (`native_origin`).
 use super::Error;
 use super::support::{failure, int, int_value, string, string_array, text};
+#[cfg(feature = "cldr")]
 use crate::data::gunzip;
+use crate::data::gunzip_checked;
 use crate::{Value, abi::Native};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -47,50 +49,71 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
 
 /// The fields text of `key` in `table`; `None` without such a key.
 fn record(native: Native, table: &str, key: &str) -> Result<Option<&'static str>, Error> {
-    let Some(rows) = table
-        .split_once('.')
-        .and_then(|(family, _)| index(family))
-        .and_then(|index| index.get(table))
-    else {
+    let family = table.split_once('.').map(|(family, _)| family);
+    let at = family.and_then(|family| FILES.iter().position(|(name, _)| *name == family));
+    let Some(at) = at else {
+        return Err(failure("core.cldr", "invalid_input", native, format!("Unknown CLDR table {table:?}")));
+    };
+    let Some(index) = index(at) else {
         return Err(failure(
             "core.cldr",
-            "invalid_input",
+            "unavailable",
             native,
-            format!("Unknown CLDR table {table:?}"),
+            format!("The CLDR data {} is not loaded", FILES[at].1),
         ));
+    };
+    let Some(rows) = index.get(table) else {
+        return Err(failure("core.cldr", "invalid_input", native, format!("Unknown CLDR table {table:?}")));
     };
     Ok(rows.get(key).copied())
 }
 
-/// Индекс семейства; `None` — такого семейства нет.
-fn index(family: &str) -> Option<&'static Index> {
-    macro_rules! families {
-        ($($name:literal => $file:literal),* $(,)?) => {
-            match family {
-                $($name => {
-                    static TEXT: OnceLock<String> = OnceLock::new();
-                    static INDEX: OnceLock<Index> = OnceLock::new();
-                    Some(INDEX.get_or_init(|| {
-                        build(TEXT.get_or_init(|| {
-                            String::from_utf8(gunzip(include_bytes!(concat!(
-                                "../../../okkama-runtime-core/data/",
-                                $file
-                            ))))
-                            .expect("UTF-8 CLDR table")
-                        }))
-                    }))
-                })*
-                _ => None,
-            }
-        };
+/// The families and their files, in `data/`.
+pub const FILES: &[(&str, &str)] = &[
+    ("numbers", "cldr-numbers.dat"),
+    ("dates", "cldr-dates.dat"),
+    ("zones", "cldr-zones.dat"),
+    ("currencies", "cldr-currencies.dat"),
+    ("locales", "cldr-locales.dat"),
+];
+
+/// The text of each family, unpacked at its first use (feature `cldr`) or given by [`provide`].
+static TEXTS: [OnceLock<String>; 5] = [const { OnceLock::new() }; 5];
+static INDEXES: [OnceLock<Index>; 5] = [const { OnceLock::new() }; 5];
+
+/// The tables in the binary, in [`FILES`]' order.
+#[cfg(feature = "cldr")]
+const EMBEDDED: [&[u8]; 5] = [
+    include_bytes!("../../data/cldr-numbers.dat"),
+    include_bytes!("../../data/cldr-dates.dat"),
+    include_bytes!("../../data/cldr-zones.dat"),
+    include_bytes!("../../data/cldr-currencies.dat"),
+    include_bytes!("../../data/cldr-locales.dat"),
+];
+
+fn family_text(at: usize) -> Option<&'static str> {
+    #[cfg(feature = "cldr")]
+    let text = Some(TEXTS[at].get_or_init(|| String::from_utf8(gunzip(EMBEDDED[at])).expect("UTF-8 CLDR table")));
+    #[cfg(not(feature = "cldr"))]
+    let text = TEXTS[at].get();
+    text.map(String::as_str)
+}
+
+/// The index of the family at `at` in [`FILES`]; `None` while its text is not there.
+fn index(at: usize) -> Option<&'static Index> {
+    let text = family_text(at)?;
+    Some(INDEXES[at].get_or_init(|| build(text)))
+}
+
+/// See [`super::provide_cldr`]. A text that is not gzip, not UTF-8, or not CLDR records is refused.
+pub(super) fn provide(file: &str, gzip: &[u8]) -> Result<(), String> {
+    let at = FILES.iter().position(|(_, name)| *name == file).ok_or_else(|| format!("{file} is not a CLDR file"))?;
+    let text = gunzip_checked(gzip).and_then(|bytes| String::from_utf8(bytes).ok()).ok_or_else(|| format!("{file} is not gzip UTF-8 text"))?;
+    if !text.lines().all(|line| line.splitn(3, '\t').count() == 3) {
+        return Err(format!("{file} has a malformed CLDR record"));
     }
-    families!(
-        "numbers" => "cldr-numbers.dat",
-        "dates" => "cldr-dates.dat",
-        "zones" => "cldr-zones.dat",
-        "currencies" => "cldr-currencies.dat",
-        "locales" => "cldr-locales.dat",
-    )
+    let _ = TEXTS[at].set(text);
+    Ok(())
 }
 
 fn build(text: &'static str) -> Index {
@@ -106,13 +129,17 @@ fn build(text: &'static str) -> Index {
     index
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cldr"))]
 mod tests {
     use super::*;
 
+    fn family(name: &str) -> Option<&'static Index> {
+        index(FILES.iter().position(|(family, _)| *family == name)?)
+    }
+
     fn fields(table: &str, key: &str) -> Option<Vec<&'static str>> {
-        let (family, _) = table.split_once('.')?;
-        let rows = index(family)?.get(table)?;
+        let (name, _) = table.split_once('.')?;
+        let rows = family(name)?.get(table)?;
         rows.get(key).map(|fields| fields.split('\t').collect())
     }
 
@@ -128,7 +155,26 @@ mod tests {
         // A row keeps its empty fields.
         assert_eq!(fields("numbers.row", "en").map(|row| row.len()), Some(7));
         assert_eq!(fields("numbers.digits", "no-such-system"), None);
-        assert!(index("nowhere").is_none());
+        assert!(family("nowhere").is_none());
+    }
+
+    /// #1125: a given file is checked, and a family already there stays; an unknown table is still refused.
+    #[test]
+    fn a_given_file_is_checked_and_a_loaded_family_stays() {
+        assert_eq!(provide("cldr-elsewhere.dat", EMBEDDED[0]), Err("cldr-elsewhere.dat is not a CLDR file".to_string()));
+        assert_eq!(provide("cldr-dates.dat", b"not gzip"), Err("cldr-dates.dat is not gzip UTF-8 text".to_string()));
+        let mut broken = Vec::new();
+        broken.extend_from_slice(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0]);
+        broken.extend(miniz_oxide::deflate::compress_to_vec(b"numbers.row\tonly-two-parts\n", 6));
+        broken.extend_from_slice(&[0; 8]);
+        assert_eq!(provide("cldr-numbers.dat", &broken), Err("cldr-numbers.dat has a malformed CLDR record".to_string()));
+        let mut other = broken[..10].to_vec();
+        other.extend(miniz_oxide::deflate::compress_to_vec(b"numbers.digits\tlatn\tXYZ\n", 6));
+        other.extend_from_slice(&[0; 8]);
+        assert_eq!(fields("numbers.digits", "latn"), Some(vec!["0123456789"]));
+        assert_eq!(provide("cldr-numbers.dat", &other), Ok(()));
+        assert_eq!(fields("numbers.digits", "latn"), Some(vec!["0123456789"]));
+        assert!(execute(Native::CldrCldrSize, &[text("numbers.nowhere".to_string()), text("x".to_string())]).is_err());
     }
 
     /// #943: one field and the size of a record agree with the whole record; a missing field is refused.
@@ -151,5 +197,28 @@ mod tests {
         assert!(call(Native::CldrCldrField, Some(-1)).is_err());
         let missing = execute(Native::CldrCldrSize, &[text("dates.fields".to_string()), text("no-such".to_string())]);
         assert!(matches!(missing.ok().and_then(|v| v.as_int().ok().and_then(|n| n.to_i64())), Some(0)));
+    }
+}
+
+/// #1125: without the tables in the binary a family is missing, with its own failure, until its file is given.
+#[cfg(all(test, not(feature = "cldr")))]
+mod given_tests {
+    use super::*;
+
+    fn gzip(text: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0];
+        bytes.extend(miniz_oxide::deflate::compress_to_vec(text, 6));
+        bytes.extend_from_slice(&[0; 8]);
+        bytes
+    }
+
+    #[test]
+    fn a_family_is_there_once_its_file_is_given() {
+        let call = || execute(Native::CldrCldrSize, &[text("locales.parent".to_string()), text("en-GB".to_string())]);
+        let Err(Error::Failure(failure)) = call() else { panic!("a missing family fails") };
+        assert!(format!("{failure:?}").contains("The CLDR data cldr-locales.dat is not loaded"), "{failure:?}");
+        assert_eq!(provide("cldr-locales.dat", &gzip(b"locales.parent\ten-GB\ten-001\n")), Ok(()));
+        let Ok(size) = call() else { panic!("given") };
+        assert_eq!(size.as_int().ok().and_then(|n| n.to_i64()), Some(1));
     }
 }

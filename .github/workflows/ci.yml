@@ -76,6 +76,65 @@ jobs:
         working-directory: okkama-rs
         run: cargo test --locked --no-fail-fast -p okkama-compiler -p okkama-cli
 
+  # The playground's compiler (#1078): okkama-compiler and okkama-wasm build for wasm32, pass clippy there (the
+  # wasm-bindgen module is cfg(wasm32), so the host clippy of the Wave never sees it), and the bindgen output stays
+  # within the 5 MB compressed budget. The site commits the output per release, as it does the /man/ reference.
+  # Sparrow without its default features (#1124: the interpreter and the pure providers) passes clippy for wasm32
+  # too, and its suite passes natively, where the interpreter is the only engine. The playground's runtime
+  # (sparrow-wasm, #1125) is the second module: built alone (no CLDR tables, no JIT, no host), within 2.0 MB
+  # compressed, and a Node smoke test builds a program with the first module and runs it with the second.
+  wasm:
+    name: Playground wasm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust
+        # The pinned release toolchain, as the Wave's clippy: a newer stable brings lints the rest of CI does not run.
+        run: |
+          toolchain="$(cat tools/release-toolchain.txt)"
+          rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown --component clippy && rustup default "$toolchain"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: wasm
+      - name: wasm-bindgen of Cargo.lock's version
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/, "", $3); print $3}' okkama-rs/Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build
+        working-directory: okkama-rs
+        run: |
+          cargo clippy --locked -p okkama-compiler -p okkama-wasm --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy --locked -p sparrow-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy --locked -p sparrow-wasm --target wasm32-unknown-unknown -- -D warnings
+          cargo build --locked -p okkama-wasm --release --target wasm32-unknown-unknown
+          # Its own invocation: built with okkama-wasm, features would be unified across the two.
+          cargo build --locked -p sparrow-wasm --release --target wasm32-unknown-unknown
+          for module in okkama_wasm sparrow_wasm; do
+            wasm-bindgen --target web --remove-name-section --remove-producers-section \
+              --out-dir ../playground-wasm target/wasm32-unknown-unknown/release/$module.wasm
+            wasm-bindgen --target nodejs --out-dir ../playground-node target/wasm32-unknown-unknown/release/$module.wasm
+          done
+      - name: Size budgets (5 MB and 2.0 MB compressed)
+        run: |
+          compressed=$(gzip -9 -c playground-wasm/okkama_wasm_bg.wasm | wc -c)
+          echo "okkama_wasm_bg.wasm: $(wc -c < playground-wasm/okkama_wasm_bg.wasm) bytes, $compressed gzip"
+          test "$compressed" -le 5000000
+          compressed=$(gzip -9 -c playground-wasm/sparrow_wasm_bg.wasm | wc -c)
+          echo "sparrow_wasm_bg.wasm: $(wc -c < playground-wasm/sparrow_wasm_bg.wasm) bytes, $compressed gzip"
+          test "$compressed" -le 2000000
+      - name: Node smoke test (build with okkama-wasm, run with sparrow-wasm)
+        run: node okkama-rs/tools/playground/smoke.mjs playground-node
+      - uses: actions/upload-artifact@v5
+        with:
+          name: playground-wasm
+          path: playground-wasm
+      - name: Sparrow without default features, natively
+        working-directory: okkama-rs
+        run: |
+          cargo test --profile gate --locked --no-fail-fast -p sparrow-core --no-default-features
+          cargo test --profile gate --locked -p sparrow-wasm
+
   conformance:
     name: Conformance (${{ matrix.engine }})
     strategy:

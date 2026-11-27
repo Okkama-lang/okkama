@@ -1,0 +1,7 @@
+module app v1.0.0;
+
+import "json" take Local;
+
+main() is int {
+    Local().number();
+}

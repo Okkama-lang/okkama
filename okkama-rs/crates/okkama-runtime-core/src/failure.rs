@@ -27,6 +27,96 @@ pub struct Site {
     pub pc: u32,
 }
 
+/// An uncaught failure of `main`: its OCS category (`uncaught-error`,
+/// `runtime`, `panic`), the error type of a thrown value or `NativeFailure`,
+/// its message, and the activations it unwound through, innermost first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Uncaught {
+    pub category: &'static str,
+    pub error_type: Option<String>,
+    pub message: String,
+    /// Function and instruction numbers; they are shared with OIR, so a
+    /// compiler can map them to source (`okkama_compiler::commands::render_trace`).
+    pub trace: Vec<Site>,
+    /// Activations of the root's unwind past the recorded limit (#1009),
+    /// missing between the innermost and the outermost ones of `trace` (#1034).
+    pub trace_omitted: u64,
+    /// Byte offset after the root and its secondaries in the plain report,
+    /// before its cause entries.
+    pub trace_offset: usize,
+    /// Byte offsets after cause entries, their original unwind stacks and the
+    /// activations each left out (#1034). Secondary cleanup failures
+    /// deliberately have no diagnostic stack.
+    pub cause_traces: Vec<(usize, Vec<Site>, u64)>,
+}
+
+impl Uncaught {
+    /// Add source or SPB stacks to the plain report, keeping cause stacks
+    /// indented under their entries. Only called when traces are requested.
+    pub fn render_report(&self, report: &str, render: impl Fn(&[Site]) -> String) -> String {
+        let mut output = String::new();
+        let mut start = 0;
+        let mut traces: Vec<_> = self.cause_traces.iter()
+            .map(|(offset, trace, omitted)| (*offset, trace.as_slice(), *omitted, "  "))
+            .chain(std::iter::once((self.trace_offset, self.trace.as_slice(), self.trace_omitted, "")))
+            .collect();
+        traces.sort_by_key(|entry| entry.0);
+        for (offset, trace, omitted, indent) in traces {
+            output.push_str(&report[start..offset]);
+            let mut stack = render(trace);
+            // The stack shows the innermost and the outermost activations; the
+            // ones between were only counted (#1009, #1034).
+            if omitted > 0 && !stack.is_empty() {
+                stack = format!(
+                    "{}\n... and {omitted} more activations in the middle, not recorded\n",
+                    stack.trim_end_matches('\n')
+                );
+            }
+            if !stack.is_empty() {
+                output.push('\n');
+                for (index, line) in stack.trim_end_matches('\n').split('\n').enumerate() {
+                    if index != 0 {
+                        output.push('\n');
+                    }
+                    output.push_str(indent);
+                    output.push_str(line);
+                }
+            }
+            start = offset;
+        }
+        output.push_str(&report[start..]);
+        output
+    }
+}
+
+
+impl Uncaught {
+    /// The category of an uncaught failure by its name, for a reader of a serialized one (the playground, #1125):
+    /// one of the names the runtime gives.
+    pub fn category_named(name: &str) -> Option<&'static str> {
+        ["uncaught-error", "runtime", "panic", "exhausted"].into_iter().find(|known| *known == name)
+    }
+}
+
+/// `main`'s outcome as a process ends (#1125, the rule of `okkama run`, shared with the playground): its result in
+/// 0..255 is the exit status; any other result, or a failure, is status 1 with what standard error says after the
+/// program's own output, ending with a newline.
+pub fn main_outcome(result: Result<i64, &str>) -> (u8, String) {
+    match result {
+        Ok(value) => match u8::try_from(value) {
+            Ok(code) => (code, String::new()),
+            Err(_) => (1, format!("main() must return an int in 0..255, got {value}\n")),
+        },
+        Err(report) => {
+            let mut text = report.to_string();
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            (1, text)
+        }
+    }
+}
+
 /// Отказ изменяем на месте: вторичные отказы
 /// и причина дописываются в тот же объект, и это видят все его ссылки.
 #[derive(Clone, Debug, PartialEq, Eq)]

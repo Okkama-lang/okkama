@@ -4,6 +4,9 @@
 # devtrace, #1025), frame pointers, in the okkama-dev image, into OUT/bin/okkama with OUT/lib/okkama/std.
 # LAYOUT_SEED (a positive integer) links with rust-lld and --shuffle-sections=*=SEED: the same code in another
 # function order, so two seeds of one revision show how much of a cell is the binary's own layout (#1086).
+# The build runs offline (--network none); a networked `cargo fetch --locked` on the same registry volume
+# runs first, so a dependency the volume lacks is fetched, not a failure of the build (#1129); with every
+# crate already there it passes without network too.
 set -euo pipefail
 worktree=$(cd "$1" && pwd); out=$2; seed=${3:-}
 name=$(basename "$worktree")
@@ -14,12 +17,22 @@ if [ -n "$seed" ]; then
   flags="$flags -C link-arg=-fuse-ld=lld -C link-arg=-B@SYSROOT@/lib/rustlib/@TARGET@/bin/gcc-ld -C link-arg=-Wl,--shuffle-sections=*=$seed"
 fi
 mkdir -p "$out/bin" "$out/lib/okkama"
-docker run --rm --cpus 6 --memory 7g --network none \
+if ! docker run --rm -v "$worktree":/repo:ro -v okkama-cargo-registry:/usr/local/cargo/registry \
+    -w /repo/okkama-rs okkama-dev cargo fetch --locked; then
+  echo "toolchain.sh: step 1 (cargo fetch --locked into the okkama-cargo-registry volume) failed: the volume lacks" \
+    "crates of okkama-rs/Cargo.lock and there is no network to fetch them; the offline build would fail" >&2
+  exit 3
+fi
+if ! docker run --rm --cpus 6 --memory 7g --network none \
   -v "$worktree":/repo:ro -v "okkama-gate-target-$name${seed:+-seed$seed}":/target -v okkama-cargo-registry:/usr/local/cargo/registry \
   -v "$(cd "$out" && pwd)":/out -e CARGO_TARGET_DIR=/target -e CARGO_NET_OFFLINE=true -e FLAGS="$flags" \
   -w /repo/okkama-rs okkama-dev sh -c '
     export RUSTFLAGS=$(echo "$FLAGS" | sed -e "s|@SYSROOT@|$(rustc --print sysroot)|" -e "s|@TARGET@|$(rustc -vV | sed -n "s/^host: //p")|")
     cargo build --release --locked --offline -p okkama-cli -p sparrow-cli -p blade-cli && cp /target/release/okkama /out/bin/okkama'
+then
+  echo "toolchain.sh: step 2 (the offline release build in okkama-dev) failed" >&2
+  exit 4
+fi
 rm -rf "$out/lib/okkama/std"
 cp -R "$worktree/std" "$out/lib/okkama/std"
 if grep -q -a OKKAMA_DEV_OUT "$out/bin/okkama"; then echo "devtrace is compiled in: not a release build" >&2; exit 1; fi

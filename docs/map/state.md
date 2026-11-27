@@ -1,6 +1,195 @@
 # State (update at the end of every task)
 
-## Release 0.6.5 (release/065)
+## Release 0.6.6 (release/066)
+
+- [x] Release commit 0.6.6 (2026-11-27): version 0.6.6, CHANGELOG [0.6.6], fuzz/Cargo.lock brought up to the wasm
+  dependencies (it lacked js-sys since #1124), Bible rebuilt (md/HTML/PDF, EN/RU); the owner confirmed the design's
+  §9 answers («дада»). No release-wide micro A/B (per-change A/Bs in the CHANGELOG). Published with the release: the
+  playground on the website (okkama-site playground/, rebuilt from the release commit).
+
+- [x] #1127 workers (owner's decision 8; feature/1127w from release/066 9d42172fd, not committed; worktree
+  okkama-work/hf-1127w, targets t-1127w and t-1127w-nd): `worker_emulated.rs` (replaces `worker_absent.rs`),
+  `worker_wire.rs` (codec moved out of `worker.rs`), `Runtime::emulated_workers`, `State::WorkerBinding` without
+  the host (`WorkerPoolRef`), `Loaded`/`FunctionInfo` Clone, `system_cpu_count` = 1 without the host (profile
+  allows it), `permits_workers` without the profile refusal. Tests: `embedding_tests::workers_are_emulated_in_the_
+  same_instance` (both builds), `one_processor_without_the_host`; playground_run
+  `the_playground_emulates_workers_as_the_cli_runs_them` over `tests/playground/workers/` (6 programs, equal to
+  the CLI's process workers); smoke: parallel map and worker output in wasm. sparrow_wasm_bg.wasm 3,846,641 bytes,
+  1,887,848 gzip.
+- [x] #1136 (feature/1136 from release/066 554a3f99c, not committed; worktree okkama-work/hf-1136, targets t-1136
+  and t-1136-nd): `stdout::{with_tick, tick}`, `rt_poll` ticks; `Batching {Write, Window}`, `BATCH_BYTES`,
+  `Receiver` (replaces `piece_sink`); `Limits::slice`/`Profile::slice`/`SLICE_PLAYGROUND` (= SLICE after
+  measuring); sparrow-wasm `window` request field (`WINDOW_MS` 16), `version().profile.stopped` (`STOPPED`,
+  wording awaiting the owner); tests in embedding_tests (poll hands over, stream and size bounds), stdout,
+  sparrow-wasm; smoke: 6000 lines batched vs per write, the stopped worker prints `stopped`. Measurement in
+  decisions.md. sparrow_wasm_bg.wasm 3,829,703 bytes, 1,881,648 gzip.
+- [x] #1127 (parts without owner decisions; feature/1127 from release/066 acea75ebb, not committed; worktree
+  okkama-work/hf-1127, targets t-1127 and t-1127-nd): `sparrow_core::run_tests_embedded`, `EmbeddedTests`,
+  `TestSetup` (engine, stdin) threaded through `test_profile`, `piece_sink`; sparrow-wasm `test`/`test_streaming`
+  (+ wasm `test(spb, request, sink?)`); `budget::tests::the_playground_offers_digests_macs_uuids_and_checksums`;
+  playground_run: `the_playground_runs_tests_as_okkama_run_t` (38 suites: 13 Bible + 25 std, all equal),
+  `the_playground_hashes_as_the_cli_does` (`tests/playground/digests/main.ok`); smoke.mjs: tests and digests in
+  wasm. sparrow_wasm_bg.wasm 3,826,377 bytes, 1,879,943 gzip (+16.7 KB). CLDR on demand: done in #1125. Workers
+  emulation (§9 #8) and the resumable scheduler (§9 #3) wait for the owner.
+- [x] #1133 and #1128 (feature/1133 from release/066 d7e6c5d79, not committed; worktree okkama-work/hf-1133,
+  target t-1133). #1133: `budget.rs` (`Reach::classify`, `PURE`, `SYSTEM_CONSTANTS`, PLAYGROUND `allowed` = stdin
+  only) and `okkama-runtime-abi/src/catalogue.rs` (PURE/HOST lists, `effect`, counts 275/3/264); five family tests
+  (`pure_family`), green in default and no-default builds with the companion test and the profile-consistency test;
+  mutation (net back in Net) fails three tests. #1128: `ide::Answering` + `Inspection::analysed`, used by
+  `lsp.rs` and okkama-wasm; unit test `answers_come_from_the_last_analysed_inspection` (mutation: record parsed
+  fails it); `tests/playground.rs` completes `bottle.` after `std.coll` (failed before: the LSP offered nothing);
+  `cli.rs` lsp_* green; Bible `build.py --check` without the replace: 249 examples, 0 failures (gate build of the tree).
+- [x] #1134 + #1135 Playground streaming and reachable natives (feature/1134 from release/066 d7e6c5d79, not
+  committed; worktree okkama-work/hf-1134, targets t-1134 and t-1134-nd): `Embedding::pieces`/`PieceSink`;
+  sparrow-wasm `run(spb, request, sink?)`, `run_streaming`, `Decoder`, `version().profile.{interrupted,exhausted}`;
+  `sparrow-core/src/reach.rs` (`functions`, `RUNTIME_CALLS`), `ProgramNatives {declared, reachable}`,
+  `requirements` → `{refused, declared, files}`; playground_run streams and checks over examples/ that a refusal
+  hit is named (315 programs, 47 stopped, all named); smoke.mjs: sink, stopped worker, texts, declared/refused
+  (file program 8→4). sparrow_wasm_bg.wasm 3,773,197 bytes, 1,863,281 gzip (+8.3 KB; budget 2,000,000).
+- [x] #1125 Playground runtime (feature/1125 from release/066, rebased on f5e49d602, not committed; worktree
+  okkama-work/hf-1125, targets t-1125 and t-1125-nd): crate `sparrow-wasm` (run/requirements/provide/version/
+  lastPanic, clocks from the page); `budget::Profile`/`PLAYGROUND`/`Limits::playground()`/`permits_workers`;
+  `stdout::with_sink`; `run_embedded`, `program_natives`, `refused_natives`, `Heap::set_stdin`; `native/secure.rs`;
+  runtime-core feature `cldr` + `provide_cldr`, `gunzip_checked`; `Uncaught`/`main_outcome` in runtime-core
+  `failure.rs`; `okkama_compiler::commands::{compile, trace}`; okkama-wasm `build`/`builtSpb`/`failureText`;
+  `okkama-cli/tests/playground_run.rs` (160 compared, 8 failing, 10 refused, all equal); `tools/playground/
+  smoke.mjs`; CI wasm job and Wave `wasm` part. Size: sparrow_wasm_bg.wasm 3,749,216 bytes, 1,854,972 gzip (budget 2,000,000; okkama_wasm_bg.wasm 2,437,086 gzip). Owner's §9 #4, #6–#10
+  provisional (decisions.md); no `--profile playground` flag.
+- [x] #1122 follow-up (feature/1122b from release/066 9bbd43bce, not committed; worktree okkama-work/hf-1122b,
+  target t-1122b): release/066 red after #1122. `Runtime::extend` loads an interpreter session's extension
+  without the pointer-free proofs (3 session tests of the no-default suite; new
+  `session_tests::a_session_on_the_interpreter_extends_as_on_the_jit`, fails with the fix removed); t/run.py
+  `sparrow-interp-gc-stress` timeout ×10 (persistence/04 121 s locally on debug, CI ran out of 240 s).
+- [x] #1130 and #1131 (feature/1130 from release/066 9bbd43bce, not committed; worktree okkama-work/hf-1130,
+  target t-1130). #1130: `ops.rs` key walks on explicit stacks (`is_object_key`, `object_key`, `cmp_fields`,
+  `owned_object_bytes`, `object_data_bytes`, `Fields` + `take_apart` for the drop; all out of line), tests
+  `ops/key_depth_tests.rs` (100 000-deep key on a 1 MiB thread, default and no-default builds; 300 keys against
+  the recursive definitions); mutations caught: compare order, no drop walk, recursive build (stack overflow).
+  Micro A/B (toolchain.sh at seeds 1 and 2, release/066 9bbd43bce vs candidate, A1 B1 B2 A2, n = 25 000 and
+  100 000, 5 runs, 14 map cells): round 1 +1.5% (map-long-key +4%, the new walks inlined into `cmp_other`); with
+  them out of line, round 2 −0.6% geomean, slope −0.9%, every cell within ±7% and within the protocol's noise
+  (map-miss +3–4% in both rounds, inside its band; worth a look in the release A/B). Toolchains and results in
+  okkama-work/micro-tc/1130-{base,cand}{1,2}, 1130-results (round 2) and 1130-results-round1.
+  #1131: i686-unknown-linux-musl build of sparrow-core's no-default suite (rust-lld, host target added with
+  rustup), run in `linux/386` alpine containers by module filter and per integration file: every lib module and
+  all 13 files pass after the fixes (`budget` 155 s emulated in the gate profile). Found: 1 GiB VM stacks exhaust
+  the 32-bit address space (`STACK_BYTES` 128 MiB on 32-bit), `length_tests` 64-bit only, and a #1122 regression
+  in the no-JIT build (a session on the interpreter refused every extension: pointer-free proofs). Wave `wasm`
+  part runs the i686 suite on the runner (gate profile).
+- [x] #1122 Interpreter 3 (feature/1122 from release/066 29d0bf49e, not committed; worktree okkama-work/hf-1122,
+  target t-1122): `interp::resume` (registers in the Future's frame, `RESUME`, a step per resumption), await,
+  await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +
+  `Heap::relayout` for the interpreter; `Interp::depth`/`reentries` (`REENTRIES` 200 on wasm32); the #1122
+  `#[ignore]`s of #1124 removed (26 tests; all pass on the no-default-features build); `tests/mnemonics/async.spa`,
+  coverage test now all 141 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
+  `region.settle_unwind`; fixed (`Emitter::check` passes the heap frame), ticket #1132. Also fixed: #1129 broke
+  `jit::ready_callees_tests::lazy_compilation_failure…` (it dropped a memory budget between runs; now a large
+  one). Tests: `interp::tests` 28, 9 mutations caught. Corpus (release, cage): t/ 142 identical on the JIT and
+  both interp configs (no skips); examples 263 identical (differ.py now runs a directory's programs serially:
+  examples/fs share files); bench/micro check 749/773 on the interpreter, the 24 cage failures the JIT's;
+  conformance on the interpreter (okkama-dev) 1075/1075. Micro A/B async cells (toolchain.sh seed 1, A B B A,
+  n=10⁵): geomean +0.3%, all within ±2.7%. The async exception line is gone; the Wave's sparrow-interp branch and
+  the gate's interpreter step are blocking. Toolchains okkama-work/micro-tc/1122-{base,cand}.
+- [x] #1129 (feature/1129 from release/066 cd4548694, not committed; worktree okkama-work/hf-1129, target t-1129):
+  `Budget::polled` fixed in `start_budget`, `Runtime::polled()` read by `jit::compile`, `interp::step`,
+  `intrinsics::sort_natural`; refusal text `polling_fixed`; test `interp::tests::the_polling_of_a_runtime_is_fixed…`
+  (three budget pairs, JIT = interpreter; 2 mutations caught); sparrow-core `--test budget` and `runtime::` green.
+  JIT code unchanged when budgets do not change between runs (no A/B). `bench/micro/toolchain.sh`: fetch step
+  (exit 3) and build step (exit 4); end-to-end build checked.
+- [x] #1123 Interpreter 4 (feature/1123 from release/066 32f74e98b, not committed; worktree okkama-work/hf-1123,
+  target t-1123): `okkama-rs/tools/engines/{differ.py, interp-exceptions.txt, test_differ.py}`; t/run.py configs
+  `sparrow-interp`, `sparrow-interp-gc-stress` (×4 timeout, exceptions → "skipped" with reason); wave.yml
+  conformance matrix `[sparrow, sparrow-interp]` (interp `continue-on-error`, `--adapter-env
+  SPARROW_CORE_INTERPRET=1 --timeout-scale 4`, `differ.py ocs`, corpora with the interp configs and `differ.py
+  run examples`; actionlint clean, not yet run on GitHub); gate.sh step "interpreter" (informative); okgen
+  `--engines sparrow,sparrow-interp`; mutants.sh JIT mutant `sparrow-jit` (+ `MUTANTS_ONLY/TARGET/OUT`); fuzz
+  exec `OKKAMA_FUZZ_DIFFERENTIAL=1` (`linking::differ`, test in okkama-compiler `fuzz_lowering`). Local runs:
+  conformance on the interpreter (okkama-dev, gate-like) 986/1075 PASS, 89 async refusals explained, 0
+  unexplained; t/ 142 files on sparrow + both interp configs: all ok, 3 async skipped (213 s, cage); differ.py
+  examples: 211 same, 52 async excepted, 0 differ; okgen 30 seeds clean: 0 disagreements; mutants.sh
+  sparrow-jit: 8/30 seeds disagree, minimized to 1 statement. Found by the fuzz differential test: a deep
+  recursion stops on steps under the JIT and on memory under the interpreter (§6.3, `either:` exception).
+  Docker volumes okkama-gate-target-hf-1123{,-mutants}; results in okkama-work/ocs-1123.
+- [x] #1121 Interpreter 2 (feature/1121 from release/066 c828a2d62, not committed; worktree okkama-work/hf-1121,
+  target t-1121): handlers and `catch` in `interp.rs` (`unwind` returns whether a handler caught; `fail!` in the
+  loop resumes there; `jump_then!` shared by catch and the lookups); `sparrow_core::{Engine, Observed, observe}`,
+  `Runtime::use_engine`; okkama-runtime-core `stdout::{capture_streams, write_error}` (natives.rs stderr goes
+  through it); `okkama-cli/tests/differential.rs` (t/ 49, 16 examples, conformance run failures 58 that build,
+  step parity on 3 programs × 5 budgets); `sparrow-core/tests/mnemonics/*.spa` (6 programs) and
+  `interp::tests::every_synchronous_mnemonic_runs_on_both_engines` (dynamic coverage, test-only recorder in the
+  loop; async mnemonics and `fut.spawn` wait for #1122). Tests: `interp::tests` 24, differential 4,
+  `stdout::tests::capture_streams…` 1; 11 mutations caught. Corpus (release, cage, JIT/interp/interp+GC):
+  t/ 139/142, examples 211/263, conformance run failures 55/58 same, the rest async refusals, 0 differ;
+  bench/micro check 621/773 on the interpreter (128 async, 24 cage-only on both). JIT path untouched (no A/B).
+- [x] #1124 Interpreter 5 (feature/1124 from release/066 c828a2d62, not committed; worktree okkama-work/hf-1124,
+  target t-1124; baseline worktree okkama-work/hf-1124-base + target t-1124-base, both to remove): sparrow-core
+  features `jit` and `host` (default), okkama-runtime-core `native` = `providers + host + zstd + brotli +
+  crypto`, okkama-native `aws-lc`; `clock.rs` (std::time natively, virtual timeline on wasm32: `install`,
+  `skip_to`), `io.rs` split (portable part + `wait_tokio` / `wait_sleeping` / `skipping`), `worker_absent.rs`,
+  stoppable merge sort under `panic = "abort"`, budget math in i64; decisions.md #1124 has every gate and the
+  recursion audit. `cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown` clean (no
+  tokio, cranelift, libc, aws-lc, rusqlite, zstd, brotli in its tree: 130 crates); `cargo check` clean (lib and
+  tests) for default, none, `jit`, `host`; runtime-core providers/providers+crypto/host/zstd/default clean;
+  okkama-compiler + okkama-wasm wasm32 still clean. Tests without defaults, run locally by module filter: lib, every module
+  (all modules; 7 async tests ignored #1122), integration all 13 files (19 ignored #1121/#1122, compile limits
+  and ready_callees JIT-only); `timer_wait` on the Tokio and the sleeping wait (`--features jit`); mutations
+  caught: no interrupt look in the sleeping wait, waker not notifying, unstable merge. Default build: `cargo tree
+  -e features` of okkama-cli/sparrow-cli identical for every external crate (only the three crates' new feature
+  names); corpus A/B of gate builds (release/066 c828a2d62 vs candidate, cage, scratchpad compare.py): t/ 142,
+  examples 333, std -t 125 (every 4th module), conformance 1075 cases: exit, stdout, stderr identical, 0 flaky;
+  SPB of 2121 files identical. Wave part `wasm` and a CI "Playground wasm" step added, not yet run on GitHub
+  (clippy of the no-default combinations is first checked there). Cargo.lock gains js-sys (getrandom `wasm_js`
+  on wasm32 only).
+- [x] #1120 Interpreter 1 (feature/1120 from release/066 39a627b67, not committed; worktree okkama-work/hf-1120,
+  target t-1120): `sparrow-core/src/interp.rs` behind the seam `Runtime::invoke`/`Runtime::resume` (runtime.rs;
+  the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in
+  `Runtime::safepoint`; `SPARROW_CORE_INTERPRET` read in `Runtime::assemble` through `env_switch`; devtrace
+  category `interp`. 141 instructions: 74 `generic` → `rt_exec`, 12 `failure_or_region` → `rt_failure_op`, 48 own
+  branches, 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
+  dispatch_table, role_slot_is_async}`, `texts.rs`. Tests: `interp::tests` (19, in-process JIT/interpreter/GC
+  stress comparison `engines`), 21 mutations of interp.rs/runtime.rs each caught. Corpus (release build, cage):
+  t/ base+op+lang+gen 135 same / 7 refused / 0 differ, under GC stress the same (persistence/06 needs 105 s vs
+  31 s); examples 133 same / 130 refused / 0 differ; SparrowBook examples and sparrow-core/sparrow-cli .spa: all
+  without handlers/async identical; bench/micro check.py 560/773 pass on the interpreter (61 handler and 128
+  async refusals, 24 cage failures shared with the JIT). Switch off: t/ 142 and examples 263 byte-identical to
+  release/066, micro check failures the same set. Micro A/B, JIT path (okkama-dev, toolchain.sh builds of
+  release/066 39a627b67 and the candidate at seeds 1 and 2, n=10⁵, 5 runs, A B B A per seed, plus a 25k/100k
+  slope round on seed 1): 12 cells (map-index/-replace/-plus/-miss/-literal, string-concat/-length/-split,
+  byte, byte-search, closure-call, recursion), geomean −0.2%, every cell within ±4% (string-length +5.5% on
+  seed 1, +0.3% on seed 2: layout). Interpreter/JIT, marginal ns per iteration (slope 20k→100k, seed 1):
+  baseline ×8.4, int-small ×8.5, float ×6.2, recursion ×19.2, method-call ×16.9, closure-call ×12.7, role-call
+  ×16.4, array-index ×8.9, map-index ×2.0, string-concat ×2.1, string-length ×6.3; geomean ×7.9 (design target
+  ≤10×). Toolchains okkama-work/micro-tc/1120-{base,cand}{,2}, results okkama-work/micro-tc/1120-results.
+- [x] Playground follow-ups #1115–#1119 (feature/pg2 from release/066 342cc7322, not committed; worktree
+  okkama-work/hf-pg2, target t-pg2): `std.…` completion over `ide::StdTree` (DiskStd for the LSP, BundledStd in
+  okkama-wasm), parity with `okkama lsp` in tests/playground.rs (#1115); `compiler/src/host.rs` (Clock,
+  dev_output) and `ModuleLoader::identity`, devtrace inert on wasm32, grep test `host::tests` (#1116); one caret
+  in a successor's completion detail (#1117); `lastPanic()` and `version().passes` (#1118); imported files named
+  relative to the current directory (`source::display_name`), LSP relay from the importer's directory, parity
+  test on root-relative paths with imported diagnostics (#1119). No expected outputs changed (Bible, t/,
+  conformance); SPB unchanged by the naming (checked on 19-shop from two directories).
+- [ ] The playground page is built on the website (repo okkama-site, `playground/`), committed locally as
+  e913d3f, not yet published; rebuilt per release with `playground/tools/build.sh CHECKOUT` (wasm-bindgen
+  0.2.130 in okkama-work/tools-wasm). Uncommitted there: worker.js reads `lastPanic` after a trap, playground.js
+  takes the passes from `version().passes` and maps the `folder` kind; `pkg/` rebuilt from hf-pg2.
+
+- [x] #1078, Rust side (feature/1078, not committed; worktree okkama-work/hf-1078, target t-1078): the compiler
+  builds for `wasm32-unknown-unknown` (`cargo check -p okkama-compiler --target wasm32-unknown-unknown`).
+  okkama-runtime-core feature `native` (default) gates `native`, `host`, `data` and their dependencies; the
+  compiler depends on it without default features. `okkama_compiler::commands` renders what check, fmt,
+  tokens, ast, ir and build report (`Finding`, `Report`), used by okkama-cli (main.rs, doctest.rs gate, ocs.rs)
+  and by the new crate `okkama-wasm` (cdylib + rlib; `Workspace` = loader over the embedded std and the page's
+  files; JSON API, decisions.md #1078). Parity: `okkama-cli/tests/playground.rs` (130 files: t/ 51, Bible
+  rejected 69, std 6, fixtures `tests/playground/` 4): check, fmt, ir (all passes and `--after fold`) identical,
+  spa = disassembly of the CLI's SPB; eleven mutations of the wasm side (loader order for std and non-std
+  files, import dirs, self-import, test-mode imports, profiles, stderr trim, fmt newline, warning code, `after`
+  ignored, build profile) each fail it; two of commands.rs (merge dedup, errors-only) fail its unit tests. Corpus before/after (release builds, release/066 994aa8603 vs the candidate): SPB of 1549 built
+  programs byte-identical (std -t 499, t/ 51, examples 264, okkama-rs/examples 13, Bible 181, conformance 541),
+  check and fmt output identical on all 2220 files, tokens/ast/ir (8 variants) identical on 420 files. Release
+  wasm 10.1 MB; after `wasm-bindgen --target web --remove-name-section`: 9.6 MB, gzip 2.40 MB, brotli 1.74 MB
+  (std text 5.97 MB of it, code 3.5 MB). Node smoke test of the nodejs build: every export answers; check of
+  std/http/server 0.33 s. wasm-bindgen-cli 0.2.130 installed into okkama-work/tools-wasm (not on PATH). Not yet:
+  the site page, the CI job (proposed in the report), `std.…` path completion in the playground.
 
 - [x] Release commit 0.6.5 (2026-11-27): version 0.6.5, CHANGELOG [0.6.5] with summary and compare links, Bible
   rebuilt (md/HTML/PDF, EN/RU), micro report `okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`

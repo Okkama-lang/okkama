@@ -300,18 +300,16 @@ impl Runtime {
         }
         self.running.push(frame);
         if get(frame, FLAGS) & COMPLETING == 0 {
-            // A compiled body's address is in the invocation table: `compile`'s frame is not worth a call (#932).
-            let compiled = self.invocations[function].code;
-            let code = match if compiled != 0 { Ok(compiled) } else { crate::jit::compile(self, function) } {
-                Ok(code) => code,
+            // A compiled body's address is in the invocation table: `compile`'s frame is not worth a call (#932);
+            // the seam reads it first and takes its cold branch only without code (#1120).
+            let pending = match self.resume(ctx, function, frame) {
+                Ok(pending) => pending,
                 Err(error) => {
                     self.running.pop();
                     crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
                     return true;
                 }
             };
-            // SAFETY: async bodies take their frame.
-            let pending = unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0;
             let status = unsafe { (*ctx).status };
             if status == FAILED {
                 let failure = unsafe {

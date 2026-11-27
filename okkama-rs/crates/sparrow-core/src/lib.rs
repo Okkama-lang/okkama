@@ -21,11 +21,21 @@
 // the context as a raw pointer and are sound for the code that calls them.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+// #1124: the features `jit` and `host` are native only; without both Sparrow builds for wasm32-unknown-unknown.
+#[cfg(all(target_family = "wasm", feature = "jit"))]
+compile_error!("sparrow-core's `jit` feature generates native code: build for wasm32 with `--no-default-features`");
+#[cfg(all(target_family = "wasm", feature = "host"))]
+compile_error!("sparrow-core's `host` feature needs an operating system: build for wasm32 with `--no-default-features`");
+
 pub mod budget;
 // The one switch policy of every crate (#1095), under its old path.
 #[doc(hidden)]
 pub use okkama_devtrace::env_switch;
 
+pub mod clock;
+/// The functions a run can reach (#1135).
+pub mod reach;
+#[cfg(feature = "jit")]
 mod code_memory;
 mod contracts;
 pub mod drivers;
@@ -34,6 +44,8 @@ pub mod heap;
 pub(crate) mod host;
 pub mod io;
 pub mod intrinsics;
+mod interp;
+#[cfg(feature = "jit")]
 pub mod jit;
 pub mod natives;
 pub mod maps;
@@ -42,16 +54,30 @@ pub mod primitives;
 pub mod program;
 pub mod runtime;
 mod scalar;
+mod texts;
 mod pointer_free;
 pub mod tasks;
 pub mod test_report;
 pub mod word;
+#[cfg(feature = "host")]
 pub mod worker;
+// #1127: without the host (wasm32, the playground) workers are emulated in the same instance.
+#[cfg(not(feature = "host"))]
+#[path = "worker_emulated.rs"]
+pub mod worker;
+/// The values that cross into a worker, process or emulated.
+mod worker_wire;
+// #1127: with the host, the emulation serves an embedding that asks for it (`Runtime::emulated_workers`).
+#[cfg(feature = "host")]
+mod worker_emulated;
+#[cfg(feature = "host")]
 mod worker_process;
 
 /// Machine stack of the VM thread (R2): deep recursion is bounded by this
-/// reservation; physical memory is committed only as frames are used.
-pub const STACK_BYTES: u64 = 1 << 30;
+/// reservation; physical memory is committed only as frames are used. 1 GiB on
+/// 64-bit targets; a 32-bit address space (wasm32, i686: #1131) holds a few
+/// runs' reservations of 128 MiB, where 1 GiB each fails the second thread.
+pub const STACK_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 1 << 27 };
 
 /// Load and run an SPB program's entry on a VM thread.
 pub fn run(bytes: Vec<u8>) -> Result<i64, Error> {
@@ -117,6 +143,275 @@ pub fn run_described(
 
 
 
+/// The engine of a run, whatever `SPARROW_CORE_INTERPRET` says (#1121: the differential test of the two).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// The JIT, in a build with it (#1124: without it the interpreter is the only engine).
+    #[cfg(feature = "jit")]
+    Jit,
+    Interpreter,
+}
+
+/// What a run shows, to compare Sparrow's engines (#1121): `main`'s result, or the report and the uncaught failure
+/// (category, type, message, sites, causes), and what the program wrote to each stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observed {
+    pub result: Result<i64, (String, Option<Uncaught>)>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// `run_described` on `engine`, with both streams captured (#1121).
+pub fn observe(engine: Engine, bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: budget::Limits) -> Result<Observed, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
+        runtime.use_engine(engine);
+        let (result, stdout, stderr) = okkama_runtime_core::stdout::capture_streams(|| execute(&mut runtime));
+        let result = result.map_err(|failure| {
+            let (error, uncaught) = *failure;
+            (error.0, uncaught)
+        });
+        Ok(Observed { result, stdout, stderr })
+    })
+}
+
+/// What an embedding gives a run (#1125: the playground, and the native run that checks it).
+#[derive(Default)]
+pub struct Embedding {
+    pub arguments: Vec<Vec<u8>>,
+    /// Standard input: these bytes, then end of input; `None` reads the process's.
+    pub stdin: Option<Vec<u8>>,
+    pub limits: budget::Limits,
+    /// Where each write goes as it happens (#1134: the playground streams output, so what a stopped run printed
+    /// stays); `None` collects them into [`Embedded::output`].
+    pub pieces: Option<PieceSink>,
+    /// How [`Embedding::pieces`] gets the writes (#1136).
+    pub batching: Batching,
+}
+
+/// How an embedded run hands its writes to [`Embedding::pieces`] (#1136).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Batching {
+    /// Each write as it happens (#1134).
+    #[default]
+    Write,
+    /// A stream's consecutive writes joined while they fall within this many nanoseconds of the first (and within
+    /// [`BATCH_BYTES`]); the piece goes when the next write does not join it, at the run's next budget poll (every
+    /// [`budget::SLICE`] steps at most), and at the end. A program that writes and then computes hands its writes
+    /// over within a slice; one that sleeps (the virtual timeline's skip) starts a new piece with its own moment.
+    Window(u64),
+}
+
+/// The most bytes [`Batching::Window`] joins into one piece.
+pub const BATCH_BYTES: usize = 64 << 10;
+
+/// The receiver of an embedded run's writes, one [`Piece`] per write, on the VM thread.
+pub type PieceSink = Box<dyn FnMut(Piece) + Send>;
+
+impl std::fmt::Debug for Embedding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Embedding")
+            .field("arguments", &self.arguments.len())
+            .field("stdin", &self.stdin.as_ref().map(Vec::len))
+            .field("limits", &self.limits)
+            .field("pieces", &self.pieces.is_some())
+            .field("batching", &self.batching)
+            .finish()
+    }
+}
+
+/// One write of a run to a stream, `nanos` after the run started on Sparrow's clock (`clock`; on wasm32 the
+/// virtual timeline, so a sleep shows as time between pieces without being waited for).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Piece {
+    pub stream: stdout::Stream,
+    pub bytes: Vec<u8>,
+    pub nanos: u64,
+}
+
+/// What an embedded run shows: `main`'s result, or the report and the uncaught failure, and the program's writes
+/// in order (consecutive writes to one stream at one moment are one piece; empty when [`Embedding::pieces`] took
+/// them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Embedded {
+    pub result: Result<i64, (String, Option<Uncaught>)>,
+    pub output: Vec<Piece>,
+}
+
+/// Run on the interpreter, as the playground does (#1125), under `embedding`'s limits, with its standard input,
+/// every write marked with its moment.
+pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let Embedding { arguments, stdin, limits, pieces: streamed, batching } = embedding;
+        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
+        runtime.use_engine(Engine::Interpreter);
+        // The playground's workers, natively too (#1127).
+        runtime.emulated_workers = true;
+        if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
+            host.set_stdin(bytes);
+        }
+        let (result, output) = Receiver::receive(&Receiver::new(streamed, batching), || execute(&mut runtime));
+        let result = result.map_err(|failure| {
+            let (error, uncaught) = *failure;
+            (error.0, uncaught)
+        });
+        Ok(Embedded { result, output })
+    })
+}
+
+/// The receiver of an embedded run's writes: each to `streamed` (by `batching`), or collected (a stream's writes at
+/// one moment joined). Moments are nanoseconds since it was made on Sparrow's clock.
+struct Receiver {
+    collected: Vec<Piece>,
+    pending: Option<Piece>,
+    streamed: Option<PieceSink>,
+    batching: Batching,
+    start: clock::Instant,
+}
+
+type Shared = std::rc::Rc<std::cell::RefCell<Receiver>>;
+
+impl Receiver {
+    fn new(streamed: Option<PieceSink>, batching: Batching) -> Shared {
+        let start = clock::Instant::now();
+        std::rc::Rc::new(std::cell::RefCell::new(Self { collected: Vec::new(), pending: None, streamed, batching, start }))
+    }
+
+    fn write(&mut self, stream: stdout::Stream, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let nanos = u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let Some(streamed) = self.streamed.as_mut() else {
+            match self.collected.last_mut() {
+                Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
+                _ => self.collected.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
+            }
+            return;
+        };
+        let window = match self.batching {
+            // A window of 0 joins nothing, so it holds nothing back either.
+            Batching::Write | Batching::Window(0) => return streamed(Piece { stream, bytes: bytes.to_vec(), nanos }),
+            Batching::Window(window) => window,
+        };
+        match self.pending.as_mut() {
+            Some(pending)
+                if pending.stream == stream
+                    && nanos.saturating_sub(pending.nanos) < window
+                    && pending.bytes.len() + bytes.len() <= BATCH_BYTES =>
+            {
+                pending.bytes.extend_from_slice(bytes);
+            }
+            _ => {
+                if let Some(pending) = self.pending.replace(Piece { stream, bytes: bytes.to_vec(), nanos }) {
+                    streamed(pending);
+                }
+            }
+        }
+    }
+
+    /// Hand over the piece being joined (a budget poll, the end of the run).
+    fn tick(&mut self) {
+        if let (Some(pending), Some(streamed)) = (self.pending.take(), self.streamed.as_mut()) {
+            streamed(pending);
+        }
+    }
+
+    /// Run `body` with the writes of this VM thread going here, ticked at each budget poll; then hand over what is
+    /// left and return what was collected.
+    fn receive<T>(shared: &Shared, body: impl FnOnce() -> T) -> (T, Vec<Piece>) {
+        let (writes, ticks) = (shared.clone(), shared.clone());
+        let sink: stdout::Sink = Box::new(move |stream, bytes| writes.borrow_mut().write(stream, bytes));
+        let tick = Box::new(move || ticks.borrow_mut().tick());
+        let result = stdout::with_sink(sink, || stdout::with_tick(tick, body));
+        let mut receiver = shared.borrow_mut();
+        receiver.tick();
+        (result, std::mem::take(&mut receiver.collected))
+    }
+}
+
+/// What an embedded test run shows (#1127): whether every test passed, and the human report (`okkama run -t`'s) with
+/// the tests' own writes, in order (empty when [`Embedding::pieces`] took them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedTests {
+    pub passed: bool,
+    pub output: Vec<Piece>,
+}
+
+/// The test profile of an SPB built with tests, as `okkama run -t` runs it, but on the interpreter and as the
+/// playground does (#1127): each test on a runtime of its own under `embedding`'s limits, with its standard input;
+/// the report streams through the same receiver as the tests' output. `Err` for a program that does not load or has
+/// no tests (the CLI's `okkama: …`, exit 4).
+pub fn run_tests_embedded(bytes: Vec<u8>, embedding: Embedding, plan: test_report::TestPlan) -> Result<EmbeddedTests, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let Embedding { arguments: _, stdin, limits, pieces: streamed, batching } = embedding;
+        let setup = TestSetup { engine: Some(Engine::Interpreter), stdin, emulated_workers: true };
+        let (report, output) = Receiver::receive(&Receiver::new(streamed, batching), || {
+            // A line at a time: the report is written in fragments, and each write is a piece the page receives.
+            test_profile(program, plan, Some(Box::new(std::io::LineWriter::new(stdout::Buffered))), Vec::new(), &limits, &setup)
+        });
+        Ok(EmbeddedTests { passed: report?.passed(), output })
+    })
+}
+
+/// How each test's runtime is set up beyond its budgets (#1127: the playground's engine and standard input).
+#[derive(Debug, Default)]
+struct TestSetup {
+    engine: Option<Engine>,
+    stdin: Option<Vec<u8>>,
+    /// Workers emulated in this instance (#1127).
+    emulated_workers: bool,
+}
+
+/// The natives of an SPB program, each once, in the ABI's order (#1125, #1135).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramNatives {
+    /// Every native it declares (the imported modules' too).
+    pub declared: Vec<okkama_runtime_abi::Native>,
+    /// Those a run can call ([`reach`]): from the entry, or the tests of a test profile.
+    pub reachable: Vec<okkama_runtime_abi::Native>,
+}
+
+impl ProgramNatives {
+    /// The symbols of `natives` that `profile` refuses, sorted.
+    pub fn refused(natives: &[okkama_runtime_abi::Native], profile: &budget::Profile) -> Vec<&'static str> {
+        let mut refused: Vec<&'static str> =
+            natives.iter().filter(|native| !profile.offers(**native)).map(|native| native.symbol()).collect();
+        refused.sort_unstable();
+        refused
+    }
+}
+
+/// The natives an SPB program declares and those a run can reach (#1125: what the playground needs for it).
+pub fn program_natives(bytes: &[u8]) -> Result<ProgramNatives, Error> {
+    let DecodedProgram::Legacy(program) = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
+    let reached = reach::functions(&program);
+    let mut declared = Vec::new();
+    let mut reachable = Vec::new();
+    for (function, reached) in program.functions.iter().zip(reached) {
+        if let Some(native) = function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve) {
+            declared.push(native);
+            if reached {
+                reachable.push(native);
+            }
+        }
+    }
+    for natives in [&mut declared, &mut reachable] {
+        natives.sort_unstable_by_key(|native| *native as usize);
+        natives.dedup();
+    }
+    Ok(ProgramNatives { declared, reachable })
+}
+
+/// The natives a run of an SPB program can reach that `profile` refuses, by symbol, sorted, each once (#1125,
+/// #1135: the playground warns before a run, and the site marks the examples that run).
+pub fn refused_natives(bytes: &[u8], profile: &budget::Profile) -> Result<Vec<&'static str>, Error> {
+    Ok(ProgramNatives::refused(&program_natives(bytes)?.reachable, profile))
+}
+
 /// CLI execution result. Loading failures remain the outer `Err`; runtime
 /// failures carry the report prefix and an already rendered Sparrow trace
 /// followed by cause reports with their own stacks. With tracing disabled,
@@ -176,7 +471,7 @@ pub fn run_executable(
         if program.has_tests() && let Some(out) = tests
         {
             // The budgets bound each test as they bound main (#1017).
-            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
+            return Ok(test_profile(program, test_report::TestPlan::default(), Some(out), worker_command, &limits, &TestSetup::default()).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         // A runtime that cannot be built (an intrinsic's contract, a malformed `SPARROW_CORE_CODE_SHIFT`) is a
@@ -247,68 +542,9 @@ fn execute(runtime: &mut Box<runtime::Runtime>) -> Result<i64, Box<(Error, Optio
     result.map_err(|error| Box::new((error, runtime.uncaught.take())))
 }
 
-/// An uncaught failure of `main`: its OCS category (`uncaught-error`,
-/// `runtime`, `panic`), the error type of a thrown value or `NativeFailure`,
-/// its message, and the activations it unwound through, innermost first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Uncaught {
-    pub category: &'static str,
-    pub error_type: Option<String>,
-    pub message: String,
-    /// Function and instruction numbers; they are shared with OIR, so a
-    /// compiler can map them to source (`okkama-cli/src/trace.rs`).
-    pub trace: Vec<Site>,
-    /// Activations of the root's unwind past the recorded limit (#1009),
-    /// missing between the innermost and the outermost ones of `trace` (#1034).
-    pub trace_omitted: u64,
-    /// Byte offset after the root and its secondaries in the plain report,
-    /// before its cause entries.
-    pub trace_offset: usize,
-    /// Byte offsets after cause entries, their original unwind stacks and the
-    /// activations each left out (#1034). Secondary cleanup failures
-    /// deliberately have no diagnostic stack.
-    pub cause_traces: Vec<(usize, Vec<Site>, u64)>,
-}
-
-impl Uncaught {
-    /// Add source or SPB stacks to the plain report, keeping cause stacks
-    /// indented under their entries. Only called when traces are requested.
-    pub fn render_report(&self, report: &str, render: impl Fn(&[Site]) -> String) -> String {
-        let mut output = String::new();
-        let mut start = 0;
-        let mut traces: Vec<_> = self.cause_traces.iter()
-            .map(|(offset, trace, omitted)| (*offset, trace.as_slice(), *omitted, "  "))
-            .chain(std::iter::once((self.trace_offset, self.trace.as_slice(), self.trace_omitted, "")))
-            .collect();
-        traces.sort_by_key(|entry| entry.0);
-        for (offset, trace, omitted, indent) in traces {
-            output.push_str(&report[start..offset]);
-            let mut stack = render(trace);
-            // The stack shows the innermost and the outermost activations; the
-            // ones between were only counted (#1009, #1034).
-            if omitted > 0 && !stack.is_empty() {
-                stack = format!(
-                    "{}\n... and {omitted} more activations in the middle, not recorded\n",
-                    stack.trim_end_matches('\n')
-                );
-            }
-            if !stack.is_empty() {
-                output.push('\n');
-                for (index, line) in stack.trim_end_matches('\n').split('\n').enumerate() {
-                    if index != 0 {
-                        output.push('\n');
-                    }
-                    output.push_str(indent);
-                    output.push_str(line);
-                }
-            }
-            start = offset;
-        }
-        output.push_str(&report[start..]);
-        output
-    }
-}
-
+/// An uncaught failure of `main` (`okkama_runtime_core::failure::Uncaught` since #1125: the playground's compiler
+/// renders it without Sparrow).
+pub use okkama_runtime_core::failure::Uncaught;
 pub use okkama_runtime_core::failure::Site;
 pub use okkama_runtime_core::stdout;
 
@@ -393,8 +629,10 @@ pub fn run_test_report_limited(
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         match progress {
-            Some(out) => test_profile(program, plan, Some(out), worker_command, &limits),
-            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, plan, None, worker_command, &limits)),
+            Some(out) => test_profile(program, plan, Some(out), worker_command, &limits, &TestSetup::default()),
+            None => okkama_runtime_core::stdout::to_stderr(|| {
+                test_profile(program, plan, None, worker_command, &limits, &TestSetup::default())
+            }),
         }
     })
 }
@@ -407,9 +645,10 @@ fn test_profile(
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
     limits: &budget::Limits,
+    setup: &TestSetup,
 ) -> Result<test_report::TestReport, Error> {
     match program {
-        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command, limits),
+        DecodedProgram::Legacy(program) => test_program(program, plan, out, worker_command, limits, setup),
     }
 }
 
@@ -419,6 +658,7 @@ fn test_program(
     out: Option<Box<dyn std::io::Write + Send>>,
     worker_command: Vec<std::ffi::OsString>,
     limits: &budget::Limits,
+    setup: &TestSetup,
 ) -> Result<test_report::TestReport, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
@@ -440,6 +680,13 @@ fn test_program(
         let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
         runtime.worker_command = worker_command.clone();
         runtime.limits = limits.clone();
+        if let Some(engine) = setup.engine {
+            runtime.use_engine(engine);
+        }
+        runtime.emulated_workers |= setup.emulated_workers;
+        if let (Some(bytes), Some(host)) = (&setup.stdin, runtime.host.as_mut()) {
+            host.set_stdin(bytes.clone());
+        }
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
             host.test_cases = test_report::SubCaseState::new(only);
@@ -622,6 +869,7 @@ fn human_outcome(
 /// program `bytes`; nested spawns run `worker_command`. For the CLIs' worker
 /// processes only, not an embedding entry point: a worker runs without
 /// budgets or native permissions.
+#[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<Vec<u8>, Error> {
     on_vm_thread(move || {
@@ -634,6 +882,7 @@ pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi
 
 /// Internal CLI worker transport. One-shot spawn keeps its EOF protocol;
 /// run-local pools use a duplex control socket, separate from program output.
+#[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<(), Error> {
     use std::io::{Read, Write};
@@ -684,12 +933,15 @@ pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> 
         .and_then(|()| out.flush())
         .map_err(|e| Error(format!("worker response: {e}")))
 }
+/// Run `body` on a VM thread with a stack of `STACK_BYTES` (R2); with the host, inside a host session.
+#[cfg(not(target_family = "wasm"))]
 fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
     std::thread::Builder::new()
         .name("sparrow-core".into())
         .stack_size(STACK_BYTES as usize)
         .spawn(move || {
             // The program's cwd and environment live as long as this run (#40).
+            #[cfg(feature = "host")]
             let _host = okkama_runtime_core::host::enter(
                 okkama_runtime_core::host::Context::process().without("SPARROW_INTERNAL_WORKER").without("SPARROW_INTERNAL_WORKER_POOL"),
             );
@@ -700,8 +952,16 @@ fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Sen
         .map_err(|payload| Error(format!("internal error: {}", runtime::panic_text(&*payload))))?
 }
 
+/// wasm32 has no threads: the run takes the caller's stack (#1124). The interpreter's frames are on its own
+/// register stack, so only Rust's re-entries (closures called by natives, destroys) use it; a panic is a trap.
+#[cfg(target_family = "wasm")]
+fn on_vm_thread<T: Send + 'static>(body: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
+    body()
+}
+
 /// A variable the launcher adds to the program's environment when the
 /// process lacks it (`okkama run` passes the pinned ICU this way).
+#[cfg(feature = "host")]
 pub fn default_environment(name: &str, value: &str) {
     okkama_runtime_core::host::default_environment(name, value);
 }
@@ -731,6 +991,7 @@ enum DecodedProgram {
 }
 
 impl DecodedProgram {
+    #[cfg(feature = "host")]
     fn legacy(self) -> Result<okkama_sparrow::Program, Error> {
         match self {
             Self::Legacy(program) => Ok(program),
@@ -756,6 +1017,9 @@ fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecE
 
 #[cfg(test)]
 mod session_tests;
+
+#[cfg(test)]
+mod embedding_tests;
 
 #[cfg(test)]
 mod uncaught_report_tests {
@@ -790,5 +1054,56 @@ mod uncaught_report_tests {
             caused.render_report(text, |_| "  at f\n".into()),
             "E: rethrown\n  at f\nCaused by:\n  RuntimeError: Stack overflow\n    at f\n  ... and 5 more activations in the middle, not recorded"
         );
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use okkama_runtime_abi::Native;
+
+    /// #1124: every build provides the pure natives (text, numbers, JSON, regex, IDNA, digests, the clocks), and
+    /// only a build with the host provides the host's (files, the environment, processes, networks, SQLite, the
+    /// terminal through runtime-core); a native a build lacks is unsupported, never routed to a refusal.
+    #[test]
+    fn the_build_provides_the_pure_natives_and_the_host_its_own() {
+        for native in [
+            Native::Utf8Encode,
+            Native::NetIpParse,
+            Native::RegexRegexEscape,
+            Native::CryptoDigest,
+            Native::LayoutDedent,
+            Native::TimeWallClock,
+            Native::TimeMonotonicClock,
+            Native::TimeSleepNanoseconds,
+            // One processor without the host, where workers are emulated in the instance (#1127).
+            Native::SystemSystemCpuCount,
+        ] {
+            assert!(crate::natives::supported(native), "{}", native.symbol());
+        }
+        for native in [
+            Native::FsOpen,
+            Native::FsPathJoin,
+            Native::EnvironmentEnvironmentSnapshot,
+            Native::ProcessProcessStateStart,
+            Native::AccountAccountCurrentUser,
+            Native::X509SystemCertificates,
+        ] {
+            let host = cfg!(feature = "host");
+            assert_eq!(crate::natives::supported(native), host, "{}", native.symbol());
+        }
+    }
+
+    /// #1124: without the JIT every runtime runs on the interpreter, switch or not; with it, the switch chooses.
+    #[test]
+    fn a_runtime_interprets_without_the_jit_or_when_chosen() {
+        let program = okkama_sparrow::assemble(
+            "sparrow 18\nmodule \"m\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 3\n 1: ret r0\n}\nentry f0\n",
+        )
+        .unwrap();
+        let mut runtime = Box::new(crate::runtime::Runtime::new(crate::program::Loaded::verified(program).unwrap()).unwrap());
+        let chosen = crate::env_switch::enabled("SPARROW_CORE_INTERPRET");
+        assert_eq!(runtime.interp.is_some(), !cfg!(feature = "jit") || chosen);
+        assert_eq!(runtime.run_entry(64 << 20).unwrap(), 3);
+        assert_eq!(runtime.invocations[0].code != 0, cfg!(feature = "jit") && !chosen, "only the JIT publishes code");
     }
 }

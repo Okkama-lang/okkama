@@ -130,7 +130,58 @@ pub enum Key {
     Str(u64, Rc<str>),
     /// A `rat` field of an object key.
     Rat(Rc<Rat>),
-    Object(u32, Rc<[Key]>),
+    Object(u32, Fields),
+}
+
+/// The field keys of an object key. Every walk over a key's depth (compare, sizes, build, drop) keeps its own
+/// stack instead of recursing (#1130): a key nested deeper than a small machine stack (wasm32's) stays usable.
+#[derive(Debug, Clone)]
+pub struct Fields(Rc<[Key]>);
+
+impl std::ops::Deref for Fields {
+    type Target = [Key];
+    fn deref(&self) -> &[Key] {
+        &self.0
+    }
+}
+
+impl From<Vec<Key>> for Fields {
+    fn from(keys: Vec<Key>) -> Self {
+        Self(keys.into())
+    }
+}
+
+impl Drop for Fields {
+    /// The last owner of nested object keys takes them apart level by level: a nested `Fields` is moved out of
+    /// its parent before the parent is freed, so no drop reaches more than one level down.
+    #[inline]
+    fn drop(&mut self) {
+        if self.0.iter().any(|key| matches!(key, Key::Object(..))) {
+            self.take_apart();
+        }
+    }
+}
+
+impl Fields {
+    /// The walk of [`Fields::drop`] over nested levels, out of line.
+    #[cold]
+    #[inline(never)]
+    fn take_apart(&mut self) {
+        let mut pending: Vec<Rc<[Key]>> = Vec::new();
+        let take = |keys: &mut Rc<[Key]>, pending: &mut Vec<Rc<[Key]>>| {
+            if let Some(keys) = Rc::get_mut(keys) {
+                for key in keys.iter_mut() {
+                    if let Key::Object(_, fields) = key {
+                        pending.push(std::mem::replace(&mut fields.0, Rc::from([])));
+                    }
+                }
+            }
+        };
+        take(&mut self.0, &mut pending);
+        while let Some(mut keys) = pending.pop() {
+            take(&mut keys, &mut pending);
+        }
+    }
 }
 impl Key {
     /// The key of an `int`: small when it fits in 64 bits.
@@ -178,9 +229,36 @@ impl Key {
             Self::Small(_) | Self::Float(_) | Self::Raw(_) => 0,
             Self::Str(_, text) => (text.len() + 16) / std::rc::Rc::strong_count(text),
             Self::Rat(value) => rational_bytes(value) / std::rc::Rc::strong_count(value),
-            Self::Object(_, fields) => {
-                let own = 16 + fields.len() * std::mem::size_of::<Key>() + fields.iter().map(Key::owned_bytes).sum::<usize>();
-                own / std::rc::Rc::strong_count(fields)
+            Self::Object(_, fields) => Self::owned_object_bytes(fields),
+        }
+    }
+
+    /// `owned_bytes` of an object key: each level's own bytes and its fields', divided by that level's owners,
+    /// computed bottom-up on an explicit stack (#1130).
+    #[cold]
+    #[inline(never)]
+    fn owned_object_bytes(fields: &Fields) -> usize {
+        // (the level, the next field to visit, the bytes summed so far)
+        let mut stack: Vec<(&Fields, usize, usize)> = vec![(fields, 0, 0)];
+        loop {
+            let (level, next, sum) = stack.last_mut().expect("a level");
+            match level.get(*next) {
+                Some(Self::Object(_, inner)) => {
+                    *next += 1;
+                    stack.push((inner, 0, 0));
+                }
+                Some(leaf) => {
+                    *next += 1;
+                    *sum += leaf.owned_bytes();
+                }
+                None => {
+                    let (level, _, sum) = stack.pop().expect("a level");
+                    let own = (16 + level.len() * std::mem::size_of::<Key>() + sum) / Rc::strong_count(&level.0);
+                    match stack.last_mut() {
+                        Some((_, _, parent)) => *parent += own,
+                        None => return own,
+                    }
+                }
             }
         }
     }
@@ -194,8 +272,26 @@ impl Key {
             Self::Int(n) => n.bits().div_ceil(64) as usize * 8,
             Self::Str(_, text) => text.len() + 16,
             Self::Rat(value) => rational_bytes(value),
-            Self::Object(_, fields) => 16 + fields.len() * std::mem::size_of::<Key>() + fields.iter().map(Key::data_bytes).sum::<usize>(),
+            Self::Object(_, fields) => Self::object_data_bytes(fields),
         }
+    }
+
+    /// `data_bytes` of an object key: a sum over every level, walked on an explicit stack (#1130).
+    #[cold]
+    #[inline(never)]
+    fn object_data_bytes(fields: &Fields) -> usize {
+        let mut total = 0;
+        let mut pending = vec![fields];
+        while let Some(level) = pending.pop() {
+            total += 16 + level.len() * std::mem::size_of::<Key>();
+            for key in level.iter() {
+                match key {
+                    Self::Object(_, inner) => pending.push(inner),
+                    leaf => total += leaf.data_bytes(),
+                }
+            }
+        }
+        total
     }
 }
 impl Ord for Key {
@@ -223,9 +319,42 @@ impl Key {
             (Self::Raw(a), Self::Raw(b)) => a.cmp(b),
             (Self::Str(_, a), Self::Str(_, b)) => a.cmp(b),
             (Self::Rat(a), Self::Rat(b)) => a.compare(b),
-            (Self::Object(a, x), Self::Object(b, y)) => a.cmp(b).then_with(|| x.iter().cmp(y.iter())),
+            (Self::Object(a, x), Self::Object(b, y)) => a.cmp(b).then_with(|| Self::cmp_fields(x, y)),
             _ => self.rank().cmp(&other.rank()),
         }
+    }
+
+    /// Two object keys' fields in order, as `Iterator::cmp` of the fields would compare them, with nested object
+    /// keys compared on an explicit stack of the levels still open (#1130). Out of line, so `cmp_other` stays as
+    /// small as before for the keys that reach it most (strings sharing their first 8 bytes).
+    #[cold]
+    #[inline(never)]
+    fn cmp_fields(x: &[Key], y: &[Key]) -> Ordering {
+        let mut open: Vec<(&[Key], &[Key])> = vec![(x, y)];
+        while let Some((x, y)) = open.last_mut() {
+            match (x.split_first(), y.split_first()) {
+                (None, None) => {
+                    open.pop();
+                }
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some((a, rest_x)), Some((b, rest_y))) => {
+                    (*x, *y) = (rest_x, rest_y);
+                    match (a, b) {
+                        (Self::Object(da, fa), Self::Object(db, fb)) => match da.cmp(db) {
+                            Ordering::Equal => open.push((fa, fb)),
+                            order => return order,
+                        },
+                        // Not two object keys: no nesting to open.
+                        _ => match a.cmp(b) {
+                            Ordering::Equal => {}
+                            order => return order,
+                        },
+                    }
+                }
+            }
+        }
+        Ordering::Equal
     }
 }
 impl Key {
@@ -319,22 +448,40 @@ impl Runtime {
     fn is_key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> bool {
         match (kind, ty) {
             (Kind::Int | Kind::Float | Kind::Raw | Kind::Byte, _) | (_, Some(Type::Str | Type::Rat)) => true,
-            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => {
-                let declaration = heap::payload(self.heap.header_of(word));
-                let program = &self.loaded.program;
-                program.objects[declaration as usize]
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (name, _))| !is_once_slot(name))
-                    .all(|(index, &(_, field))| {
-                        // A field not bound yet (#1076) holds no value to key by.
-                        let (value, kind) = (self.heap.field(word, index), self.kind_of(field));
-                        value != word::unbound(kind.repr()) && self.is_key(value, kind, program.ty(field))
-                    })
-            }
+            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => self.is_object_key(word),
             _ => false,
         }
+    }
+
+    /// Whether every field of object `word` keys by, nested objects included: their fields are visited on an
+    /// explicit stack (#1130), so a key's depth does not use the machine stack.
+    #[cold]
+    #[inline(never)]
+    fn is_object_key(&self, word: Word) -> bool {
+        let program = &self.loaded.program;
+        let mut pending = vec![word];
+        while let Some(object) = pending.pop() {
+            let declaration = heap::payload(self.heap.header_of(object));
+            for (index, &(ref name, field)) in program.objects[declaration as usize].fields.iter().enumerate() {
+                if is_once_slot(name) {
+                    continue;
+                }
+                // A field not bound yet (#1076) holds no value to key by.
+                let (value, kind) = (self.heap.field(object, index), self.kind_of(field));
+                if value == word::unbound(kind.repr()) {
+                    return false;
+                }
+                match (kind, program.ty(field)) {
+                    (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(value)) == heap::OBJECT => pending.push(value),
+                    (kind, ty) => {
+                        if !self.is_key(value, kind, ty) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
     }
 
     pub(crate) fn key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> Key {
@@ -344,19 +491,47 @@ impl Runtime {
             (Kind::Raw | Kind::Byte, _) => Key::Raw(word),
             (_, Some(Type::Str)) => Key::text(Rc::from(self.heap.text(word))),
             (_, Some(Type::Rat)) => Key::Rat(Rc::new(self.rational(word).clone())),
-            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => {
-                let declaration = heap::payload(self.heap.header_of(word));
-                let program = &self.loaded.program;
-                let fields = program.objects[declaration as usize]
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (name, _))| !is_once_slot(name))
-                    .map(|(index, &(_, field))| self.key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
-                    .collect();
-                Key::Object(declaration, fields)
-            }
+            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => self.object_key(word),
             _ => Key::Raw(word),
+        }
+    }
+
+    /// The key of object `word`: its declaration and its fields' keys, nested objects built on an explicit stack
+    /// of the objects still open (#1130).
+    #[cold]
+    #[inline(never)]
+    fn object_key(&self, word: Word) -> Key {
+        let program = &self.loaded.program;
+        // (the object, its declaration, the next field to read, the field keys made so far)
+        let open_object = |object: Word| {
+            let declaration = heap::payload(self.heap.header_of(object));
+            (object, declaration, 0usize, Vec::new())
+        };
+        let mut open = vec![open_object(word)];
+        loop {
+            let (object, declaration, next, keys) = open.last_mut().expect("an open object");
+            let fields = &program.objects[*declaration as usize].fields;
+            match fields.get(*next) {
+                Some((name, _)) if is_once_slot(name) => *next += 1,
+                Some(&(_, field)) => {
+                    let (value, kind, ty) = (self.heap.field(*object, *next), self.kind_of(field), program.ty(field));
+                    *next += 1;
+                    match (kind, ty) {
+                        (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(value)) == heap::OBJECT => {
+                            open.push(open_object(value));
+                        }
+                        (kind, ty) => keys.push(self.key(value, kind, ty)),
+                    }
+                }
+                None => {
+                    let (_, declaration, _, keys) = open.pop().expect("an open object");
+                    let key = Key::Object(declaration, keys.into());
+                    match open.last_mut() {
+                        Some((_, _, _, parent)) => parent.push(key),
+                        None => return key,
+                    }
+                }
+            }
         }
     }
 }
@@ -1167,11 +1342,9 @@ pub extern "C" fn rt_exec(
         // Spawning runs the worker's driver now: it needs the context.
         I::WorkerSpawn { entry, args, direct, .. } => {
             let arguments: Vec<Word> = args.iter().map(value).collect();
-            match &runtime.limits.natives {
-                Some(allowed) if !allowed.contains(&crate::budget::NativeGroup::Process) => {
-                    Err("Process workers need the Process permission".to_string())
-                }
-                _ => crate::worker::spawn(runtime, &mut *ctx, value(entry), &arguments, *direct),
+            match runtime.limits.permits_workers() {
+                Err(message) => Err(message),
+                Ok(()) => crate::worker::spawn(runtime, &mut *ctx, value(entry), &arguments, *direct),
             }
         }
         // The init of a constant runs machine code: it needs the context.
@@ -2172,3 +2345,7 @@ pub(crate) fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: 
         None => message,
     })
 }
+
+#[cfg(test)]
+#[path = "key_depth_tests.rs"]
+mod key_depth_tests;

@@ -7,6 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["aws-lc"]
+# aws-lc (a C library): RSA, X.509 signature checks and the ECDSA verification fast path (`rsa_public`, `x509`,
+# `ops::rsa_op`). Without it those operations are refused as unsupported and the rest, RustCrypto, is pure Rust,
+# which builds for wasm32-unknown-unknown (#1124). Every runtime that has the host keeps it on.
+aws-lc = ["dep:aws-lc-rs", "dep:aws-lc-sys"]
+
 [dependencies]
 aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 argon2 = { version = "0.6.0", features = ["zeroize"] }
@@ -16,7 +23,6 @@ ed25519-dalek = { version = "3.0.0", features = ["pkcs8", "alloc"] }
 # Only for its `zeroize` feature, which ed25519-dalek does not forward: the seed
 # copy in `KeypairBytes` (PKCS#8 in and out) is zeroed on drop (#1026).
 ed25519 = { version = "3.0.0", default-features = false, features = ["zeroize"] }
-getrandom = "0.4.3"
 hkdf = "0.13.0"
 hmac = { version = "0.13.0", features = ["zeroize"] }
 p256 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
@@ -24,8 +30,8 @@ ecdsa = { version = "0.17.0", default-features = false, features = ["algorithm",
 p384 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
 p521 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
 pkcs8 = "0.11"
-aws-lc-rs = "=1.18.2"
-aws-lc-sys = "=0.46.0"
+aws-lc-rs = { version = "=1.18.2", optional = true }
+aws-lc-sys = { version = "=0.46.0", optional = true }
 sha1 = { version = "0.11.0", features = ["oid"] }
 sha2 = "0.11.0"
 sha3 = "0.12.0"
@@ -34,6 +40,13 @@ spki = "0.8"
 subtle = "2.6.1"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = "1.9.1"
+
+# Platform randomness off Apple systems (`secure`). On wasm32-unknown-unknown it asks the JavaScript host
+# (`crypto.getRandomValues`): getrandom has no backend there without its `wasm_js` feature (#1124).
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+getrandom = "0.4.3"
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
 
 # unsafe разрешён только в
 # `rsa_public` (низкоуровневая проверка подписей RSA через aws-lc), в

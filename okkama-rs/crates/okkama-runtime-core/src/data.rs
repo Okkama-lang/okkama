@@ -3,24 +3,29 @@
 
 /// Содержимое gzip-файла (RFC 1952: заголовок, deflate, CRC и длина).
 pub fn gunzip(bytes: &[u8]) -> Vec<u8> {
-    assert!(bytes.len() > 18 && bytes[..3] == [0x1f, 0x8b, 8], "gzip data");
+    gunzip_checked(bytes).expect("gzip data")
+}
+
+/// [`gunzip`] of bytes from outside the runtime (#1125: a CLDR file the playground fetched): `None` unless they
+/// are gzip data.
+pub fn gunzip_checked(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() <= 18 || bytes[..3] != [0x1f, 0x8b, 8] {
+        return None;
+    }
     let flags = bytes[3];
     let mut at = 10;
     if flags & 4 != 0 {
-        at += 2 + usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+        at += 2 + usize::from(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]));
     }
     for flag in [8, 16] {
         if flags & flag != 0 {
-            while bytes[at] != 0 {
-                at += 1;
-            }
-            at += 1;
+            at += bytes.get(at..)?.iter().position(|&byte| byte == 0)? + 1;
         }
     }
     if flags & 2 != 0 {
         at += 2;
     }
-    miniz_oxide::inflate::decompress_to_vec(&bytes[at..bytes.len() - 8]).expect("valid deflate")
+    miniz_oxide::inflate::decompress_to_vec(bytes.get(at..bytes.len() - 8)?).ok()
 }
 
 macro_rules! table {

@@ -34,10 +34,18 @@ pub enum State {
     Selection(Selection),
     Group(Group),
     Stream(Box<Stream>),
-    /// A bound action (`worker.bind`): its worker entry and receiver fields.
-    WorkerBinding { entry: Word, fields: Vec<(Word, Repr)>, pool: Option<Rc<crate::worker_process::Pool>> },
+    /// A bound action (`worker.bind`): its worker entry and receiver fields; a spawn of it reconstructs the
+    /// receiver from them (in a process, or emulated without the host, #1127).
+    WorkerBinding { entry: Word, fields: Vec<(Word, Repr)>, pool: Option<WorkerPoolRef> },
+    #[cfg(feature = "host")]
     WorkerPool(Rc<crate::worker_process::Pool>),
 }
+
+/// The process pool a bound action reuses (#1127: none without the host, where workers are emulated).
+#[cfg(feature = "host")]
+pub type WorkerPoolRef = Rc<crate::worker_process::Pool>;
+#[cfg(not(feature = "host"))]
+pub type WorkerPoolRef = std::convert::Infallible;
 
 /// `FutureCompletions`: settled inputs handed to `completion()` requests in
 /// settlement order (inputs already settled at the start: in input order).

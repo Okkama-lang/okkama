@@ -108,11 +108,54 @@ pub fn limits() -> Limits {
 /// a syntax, language or load error), else the run's outcome. A compiler
 /// failure on a linked module panics.
 pub fn run(data: &[u8]) -> Option<Result<i64, sparrow_core::Error>> {
+    let bytes = spb(data)?;
+    Some(sparrow_core::run_limited(bytes, Vec::new(), false, Vec::new(), limits()))
+}
+
+/// The SPB of a fuzz input, when it is a program.
+fn spb(data: &[u8]) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(data).ok()?;
     let source = SourceFile::new("fuzz.ok", text).ok()?;
     let program = syntax::parse(&source, &ParseOptions::default()).ok()?;
     let module = linked(&prune::strip_test_items(program))?;
     let program = okkama_compiler::codegen::sparrow::generate(&module).expect("codegen of linked OIR");
-    let bytes = okkama_sparrow::encode(&program).expect("encoding generated SPB");
-    Some(sparrow_core::run_limited(bytes, Vec::new(), false, Vec::new(), limits()))
+    Some(okkama_sparrow::encode(&program).expect("encoding generated SPB"))
+}
+
+/// The exec target's differential mode (#1123, `OKKAMA_FUZZ_DIFFERENTIAL=1`): the program runs on Sparrow's JIT
+/// and on its interpreter under the same budgets, and the two must show the same result or uncaught report (as a
+/// structure) and the same output, or the input crashes the target. The design's known divergences
+/// (`okkama-rs/tools/engines/interp-exceptions.txt`) pass:
+/// a stack overflow reached on both (its depth is each engine's), a memory budget run out on either (its moment is
+/// each engine's: the interpreter's register stack is allocated memory), and the JIT's compile limits. Returns what was compared, `None` when the input is not a program.
+pub fn differ(data: &[u8]) -> Option<Difference> {
+    use sparrow_core::{Engine, observe};
+    let bytes = spb(data)?;
+    let jit = observe(Engine::Jit, bytes.clone(), Vec::new(), limits()).expect("generated SPB loads");
+    let interpreted = observe(Engine::Interpreter, bytes, Vec::new(), limits()).expect("generated SPB loads");
+    let report = |observed: &sparrow_core::Observed| match &observed.result {
+        Err((report, _)) => report.clone(),
+        Ok(_) => String::new(),
+    };
+    let (jit_report, interpreted_report) = (report(&jit), report(&interpreted));
+    if ["compiling it would take more than", "too large to compile", "KiB limit"].iter().any(|text| jit_report.contains(text)) {
+        return Some(Difference::Excepted("the JIT's compile limits (design 6.3)"));
+    }
+    if jit_report.contains("Stack overflow") && interpreted_report.contains("Stack overflow") {
+        return Some(Difference::Excepted("a stack overflow reached on both, at each engine's depth (design 6.3)"));
+    }
+    let memory = "Execution budget exhausted: memory";
+    if jit_report.contains(memory) || interpreted_report.contains(memory) {
+        return Some(Difference::Excepted("the memory budget, run out at each engine's moment (design 6.3)"));
+    }
+    assert_eq!(interpreted, jit, "the interpreter differs from the JIT");
+    Some(Difference::Same)
+}
+
+/// What [`differ`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Difference {
+    Same,
+    /// A known divergence of the design, with its reason.
+    Excepted(&'static str),
 }

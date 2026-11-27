@@ -10,26 +10,39 @@ use crate::{
     abi::{Native, NativeFailure},
     heap::ArrayHeap,
 };
+// The host's providers (feature `host`, #1124); the rest are pure (`providers`).
+#[cfg(feature = "host")]
 pub(crate) mod application;
+#[cfg(feature = "host")]
 pub use application::terminal_columns;
 pub(crate) mod cldr;
+#[cfg(feature = "host")]
 pub(crate) mod collation;
 pub(crate) mod compression;
 pub(crate) mod formats;
+#[cfg(feature = "host")]
 pub mod fs;
+#[cfg(feature = "host")]
 pub(crate) mod host;
+// IDNA and the public suffixes here serve the name checks of `x509` only.
+#[cfg(feature = "host")]
 pub(crate) mod idna;
 pub(crate) mod json;
 pub(crate) mod json_split;
 pub(crate) mod math;
 pub(crate) mod misc;
+#[cfg(feature = "host")]
 pub(crate) mod net;
 pub mod regex;
+#[cfg(feature = "crypto")]
+pub(crate) mod secure;
+#[cfg(feature = "host")]
 pub(crate) mod signal;
 pub(crate) mod text;
 pub(crate) mod time;
 pub(crate) mod unicode;
 pub(crate) mod value;
+#[cfg(feature = "host")]
 pub(crate) mod x509;
 
 pub(crate) mod inspect;
@@ -73,18 +86,25 @@ pub fn execute(
         Some(Provider::Misc) => misc::execute(native, args, context),
         Some(Provider::Json) => json::execute(native, args, arrays),
         Some(Provider::Math) => math::execute(native, args, context),
+        #[cfg(feature = "host")]
         Some(Provider::Host) => host::execute(native, args),
         Some(Provider::Value) => value::execute(native, args),
         Some(Provider::Unicode) => unicode::execute(native, args),
+        #[cfg(feature = "host")]
         Some(Provider::X509) => x509::execute(native, args),
+        #[cfg(feature = "host")]
         Some(Provider::Application) => application::execute(native, args),
+        #[cfg(feature = "host")]
         Some(Provider::Collation) => collation::execute(native, args),
         Some(Provider::Time) => time::execute(native, args),
         Some(Provider::Formats) => formats::execute(native, args),
         Some(Provider::Text) => text::execute(native, args),
         Some(Provider::Compression) => compression::execute(native, args, arrays),
+        #[cfg(feature = "host")]
         Some(Provider::Signal) => signal::execute(native, args),
         Some(Provider::Cldr) => cldr::execute(native, args),
+        #[cfg(feature = "crypto")]
+        Some(Provider::Secure) => secure::execute(native, args),
         None => Err(not_provided(native)),
     }
 }
@@ -93,6 +113,15 @@ pub fn execute(
 /// with [`Error::Unsupported`]. Sparrow checks its `ORIGIN` routes against it.
 pub fn provides(native: Native) -> bool {
     provider(native).is_some()
+}
+
+/// The CLDR files and their families (#1125: what a program that reads CLDR needs, in a build without them).
+pub use cldr::FILES as CLDR_FILES;
+
+/// Give the CLDR family of `file` (`cldr-dates.dat`: gzip text, as in `data/`) to a build without the tables
+/// (feature `cldr` off); a family already there stays. The playground fetches the files a program needs first.
+pub fn provide_cldr(file: &str, gzip: &[u8]) -> Result<(), String> {
+    cldr::provide(file, gzip)
 }
 
 /// The refusal for a native Sparrow provides itself (#1016).
@@ -109,18 +138,25 @@ enum Provider {
     Misc,
     Json,
     Math,
+    #[cfg(feature = "host")]
     Host,
     Value,
     Unicode,
+    #[cfg(feature = "host")]
     X509,
+    #[cfg(feature = "host")]
     Application,
+    #[cfg(feature = "host")]
     Collation,
     Time,
     Formats,
     Text,
     Compression,
+    #[cfg(feature = "host")]
     Signal,
     Cldr,
+    #[cfg(feature = "crypto")]
+    Secure,
 }
 
 /// Provider native по таблице, заполненной один раз [`route`]: при вызове —
@@ -146,11 +182,15 @@ fn provider(native: Native) -> Option<Provider> {
 fn route(native: Native) -> Option<Provider> {
     let name = native.name();
     Some(match native.module() {
-        "runtime/crypto" | "runtime/debug" | "runtime/diff" | "runtime/math_aggregate"
-        | "runtime/layout" => Provider::Misc,
+        #[cfg(feature = "crypto")]
+        "runtime/crypto" => Provider::Misc,
+        "runtime/debug" | "runtime/diff" | "runtime/math_aggregate" | "runtime/layout" => Provider::Misc,
         "runtime/json" if name.starts_with("json_split_") => Provider::Json,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => Provider::Math,
         "runtime/random" => Provider::Math,
+        #[cfg(feature = "crypto")]
+        "runtime/system" if name.starts_with("secure_") => Provider::Secure,
+        #[cfg(feature = "host")]
         "runtime/system"
             if !matches!(
                 native,
@@ -163,14 +203,18 @@ fn route(native: Native) -> Option<Provider> {
         }
         "runtime/uuid" | "runtime/unicode_normalization" => Provider::Value,
         "runtime/unicode_character" => Provider::Unicode,
+        #[cfg(feature = "host")]
         "runtime/x509" => Provider::X509,
+        #[cfg(feature = "host")]
         "runtime/application" | "runtime/account" => Provider::Application,
+        #[cfg(feature = "host")]
         "runtime/collation" | "runtime/locale" => Provider::Collation,
         "runtime/time_zone" => Provider::Time,
         "runtime/io_decorators" | "runtime/pem" | "runtime/template" => Provider::Formats,
         "runtime/hpack" | "runtime/collections" => Provider::Text,
         "runtime/number_text" if name.starts_with("float_parse") => Provider::Text,
         _ if compression::handles(native) => Provider::Compression,
+        #[cfg(feature = "host")]
         _ if signal::handles(native) => Provider::Signal,
         _ if cldr::handles(native) => Provider::Cldr,
         _ => return None,
@@ -192,10 +236,35 @@ mod tests {
             let refused = execute(native, &args, &mut ArrayHeap, &mut context).err();
             assert_eq!(refused, Some(not_provided(native)), "{}", native.symbol());
         }
-        let routed = execute(Native::SystemSystemCpuCount, &[], &mut ArrayHeap, &mut context);
-        assert!(matches!(routed, Ok(Value::Int(_))), "{routed:?}");
-        assert_eq!(provider(Native::X509SystemCertificates), Some(Provider::X509));
+        #[cfg(feature = "host")]
+        {
+            let routed = execute(Native::SystemSystemCpuCount, &[], &mut ArrayHeap, &mut context);
+            assert!(matches!(routed, Ok(Value::Int(_))), "{routed:?}");
+            assert_eq!(provider(Native::X509SystemCertificates), Some(Provider::X509));
+        }
         assert_eq!(provider(Native::JsonJsonSplitState), Some(Provider::Json));
         assert_eq!(provider(Native::JsonJsonParseState), None);
+    }
+
+    /// #1124: a build without the host (wasm32) has no provider for the host's natives and refuses them by name,
+    /// as it refuses Sparrow's own; the pure providers still answer.
+    #[cfg(not(feature = "host"))]
+    #[test]
+    fn a_build_without_the_host_refuses_its_natives_by_name() {
+        let mut context = Context::default();
+        for native in [
+            Native::SystemSystemCpuCount,
+            Native::X509SystemCertificates,
+            Native::CollationCollationKey,
+            Native::AccountAccountCurrentUser,
+        ] {
+            assert!(!provides(native), "{}", native.symbol());
+            let args = vec![Value::Str("x".into()); native.parameters().len()];
+            let refused = execute(native, &args, &mut ArrayHeap, &mut context).err();
+            assert_eq!(refused, Some(not_provided(native)), "{}", native.symbol());
+        }
+        assert!(provides(Native::JsonJsonSplitState) && provides(Native::LayoutDedent));
+        let crypto = cfg!(feature = "crypto");
+        assert_eq!(provides(Native::CryptoDigest), crypto);
     }
 }

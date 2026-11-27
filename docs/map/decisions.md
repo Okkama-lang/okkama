@@ -760,3 +760,425 @@ every declaration is open (#1005, owner decision).
   compiles, and the runtime refuses it, as the SPB verifier does.
 - A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
   and a test replays the target's logic on it.
+
+## The playground's compiler in wasm (#1078, 2026-11-27, owner-approved ticket; design by the implementer)
+
+- **okkama-runtime-core has a default feature `native`**: the modules `native`, `host` and `data` and every
+  dependency only they use (okkama-native with aws-lc and getrandom, libc, the C zstd, Brotli, miniz,
+  unicode-normalization/-segmentation, md-5, sha1). okkama-compiler depends on it with `default-features =
+  false`: it uses only `Value`, `IntValue`, `heap` (arrays, map keys), `ops`, `integer` and `float` (constant
+  folding and value types), and no compiler code reached the gated modules. Cutting the dependency instead
+  would have moved the value types out of the crate the runtime shares them from (two copies of one rule).
+  Every runtime (sparrow-core, okkama-cli) keeps the default, so a native build unifies to the same features and
+  compiles the same crate: corpus SPB byte-identical (std -t 499, t/ 51, examples 264, okkama-rs/examples 13,
+  Bible 181, conformance 541: 1549 built programs), check/fmt output identical on all 2220 files.
+- **`okkama_compiler::commands`** is the one place that renders what check, fmt, tokens, ast, ir and build
+  report (`Finding`: file, span, severity, kind, message and the printed text; `Report`: findings and the whole
+  text), including the missing-docs gate, the two-profile check of #649, the merge of their findings, pass
+  selection (`passes_named`, `passes_after`), the parse of a found import (`commands::module`) and the editor's
+  two-pass inspection (`commands::inspect`). okkama-cli, its OCS adapter and okkama-wasm call it; the CLI keeps
+  only files, flags and exit codes. Nothing in it reads a file or the environment: sources come from the
+  caller, imports from the `ModuleLoader` it passes (a factory taking the test mode).
+- **The playground's loader** (`okkama-wasm` `Loader`) follows the CLI's search order without Blade packages:
+  a std file looks in std, then beside itself; any other file beside itself, then in the import directories,
+  then in std; a module never imports itself. Files are the bundled std under `std/` plus what the page sets
+  (`setFiles`). The CLI's `FileLoader` stays in the CLI (it needs the file system and blade.toml).
+- **The std is embedded** by `okkama-wasm/build.rs` (`include_str!` of every `std/**/*.ok`, unchanged, so
+  positions in std match the CLI): 499 files, 5.97 MB of the 9.6 MB wasm.
+- **API**: each export takes one JSON request and returns one JSON response. Commands answer `{ok, code,
+  stdout, stderr, diagnostics}` with `stdout`/`stderr`/`code` exactly the CLI's; a diagnostic is `{file,
+  severity, kind, message, text, span: {start, end} (bytes) | null, range: {start, end: {line, character}}
+  (zero-based, UTF-16) | null}`. Requests: `{source, path = "main.ok", tests?}` for check/ir/spa, plus
+  `passes`/`after` (ir), `format` (tokens: text|json; ast: tree|json), `mode`, `spans`, `pruneTests` (ast);
+  `{source, path, line, character, trigger?}` for hover → `{hover: {markdown, range} | null}`, definition →
+  `{definition: {path, range} | null}`, signature → `{signature: {label, parameters, active} | null}`,
+  complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}` (kind: method, field,
+  variable, object, role, enum, enumMember, function, keyword, module, argument, folder), in the order to show
+  them. The IDE calls answer from the last inspection of the file that parsed, as the language server does
+  (recorded by each IDE call; the server records one per change). `version()` → `{version, stdModules,
+  stdBytes, passes}`, `passes` the IR passes in order (`lowering::PASSES`, #1118). `lastPanic()` → `{panic:
+  {message, location: "file:line:column" | null} | null}`: the last call's panic (each call clears it; the
+  hook is installed by the first call), read from the trapped instance before the page starts a new one.
+- **`std.…` completion reads a `StdTree`** (#1115, 2026-11-27): `key`, `modules`, `stamp`, `entries`, `source`
+  (the stored text the stamp describes) and `unsaved` (an editor's text, applied on top of the cached index and
+  never cached). `ide::DiskStd` is the language server's std directory (stamp: each file's length and mtime;
+  native only); okkama-wasm's `BundledStd` is the embedded std, a constant stamp, with the page's files under
+  `std/` as unsaved texts. The wasm sorts the items as the editor shows the server's (`sortText` = deep, label).
+  The parity test compares them with `okkama lsp`'s, item by item.
+- **The compiler's only host calls are in `host.rs`** (#1116, 2026-11-27): `host::Clock` (the
+  `OKKAMA_PROFILE_REGISTERS` timings; zero on wasm32) and `host::dev_output` (`OKKAMA_DUMP_INVALID_IR`,
+  `OKKAMA_OWNERSHIP_REPORT`; dropped on wasm32). `ide/std_disk.rs` is native only. File identity is the
+  loader's (`ModuleLoader::identity`, default the name; the CLI canonicalizes). okkama-devtrace treats wasm32
+  like `okkama_release`. `host::tests` greps every other source file (comments and the trailing test module
+  excluded) for file-system, clock and process calls.
+- **How diagnostics name files** (#1119, 2026-11-27): a file the user named keeps the user's spelling; a file
+  found through an import is named relative to the current directory when it is under it, and by its canonical
+  path otherwise (`source::display_name(found, base)`, lexical). The CLI's `FileLoader` names loaded modules so
+  (`LoadedModule::id` stays canonical; `commands::module(id, name, …)`), and run-time traces use the same
+  function. The language server keeps whole names (they are URIs) and names a relayed import error from the
+  checked file's directory. `okkama man` keeps whole names in its loader (the export records them) and names
+  its warnings by the rule. The playground's names are the page's, relative to its root, its current directory.
+  The parity test runs the CLI in the repository root on relative paths against a page-like workspace (`std/`,
+  root-relative names), unnormalized, with imported files' diagnostics in the sample.
+- **The playground page is published with the release** (2026-11-27), like the /man/ reference: the site repo
+  (okkama-site, `playground/`) is rebuilt per release by `playground/tools/build.sh CHECKOUT [WASM_BINDGEN]`
+  (wasm, wasm-bindgen of Cargo.lock's version, `pkg/manifest.json`, `examples.json`).
+- **Parity is a test of the CLI binary** (`okkama-cli/tests/playground.rs`): `okkama check`, `fmt` and `ir`
+  against `Workspace::check`/`fmt`/`ir`, and `spa` against the disassembly of `okkama build`'s SPB, on t/, the Bible's rejected examples, six std modules and the fixtures of
+  `tests/playground/` (a warning, a module shadowing std, an imported fake), byte for byte with the exit code.
+
+## Sparrow's interpreter, synchronous part (#1120, 2026-11-27; design Fable, `okkama-docs/runtime/sparrow-interpreter-1079.md`; implementer's choices where it leaves room)
+
+- **The helpers are called as they are; `rt_exec` is not split.** The interpreter calls the `extern "C"` helpers
+  (`ops::rt_exec`, `failures::rt_failure_op`, `rt_native`, `rt_intrinsic`, `rt_future_new`, …) directly, with the
+  instruction's uses gathered from its registers into a stack buffer in visit order (the plan keeps the use list
+  per instruction, as the JIT keeps `operands`). `execute` and `Operands` are untouched: no second access path,
+  no second monomorphisation, the JIT's `rt_exec` source byte for byte as before (the design's split was for a
+  generic register-file access; a copy of a few words per generic instruction costs less than the risk).
+- **The mode lives in `Runtime`, not in `Loaded`.** Synchronous roots read every register by kind and do not
+  depend on the pointer-free proofs; #1122 moves the choice to load time when async frame layouts need the
+  proofs off.
+- **Refusal at the moment of need.** A failure at an instruction an active handler covers, a `catch`, and an
+  async body (`Runtime::resume`, the suspending instructions) stop the run (status FATAL) with "`symbol:pc`: … is
+  not supported by the interpreter yet (#1121/#1122)". A program with handlers that never fails runs. No
+  refusal at load.
+- **Regions and resources already run.** The `failure_or_region` family (regions, `resource.unwind`,
+  `fail.*`, `raise`, `panic`, `role.narrow`) goes through `rt_failure_op`, `resource.pin`/`leave` through
+  their helpers: they need no handler, and a destroy is the seam's re-entry. #1121 keeps handlers, `catch`,
+  unwinding through them and the differential test.
+- **Own branches only where the JIT has no helper.** Every `program::generic` instruction runs `rt_exec`, also
+  where the JIT has an inline fast path (the PLAIN reference); the 48 own branches follow the emitter (small
+  integers inline, else `rt_int`/`rt_int_order`; a non-finite float through `rt_float`; allocation from the free
+  list, else `rt_allocate`; `rt_created` where the type can reach a destroy; the stub check of #1076). A call of
+  an accessor or of a small callee is an activation: the JIT's #541 and #926 shortcuts change no step, failure
+  or trace.
+- **Limits.** The register stack takes at most the run's stack bytes (1 GiB; under a memory budget the capped
+  stack, `stack_capped` making it "out of memory"); a re-entry from Rust checks the Rust stack against
+  `Ctx.stack_limit`, as the JIT's prologue checks SP. No re-entry counter yet: the design gives it to the async part (#1122).
+- **Shared code moved out of `jit.rs`.** `program.rs`: `generic`, `failure_or_region`, `suspends`,
+  `dispatch_table`, `role_slot_is_async`; `texts.rs`: the four emitter texts. Moves only, no change in the JIT.
+
+## Sparrow's interpreter: handlers and the differential test (#1121, 2026-11-27; design Fable; implementer's choices)
+
+- **Unwinding mirrors `check`.** For each activation from the innermost: record (`rt_trace`, keyed by its
+  register file), then take the first handler whose range covers the instruction (ranges end before `end`, as
+  the JIT reads them); FATAL and EXHAUSTED pass every handler. The handler's edge is a step when it goes back,
+  its moves read before they write, the failure goes into the handler register last; `ctx.failure` keeps the
+  failure, as in the JIT.
+- **One observation API, not a second runner.** `sparrow_core::observe(Engine, bytes, arguments, limits)` is
+  `run_described` with the engine chosen in the call (`Runtime::use_engine`, before anything runs) and both
+  streams captured; the environment switch stays the way to choose it for a process.
+- **Standard error has a sink.** `okkama_runtime_core::stdout::write_error` is the one way `stderr_write` writes;
+  inside `capture_streams` it appends to the capture, otherwise it flushes standard output first, as before.
+- **Coverage is dynamic.** A test-only recorder in the interpreter's loop collects the mnemonics a run executes;
+  the coverage test runs every `.spa` with an entry of the SparrowBook, sparrow-core's tests, `tests/mnemonics`
+  and sparrow-cli's handler programs on both engines and fails while a synchronous mnemonic is not executed.
+  Templates that do not assemble on their own are skipped (their tests complete them). `fut.spawn` counts as
+  async: spawning runs a body (#1122).
+- **The differential samples are fixed lists**, not the whole corpora (CI time, debug profile included): t/
+  base, op and lang; sixteen examples whose output depends on the program alone; every single-file conformance
+  case expecting a run-time failure that builds (at least 50). Whole corpora stay #1123's (`sparrow-interp`
+  configurations).
+
+## The interpreter in the test runs (#1123, 2026-11-27; design Fable §6.2–6.3; implementer's choices)
+
+- **One exceptions file for every runner.** `okkama-rs/tools/engines/interp-exceptions.txt`, read by
+  `differ.py`, `tools/t/run.py` and (through `differ.py ocs`) the Wave and the gate. Selectors: `refusal:` (the
+  interpreter's own refusal), `both:` (both outputs contain it, statuses equal), `either:`, `jit:`, `path:`; each
+  line names a ticket or §6.3, or the file does not load. The fuzz `exec` differential mode keeps the same four
+  rules in Rust (`linking::differ`), with no file reader in the fuzz target.
+- **A memory budget is `either`, not `both`.** The interpreter's register stack is allocated memory and the JIT's
+  machine stack is not, so a deep recursion under the fuzz budgets stops on steps under the JIT and on memory
+  under the interpreter (found by the differential test). §6.3 lists the moment of memory exhaustion as a known
+  divergence; the exception follows it, for either side.
+- **Report-only first.** The Wave's `sparrow-interp` matrix branch has `continue-on-error`, the gate's step
+  records `informative`; both become blocking after the first green run (design decision 11). The JIT's
+  branch is unchanged: `SPARROW_CORE_INTERPRET` is empty there, which the switch rule reads as off.
+- **The interpreter's t/ run compares with the JIT in one invocation** (`--configs sparrow,sparrow-interp,
+  sparrow-interp-gc-stress`): t/run.py already requires one TAP stream of all configurations. The GC-stress
+  interpreter gets four times the timeout (#1120's 105 s file); ten since #1122's follow-up: on the Wave's debug
+  adapter t/gen/persistence/04 needs 121 s locally (JIT under stress 57 s) and ran out of 240 s on CI at 520 of
+  618 checks; with slow runners (x1.86, #843) 600 s. Chosen over a subset: the branch is blocking and should
+  see the whole suite; only a hang waits the full timeout.
+- **An extension of an interpreter's session loads as the session did (#1122 follow-up).** `Runtime::extend`
+  drops the pointer-free proofs of the new `Loaded` when the runtime has an interpreter, before the prefix
+  checks: otherwise every published function's metadata and frame layout differ and every extension is refused.
+- **The seeded JIT defect needs no reference build.** The mutated build's interpreter does not run the emitter's
+  code, so `okgen.py --engines sparrow,sparrow-interp` on that one build finds it; the existing shared-helper
+  mutant keeps its unmutated reference.
+
+## Sparrow without the JIT and the host, wasm32-clean (#1124, 2026-11-27; design Fable §7, §4.2; implementer's choices where it leaves room)
+
+- **Features, as the design's §7.1.** sparrow-core `default = ["jit", "host"]`; okkama-runtime-core's `native`
+  (still the default) is `providers + host + zstd + brotli + crypto`; okkama-native `aws-lc` (default). Every
+  binary and every other crate's tests build the defaults, so `cargo tree -e features` of okkama-cli and
+  sparrow-cli changes only by the new feature names of these three crates (every external crate's version and
+  features identical). `jit` or `host` on wasm32 is a `compile_error!` that names `--no-default-features`.
+- **sparrow-core depends on runtime-core `providers + crypto` and on okkama-native without `aws-lc`
+  unconditionally; `host` adds the rest.** RustCrypto digests, HMAC, HKDF, AEAD, ECC and argon2 stay in the
+  no-host build (sparrow-core's own `native_crypto`/`native_secret`/digest handles use them); what the playground
+  allows is the profile's question (#1125, owner decision 6 of the design), not the build's. zstd (C) and Brotli
+  are left out without the host; their formats are then refused as `unsupported` ("zstd is not available in this
+  build"), not as unknown.
+- **What `host` gates in sparrow-core** is the design's list, files and sockets, plus `native_glob`, `path_syntax`
+  (path natives use the host's path rules) and the worker modules. `native_net` (numeric IP parse/format) and
+  `native_postgres` (DataRow pages, no socket) are pure and stay: the design listed them with the host, but they
+  touch no OS. `native_db`, `native_input` (stdin through `std::io`), `native_io` (the request machinery) stay.
+  runtime-core's `native::idna` (public suffixes) serves only `x509`'s name checks and goes with it.
+- **The bridge routes only what runtime-core provides.** `native_origin::handles` (the catch-all for synchronous
+  natives) also requires `okkama_runtime_core::native::provides` without the host, so a native neither side has
+  is unsupported (`--native-capabilities`, `natives::supported`) instead of routed to the bridge's refusal; with
+  the host the condition is constant true. `origin_routes_match_the_runtime_core_providers` holds in both builds.
+- **`Engine::Jit` exists only with `jit`** (#1121's `observe`/`Runtime::use_engine`): a build without the JIT
+  cannot be asked for it.
+- **Without `jit` every runtime interprets** (`Runtime::assemble`: `!cfg!(feature = "jit") ||
+  SPARROW_CORE_INTERPRET`), `invoke`/`resume` call the interpreter directly, the collector's JIT branch is
+  `unreachable!`, `frame_pointer!` is 0. The JIT path's `invoke`/`resume`/`*_cold` bodies are unchanged under
+  `cfg(feature = "jit")`.
+- **Process workers without the host behave as a runtime without a worker command** (`worker_absent.rs`; replaced
+  by the emulation of #1127, below): `bind`
+  copies the action (`Runtime::closure_copy`, shared with `worker.rs`), a pool hands the plain action back, closing
+  one is done, `spawn` refuses with `texts::NO_WORKER_COMMAND` (the text `worker.rs` gives without a command). The
+  `WorkerBinding`/`WorkerPool` states exist only with the host.
+- **The VM thread** stays natively without the host (deep recursion needs its 1 GiB); only the host session
+  (`okkama_runtime_core::host::enter`) is the host's. On wasm32 the run takes the caller's stack.
+- **`clock`.** `clock::Instant` is `std::time::Instant` natively (timers, statistics, JIT-path code unchanged)
+  and a virtual timeline on wasm32: `now = installed source + skipped`, `skip_to(deadline)` never goes back, the
+  wall clock is the source's wall clock at installation plus the timeline's progress. Without an installed source
+  time stands still except for skips (a deterministic run). The embedder (#1125, sparrow-wasm) installs
+  `Source { monotonic, wall }` as plain function pointers: sparrow-core has no wasm-bindgen. The time natives
+  (`wall_clock`, `monotonic_clock`, `clock_domain`'s process number) read `clock`.
+- **`io.rs`: one portable part, three waits.** The woken queue, requests, wakers and the firing of due timers are
+  shared by `wait_external`; the wait is `wait_tokio` (host, the old body unchanged), `wait_sleeping` (native
+  without the host: a condition variable the waker notifies holding its lock, woken by the earliest timer and the
+  interrupt look) or `skipping` (wasm32: a fired waker needs no wait; else skip to the earliest timer; requests
+  alone cannot progress there, so false and "no task can make progress").
+- **`sort_or_stop` under `panic = "abort"`** is a stable bottom-up merge sort over two copies whose comparison may
+  stop it, the slice taking the result only when the sort completes; the unwinding version stays the native one.
+  Both are tested natively (`sort_tests` run the same properties on each).
+- **Budget arithmetic in `i64`**, not `isize` (`Runtime::memory_used`, `would_exceed`, `over_budget`,
+  `rt_allocate`, `budget::Meter::used`, `Watch::grow`): identical on 64-bit targets.
+- **`catch_unwind`** (`rt_native`, `rt_exec`'s panic guard) stays: under `panic = "abort"` a panic is a trap, and
+  the page gets its text from a panic hook (#1125).
+- **Recursion over value depth (audit, design §7.2).** Unbounded by value depth: `Runtime::is_key`/`key` and
+  `Key::cmp_other`/`data_bytes`/its drop (`ops.rs`, nested value-object map keys). Bounded: the regex parser
+  (nesting ≤ 256), `data_dump` (depth 64), test-report `show` (`SHOWN_DEPTH`); iterative: `equal`, JSON, marking.
+  v1 keeps the trap (design); the keys' rewrite is a ticket.
+- **Tests without the JIT.** Tests that need an async body or a failure handler carry
+  `cfg_attr(not(feature = "jit"), ignore = "#1122 …"/"#1121, #1122 …")`; the JIT's own tests (`jit/`,
+  `ready_callees`, compile limits) are `cfg(feature = "jit")`; `interp_tests::engines` compares the interpreter
+  with itself under GC stress when there is no JIT.
+## The polling of a runtime is fixed at its first run (#1129, 2026-11-27, lead decision)
+
+- **Read at the same moment, not recompile.** Whether code polls the fuel cell is fixed when a runtime first runs
+  (`Budget::polled`, set in `start_budget`): the JIT compiles it into every function, the interpreter and the
+  sorting intrinsics read `Runtime::polled`. A later run whose budgets would turn polling on or off is refused
+  with a message; the values of the budgets may change. Recompiling was rejected: compiled code embeds published
+  addresses (ready callees, dispatch tables), and dropping every function between a session's cells would lose
+  what the session compiled for an embedding case no command line reaches. Before the first run `polled()`
+  answers from the budgets as they are (a session's destroys at close, direct compiles in tests).
+- **`toolchain.sh` fetches first.** A networked `cargo fetch --locked` on the registry volume runs before the
+  offline build; with every crate present it passes without network. A failure names its step.
+
+## Sparrow's interpreter: async bodies (#1122, 2026-11-27; design Fable §2.4, §6.4; implementer's choices)
+
+- **An async activation is the base of its entry.** `interp::resume` pushes an activation whose registers are the
+  frame's `REGISTERS` (no register-stack chunk); a suspension writes `RESUME = pc + 1`, leaves and answers
+  pending; a resumption starts at `RESUME - 1`. Await-like instructions occur only in the async function itself, so
+  no synchronous activation is ever above a suspension. Each resumption is a step (the JIT polls in every entry of
+  the body).
+- **Pointer-free off by mode.** `Loaded::without_pointer_free` runs when the runtime is assembled for the
+  interpreter, and `Runtime::use_engine(Interpreter)` re-lays the heap's descriptors before anything ran.
+- **Re-entry counter.** `Interp::depth` counts entries from Rust (`invoke`, `resume`); past `REENTRIES` (200 on
+  wasm32, unbounded natively, where `Ctx.stack_limit` decides) the entry is a stack overflow.
+- **§6.4 fixed in the JIT.** `rt_trace`'s rule is one record per activation; the JIT's `check` now passes an async
+  body's heap frame (stable across resumptions) instead of its frame pointer; synchronous and inlined code keep the
+  frame pointer (#926). Ticket filed for the record.
+- **The interpreter's branches block.** With async running and every difference explained, the Wave's
+  `sparrow-interp` matrix branch loses `continue-on-error` and the gate's interpreter step fails the gate.
+
+## The playground's runtime (#1125, 2026-11-27; design Fable §5, §8 item 6; implementer's choices; owner's §9 answers taken as recommended, awaiting the owner)
+
+- **Owner's decisions provisional.** §9 #4 (profile text "Native X is not available in the playground"), #6 (hashes
+  and HMAC in; ECC, AEAD, RSA, X.509 out — ECC's RustCrypto code is still linked through okkama-native, the profile
+  only names what has no provider), #7 (two modules, 2.0 MB gzip), #8 (workers refused:
+  `Limits::permits_workers`, "Process workers are not available in the playground"), #9 (real clocks through
+  `performance.now`/`Date.now`, real randomness through getrandom's `wasm_js`), #10 (5·10⁷ steps, 256 MiB
+  `MemoryScope::Runtime`, 1 MiB output) are implemented as recommended and await the owner.
+- **No `okkama run --profile playground` (#5).** The parity test calls the two crates' Rust functions (rlib), so the
+  CLI surface was not needed; not built.
+- **The profile is data beside `PURE`.** `Profile {name, groups, allowed, refused, budgets}`, checked first in
+  `Limits::permits`; `allowed` names natives of refused groups the playground offers: `stdin_*` (the buffer) and
+  natives that compute although their module sits in a group (`input_state`, net `ip_*`, postgres `pg_page*`,
+  `timezone_local_*`, `system_platform/architecture/byte_order`). The consistency test (build without default
+  features) requires offers ⇔ `natives::supported`. Reclassifying those natives in `Reach::classify` was left
+  out: the companion catalogue of the compiler (#569 C7) agrees with the groups by test, so it is a compiler
+  change; the profile does not depend on it.
+- **CLDR out of the module.** Measured 2.80 MB gzip with the tables in; the five CLDR files are 0.94 MB of gzip
+  that does not compress further. okkama-runtime-core feature `cldr` (in `native`) embeds them; without it
+  `native::provide_cldr(file, gzip)` installs a family (checked: gzip, UTF-8, three-part records), and a table of a
+  missing family fails `core.cldr`/`unavailable`. `requirements` lists all five files for any program declaring a
+  CLDR native: which family it reads shows only when it runs. tzdb, Unicode, IDNA and PSL stay in.
+- **Paths stay under `host`.** `host/path_syntax.rs` depends on `path_regex.rs` (fancy-regex) and serves the fs,
+  glob, temporary and watch providers: not cheap to move, and the playground refuses fs anyway.
+- **Output as pieces.** `stdout::with_sink` hands every write of both streams to a closure on the VM thread (after
+  `capture`, before buffering); `run_embedded` marks each piece with nanoseconds since the run's start on
+  `clock::Instant` and joins consecutive writes of one stream at the same moment. sparrow-wasm turns pieces into
+  text holding back a character split between writes of one stream. Since #1134 the writes can stream instead (below).
+- **Uncaught across modules.** sparrow-wasm describes the failure as JSON (`category`, `errorType`, `message`,
+  stacks as runs `[function, pc, count]`, offsets, causes); okkama-wasm reads it back (`Uncaught::category_named`)
+  and renders with the module of its last `build`. `main_outcome` is the CLI's 0..255 rule and report newline.
+- **stdin.** `Heap::set_stdin` puts a `Cursor` in `Stdin`; `Stdin::read` reads it instead of the process's; after
+  it, end of input. The playground always passes a buffer (empty without the field).
+- **Streamed output (#1134).** `run(spb, request, sink?)`: with a sink (a JS function) every write is handed to it
+  while the program runs, as one chunk's JSON text, and the answer's `output` is `[]`; without one the output comes
+  back in the answer as before. One chunk per write, not batched: a run is one synchronous call, so neither the
+  module nor the worker's JS can flush on a timer, and a chunk held back would be lost when the page stops the run
+  (`worker.terminate()`); the output budget (1 MiB) bounds the number. sparrow-core: `Embedding::pieces`
+  (`PieceSink`, called on the VM thread) instead of collecting. On wasm32 the sink sits in a thread-local for the
+  call (`JsValue` is not `Send`); a sink that throws loses that chunk (`catch`), the run goes on. Natively
+  `sparrow_wasm::run_streaming(spb, request, emit)` takes a closure and returns the answer as a `Value`.
+- **Batches at the budget poll (#1136).** A streamed run joins a stream's consecutive writes into one chunk while
+  they fall within a window of the first (default 16 ms of the run's timeline, `window` in the request; 0 is a chunk
+  per write, kept for a page that wants every write) and within 64 KiB; the chunk goes when the next write does not
+  join it, at the run's next budget poll (`stdout::tick`, called from `rt_poll`; the playground always polls, it has
+  a step budget) and at the end. So no tail waits while the program computes: a poll comes every 65 536 steps.
+  Measured in wasm (Node 26, release build, best of three):
+
+  | slice (steps) | window | 60 000 lines: chunks | run | max wait | print-then-compute: "started" arrives |
+  |---|---|---|---|---|---|
+  | any | per write | 120 000 | 158–163 ms | 1.7–2.3 ms | 0.1–0.2 ms |
+  | 4 096 | 16 ms | 162 | 51 ms | 0.9 ms | 0.2 ms |
+  | 16 384 | 16 ms | 41 | 48 ms | 1.7 ms | 0.4 ms |
+  | 65 536 | 4 ms | 21 | 48 ms | 4.3 ms | 1.4 ms |
+  | 65 536 | 16 / 50 ms | 11 | 50 ms | 5.4–6.0 ms | 1.5 ms |
+
+  The interpreter runs about 50 million steps a second there (the design guessed 4–10 million), so the default slice
+  already bounds the wait to a few milliseconds: `SLICE_PLAYGROUND = SLICE` (65 536), now a field of the profile and
+  of `Limits` (`Limits::slice`) so it can be tuned; 16 ms windows (one frame). A run that writes per write costs three
+  times the time in messages alone. On Stop the page loses at most what was written since the last poll. The poll's
+  tick is a thread-local look in `rt_poll`, which runs only under budgets (micro-benchmarks have none: no A/B).
+- **A user's stop has its own text (#1136, wording awaiting the owner).** `version().profile.stopped` =
+  `"Execution stopped\n"` for the Stop button; `interrupted` stays the watchdog's, as `--timeout`'s in the CLI.
+- **The page's texts come from the runtime (#1134).** `version().profile.interrupted` is the line `okkama run`
+  prints when interrupted (`Exhausted::Interrupted`), written by the page on Stop and on its watchdog;
+  `profile.exhausted.{steps,memory,output}` are the budget lines (a run's own report carries them too).
+- **Reachable natives (#1135).** `requirements` names the refused natives a run can reach (`sparrow_core::reach`)
+  from the entry, or the tests of a test build; `declared` keeps the old list. The walk over-approximates: direct
+  calls and closures, constants' inits, cap fields called, intrinsic helpers and objects, built objects (`obj.new`,
+  `variant.new`, builtins) with their destroy, and a built object's implementation of a role method once that
+  method can be called (a reached `call.role` of that role and slot, or `reach::RUNTIME_CALLS`: `Error.text` for an
+  uncaught report, `size`/`item`/`order` from an intrinsic). A test counts the runtime's role-dispatch sites so a
+  new one cannot slip past the list. CLDR `files` follow the reachable natives too. Measured: the Bible's refused
+  examples 8→4, 16→12, 23→22 refused natives (others equal), the smoke test's file program 8→4; over examples/
+  (315 programs) every run that stopped at a refusal (47) stopped at a named native.
+
+- **Module tests in the playground (#1127).** `test(spb, request, sink?)` runs an SPB built with `tests: true` as
+  `okkama run -t` does (`sparrow_core::run_tests_embedded`: the same `test_profile`, each test on its own runtime,
+  here on the interpreter with `Limits::playground()` and the request's standard input given afresh to each test).
+  The human report goes through the same receiver as the tests' output, through a `LineWriter` (the report is
+  written in fragments; one chunk per line, not per fragment). Exit as the CLI's: 0 all passed, 1 a test failed, 4
+  with `report` `okkama: …` when the tests cannot run. Not done in the playground: `okkama run -t`'s
+  documentation examples (`ok - doctest …`, each a program of its own), name filters (the CLI filters the module
+  before codegen), workers (`-j`). Parity: the Bible's 13 `-tests` examples and 25 std modules' tests (json, csv,
+  diff, toml, plist, strings, crypto/hmac, crypto/kdf, digests, uuid, checksums …) byte for byte, doctest lines
+  left out of the CLI's side.
+- **Hashes, HMAC, HKDF, UUIDs, checksums (#1127, owner's §9 #6 still provisional).** Already in the profile since
+  #1125 (`crypto`, `host_crypto`, `uuid`, `checksum` are pure, RustCrypto in wasm); now checked: a test that every
+  native of those modules is offered, their std modules' tests in the parity test, a digests program
+  (`okkama-cli/tests/playground/digests/main.ok`) compared with the CLI and run in wasm by the Node smoke test with
+  the known values (SHA-256 "abc", HMAC-SHA256, HKDF, UUID 5 of example.com, CRC-32, Adler-32).
+- **CLDR on demand** (design §8 item 8, first point) was done in #1125 (`provide`, `files`).
+- **Left for the owner:** workers' emulation (§9 #8) and the resumable scheduler (§9 #3).
+
+- **Workers emulated in the instance (#1127, owner's decision 8: emulation; decision 3: time stays
+  fast-forward).** Without the host (`worker_emulated.rs`, and with it when `Runtime::emulated_workers`: the
+  playground's embedding natively, `run_embedded`/`run_tests_embedded`), `worker.spawn` runs the worker at the spawn
+  on a runtime of its own: a clone of the parent's `Loaded` (no second load), the parent's engine and budgets
+  (each worker its own steps, memory and output, the same interrupt flag), empty standard input. Receiver fields
+  and arguments cross by the process codec, moved to `worker_wire.rs` (so `spawn cannot transfer …` and every
+  decoding rule are the same), the result back the same way; a failure comes back as the worker's report text;
+  its stdout and stderr are captured and handed over when the parent takes the result, before it. The Future's
+  driver waits one scheduler round at the spawn (as a process worker's reply comes after the parent goes on), so
+  the parent's own writes after a spawn come first; a cancelled worker reports nothing. Nondeterminism of real
+  workers resolved as one valid order: workers finish at their spawn, their outputs reach the parent in the order
+  their drivers run (spawn order). Pools reuse nothing (every spawn is a fresh runtime). `system_cpu_count` is 1
+  without the host (one processor runs the emulated workers in turn), offered by the profile, so `ParallelMapped`
+  with its default bound runs. `permits_workers` no longer refuses under the profile; its text went. Differences
+  from the CLI, recorded: a CLI worker runs without budgets (the playground's does, so a spinning worker ends
+  with the budget's text as the parent's failure), a worker's stderr is written through `write_error` (ordered
+  with stdout; the CLI writes the child's stderr directly). No Bible example uses workers (chapter 20 says its
+  examples do not); the parity uses `okkama-cli/tests/playground/workers/` (two workers, output, failure, bound
+  action, parallel map, a compile-time transfer refusal), all equal to the CLI's process workers.
+
+### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135, #1127)
+
+- `run(spb, request, sink?)` → request `{stdin?: text, arguments?: [text], window?: ms}` (`window`, #1136: a
+  stream's writes within it of the first are one chunk; 0 a chunk per write; default 16); answer
+  `{exit: 0..255, output: [chunk], report: text | null, uncaught: Uncaught | null}`, or `{error}` for a request
+  that is not JSON. A program that does not load: `exit` 1, `report` `"okkama: …\n"`. `report` is null when there
+  is nothing to print (exit 0..255 from main), else the stderr text `okkama run` prints before the stack.
+- chunk `{stream: "stdout" | "stderr", text, t}`: `t` nanoseconds since the run started on the run's timeline
+  (wasm32: virtual, sleeps skipped). Without a sink, writes of one stream at the same `t` are joined.
+- Uncaught `{category: "uncaught-error" | "runtime" | "panic" | "exhausted", errorType: text | null, message,
+  trace: [[function, pc, count]], traceOmitted, traceOffset, causeTraces: [[offset, [[function, pc, count]],
+  omitted]]}`: stacks as runs of equal consecutive sites. okkama-wasm `failureText({report, uncaught, cwd?})` →
+  `{ok: true, text}`.
+- `test(spb, request, sink?)` → request `{stdin?: text, seed?: 0..2^53-1, window?: ms}`; answer `{exit: 0 | 1 | 4, output:
+  [chunk], report: text | null}` (`report` only with exit 4), or `{error}` for a request that is not JSON or a bad
+  seed. With a sink, `output` is `[]`.
+- `requirements(spb)` → `{refused: [symbol], declared: [symbol], files: [name]}` (symbols sorted), or `{error}`.
+- `provide(name, gzipBytes)` → `{ok: true}` or `{error}`.
+- `version()` → `{version, profile: {name, groups: [name], steps, memory, output, interrupted, stopped, exhausted:
+  {steps, memory, output}}}`.
+- `lastPanic()` → `{panic: {message, location} | null}`.
+
+## Map keys walk their depth on their own stack (#1130, 2026-11-27, from the #1124 audit)
+
+- **What is iterative.** `Runtime::is_key`/`key` (their object arms, `is_object_key`/`object_key`, `#[cold]`),
+  `Key::cmp_other`'s object arm (`cmp_fields`: the open levels as slice pairs), `owned_bytes` and `data_bytes`
+  (`owned_object_bytes` bottom-up, since each level divides by its own owners; `object_data_bytes` a plain sum)
+  and the drop of nested keys. The scalar and string arms, `Key::cmp`'s inline fast path and every map entry
+  layout are unchanged.
+- **The drop.** `Key::Object` holds `Fields(Rc<[Key]>)` (same size as before) whose `Drop` returns at once when
+  no field is an object key; otherwise the last owner moves each nested level's `Rc` out of its parent (leaving an
+  empty slice) onto a list before the parent is freed, so no drop goes more than one level down.
+- **Same results** are a test, not an argument: 300 keys of every kind, objects three deep and partly shared,
+  compared pairwise and sized against the recursive definitions kept in the test (`ops/key_depth_tests.rs`); a
+  100 000-deep key is checked, built, compared, sized and dropped on a 1 MiB thread, in both builds.
+
+## Sparrow on 32-bit targets (#1131, 2026-11-27)
+
+- **How it runs.** The suite of sparrow-core without default features is built for `i686-unknown-linux-musl`
+  (static, linked by rust-lld with the target's self-contained musl, no C toolchain) and run on a 32-bit Linux:
+  locally a `linux/386` alpine container (Docker's emulation on the arm64 Mac), on the Wave's x86_64 runner
+  directly (`wasm` part). Locally it ran by module filters and one integration file at a time.
+- **`STACK_BYTES` is 1 GiB on 64-bit targets and 128 MiB on 32-bit ones**: a 1 GiB reservation per VM thread left
+  no room for a second run's thread in a 32-bit address space ("VM thread: Resource temporarily unavailable"). The
+  interpreter's register stack takes the same bound (so 128 MiB on wasm32).
+- **Tests.** `length_tests`' past-4 GiB case exists only on 64-bit targets (a 32-bit `usize` has no such length).
+- **A session on the interpreter** (`extend`) drops the pointer-free proofs of the extension's functions as
+  `assemble`/`use_engine` drop its own (#1122); the published-metadata check refused every extension before. Found by
+  this run; it fails natively without default features too.
+
+## Pure natives are pure in both classifications (#1133, 2026-11-27)
+
+- `input_state`, `net` (`ip_*` only) and `postgres` (`pg_page*` only) are pure modules in `budget::PURE` and the
+  companion catalogue's `PURE`; `timezone_local_*` falls to `time_zone`'s pure; `system_platform`,
+  `system_architecture`, `system_byte_order` are pure by name (`budget::SYSTEM_CONSTANTS`, the catalogue's
+  `effect`), the rest of `runtime/system` stays Env (host name, CPUs, storage) or Random (`secure_*`). Effect counts
+  of the catalogue: pure 275, stdio 3, host 264. The playground's `allowed` keeps only `stdin_*`.
+
+## One rule for the inspection an editor's answer uses (#1128, 2026-11-27)
+
+- **`Inspection::analysed`**: parsed, std paths desugared, the import graph loaded and analysis ran.
+  **`ide::Answering`** keeps the last analysed inspection and its text; the language server records every
+  inspection (each change) and okkama-wasm every IDE call's, and both answer hover, completion, definition and
+  signature from it. A std path or import that does not resolve no longer costs the language server every symbol:
+  the earlier answers stay, the new diagnostics are published. The outline is syntax: the current text's when it
+  parses, else the answering one's.
+- **Left as it is:** the playground inspects only at IDE calls, so a text that was analysed between two calls and
+  never sent is not seen; with the rule above that changes an answer only when such a text differs in its symbols
+  from both neighbours.
+- `docs/OkkamaBible/build.py --check` no longer rewrites `examples/` out of the output: since #1119 the CLI names
+  imported files relative to the current directory (249 examples, unchanged).

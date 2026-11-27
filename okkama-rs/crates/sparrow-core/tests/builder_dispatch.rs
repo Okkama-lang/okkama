@@ -1,7 +1,6 @@
 //! #537: builder-produced arrays keep aliased resources alive through GC,
 //! await and region cleanup. The existing #580 oracle expects exactly BA.
 use okkama_sparrow::{Dst, Instruction as I, Register, Type, TypeRef};
-
 #[test]
 fn builder_dispatch_resources_survive_finish_and_cleanup_once_in_reverse_order() {
     for ready in [false, true] {

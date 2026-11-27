@@ -130,7 +130,7 @@ fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, de
                 match source.parse::<i64>() {
                     Ok(0) => return Done(1),
                     Ok(nanos) => {
-                        let deadline = std::time::Instant::now() + std::time::Duration::from_nanos(nanos as u64);
+                        let deadline = crate::clock::Instant::now() + std::time::Duration::from_nanos(nanos as u64);
                         runtime.timers.push((deadline, frame));
                         wait(frame, 0);
                         return Pending;

@@ -1,0 +1,6 @@
+module imported/lib/broken v1.0.0;
+
+object Broken {
+    Broken();
+    size() is int { missing; }
+}

@@ -582,11 +582,11 @@ fn lower_analyzed(
     }
     dev_ir("ir after passes", &module);
     verify_lowered(&module, program.span, verify_ownership()).map_err(|error| (root, error))?;
-    if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
+    crate::host::dev_output("OKKAMA_OWNERSHIP_REPORT", || {
         let mut report = ir::ownership::analyze(&module);
         report.record_param_adopts(&param_adopts_removed);
-        let _ = std::fs::write(path, report.to_json());
-    }
+        report.to_json()
+    });
     Ok((module, analysis.warnings.clone()))
 }
 
@@ -785,6 +785,7 @@ pub fn inspect_parsed(
     inspection.members = index.members;
     inspection.scopes = index.scopes;
     inspection.globals = index.globals;
+    inspection.analysed = true;
     inspection
 }
 
@@ -832,9 +833,7 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
     // Invalid output is a compiler failure, never a rejected fuzz input.
     if let Err(error) = ir::verify(module) {
         // Preserve rejected IR for diagnostics.
-        if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-            let _ = std::fs::write(path, module.to_string());
-        }
+        crate::host::dev_output("OKKAMA_DUMP_INVALID_IR", || module.to_string());
         return Err(LoweringError::internal(
             span,
             format!("lowering produced invalid IR: {error}"),
@@ -845,9 +844,7 @@ fn verify_lowered(module: &ir::Module, span: Span, ownership: bool) -> Result<()
     if ownership {
         let _span = okkama_devtrace::span!("lower", "linearity check");
         if let Err(error) = ir::linearity::check(module) {
-            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
-                let _ = std::fs::write(path, module.to_string());
-            }
+            crate::host::dev_output("OKKAMA_DUMP_INVALID_IR", || module.to_string());
             return Err(LoweringError::internal(span, error));
         }
     }

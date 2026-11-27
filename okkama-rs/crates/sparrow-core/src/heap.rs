@@ -731,6 +731,13 @@ impl Heap {
     /// Declare which object descriptors carry their identity inline (#528).
     /// #588: a session runtime's extension appends layouts; the existing ones are unchanged (checked by
     /// `Runtime::extend`), so the trace descriptors are rebuilt for the longer tables.
+    /// #1122: other layouts for the same descriptors, before any frame of the old ones exists (a runtime choosing
+    /// its engine).
+    pub(crate) fn relayout(&mut self, layouts: Layouts) {
+        self.trace_layouts = TraceLayouts::new(&layouts);
+        self.layouts = layouts;
+    }
+
     pub(crate) fn extend_layouts(&mut self, layouts: Layouts) {
         debug_assert!(layouts.objects.starts_with(&self.layouts.objects));
         debug_assert!(layouts.closures.starts_with(&self.layouts.closures));
@@ -1584,7 +1591,7 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "collect");
         // A freed string's address may be reused for another one.
         self.positions = Positions::default();
-        let started = self.allocations.is_some().then(std::time::Instant::now);
+        let started = self.allocations.is_some().then(crate::clock::Instant::now);
         self.collect_inner(roots, &mut ephemerons);
         if let (Some(allocations), Some(started)) = (&mut self.allocations, started) {
             allocations.collection_nanos += started.elapsed().as_nanos() as u64;
@@ -1597,7 +1604,7 @@ impl Heap {
         ephemerons: &mut Ephemerons<'_>,
     ) {
         crate::maps::begin_pass();
-        let marking = self.allocations.is_some().then(std::time::Instant::now);
+        let marking = self.allocations.is_some().then(crate::clock::Instant::now);
         let mut worklist = std::mem::take(&mut self.worklist);
         // An object is marked when it is queued, not when it is traced
         // (#438): one shared by many edges enters the worklist once.
@@ -1650,7 +1657,7 @@ impl Heap {
                 self.released.push(object);
             }
         }
-        let swept = self.allocations.is_some().then(std::time::Instant::now);
+        let swept = self.allocations.is_some().then(crate::clock::Instant::now);
         if self.ages.is_some() {
             self.age_census();
         }
@@ -2055,10 +2062,14 @@ mod length_tests {
     fn header_lengths_up_to_u32_max_pass_and_longer_ones_stop() {
         assert_eq!(length(0), 0);
         assert_eq!(length(u32::MAX as usize), u32::MAX);
-        let longer = std::panic::catch_unwind(|| length(u32::MAX as usize + 1));
-        let message = longer.expect_err("must stop");
-        let text = message.downcast_ref::<String>().cloned().unwrap_or_default();
-        assert!(text.contains("passes the 4 GiB limit"), "{text}");
+        // A 32-bit target (#1131) has no longer length to give.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let longer = std::panic::catch_unwind(|| length(u32::MAX as usize + 1));
+            let message = longer.expect_err("must stop");
+            let text = message.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(text.contains("passes the 4 GiB limit"), "{text}");
+        }
     }
 }
 
@@ -2712,11 +2723,12 @@ mod tests {
     fn payload_436_cell_layout_census_and_reinitialization() {
         assert_eq!(std::mem::offset_of!(PayloadCell, header), 0);
         assert!(align_of::<PayloadCell>() <= align_of::<u64>());
-        // Supported 64-bit targets: verify the observed layout, without
-        // using it to split or reconstruct the typed owner.
-        assert_eq!(size_of::<usize>(), 8);
-        assert_eq!(size_of::<PayloadCell>(), 24);
-        assert_eq!(CLASSES[Heap::class_of(PAYLOAD_WORDS).unwrap()], 3);
+        // Verify the observed layout, without using it to split or reconstruct
+        // the typed owner: the header word and the payload's fat box, 24 bytes
+        // on 64-bit targets and 16 on 32-bit ones (wasm32, #1124).
+        let bytes = size_of::<u64>() + 2 * size_of::<usize>();
+        assert_eq!(size_of::<PayloadCell>(), bytes);
+        assert_eq!(CLASSES[Heap::class_of(PAYLOAD_WORDS).unwrap()], bytes / 8);
         let mut heap = Heap::new(layouts());
         heap.set_stress(true);
         heap.allocations = Some(Box::default());
@@ -2726,10 +2738,10 @@ mod tests {
             // afresh, rather than assigned over the previous cell bytes.
             let object = heap.allocate_payload(Box::new(Counted { _alive: alive.clone(), words: vec![] }));
             heap.collect(|visit| visit(object, Repr::Ref));
-            assert_eq!(heap.stats().live_bytes, 24);
+            assert_eq!(heap.stats().live_bytes, bytes);
             let allocations = heap.allocations.as_ref().unwrap();
-            assert_eq!(allocations.kinds[&("payload", 0)], (n, n * 24));
-            assert_eq!(allocations.live[&("payload", 0)], (1, 24));
+            assert_eq!(allocations.kinds[&("payload", 0)], (n, n * bytes as u64));
+            assert_eq!(allocations.live[&("payload", 0)], (1, bytes as u64));
             assert_eq!(Rc::strong_count(&alive), 2);
             heap.collect(|_| {});
             assert_eq!(Rc::strong_count(&alive), 1);

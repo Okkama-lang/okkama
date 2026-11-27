@@ -14,7 +14,7 @@
 use crate::Error;
 use crate::heap::{self, Heap};
 use crate::intrinsics::Intrinsic;
-use crate::program::Kind;
+use crate::program::{Kind, dispatch_table, failure_or_region, generic, suspends};
 use crate::runtime::{self, Ctx, FAILED, OK, Runtime};
 use crate::word::{self, Repr, Word};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -235,17 +235,6 @@ impl Chosen {
     fn has(&self, symbol: &str) -> bool {
         self.all || self.symbols.contains(symbol)
     }
-}
-
-/// The implementation of role `role`'s slot `slot` per descriptor (`u64::MAX`: none), `length` entries long.
-fn dispatch_table(program: &okkama_sparrow::Program, role: u32, slot: u32, length: usize) -> Box<[u64]> {
-    let mut table = vec![u64::MAX; length];
-    for (entry, object) in table.iter_mut().zip(&program.objects) {
-        if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
-            *entry = u64::from(witness.slots[slot as usize].0);
-        }
-    }
-    table.into_boxed_slice()
 }
 
 impl Jit {
@@ -585,6 +574,8 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
     let closure_reference = runtime.closure_bridge_reference;
+    // #1129: the polling of this runtime's code, as the interpreter reads it.
+    let polled = runtime.polled();
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
     let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);
@@ -671,7 +662,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             blocks: Vec::new(),
             ctx: None,
             frame: None,
-            polled: limits.polled(),
+            polled,
             count_helpers: stats.is_some(),
             closure_reference,
             fuel: budget.fuel.address(),
@@ -1123,7 +1114,13 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(recorded);
         let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
-        let mut frame = self.builder.ins().get_frame_pointer(types::I64);
+        // #1122 (design #1079 §6.4): an async body is keyed by its heap frame, which stays where it is while the
+        // body suspends and resumes on another stack depth; its machine frame pointer does not, and a failure that
+        // unwound through a suspended settle recorded the body twice.
+        let mut frame = match self.frame {
+            Some(frame) if self.inline.is_none() => self.builder.use_var(frame),
+            _ => self.builder.ins().get_frame_pointer(types::I64),
+        };
         if let Some(inline) = &self.inline {
             // An inlined activation shares its caller's frame: frame pointers are 16-aligned, so `fp - depth` keys
             // it apart for the trace's once-per-activation rule (#926).
@@ -1395,10 +1392,7 @@ impl Emitter<'_, '_> {
             let yes = self.iconst(1);
             return self.builder.ins().select(unbound, yes, value);
         }
-        let message = format!(
-            "Field `{name}` of `{}` is read before it is bound",
-            okkama_runtime_core::testing::display_name(&declared.name)
-        );
+        let message = crate::texts::unbound_field(name, &declared.name);
         let bound = self.builder.create_block();
         let stubbed = self.builder.create_block();
         self.builder.set_cold_block(stubbed);
@@ -2050,7 +2044,7 @@ impl Emitter<'_, '_> {
                 let outside = self.builder.create_block();
                 self.builder.ins().brif(valid, load, &[], outside, &[]);
                 self.builder.switch_to_block(outside);
-                let message = self.constant_text("Array index out of bounds");
+                let message = self.constant_text(crate::texts::ARRAY_INDEX);
                 self.helper(|h| h.trap, &[ctx, message]);
                 self.check(pc);
                 self.builder.ins().jump(load, &[]);
@@ -2157,7 +2151,7 @@ impl Emitter<'_, '_> {
                 let inactive = self.builder.create_block();
                 self.builder.ins().brif(active, load, &[], inactive, &[]);
                 self.builder.switch_to_block(inactive);
-                let message = self.constant_text("Variant payload of an inactive case");
+                let message = self.constant_text(crate::texts::INACTIVE_CASE);
                 self.helper(|h| h.trap, &[ctx, message]);
                 self.check(pc);
                 self.builder.ins().jump(load, &[]);
@@ -2183,12 +2177,7 @@ impl Emitter<'_, '_> {
                 let entry = self.builder.ins().iadd(base, offset);
                 let function = self.builder.ins().load(types::I64, MEMORY, entry, 0);
                 // Async witnesses: the call makes a cold Future of the method.
-                let asynchronous = program
-                    .objects
-                    .iter()
-                    .flat_map(|o| &o.does)
-                    .filter(|w| w.role == *role)
-                    .any(|w| program.functions[w.slots[*slot as usize].0 as usize].is_async);
+                let asynchronous = crate::program::role_slot_is_async(program, *role, *slot);
                 let result = if asynchronous {
                     let mut registers = vec![*receiver];
                     registers.extend(args.iter().copied());
@@ -3266,8 +3255,7 @@ fn frame_resident(is_async: bool, suspensions: usize, registers: usize, plain: b
     is_async && !plain && suspensions.saturating_mul(registers) > RESIDENT_LIMIT
 }
 
-/// The program error of a reached `unreachable` (#1072).
-pub(crate) const UNREACHABLE: &str = "Unreachable code reached";
+pub(crate) use crate::texts::UNREACHABLE;
 
 #[cfg(test)]
 mod frame_resident_tests {
@@ -3281,39 +3269,6 @@ mod frame_resident_tests {
         assert!(!super::frame_resident(true, 300, 600, true));
         assert!(!super::frame_resident(true, 200, 200, false), "exactly the limit stays classic");
     }
-}
-
-/// An instruction that may suspend its async frame and is re-entered on
-/// resumption: `await` and the region closes that await async destroys (#154).
-fn suspends(instruction: &I) -> bool {
-    matches!(
-        instruction,
-        I::Await { .. }
-            | I::AwaitTake { .. }
-            | I::RegionSettle { .. }
-            | I::RegionSettleUnwind { .. }
-            | I::ResourceSettle { .. }
-            | I::ResourceSettleUnwind { .. }
-    )
-}
-
-/// Instructions executed by `failures::rt_failure_op`.
-fn failure_or_region(instruction: &I) -> bool {
-    matches!(
-        instruction,
-        I::RegionEnter { .. }
-            | I::RegionAdopt { .. }
-            | I::RegionTrack { .. }
-            | I::RegionTransfer { .. }
-            | I::RegionLeave { .. }
-            | I::RegionUnwind { .. }
-            | I::ResourceUnwind { .. }
-            | I::FailSecondary { .. }
-            | I::FailCaused { .. }
-            | I::Raise { .. }
-            | I::Panic { .. }
-            | I::RoleNarrow { .. }
-    )
 }
 
 /// The parameter and field of a function whose whole body is `obj.get` of a
@@ -3344,88 +3299,6 @@ fn atomic_access(callee: &okkama_sparrow::Function) -> Option<Intrinsic> {
             | Intrinsic::EventReady
     )
     .then_some(intrinsic)
-}
-
-/// Instructions executed by `ops::rt_exec`.
-fn generic(instruction: &I) -> bool {
-    matches!(
-        instruction,
-        I::ByteAnd { .. }
-            | I::ByteOr { .. }
-            | I::ByteXor { .. }
-            | I::ByteShl { .. }
-            | I::ByteShr { .. }
-            | I::ByteUshr { .. }
-            | I::ByteNot { .. }
-            | I::Bits { .. }
-            | I::RangeNew { .. }
-            | I::RangePart { .. }
-            | I::StrUtf8 { .. }
-            | I::StrFn { .. }
-            | I::GlobalGet { .. }
-            | I::StrReplaceFirst { .. }
-            | I::IntAnd { .. }
-            | I::IntOr { .. }
-            | I::IntXor { .. }
-            | I::IntShl { .. }
-            | I::IntShr { .. }
-            | I::IntUshr { .. }
-            | I::IntNot { .. }
-            | I::IntNeg { .. }
-            | I::IntAbs { .. }
-            | I::Sign { .. }
-            | I::FloatMod { .. }
-            | I::FloatPow { .. }
-            | I::FloatSqrt { .. }
-            | I::Convert { .. }
-            | I::ByteFrom { .. }
-            | I::RatNew { .. }
-            | I::RatAdd { .. }
-            | I::RatSub { .. }
-            | I::RatMul { .. }
-            | I::RatDiv { .. }
-            | I::RatMod { .. }
-            | I::RatNeg { .. }
-            | I::RatAbs { .. }
-            | I::RatCmp { .. }
-            | I::RatPart { .. }
-            | I::StrCmp { .. }
-            | I::StrLen { .. }
-            | I::StrSlice { .. }
-            | I::StrSplit { .. }
-            | I::StrReplace { .. }
-            | I::StrTrim { .. }
-            | I::StrChomp { .. }
-            | I::EnumCase { .. }
-            | I::EnumCmp { .. }
-            | I::ValCmp { .. }
-            | I::Undef { .. }
-            | I::AnyBox { .. }
-            | I::ArraySlice { .. }
-            | I::ArrayReplace { .. }
-            | I::ArrayRemove { .. }
-            | I::ArrayJoin { .. }
-            | I::ArrayConcat { .. }
-            | I::ArrayDiff { .. }
-            | I::MapMerge { .. }
-            | I::MapDiff { .. }
-            | I::BuilderNew { .. }
-            | I::BuilderPush { .. }
-            | I::BuilderAppend { .. }
-            | I::BuilderRange { .. }
-            | I::BuilderFinish { .. }
-            | I::MapNew { .. }
-            | I::MapLen { .. }
-            | I::MapHas { .. }
-            | I::MapGet { .. }
-            | I::MapKeys { .. }
-            | I::MapValues { .. }
-            | I::MapBuilderNew { .. }
-            | I::MapBuilderPut { .. }
-            | I::MapBuilderFinish { .. }
-            | I::WorkerSpawn { .. }
-            | I::WorkerBind { .. }
-    )
 }
 
 fn int_condition(op: Cmp) -> IntCC {

@@ -160,7 +160,6 @@ fn gh09_region_boundaries_duplicates_transfers_and_keeps() {
         }
     }
 }
-
 #[test]
 fn gh09_region_failing_and_async_nested_cleanup() {
     for asynchronous in [false, true] {

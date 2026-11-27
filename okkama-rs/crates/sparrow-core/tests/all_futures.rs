@@ -7,12 +7,10 @@ fn check_all_futures(ready: bool) {
     let bytes = okkama_sparrow::encode(&program).unwrap();
     assert!(sparrow_core::run_tests(bytes, Box::new(std::io::stdout())).unwrap());
 }
-
 #[test]
 fn all_futures_retains_duplicate_results_until_scope_exit() {
     check_all_futures(true);
 }
-
 #[test]
 fn all_futures_transfers_results_after_suspension() {
     check_all_futures(false);

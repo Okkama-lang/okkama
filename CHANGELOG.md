@@ -6,6 +6,231 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-11-27
+
+0.6.6 brings Okkama to the browser: a playground on okkama-lang.github.io/playground/ checks, formats, explains
+and runs programs with no server, on the compiler and the Sparrow runtime built for WebAssembly. Sparrow gains a
+second executor, an interpreter, which also checks the JIT in every test run. Nothing in the language or the
+public std changes.
+- **The playground.** The compiler in wasm (`okkama-wasm`, #1078) answers `check`, `fmt`, tokens, AST, IR with
+  pass selection and Sparrow assembly exactly as the CLI prints them, with hover, completion (std paths included),
+  go to definition and signature help (#1115–#1119, #1128). The runtime in wasm (`sparrow-wasm`, #1125) runs
+  programs and module tests on the interpreter under a playground profile: no files, sockets, processes or
+  environment; clocks, randomness, digests and HMAC yes; workers emulated in the instance (#1127); output streamed
+  in batches with its moments on a virtual timeline (#1134, #1136); requirements by reachability (#1135). 170 of
+  the Bible's examples run there, giving the book's output.
+- **Sparrow's interpreter.** A second executor behind one engine seam (`SPARROW_CORE_INTERPRET=1`): synchronous
+  code (#1120), failure handlers (#1121), async bodies (#1122); conformance passes 1075/1075 on both engines.
+  It is an oracle in the Wave, the gate, t/, okgen and fuzz (#1123), and found a JIT trace defect (#1132).
+- **Sparrow without the JIT and the host.** Features `jit` and `host`, a clock module and a wasm32-clean build
+  (#1124); a 32-bit run on i686 (#1131); map keys walked without recursion (#1130); one rule for budget polling
+  across engines (#1129); pure natives classified as pure (#1133).
+- **Speed.** The JIT path is unchanged by the interpreter: per-change micro A/B −0.2% (#1120), +0.3% on async
+  cells (#1122), −0.6% on map cells (#1130); no release-wide A/B was run for this release.
+
+### Added
+- **Workers run in the playground (#1127, the owner's decision).** Without the host (and so in sparrow-wasm),
+  `spawn` of a synchronous action and std's `ParallelMapped` run the worker in the same instance, on a runtime of
+  its own: the same program with fresh globals, only values crossing by the process workers' codec, its output
+  passed on whole before its result, its failure as text, budgets per worker; one valid order where process
+  workers are nondeterministic (each finishes at its spawn). `system_cpu_count` is 1 there. The playground's
+  refusal of workers is gone. Programs with two workers, worker output, a failing worker, a bound action and a
+  parallel map give the CLI's output (whose workers are processes, unchanged).
+- **The playground's output comes in batches, handed over at the budget polls (#1136).** A streamed run joins a
+  stream's writes within a 16 ms window into one chunk (`window` in the request; 0 keeps a chunk per write) and
+  hands it over at the next budget poll, every 65 536 steps (a few milliseconds in wasm), so nothing waits while a
+  program computes: 60 000 lines arrive in 11 chunks instead of 120 000, the run three times faster. `version()`
+  carries a `stopped` text for a run the user stops ("Execution stopped", wording awaiting the owner); `interrupted`
+  stays the watchdog's.
+- **The playground runs a module's tests (#1127).** sparrow-wasm's `test` runs an SPB built with tests as `okkama run
+  -t` does, on the interpreter under the playground's profile, the report streamed a line at a time through the
+  same output sink, with the CLI's exit status (0, 1, or 4 when the tests cannot run). The Bible's 13 test examples
+  and 25 std modules' tests give `okkama run -t`'s report byte for byte (its documentation-example lines aside).
+  Digests, HMAC, HKDF, named UUIDs and checksums are checked in the profile, against the CLI and in wasm (Node
+  smoke test). CLDR on demand was done in #1125; workers and the resumable scheduler await the owner.
+- **The playground streams a run's output, and warns only about what a run can reach (#1134, #1135).**
+  sparrow-wasm's `run` takes an optional output sink: every write reaches it as a chunk `{stream, text, t}` while
+  the program runs, so the page shows output as it comes and keeps what a run it stops had printed (a Node smoke
+  test stops a spinning worker and finds its line). `version()` carries the profile's texts (`interrupted`, the
+  budget lines) for the page to print. `requirements` names the refused natives a run can reach from `main` (or
+  the tests of a test build) over the call graph (`sparrow_core::reach`: direct calls, closures, constants, cap
+  fields, built objects and the role methods that can be called on them), not every native the imports declare,
+  which stay in `declared`; over examples/ every run that stopped at a refused native stopped at a named one.
+- **The playground runs programs (#1125, sixth part of #1079).** A new crate `sparrow-wasm` (cdylib, wasm-bindgen)
+  is Sparrow without the JIT and the host: it runs the SPB that okkama-wasm's new `build` makes on the interpreter
+  under `Limits::playground()`, with standard input from the request and every write to stdout and stderr marked
+  with its moment on the virtual timeline (a sleep shows as time between pieces and is not waited for). The
+  playground's profile (`sparrow_core::budget::PLAYGROUND`) is data, not a build flag: clocks and secure
+  randomness are allowed, standard input reads the buffer, files, sockets, processes, workers, the environment and
+  the terminal are refused as "Native X is not available in the playground" (natively too under the same limits),
+  and so are collation and X.509, whose providers are not in the module; budgets 5·10⁷ steps, 256 MiB of the
+  runtime's heap, 1 MiB of output. `requirements(spb)` names before a run what the profile refuses and the data
+  files to `provide`: the CLDR tables leave the module (okkama-runtime-core feature `cldr`, on in every native
+  build) and come only to a program that reads CLDR. okkama-wasm's `failureText` draws an uncaught failure's place
+  and stack in the sources as `okkama run` does: the stack renderer moved from the CLI to
+  `okkama_compiler::commands::trace`, `Uncaught` and the exit-status rule (`main_outcome`) to
+  okkama-runtime-core. The `secure_*` randomness natives moved into a pure provider of their own.
+  `okkama-cli/tests/playground_run.rs` runs the Bible's and the Book's examples on both sides: the 160 the profile
+  admits (8 of them failing, with stacks) give the CLI's stdout, stderr and exit status byte for byte. CI builds
+  the module alone, checks it within 2.0 MB gzip (1,854,972 bytes gzip of 3,749,216) and runs a Node smoke test of the two modules.
+- **The compiler builds for WebAssembly, for the playground (#1078).** A new crate `okkama-wasm` (cdylib,
+  wasm-bindgen) answers `check`, `fmt`, `tokens`, `ast`, `ir` (with `passes`/`after`), `spa` (the Sparrow
+  assembly of the built SPB), `hover`, `complete`, `definition` and `signature` as JSON, over the repository's
+  std embedded read-only (499 modules, 6.0 MB); nothing runs. Each command answers the CLI's own standard
+  output, standard error and exit status, and each diagnostic its file, kind, message, text, byte span and
+  editor range. The text comes from a new `okkama_compiler::commands` module that the CLI and its conformance
+  adapter now use too, so a diagnostic is rendered in one place. okkama-runtime-core's native providers and
+  the libraries only they need (libc, the C zstd, Brotli, miniz, host cryptography) are behind its default
+  feature `native`, which the compiler leaves off. The release wasm after `wasm-bindgen` is 9.6 MB, 2.4 MB
+  gzip, 1.7 MB brotli. `okkama-cli/tests/playground.rs` compares `okkama check` and `okkama fmt` with the
+  playground on t/, the Bible's rejected examples and std modules, byte for byte. The CLI's output and the SPB
+  it builds are unchanged (2220 corpus files; 1549 SPB byte-identical).
+- **The playground completes `std.…` paths like the language server (#1115).** Completion of std paths reads a
+  std tree (`okkama_compiler::ide::StdTree`): the std directory for `okkama lsp` (`DiskStd`, with the editor's
+  unsaved texts) and the bundled std for the playground, whose page files under `std/` come first. The index of
+  whole paths is cached by the tree's stamp. `okkama-cli/tests/playground.rs` compares the playground's
+  completion with `okkama lsp`'s, item for item and in the editor's order.
+- **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
+  location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
+  passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+- **Sparrow's interpreter runs async bodies (#1122, third part of #1079).** An async body's registers are its
+  Future's heap frame: a suspension writes the resume point and leaves, a resumption executes the suspending
+  instruction again, and `await`, `await.take`, `region.settle*` and `resource.settle*` call the JIT's helpers;
+  every resumption is a step, as every entry of the JIT's body. The interpreter's runtime loads without the
+  pointer-free proofs, so a suspended frame traces every register of a traced kind, and entries from Rust nest
+  at most 200 deep on wasm32 (a stack overflow, not a trap). The tests that waited for it (tasks, async destroys,
+  selection, all_futures, future inputs, timers, payloads) run on the interpreter in the build without the JIT,
+  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 141 mnemonics. The design's §6.4
+  hypothesis was confirmed: the JIT recorded an async body twice in a trace when a failure unwound through a
+  suspended `region.settle_unwind`, because it keyed the activation by its machine frame pointer, which differs
+  after a resumption; it now keys an async body by its heap frame, as the interpreter does. With nothing left
+  unexplained, the async line leaves `interp-exceptions.txt` and the Wave's `sparrow-interp` branch and the gate's
+  interpreter step are blocking. `differ.py` runs the programs of one directory one after another (examples/fs
+  share files).
+- **The interpreter is an oracle in the test runs (#1123, fourth part of #1079).** t/ has the configurations
+  `sparrow-interp` and `sparrow-interp-gc-stress` (four times the timeout); the Wave's conformance-and-corpora
+  matrix has a `sparrow-interp` branch (conformance with `SPARROW_CORE_INTERPRET=1`, t/ on the JIT and both
+  interpreter configurations, bench/micro, examples, the Bible's examples, and `differ.py` on examples), report-only
+  until its first green run; the gate has an informative "interpreter" step with the same three. A difference
+  from the JIT is a defect unless `okkama-rs/tools/engines/interp-exceptions.txt` explains it, each line with
+  its reason and ticket: async bodies (#1122), a stack overflow reached on both, a memory budget run out on either
+  side, the JIT's compile limits (design §6.3). `okkama-rs/tools/engines/differ.py` compares programs without
+  expectations byte for byte (`run`) and explains an interpreter conformance run (`ocs`); t/run.py reports an
+  explained interpreter run as skipped with its reason. `tools/gen/okgen.py --engines sparrow,sparrow-interp`
+  compares generated programs on both engines, and `tools/gen/mutants.sh` has a seeded JIT defect (the inline
+  multiplication) that the mutated build's own interpreter finds. The fuzz `exec` target has a differential
+  mode, `OKKAMA_FUZZ_DIFFERENTIAL=1`. LLM-GUIDE §9 has the three runs (interpreter, plain unoptimized JIT,
+  JIT) that locate a disagreement. Local results: conformance on the interpreter 986 of 1075 cases pass, the 89
+  others async refusals, none unexplained; t/ (142 files, 50972 checks) identical on the JIT and both
+  interpreter configurations but 3 async files; examples 211 identical, 52 async, none different.
+- **Sparrow's interpreter runs failure handlers (#1121, second part of #1079).** A failure follows the JIT's
+  status protocol: each activation it reaches is recorded once, at the instruction it reached, and the first
+  handler covering that instruction takes it (the activations above it left, the handler's edge moves taken,
+  a step when the edge goes back, the failure in the handler's register); `catch` matches through `rt_catch`.
+  Cleanups on the failure path (`region.unwind`, `resource.unwind`, destroys) are the program's own code, as
+  under the JIT. `sparrow_core::observe` runs one SPB on either engine (`Engine::Jit`, `Engine::Interpreter`)
+  with standard output and, now, standard error captured apart (`okkama_runtime_core::stdout::capture_streams`;
+  `stderr_write` goes through `stdout::write_error`). `okkama-cli/tests/differential.rs` compares the two engines
+  in one process on t/, sixteen examples of the Bible and the Book, conformance's run-time failures and five step
+  budgets: result, uncaught report as a structure, both streams. `sparrow-core/tests/mnemonics/` and the
+  SparrowBook's programs execute every synchronous mnemonic on both engines (checked by a test). Results: t/
+  139 of 142, examples 211 of 263, conformance failures 55 of 58 give the JIT's output (the rest async,
+  refused), also under GC stress; bench/micro `check.py` passes 621 of 773 programs on the interpreter (128
+  async, 24 failing in the cage on both).
+- **Sparrow runs synchronous programs without the JIT: `SPARROW_CORE_INTERPRET=1` (#1120, first part of #1079).**
+  The interpreter (`sparrow-core/src/interp.rs`) is a mode of the same runtime: heap, collector, `ops`, failures,
+  regions, natives, intrinsics and budgets are shared, and every instruction the JIT runs through a helper calls
+  that helper (the `SPARROW_CORE_PLAIN` path without Cranelift); 48 instructions have branches of their own
+  (scalars, objects, variants, arrays, calls of every kind, closures, roles, caps, control) with the emitter's
+  failure texts, now in one place (`texts.rs`). Frames live on a register stack, not the Rust stack, and the
+  collector roots every register by its kind. Every entry from Rust into Okkama code (a synchronous entry, a
+  closure's helper, an async body, an intrinsic's callback, a destroy, `Error.text`) goes through one seam,
+  `Runtime::invoke`/`Runtime::resume`, which reads the published code first as before. Steps, the stack limit
+  and traces follow the JIT's rules, so a budget stops both at the same point and a failure reports the same
+  sites. Failure handlers (#1121) and async bodies (#1122) are not run yet: a failure a handler would catch, or
+  an async body, stops the run with "… is not supported by the interpreter yet". Results: t/ 135 of 142 files
+  and examples 133 of 263 give the JIT's output and exit code (the rest refused, none different), under
+  `SPARROW_CORE_GC_STRESS=1` too; bench/micro `check.py` passes 560 of 773 programs on the interpreter (the others
+  refused, or failing in the cage on both). With the switch off, the output of every corpus is unchanged.
+- **Sparrow builds without the JIT and the host, for WebAssembly (#1124, part of #1079).** sparrow-core has two
+  default features: `jit` (Cranelift, `jit.rs`, `code_memory.rs`) and `host` (Tokio, files, sockets, DNS, TLS,
+  SQLite, processes and process workers, the environment). Without them Sparrow is its interpreter and the pure
+  native providers, and `cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown`
+  passes (Wave part `wasm`, CI job "Playground wasm"). okkama-runtime-core's `native` is now `providers`
+  (text, numbers, Unicode, formats, JSON splitting, time zones, CLDR, DEFLATE, UUIDs), `crypto` (digests),
+  `host`, `zstd` and `brotli`; okkama-native keeps aws-lc (RSA, X.509, the ECDSA verification fast path)
+  behind its default feature `aws-lc`, and on wasm32 takes randomness from the JavaScript host. A new module
+  `sparrow_core::clock` gives the timers and the time natives their clocks: the system's natively, a virtual
+  timeline on wasm32, where the scheduler moves time to the next timer instead of waiting for it. The
+  scheduler's wait has three bodies: Tokio with the host, a sleep on a condition variable natively without it,
+  that skip on wasm32. Without the host a native neither runtime provides is unsupported rather than routed to a
+  refusal, a zstd or Brotli codec is refused as unsupported, and a worker spawn is refused as without a worker
+  command; where a panic aborts, a sort that a budget stops is a merge sort that can stop; budget arithmetic is in
+  `i64` on every target. `cargo test -p sparrow-core --no-default-features` passes natively, with the interpreter
+  as the only engine (the tests that need an async body or a failure handler wait for #1122/#1121). The default
+  build is unchanged: `cargo tree -e features` of okkama-cli and sparrow-cli differs only by the new feature
+  names, and every corpus gives the same exit status, standard output and standard error byte for byte as before (t/ 142 programs, examples 333, std -t 125 modules, conformance 1075 cases, in the cage), with byte-identical SPB (2121 files, 1380 built).
+
+### Changed
+- **The polling of a runtime is fixed at its first run, for both engines (#1129).** Whether code polls the fuel
+  cell (a step, memory or interrupt budget is set) was compiled into each function by the JIT when it compiled
+  it, and read at every step by the interpreter, so an embedder that set a budget on a runtime after its first run
+  (a session's later cell) got two answers. Now the runtime fixes it at its first run (`Budget::polled`), the
+  JIT compiles it and the interpreter and the sorting intrinsics read it, and a later run that would turn polling
+  on or off is refused ("… set the budgets before the first run"); other budget values may change. No command
+  line path changes budgets between runs. `bench/micro/toolchain.sh` fetches the lock's crates into the
+  `okkama-cargo-registry` volume (`cargo fetch --locked`) before its offline build, and names the step that
+  failed (exit 3 for the fetch, 4 for the build).
+- **Diagnostics name an imported file relative to the current directory (#1119).** `okkama check`, `build`,
+  `run`, `ir` and every other command that loads imports named a file they found through an import by its absolute path, while the
+  file given on the command line kept its spelling: `okkama check 19-cycle-rejected.ok` in the Bible's examples
+  printed `/…/examples/cycle/customers.ok:3:1: …`. A found file is now named relative to the current directory
+  when it is under it, and by its path otherwise (`cycle/customers.ok:3:1: …`), the rule run-time traces already
+  followed; one function, `okkama_compiler::source::display_name`, serves both. The language server's copy of an
+  imported file's error on the importer names the file the same way from the importer's directory
+  (`sub/lib.ok:7: …`; it printed the bare file name). The playground's names are already relative to its root.
+  No expected output changes: the Bible's build script, t/ and conformance did not compare absolute paths.
+- **No compiler path reaches a file system or a clock on wasm32 (#1116).** The standard-library documentation
+  gate takes file identity from the loader (`ModuleLoader::identity`; the CLI's resolves the file system's)
+  instead of canonicalizing, the development switches `OKKAMA_PROFILE_REGISTERS`, `OKKAMA_DUMP_INVALID_IR` and
+  `OKKAMA_OWNERSHIP_REPORT` use the clock and file writes of a new `okkama_compiler::host` module, which a wasm32
+  build compiles inert, `ModuleDoc::load` (a file read) moved into `okkama man`, and okkama-devtrace compiles out
+  on wasm32 as in a release build. A test holds every other source file of the compiler off file-system, clock
+  and process calls.
+
+### Fixed
+- **A deny flag refuses only real host access (#1133).** The natives that compute without the host were counted as
+  host access, so `--deny env`, `--deny net` or a restricted embedding refused them: standard input's line buffers
+  (`input_state`, was Terminal), IP address text (`net` `ip_*`, was Net), PostgreSQL result pages (`pg_page*`, was
+  Net), the date-times of a named zone (`timezone_local_*`, was Env) and what the build is (`system_platform`,
+  `system_architecture`, `system_byte_order`, was Env). They are pure in Sparrow's permission groups and in the
+  compiler's companion catalogue alike (23 natives), and the playground profile no longer lists them as exceptions.
+- **The editor keeps its answers while an import or a std path is being typed (#1128).** The language server and
+  the playground answered hover, completion and definition from the last text that parsed, so a text that parsed
+  but did not resolve (`std.coll` half typed) cost every symbol in the language server: completion after `bottle.`
+  offered nothing. Both now answer from the last inspection that was analysed (`ide::Answering`, one rule for both);
+  the unresolved text's diagnostics are still shown. The Bible's example check compares the CLI's own names of
+  imported files, without rewriting them.
+- **Completion showed a successor action's result with two carets (#1117).** After `bottle.`, `open` had the
+  detail `() is ^^Bottle` in the language server and the playground; it is `() is ^Bottle`, as declared.
+- **A session on the interpreter refused every extension (#1122).** The interpreter's runtime loads without the
+  pointer-free proofs, its extension loaded with them, and the published-prefix check saw every function's
+  metadata changed ("the extension changes published function metadata"): the REPL with
+  `SPARROW_CORE_INTERPRET=1` and the session tests of the build without the JIT failed. An extension now loads as
+  its runtime did. The interpreter's t/ run under GC stress gets ten times the timeout instead of four:
+  t/gen/persistence/04–07 ran out of it on the Wave's debug adapter.
+- **A map key's depth no longer uses the machine stack (#1130).** Checking that a value object can key a map,
+  building its key, comparing two keys, sizing one and dropping it each recursed once per level of nested value
+  objects; a key nested deeper than the stack (about 1 MiB on wasm32) would have crashed the run. Each now walks
+  the levels on a stack of its own, with the same results (checked against the recursive definitions on keys of
+  every kind), and a key 100 000 levels deep works on a 1 MiB stack, also without the JIT. The 14 map cells of the micro A/B are within noise (geomean −0.6%, every cell within ±7%).
+- **Sparrow on 32-bit targets (#1131).** Sparrow's suite without default features runs on i686, the pointer width
+  of wasm32 (in the Wave's `wasm` part, a static musl build on the x86_64 runner). It found that the VM thread
+  reserved 1 GiB of stack on every target, so a second run at once could not start in a 32-bit address space:
+  32-bit targets reserve 128 MiB. A session runtime on the interpreter refused every extension ("the extension
+  changes published function metadata"): the extension's functions kept the pointer-free proofs its runtime had
+  dropped (#1122); they drop them too now.
+
 ## [0.6.5] — 2026-11-27
 
 0.6.5 closes the findings of the three internals books (Codex Gigas, Malleus, Clavicula) and of fuzzing, moves
@@ -8993,7 +9218,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/Okkama-lang/okkama/compare/v0.6.2...v0.6.3

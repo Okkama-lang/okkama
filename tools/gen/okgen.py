@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generated Okkama programs compared across Sparrow configurations (hardening H-18).
 
-    tools/gen/okgen.py run [--seeds N] [--first S] [--engines sparrow] [--out DIR]
+    tools/gen/okgen.py run [--seeds N] [--first S] [--engines sparrow,sparrow-interp] [--out DIR]
     tools/gen/okgen.py show SEED
 
 Each seed makes one terminating, deterministic program: exact integers with
@@ -13,7 +13,10 @@ engines disagree is minimized (delta debugging over the statements of
 engine's output. Exit status 1 when some seed disagreed.
 
 Programs run through `okkama run` (OKKAMA, default the release
-build). The reference is Sparrow with IR passes off, or OKKAMA_REFERENCE
+build). Engines: `sparrow` (the JIT) and `sparrow-interp` (Sparrow's
+interpreter, SPARROW_CORE_INTERPRET=1, #1123): an interpreter that disagrees
+with the JIT points at the emitter, its inline paths or its roots, which the
+two do not share. The reference is Sparrow with IR passes off, or OKKAMA_REFERENCE
 when comparing two builds; a whole campaign belongs in a container (`make gate`'s image) or CI.
 """
 import argparse
@@ -27,6 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "release", "okkama"))
 
 REFERENCE = os.environ.get("OKKAMA_REFERENCE")
+# Each engine's environment on top of the process's.
+ENGINES = {"sparrow": {}, "sparrow-interp": {"SPARROW_CORE_INTERPRET": "1"}}
 
 PRELUDE = """module app;
 import "io/stdout" take Stdout;
@@ -158,6 +163,8 @@ def run(text, engine, directory, reference=False):
         out.write(text)
     try:
         env = dict(os.environ, OKKAMA_TRACE="off")
+        env.pop("SPARROW_CORE_INTERPRET", None)
+        env.update(ENGINES[engine])
         if reference and not REFERENCE:
             env["OKKAMA_IR_PASSES"] = "none"
         binary = REFERENCE if reference and REFERENCE else OKKAMA
@@ -216,8 +223,8 @@ def main():
         print(program(args.seed)[0], end="")
         return 0
     engines = args.engines.split(",")
-    if any(engine not in ("sparrow",) for engine in engines):
-        parser.error("Sparrow is the only Okkama engine")
+    if any(engine not in ENGINES for engine in engines):
+        parser.error(f"engines: {', '.join(ENGINES)} (Sparrow's JIT and its interpreter)")
     found = 0
     for seed in range(args.first, args.first + args.seeds):
         text, count = program(seed)
