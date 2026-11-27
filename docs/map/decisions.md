@@ -1307,6 +1307,8 @@ every declaration is open (#1005, owner decision).
 - Lazy sweep rejected (unmarking and counting live is the walk; owner pages must stay eager); a per-cell side
   bitmap deferred with the marking follow-up.
 - Owner (2026-11-28): a little more memory for this speed is acceptable, unless something is plainly wrong.
+- Bump lanes (step 3) rejected with numbers: allocating from a bump region before the free cells of partly live
+  pages cost cycles (10-app +5.6%, 05-strings up to +6%) for +0.8% instructions; the free-list pop stays.
 
 ## Keys from outside the process take a keyed hash (#1103, 2026-11-28; owner: research first)
 
