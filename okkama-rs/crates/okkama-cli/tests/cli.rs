@@ -2791,7 +2791,9 @@ fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
         .args(["--no-build", "--man-pages", "--version", "test-515", "--out"]).arg(&out)
         .env("CARGO_TARGET_DIR", &target).output().unwrap();
     assert!(package.status.success(), "{}", stderr(&package));
-    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.to_string_lossy().ends_with(".tar.gz")).unwrap();
+    // The package, not its symbols archive (#1109).
+    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".tar.gz") && !path.to_string_lossy().ends_with("-symbols.tar.gz")).unwrap();
     let unpack = root.join("unpack"); std::fs::create_dir_all(&unpack).unwrap();
     assert!(Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&unpack).status().unwrap().success());
     let payload = std::fs::read_dir(unpack).unwrap().next().unwrap().unwrap().path();
