@@ -921,6 +921,17 @@ fn has_loop(source: &okkama_sparrow::Function) -> bool {
 /// broken invariant of `scalar::float_binary`, never a program's failure.
 const FLOAT_SLOW_PATH_RETURNED: u8 = 1;
 
+/// The user trap after a shared slow path that always fails on the inputs that reach it (#1106: a byte shift
+/// count outside 0..7, sqrt of a negative float).
+const GENERIC_SLOW_PATH_RETURNED: u8 = 2;
+
+/// A shift or rotation count checked inline (#1106).
+#[derive(Clone, Copy)]
+struct Count {
+    valid: Value,
+    value: Value,
+}
+
 /// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
 const INLINE_CALLEE: usize = 24;
 const INLINE_TOTAL: usize = 160;
@@ -2717,6 +2728,140 @@ impl Emitter<'_, '_> {
                 let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
             }
+            // #1106: byte bit operations inline. A byte is a raw u8 word, so `& | ^ ~` need no check; a shift's
+            // count is an int that must be in 0..7, and any other count fails on the shared path.
+            I::ByteAnd { dst, left, right } | I::ByteOr { dst, left, right } | I::ByteXor { dst, left, right } => {
+                let (l, r) = (self.get(left), self.get(right));
+                let value = match instruction {
+                    I::ByteAnd { .. } => self.builder.ins().band(l, r),
+                    I::ByteOr { .. } => self.builder.ins().bor(l, r),
+                    _ => self.builder.ins().bxor(l, r),
+                };
+                self.set(&dst.0, value);
+            }
+            I::ByteNot { dst, operand } => {
+                let value = self.get(operand);
+                let value = self.builder.ins().bxor_imm_u(value, 0xFF);
+                self.set(&dst.0, value);
+            }
+            I::ByteShl { dst, left, right } | I::ByteShr { dst, left, right } | I::ByteUshr { dst, left, right } => {
+                let (l, r) = (self.get(left), self.get(right));
+                let count = self.small_count(r, 8);
+                let fast = self.builder.create_block();
+                let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(count.valid, fast, &[], slow, &[]);
+                self.fail_generic(slow, pc, instruction);
+                self.builder.switch_to_block(fast);
+                let value = if matches!(instruction, I::ByteShl { .. }) {
+                    let shifted = self.builder.ins().ishl(l, count.value);
+                    self.builder.ins().band_imm_u(shifted, 0xFF)
+                } else {
+                    // A byte has no sign: `>>>` shifts as `>>` does.
+                    self.builder.ins().ushr(l, count.value)
+                };
+                self.set(&dst.0, value);
+            }
+            I::IntUshr { dst, left, right } => {
+                // Inline for tagged-small operands, a count in 0..63 and a result that is tagged-small again; the
+                // rest (BigInt operands, large results, bad counts) goes the exact way.
+                let (l, r) = (self.get(left), self.get(right));
+                let both = self.builder.ins().band(l, r);
+                let small = self.builder.ins().band_imm_u(both, 1);
+                let (fast, commit, slow, done) = (
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                );
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let v = self.builder.ins().sshr_imm_u(l, 1);
+                let n = self.builder.ins().sshr_imm_u(r, 1);
+                let in_range = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, n, 64);
+                self.builder.ins().brif(in_range, commit, &[], slow, &[]);
+                self.builder.switch_to_block(commit);
+                let shifted = self.builder.ins().ushr(v, n);
+                self.tag_if_small(shifted, done, slow);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::IntAbs { dst, operand } => {
+                // |2v+1| for v < 0 is 2 - (2v+1); only SMALL_MIN overflows (its absolute value needs a BigInt).
+                let v = self.get(operand);
+                let small = self.builder.ins().band_imm_u(v, 1);
+                let (fast, negative, slow, done) = (
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                );
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let below = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                self.builder.ins().brif(below, negative, &[], done, &[v.into()]);
+                self.builder.switch_to_block(negative);
+                let two = self.iconst(2);
+                let (value, overflow) = self.builder.ins().ssub_overflow(two, v);
+                let commit = self.builder.create_block();
+                self.builder.ins().brif(overflow, slow, &[], commit, &[]);
+                self.builder.switch_to_block(commit);
+                self.builder.ins().jump(done, &[value.into()]);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::Sign { dst, operand } if matches!(self.register_type(operand), Some(Type::Int)) => {
+                // A tagged-small w = 2v+1: v > 0 iff w > 1, v < 0 iff w < 0. BigInts go the exact way.
+                let v = self.get(operand);
+                let small = self.builder.ins().band_imm_u(v, 1);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let above = self.builder.ins().icmp_imm_s(IntCC::SignedGreaterThan, v, 1);
+                let below = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                let tagged = self.tagged_sign(above, below);
+                self.builder.ins().jump(done, &[tagged.into()]);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::Sign { dst, operand } if matches!(self.register_type(operand), Some(Type::Float)) => {
+                // Both zeros have sign 0; a float is never NaN.
+                let x = self.get(operand);
+                let zero = self.builder.ins().f64const(0.0);
+                let above = self.builder.ins().fcmp(FloatCC::GreaterThan, x, zero);
+                let below = self.builder.ins().fcmp(FloatCC::LessThan, x, zero);
+                let tagged = self.tagged_sign(above, below);
+                self.set(&dst.0, tagged);
+            }
+            I::FloatSqrt { dst, operand } => {
+                // A negative operand fails (its slow path never returns); sqrt of a finite x >= 0, -0 included, is
+                // finite and exact in hardware.
+                let x = self.get(operand);
+                let zero = self.builder.ins().f64const(0.0);
+                let negative = self.builder.ins().fcmp(FloatCC::LessThan, x, zero);
+                let (fast, slow) = (self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(negative, slow, &[], fast, &[]);
+                self.fail_generic(slow, pc, instruction);
+                self.builder.switch_to_block(fast);
+                let value = self.builder.ins().sqrt(x);
+                self.set(&dst.0, value);
+            }
+            I::Bits { op, byte, dst, value: source, count } => {
+                self.bits(pc, instruction, *op, *byte, &dst.0, source, count.as_ref())?;
+            }
             I::StrCmp { op: op @ (Cmp::Eq | Cmp::Ne), dst, left, right } => {
                 // The same string, or strings of different byte lengths, decide
                 // equality inline; the rest compares bytes in the slow path.
@@ -3059,6 +3204,156 @@ impl Emitter<'_, '_> {
     }
 
 
+    /// A shift or rotation count (#1106): `valid` when the int word is tagged-small and in 0..limit, `value` the
+    /// untagged count (meaningful only when valid).
+    fn small_count(&mut self, word: Value, limit: i64) -> Count {
+        let small = self.builder.ins().band_imm_u(word, 1);
+        let value = self.builder.ins().sshr_imm_u(word, 1);
+        let inside = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, value, limit);
+        let inside = self.builder.ins().uextend(types::I64, inside);
+        let valid = self.builder.ins().band(small, inside);
+        Count { valid, value }
+    }
+
+    /// Jump to `done` with `value` tagged when it is tagged-small, otherwise to `slow` (#1106).
+    fn tag_if_small(&mut self, value: Value, done: Block, slow: Block) {
+        let doubled = self.builder.ins().ishl_imm_u(value, 1);
+        let back = self.builder.ins().sshr_imm_u(doubled, 1);
+        let fits = self.builder.ins().icmp(IntCC::Equal, back, value);
+        let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+        self.builder.ins().brif(fits, done, &[tagged.into()], slow, &[]);
+    }
+
+    /// The tagged int -1, 0 or 1 from the two comparison flags of a sign (#1106).
+    fn tagged_sign(&mut self, above: Value, below: Value) -> Value {
+        let above = self.builder.ins().uextend(types::I64, above);
+        let below = self.builder.ins().uextend(types::I64, below);
+        let sign = self.builder.ins().isub(above, below);
+        let doubled = self.builder.ins().ishl_imm_u(sign, 1);
+        self.builder.ins().bor_imm_u(doubled, 1)
+    }
+
+    /// In the cold block `slow`: the shared path of `instruction`, whose result joins `done` (#1106).
+    fn slow_generic(&mut self, slow: Block, done: Block, pc: usize, instruction: &I) {
+        self.builder.switch_to_block(slow);
+        self.cold = true;
+        let result = self.exec_generic(pc, instruction);
+        self.cold = false;
+        self.builder.ins().jump(done, &[result.into()]);
+    }
+
+    /// In the cold block `slow`: the shared path of `instruction` on inputs it always refuses, so it never returns
+    /// (#1106; the trap is a broken invariant, as after the float slow path of #1105).
+    fn fail_generic(&mut self, slow: Block, pc: usize, instruction: &I) {
+        self.builder.switch_to_block(slow);
+        self.cold = true;
+        self.exec_generic(pc, instruction);
+        self.cold = false;
+        self.builder.ins().trap(TrapCode::unwrap_user(GENERIC_SLOW_PATH_RETURNED));
+    }
+
+    /// `bits` actions inline (#1106): counts, rotations, bit reversal and byte swap of a byte or a tagged-small
+    /// int; a BigInt operand, a bad rotation count or an int result outside tagged-small goes the exact way.
+    #[allow(clippy::too_many_arguments)]
+    fn bits(
+        &mut self,
+        pc: usize,
+        instruction: &I,
+        op: okkama_sparrow::BitOp,
+        byte: bool,
+        dst: &okkama_sparrow::Register,
+        source: &okkama_sparrow::Register,
+        count: Option<&okkama_sparrow::Register>,
+    ) -> Result<(), Error> {
+        use okkama_sparrow::BitOp;
+        let word = self.get(source);
+        let rotates = matches!(op, BitOp::RotateLeft | BitOp::RotateRight);
+        let width: i64 = if byte { 8 } else { 64 };
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.set_cold_block(slow);
+        let mut valid = if byte { self.iconst(1) } else { self.builder.ins().band_imm_u(word, 1) };
+        let mut amount = None;
+        if rotates {
+            let Some(count) = count else { return Err(Error(format!("bits {op:?} without a count"))) };
+            let count = self.get(count);
+            let count = self.small_count(count, width);
+            valid = self.builder.ins().band(valid, count.valid);
+            amount = Some(count.value);
+        }
+        self.builder.ins().brif(valid, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        let tag = |emit: &mut Self, value: Value| {
+            let doubled = emit.builder.ins().ishl_imm_u(value, 1);
+            emit.builder.ins().bor_imm_u(doubled, 1)
+        };
+        if byte {
+            let w = word;
+            let value = match op {
+                BitOp::BitCount => {
+                    let n = self.builder.ins().popcnt(w);
+                    tag(self, n)
+                }
+                BitOp::LeadingZeros => {
+                    let n = self.builder.ins().clz(w);
+                    let n = self.builder.ins().iadd_imm_s(n, -56);
+                    tag(self, n)
+                }
+                BitOp::TrailingZeros => {
+                    // A zero byte has eight trailing zeros: bit 8 stops the count there.
+                    let guarded = self.builder.ins().bor_imm_u(w, 0x100);
+                    let n = self.builder.ins().ctz(guarded);
+                    tag(self, n)
+                }
+                BitOp::RotateLeft | BitOp::RotateRight => {
+                    let n = amount.expect("count");
+                    let eight = self.iconst(8);
+                    let back = self.builder.ins().isub(eight, n);
+                    let (first, second) = if op == BitOp::RotateLeft {
+                        (self.builder.ins().ishl(w, n), self.builder.ins().ushr(w, back))
+                    } else {
+                        (self.builder.ins().ushr(w, n), self.builder.ins().ishl(w, back))
+                    };
+                    let both = self.builder.ins().bor(first, second);
+                    self.builder.ins().band_imm_u(both, 0xFF)
+                }
+                BitOp::ReverseBits => {
+                    let reversed = self.builder.ins().bitrev(w);
+                    self.builder.ins().ushr_imm_u(reversed, 56)
+                }
+                BitOp::SwapBytes => w,
+            };
+            self.builder.ins().jump(done, &[value.into()]);
+        } else {
+            let v = self.builder.ins().sshr_imm_u(word, 1);
+            match op {
+                BitOp::BitCount | BitOp::LeadingZeros | BitOp::TrailingZeros => {
+                    let n = match op {
+                        BitOp::BitCount => self.builder.ins().popcnt(v),
+                        BitOp::LeadingZeros => self.builder.ins().clz(v),
+                        _ => self.builder.ins().ctz(v),
+                    };
+                    let tagged = tag(self, n);
+                    self.builder.ins().jump(done, &[tagged.into()]);
+                }
+                _ => {
+                    let value = match op {
+                        BitOp::RotateLeft => self.builder.ins().rotl(v, amount.expect("count")),
+                        BitOp::RotateRight => self.builder.ins().rotr(v, amount.expect("count")),
+                        BitOp::ReverseBits => self.builder.ins().bitrev(v),
+                        _ => self.builder.ins().bswap(v),
+                    };
+                    self.tag_if_small(value, done, slow);
+                }
+            }
+        }
+        self.slow_generic(slow, done, pc, instruction);
+        self.builder.switch_to_block(done);
+        let value = self.builder.block_params(done)[0];
+        self.set(dst, value);
+        Ok(())
+    }
+
     /// Compile `instruction` as a call of the shared slow path, defining its result.
     fn generic_instruction(&mut self, pc: usize, instruction: &I) {
         let mut def = None;
@@ -3360,6 +3655,9 @@ mod pointer_free_tests;
 #[cfg(test)]
 #[path = "dispatch_537_tests.rs"]
 mod dispatch_537_tests;
+#[cfg(test)]
+#[path = "scalar_inline_tests.rs"]
+mod scalar_inline_tests;
 
 #[cfg(test)]
 mod profile_tests {

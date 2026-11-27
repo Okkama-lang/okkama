@@ -7,6 +7,12 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1166 (#1106 stage 1) scalar inlining (feature/1106; worktree okkama-work/p-1106, target t-1106; toolchains
+  micro-tc/f1166-s{1,2}): byte `& | ^ ~ << >> >>>`, `int.ushr`, `int.abs`, `sign` (int, float), `float.sqrt`,
+  `bits` actions inline (`Emit::{small_count, tag_if_small, tagged_sign, slow_generic, fail_generic, bits}`, trap
+  `GENERIC_SLOW_PATH_RETURNED` = 2). Tests `scalar_inline_tests.rs` (inline vs `jit.plain` on edge values, fast
+  inputs never reach rt_exec; mutations clz offset and abs overflow caught). Micro byte 10.18 → 2.72 ns (−73%).
+  Design of all three stages on #1106 (sub-issues #1166–#1168).
 - [x] #1105 Perf 1 float fast paths (feature/1105; worktree okkama-work/p-1105, target t-1105; toolchains
   micro-tc/f1105-s{1,2}): `rt_scalar_safepoint` removed, float `+ − × ÷` finiteness by `x − x`, cold diverging slow
   path with `trap(user 1)` after `check`, cold `check` blocks inside slow paths (`Emit::cold`), `fcvt_to_sint_sat`

@@ -1197,3 +1197,13 @@ every declaration is open (#1005, owner decision).
   path never returns. After its `check` the continuation is `trap(user 1)` (`FLOAT_SLOW_PATH_RETURNED`): reaching it
   is a broken invariant, not a program failure. Finiteness is `fcmp ord (x − x), (x − x)` (`Ordered`: one condition on x86-64).
 
+## Scalar operations inline, shared path as the oracle (#1166 / #1106 stage 1, 2026-11-27; lead)
+
+- Byte `& | ^ ~` are always inline (a byte is a raw u8 word). Byte shifts inline when the int count is
+  tagged-small in 0..7; any other count goes to a cold slow path that always fails (`fail_generic`, trap 2 after it).
+- `int.ushr`, `int.abs`, int `bits` rotations, reversal and swap are inline for tagged-small operands whose result is
+  tagged-small again (`tag_if_small`); otherwise the shared path, so BigInt results and failure texts stay exact.
+  `sign` of an int or float and `sqrt` of x ≥ 0 are inline; rat `sign` stays generic.
+- Tests compare the inline build with `jit.plain` (every such instruction through rt_exec) on edge values, and
+  assert the fast inputs never reach rt_exec (`exec <mnemonic>` stats).
+

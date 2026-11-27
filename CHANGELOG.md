@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Byte bit operations, `>>>`, `abs`, `sign`, `sqrt` and bit actions inline (#1166, part of #1106).** They ran
+  through the runtime's shared path on every use; the JIT now does them in machine code when the operands allow it
+  (bytes always, tagged-small ints, valid shift counts, a non-negative `sqrt`), and the rest keeps the exact path.
+  Micro A/B against 0.6.6: byte 10.18 → 2.72 ns (−73%); controls within ±1.5%.
 - **Float at native speed on the fast path (#1105).** The inline int→float and float→int conversions no longer
   call a safepoint (they allocate nothing; a collection is due only after an allocation, whose slow path is a
   safepoint). `+ − × ÷` check finiteness with one subtraction (`x − x`) instead of `fabs` and a constant, and their
