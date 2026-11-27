@@ -46,8 +46,11 @@ pub struct Workspace {
     std: HashMap<String, &'static str>,
     files: BTreeMap<String, String>,
     import_dirs: Vec<String>,
-    parsed: RefCell<HashMap<String, (Rc<str>, Rc<Inspection>)>>,
+    parsed: RefCell<HashMap<String, Parsed>>,
 }
+
+/// The text a file last parsed from and its inspection.
+type Parsed = (Rc<str>, Rc<Inspection>);
 
 impl Default for Workspace {
     fn default() -> Self {
