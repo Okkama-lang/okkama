@@ -2004,16 +2004,19 @@ impl Heap {
     }
 
     /// Overwrite every free cell past its link (collector stress).
-    fn poison(&mut self) {
+    /// `idle`: pages the sweep kept idle without a look; nothing on them changed since an earlier sweep poisoned
+    /// them, so they are not poisoned again (#1114: every stress collection repoisoned every empty page).
+    fn poison(&mut self, idle: &std::collections::HashSet<u32>) {
         for (class, &size) in CELL_WORDS.iter().enumerate() {
+            let fresh = |reserved: &&Reserved| !idle.contains(&reserved.page);
             // #1114: an unthreaded page is poisoned whole, headers included (POISON is no kind).
-            for reserved in self.reserve[class].iter().filter(|reserved| !reserved.threaded) {
+            for reserved in self.reserve[class].iter().filter(fresh).filter(|reserved| !reserved.threaded) {
                 for word in 0..reserved.bytes / 8 {
                     // SAFETY: the words of a live page none of whose cells is live.
                     unsafe { *((reserved.head + word as Word * 8) as *mut u64) = POISON };
                 }
             }
-            let chains = self.reserve[class].iter().filter(|reserved| reserved.threaded).map(|reserved| reserved.head);
+            let chains = self.reserve[class].iter().filter(fresh).filter(|reserved| reserved.threaded).map(|reserved| reserved.head);
             for mut cell in std::iter::once(self.free[class]).chain(chains) {
                 while cell != 0 {
                     for word in 2..size {
@@ -2043,6 +2046,7 @@ impl Heap {
         // Pages with no live cell (#435): their chains wait until the end of
         // the sweep decides how many empty pages the next cycle needs.
         let mut empty: Vec<(usize, Reserved)> = Vec::new();
+        let mut idle_ids = std::collections::HashSet::new();
         let touched = std::mem::take(&mut self.touched);
         for (index, page) in self.pages.iter_mut().enumerate() {
             let size = CELL_WORDS[page.class];
@@ -2052,6 +2056,9 @@ impl Heap {
             if let Some(reserved) = page.idle
                 && !touched.contains(&page.id)
             {
+                if self.stress {
+                    idle_ids.insert(page.id);
+                }
                 visited += cells;
                 empty_cells += cells;
                 idle_pages += 1;
@@ -2154,7 +2161,7 @@ impl Heap {
         self.release_empty_pages(empty);
         // After the empty pages join the reserve (#1114: before, their cells escaped the poison).
         if self.stress {
-            self.poison();
+            self.poison(&idle_ids);
         }
         self.collections += 1;
         okkama_devtrace::count!("gc", "sweep cells visited", visited);
