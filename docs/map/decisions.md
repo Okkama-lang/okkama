@@ -1227,3 +1227,17 @@ every declaration is open (#1005, owner decision).
 - Not cold, because real data takes them often: equal-length string comparison, `StrLen` of non-ASCII text,
   structural `val.cmp` of objects.
 
+## Explicit roots for synchronous functions: rejected (#1107 stage 1, 2026-11-27; lead, by the owner's rule on #1107)
+
+- Fable's reconstruction: the audit's proxy numbers were `SPARROW_X_NORELOAD` + `SPARROW_X_COLD`. The cold half is in
+  (stage 2: recursion −11.9%, method-call −8.1%).
+- Prototype (Fable's scheme, first step): sync functions on `Roots` with words spilled before every call and
+  reloaded after it, nothing stored at definitions, inlining off (`SPARROW_CORE_SYNC_ROOTS`, A/B in one binary,
+  two layout seeds): baseline 2.13 → 2.00 ns (−6%), compare +12%, closure-call +17%, constructor +19%, role-call
+  +50%, method-call +54%, recursion +65%; geomean +16% over 12 cells.
+- The remaining gain on scalar loops (−6%) does not pay for the losses on calls, and the full scheme (store
+  skipping, inlining with per-callee word maps, a live-across set per call) is a large change. By the owner's rule
+  ("if explicit roots create excessive complexity or regressions, retain the existing stack-map mechanism"),
+  synchronous functions keep Cranelift's stack maps. The patch is kept in
+  okkama-docs/runtime/perf-audit-2026-11-27/1107-sync-roots-prototype.patch.
+
