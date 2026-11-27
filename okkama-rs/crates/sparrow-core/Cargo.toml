@@ -63,7 +63,9 @@ rustix = { version = "1", features = ["fs", "process", "stdio"], optional = true
 libc = { version = "0.2", optional = true }
 # `jit`
 cranelift-codegen = { version = "0.137", optional = true }
-cranelift-frontend = { version = "0.137", optional = true }
+# #1147: without `std` its safepoint spiller keeps its sets in hashbrown (foldhash) instead of std's SipHash
+# sets: a quarter of its time. Only sparrow-core uses the crate, so no other dependent turns `std` back on.
+cranelift-frontend = { version = "0.137", optional = true, default-features = false, features = ["core"] }
 cranelift-jit = { version = "0.137", optional = true }
 cranelift-module = { version = "0.137", optional = true }
 cranelift-native = { version = "0.137", optional = true }
