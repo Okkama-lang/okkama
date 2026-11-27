@@ -1572,6 +1572,12 @@ impl Emitter<'_, '_> {
         self.blocks[pc].expect("a jump, handler or resume target starts a block")
     }
 
+    /// The leader block of `target` when its edge does nothing (no moves, no poll): a branch can go there directly.
+    fn direct(&self, target: &Target) -> Option<Block> {
+        let polls = self.polled && target.pc as usize <= self.pc;
+        (target.moves.is_empty() && !polls).then(|| self.blocks[target.pc as usize].expect("a branch target starts a block"))
+    }
+
     fn jump(&mut self, target: &Target) {
         if self.polled && target.pc as usize <= self.pc {
             self.poll();
@@ -2761,12 +2767,19 @@ impl Emitter<'_, '_> {
             }
             I::Branch { condition, then_target, else_target } => {
                 let condition = self.get(condition);
-                let (yes, no) = (self.builder.create_block(), self.builder.create_block());
+                // #1147 (A3): an edge with no moves and no poll goes straight to its leader block.
+                let (then_direct, else_direct) = (self.direct(then_target), self.direct(else_target));
+                let yes = then_direct.unwrap_or_else(|| self.builder.create_block());
+                let no = else_direct.unwrap_or_else(|| self.builder.create_block());
                 self.builder.ins().brif(condition, yes, &[], no, &[]);
-                self.builder.switch_to_block(yes);
-                self.jump(then_target);
-                self.builder.switch_to_block(no);
-                self.jump(else_target);
+                if then_direct.is_none() {
+                    self.builder.switch_to_block(yes);
+                    self.jump(then_target);
+                }
+                if else_direct.is_none() {
+                    self.builder.switch_to_block(no);
+                    self.jump(else_target);
+                }
                 return Ok(true);
             }
             I::Return { value } => {

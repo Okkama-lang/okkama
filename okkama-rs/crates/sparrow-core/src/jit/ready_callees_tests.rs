@@ -555,3 +555,31 @@ function f1 "caller" {
     assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
     assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
 }
+
+/// #1147 (A3): a branch whose edges move nothing goes straight to the two leader blocks: no block holds a lone
+/// jump; an edge with moves still gets its block.
+#[test]
+fn branch_edges_without_moves_need_no_jump_blocks() {
+    let text = r#"
+sparrow 18
+module "direct-branch" "1.0.0"
+type t0 int
+type t1 bool
+function f0 "pick" {
+ registers [t0, t1, t0]
+ params [r0, r1]
+ result t0
+ 0: br r1, @1, @2
+ 1: ret r0
+ 2: const r2, int 5
+ 3: br r1, @1, @4(r0 <- r2)
+ 4: ret r0
+}
+"#;
+    let mut runtime = runtime(text, true);
+    compile(&mut runtime, 0).unwrap();
+    // Only the edge with a move (pc 3 to 4) jumps; the three others branch to their leaders.
+    assert_eq!(opcodes(&runtime, 0, Opcode::Jump), 1);
+    assert_eq!(runtime.run_function_with(0, &[word::small(7).unwrap(), 0], 2 << 20).unwrap(), word::small(5).unwrap());
+    assert_eq!(runtime.run_function_with(0, &[word::small(7).unwrap(), 1], 2 << 20).unwrap(), word::small(7).unwrap());
+}
