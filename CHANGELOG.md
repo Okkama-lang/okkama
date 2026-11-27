@@ -6,7 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
-- **Fixes.** Blade's run and build no longer fail with status 2 on a symlink loop in an import or std tree: the
+- **Fixes.** The playground refuses failureText offsets outside the report instead of trapping, recovers after a
+  trapped call, places hover and definition as the language server does and completes the page's own std/
+  modules (#1139). The fuzz differential mode reads the one exceptions list, `differ.py` fails when nothing was
+  compared, and workers.spa runs its spawns (#1144). Blade's run and build no longer fail with status 2 on a symlink loop in an import or std tree: the
   walk skips a link back to a directory it is inside (#1140). An internal compiler error reads the same in
   `okkama check` and `okkama build`, with its prefix once; `sparrow` reports main's result outside 0..255 by the
   one rule `okkama run` uses (#1143). The listen-backlog test reads the queue's limit on macOS instead of counting

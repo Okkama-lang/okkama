@@ -1258,3 +1258,17 @@ every declaration is open (#1005, owner decision).
   (`SemanticError::internal`, `Finding::semantic`): it is a compiler bug, not a semantic error of the program.
   Other kinds still differ between the two commands ("analysis limitation" vs "lowering error"); left as they are.
 
+## Oracle tooling (#1144, 2026-11-27; an Opus agent's choices, accepted by the lead)
+
+- The fuzz differential target embeds `okkama-rs/tools/engines/interp-exceptions.txt` (`include_str!`) and applies
+  its `jit:`, `both:` and `either:` selectors as `differ.py` does; `path:` never applies to a fuzz input.
+- The dead refusal text is gone everywhere; a run without the JIT is explained only by `path:` lines, and a
+  `refusal:` line is rejected as an unknown selector.
+- `differ.py run` exits 1 when a program differs and when nothing built; some programs unbuilt still pass.
+- The interpreter test harness turns on emulated workers, so workers.spa's spawns run in-process.
+
+## Playground positions (#1139, 2026-11-27; agent, accepted)
+
+- Hover and definition take zero-based line/character in UTF-16 units against the text of the inspection that
+  answers (the last analysed), as `okkama lsp` does; completion and signature help against the current source.
+
