@@ -760,3 +760,41 @@ every declaration is open (#1005, owner decision).
   compiles, and the runtime refuses it, as the SPB verifier does.
 - A fuzz finding's input is kept in `okkama-rs/fuzz/regressions/<target>/`. `run.sh` adds it to the corpus,
   and a test replays the target's logic on it.
+
+## The playground's compiler in wasm (#1078, 2026-11-27, owner-approved ticket; design by the implementer)
+
+- **okkama-runtime-core has a default feature `native`**: the modules `native`, `host` and `data` and every
+  dependency only they use (okkama-native with aws-lc and getrandom, libc, the C zstd, Brotli, miniz,
+  unicode-normalization/-segmentation, md-5, sha1). okkama-compiler depends on it with `default-features =
+  false`: it uses only `Value`, `IntValue`, `heap` (arrays, map keys), `ops`, `integer` and `float` (constant
+  folding and value types), and no compiler code reached the gated modules. Cutting the dependency instead
+  would have moved the value types out of the crate the runtime shares them from (two copies of one rule).
+  Every runtime (sparrow-core, okkama-cli) keeps the default, so a native build unifies to the same features and
+  compiles the same crate: corpus SPB byte-identical (std -t 499, t/ 51, examples 264, okkama-rs/examples 13,
+  Bible 181, conformance 541: 1549 built programs), check/fmt output identical on all 2220 files.
+- **`okkama_compiler::commands`** is the one place that renders what check, fmt, tokens, ast, ir and build
+  report (`Finding`: file, span, severity, kind, message and the printed text; `Report`: findings and the whole
+  text), including the missing-docs gate, the two-profile check of #649, the merge of their findings, pass
+  selection (`passes_named`, `passes_after`), the parse of a found import (`commands::module`) and the editor's
+  two-pass inspection (`commands::inspect`). okkama-cli, its OCS adapter and okkama-wasm call it; the CLI keeps
+  only files, flags and exit codes. Nothing in it reads a file or the environment: sources come from the
+  caller, imports from the `ModuleLoader` it passes (a factory taking the test mode).
+- **The playground's loader** (`okkama-wasm` `Loader`) follows the CLI's search order without Blade packages:
+  a std file looks in std, then beside itself; any other file beside itself, then in the import directories,
+  then in std; a module never imports itself. Files are the bundled std under `std/` plus what the page sets
+  (`setFiles`). The CLI's `FileLoader` stays in the CLI (it needs the file system and blade.toml).
+- **The std is embedded** by `okkama-wasm/build.rs` (`include_str!` of every `std/**/*.ok`, unchanged, so
+  positions in std match the CLI): 499 files, 5.97 MB of the 9.6 MB wasm.
+- **API**: each export takes one JSON request and returns one JSON response. Commands answer `{ok, code,
+  stdout, stderr, diagnostics}` with `stdout`/`stderr`/`code` exactly the CLI's; a diagnostic is `{file,
+  severity, kind, message, text, span: {start, end} (bytes) | null, range: {start, end: {line, character}}
+  (zero-based, UTF-16) | null}`. Requests: `{source, path = "main.ok", tests?}` for check/ir/spa, plus
+  `passes`/`after` (ir), `format` (tokens: text|json; ast: tree|json), `mode`, `spans`, `pruneTests` (ast);
+  `{source, path, line, character, trigger?}` for hover → `{hover: {markdown, range} | null}`, definition →
+  `{definition: {path, range} | null}`, signature → `{signature: {label, parameters, active} | null}`,
+  complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}`. The IDE calls answer from
+  the last inspection of the file that parsed, as the language server does. `std.…` path completion is not in
+  the playground (ide::std_paths reads the std directory from disk; a follow-up of #1078).
+- **Parity is a test of the CLI binary** (`okkama-cli/tests/playground.rs`): `okkama check`, `fmt` and `ir`
+  against `Workspace::check`/`fmt`/`ir`, and `spa` against the disassembly of `okkama build`'s SPB, on t/, the Bible's rejected examples, six std modules and the fixtures of
+  `tests/playground/` (a warning, a module shadowing std, an imported fake), byte for byte with the exit code.

@@ -2,12 +2,15 @@
 
 pub mod bignum;
 pub mod budget;
+#[cfg(feature = "native")]
 pub mod data;
 pub mod failure;
 pub mod float;
 pub mod rat;
 pub mod heap;
+#[cfg(feature = "native")]
 pub mod host;
+#[cfg(feature = "native")]
 pub mod native;
 pub mod ops;
 pub mod range;

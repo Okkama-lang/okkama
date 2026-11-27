@@ -6,6 +6,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Added
+- **The compiler builds for WebAssembly, for the playground (#1078).** A new crate `okkama-wasm` (cdylib,
+  wasm-bindgen) answers `check`, `fmt`, `tokens`, `ast`, `ir` (with `passes`/`after`), `spa` (the Sparrow
+  assembly of the built SPB), `hover`, `complete`, `definition` and `signature` as JSON, over the repository's
+  std embedded read-only (499 modules, 6.0 MB); nothing runs. Each command answers the CLI's own standard
+  output, standard error and exit status, and each diagnostic its file, kind, message, text, byte span and
+  editor range. The text comes from a new `okkama_compiler::commands` module that the CLI and its conformance
+  adapter now use too, so a diagnostic is rendered in one place. okkama-runtime-core's native providers and
+  the libraries only they need (libc, the C zstd, Brotli, miniz, host cryptography) are behind its default
+  feature `native`, which the compiler leaves off. The release wasm after `wasm-bindgen` is 9.6 MB, 2.4 MB
+  gzip, 1.7 MB brotli. `okkama-cli/tests/playground.rs` compares `okkama check` and `okkama fmt` with the
+  playground on t/, the Bible's rejected examples and std modules, byte for byte. The CLI's output and the SPB
+  it builds are unchanged (2220 corpus files; 1549 SPB byte-identical).
+
 ## [0.6.5] — 2026-11-27
 
 0.6.5 closes the findings of the three internals books (Codex Gigas, Malleus, Clavicula) and of fuzzing, moves

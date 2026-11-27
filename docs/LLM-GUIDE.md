@@ -143,10 +143,14 @@ okkama-new/
 ├── okkama-rs/                  Rust workspace (version in okkama-rs/Cargo.toml)
 │   ├── crates/
 │   │   ├── okkama-compiler     lexer, parser, AST, checker (THIR), lowering to OIR,
-│   │   │                       IR verifier, codegen: sparrow (SPB); LSP/ide
+│   │   │                       IR verifier, codegen: sparrow (SPB); LSP/ide; `commands`: what
+│   │   │                       check/fmt/tokens/ast/ir/build report (one text for CLI and playground)
 │   │   ├── okkama-cli          `okkama`: run/build/exec/check/fmt/lint/lsp, OCS adapter
-│   │   ├── okkama-runtime-core native providers, bridge values, scheduler `sched`;
-│   │   │                       also compiler constants and shared exact arithmetic
+│   │   ├── okkama-wasm         the playground (#1078): the compiler in wasm32, JSON API, bundled std,
+│   │   │                       no execution; parity test okkama-cli/tests/playground.rs
+│   │   ├── okkama-runtime-core native providers (feature `native`, default), bridge values, scheduler
+│   │   │                       `sched`; also compiler constants and shared exact arithmetic (the
+│   │   │                       compiler takes it without `native`, so it builds for wasm32)
 │   │   ├── okkama-runtime-abi  native identities and signatures: src/table.rs (≈620 natives)
 │   │   ├── okkama-sparrow      SPB format: Program, Instruction, encode/decode, assembler
 │   │   ├── sparrow-core        Sparrow, THE runtime (version Tomato): JIT (Cranelift), heap, GC, async, natives
@@ -187,6 +191,19 @@ to itself. Without installing, set `OKKAMA_STDLIB_DIR=<repo>/std`.
 
 Builds for experiments go to the scratchpad, not to `okkama-rs/target`:
 `CARGO_TARGET_DIR=$SCRATCH/target cargo build --release -p okkama-cli -p sparrow-cli`.
+
+The playground's wasm (#1078; `rustup target add wasm32-unknown-unknown`, `wasm-bindgen-cli` of the version
+in `Cargo.lock`):
+
+```sh
+cargo build -p okkama-wasm --release --target wasm32-unknown-unknown
+wasm-bindgen --target web --remove-name-section --remove-producers-section \
+    --out-dir OUT target/wasm32-unknown-unknown/release/okkama_wasm.wasm
+```
+
+`OUT/okkama_wasm.js` exports `check`, `fmt`, `tokens`, `ast`, `ir`, `spa`, `hover`, `complete`, `definition`,
+`signature` (each takes and returns JSON text), `setFiles` and `version`. `cargo check -p okkama-compiler
+--target wasm32-unknown-unknown` keeps the compiler wasm-clean.
 
 Running programs:
 

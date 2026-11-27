@@ -21,21 +21,9 @@ fn failure(source: &SourceFile, span: Span, message: &str) -> Outcome {
     Outcome::failure(format!("{}:{}:{}: doctest error: {message}\n", source.name(), location.line, location.column), EXIT_DIAGNOSTICS)
 }
 
-/// The gate applies only to roots in completed std waves, never dependencies
-/// or user files that happen to declare the same module name.
+/// The documentation gate of the roots (`commands::missing_docs`).
 pub(super) fn gate(sources: &[SourceFile]) -> Result<(), Outcome> {
-    let mut loader = loader(false);
-    for source in sources {
-        if !okkama_compiler::doc::coverage::enforced_file(source.name(), &mut loader) { continue; }
-        // Parsing failures belong to the normal frontend, which retains all
-        // diagnostics and their exact locations; this gate only adds lint.
-        let Ok(doc) = ModuleDoc::parse(source.name().into(), source.text().into()) else { continue; };
-        if let Some(missing) = doc.coverage().missing.first() {
-            let location = source.location(missing.span.start);
-            return Err(Outcome::failure(format!("{}:{}:{}: error[missing-docs]: public declaration `{}` has no documentation\n", source.name(), location.line, location.column, missing.name), EXIT_DIAGNOSTICS));
-        }
-    }
-    Ok(())
+    okkama_compiler::commands::missing_docs(sources, &mut loader(false)).map_err(report_failure)
 }
 
 pub(super) fn check(sources: &[SourceFile], filters: &[String]) -> Outcome {

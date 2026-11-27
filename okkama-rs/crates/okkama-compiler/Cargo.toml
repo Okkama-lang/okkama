@@ -9,7 +9,8 @@ publish.workspace = true
 
 [dependencies]
 okkama-devtrace = { path = "../okkama-devtrace" }
-okkama-runtime-core = { path = "../okkama-runtime-core" }
+# Value types, exact arithmetic and constant folding only: the native providers stay off (#1078).
+okkama-runtime-core = { path = "../okkama-runtime-core", default-features = false }
 okkama-sparrow = { path = "../okkama-sparrow" }
 # Doc comments are a CommonMark subset (#512).
 pulldown-cmark = { version = "0.13", default-features = false }

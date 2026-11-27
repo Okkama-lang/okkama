@@ -81,9 +81,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/codegen/sparrow/mod.rs` 734 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 16 files, 6236 lines
+## compiler — 17 files, 6557 lines
 
-- `okkama-compiler/src/lib.rs` 19 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
+- `okkama-compiler/src/commands.rs` 320 — What the read-only commands report, as values (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir` and
+- `okkama-compiler/src/lib.rs` 20 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
 - `okkama-compiler/src/doc/coverage.rs` 43 — Public declaration coverage and the incremental std gate (#514).
 - `okkama-compiler/src/doc/examples.rs` 102 — Documentation examples (#514): CommonMark blocks and original byte spans.
@@ -189,20 +190,20 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 84 — The environment-switch policy, one implementation for every crate (#1095): booleans (#1067), byte counts
 - `okkama-devtrace/src/lib.rs` 328 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5304 lines
+## cli — 10 files, 5046 lines
 
 - `okkama-cli/src/core.rs` 81 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
-- `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
+- `okkama-cli/src/doctest.rs` 326 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 935 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1764 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1541 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 414 — `okkama man` (#512): reference pages from the doc comments of modules, read
-- `okkama-cli/src/ocs.rs` 630 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
+- `okkama-cli/src/ocs.rs` 604 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 86 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 69 files, 22234 lines
+## other — 71 files, 22767 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -236,7 +237,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/heap.rs` 1613 — Values used by the Sparrow native bridge and its providers.
 - `okkama-runtime-core/src/host.rs` 298 — Состояние хоста для providers: текущий каталог
 - `okkama-runtime-core/src/integer.rs` 225 — Exact integer arithmetic shared by Sparrow, natives and compiler constants.
-- `okkama-runtime-core/src/lib.rs` 132 — Shared runtime values; no source syntax, IR, or execution-engine dependency.
+- `okkama-runtime-core/src/lib.rs` 135 — Shared runtime values; no source syntax, IR, or execution-engine dependency.
 - `okkama-runtime-core/src/native.rs` 168 — Native providers Sparrow does not implement itself. The only entry is
 - `okkama-runtime-core/src/ops.rs` 510 — Операции над значениями для констант компилятора и native-провайдеров:
 - `okkama-runtime-core/src/range.rs` 29 — Immutable range bounds; iteration counters and inclusive ends are exact.
@@ -272,4 +273,6 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/x509.rs` 2100 — `runtime/x509`: строгий DER-конверт и снимок
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
+- `okkama-wasm/build.rs` 31 — Bundles the repository's std (#1078): every `std/**/*.ok`, embedded read-only, so imports resolve without a
+- `okkama-wasm/src/lib.rs` 499 — The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
 - `sparrow-cli/src/main.rs` 260 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a

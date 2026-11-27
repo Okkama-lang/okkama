@@ -8,7 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+default = ["native"]
 allocation-scopes = ["dep:okkama-allocation-counter"]
+# The native providers (`native`, `host`, `data`) and the libraries only they use: libc, the C zstd, Brotli,
+# miniz, Unicode tables, digests and host cryptography. The compiler leaves it off (#1078): it uses the value
+# types, exact arithmetic and constant folding only, and builds for wasm32 without it. Every runtime turns it on.
+native = [
+    "dep:okkama-native", "dep:libc", "dep:miniz_oxide", "dep:zstd", "dep:brotli", "dep:unicode-normalization",
+    "dep:unicode-segmentation", "dep:md-5", "dep:sha1",
+]
 
 [dependencies]
 okkama-allocation-counter = { path = "../../tools/allocation-counter", optional = true }
@@ -21,22 +29,22 @@ num-integer = "0.1"
 num-traits = "0.2"
 # Platform randomness, digests and certificate store (runtime/system,
 # runtime/crypto, runtime/x509), Rust API.
-okkama-native = { path = "../okkama-native" }
+okkama-native = { path = "../okkama-native", optional = true }
 
 # Вызовы ОС без обёртки std (renameat2/renamex_np, терминал, сигналы, учётные записи).
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 # Распаковка gzip-таблиц рантайма (unicode.dat и др.).
-miniz_oxide = "0.8"
+miniz_oxide = { version = "0.8", optional = true }
 # zstd and Brotli codecs (#184).
-zstd = { version = "0.13", default-features = false }
-brotli = { version = "8", default-features = false, features = ["std"] }
+zstd = { version = "0.13", default-features = false, optional = true }
+brotli = { version = "8", default-features = false, features = ["std"], optional = true }
 # Нормализация Unicode (NFC/NFD/NFKC/NFKD), как java.text.Normalizer.
-unicode-normalization = "0.1"
+unicode-normalization = { version = "0.1", optional = true }
 # Кластеры графем для ширины текста в терминале.
-unicode-segmentation = "1"
+unicode-segmentation = { version = "1", optional = true }
 # Именованные UUID (v3 — MD5, v5 — SHA-1).
-md-5 = "0.10"
-sha1 = "0.10"
+md-5 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # The environment-switch policy (#1095); only tests read a switch in this crate.

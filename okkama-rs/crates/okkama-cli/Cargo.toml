@@ -31,6 +31,10 @@ sparrow-core = { path = "../sparrow-core", features = ["mimalloc"] }
 # Line editing and history in `okkama repl` (#588, owner 2026-11-21).
 rustyline = { version = "14.0.0", default-features = false, features = ["with-file-history"] }
 
+[dev-dependencies]
+# The playground's API (#1078), compared with this binary by tests/playground.rs.
+okkama-wasm = { path = "../okkama-wasm" }
+
 # The doctest child monitors its whole-process RSS as a backstop for natives.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", default-features = false, features = ["resource"] }

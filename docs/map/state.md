@@ -1,6 +1,24 @@
 # State (update at the end of every task)
 
-## Release 0.6.5 (release/065)
+## Release 0.6.6 (release/066)
+
+- [x] #1078, Rust side (feature/1078, not committed; worktree okkama-work/hf-1078, target t-1078): the compiler
+  builds for `wasm32-unknown-unknown` (`cargo check -p okkama-compiler --target wasm32-unknown-unknown`).
+  okkama-runtime-core feature `native` (default) gates `native`, `host`, `data` and their dependencies; the
+  compiler depends on it without default features. `okkama_compiler::commands` renders what check, fmt,
+  tokens, ast, ir and build report (`Finding`, `Report`), used by okkama-cli (main.rs, doctest.rs gate, ocs.rs)
+  and by the new crate `okkama-wasm` (cdylib + rlib; `Workspace` = loader over the embedded std and the page's
+  files; JSON API, decisions.md #1078). Parity: `okkama-cli/tests/playground.rs` (130 files: t/ 51, Bible
+  rejected 69, std 6, fixtures `tests/playground/` 4): check, fmt, ir (all passes and `--after fold`) identical,
+  spa = disassembly of the CLI's SPB; eleven mutations of the wasm side (loader order for std and non-std
+  files, import dirs, self-import, test-mode imports, profiles, stderr trim, fmt newline, warning code, `after`
+  ignored, build profile) each fail it; two of commands.rs (merge dedup, errors-only) fail its unit tests. Corpus before/after (release builds, release/066 994aa8603 vs the candidate): SPB of 1549 built
+  programs byte-identical (std -t 499, t/ 51, examples 264, okkama-rs/examples 13, Bible 181, conformance 541),
+  check and fmt output identical on all 2220 files, tokens/ast/ir (8 variants) identical on 420 files. Release
+  wasm 10.1 MB; after `wasm-bindgen --target web --remove-name-section`: 9.6 MB, gzip 2.40 MB, brotli 1.74 MB
+  (std text 5.97 MB of it, code 3.5 MB). Node smoke test of the nodejs build: every export answers; check of
+  std/http/server 0.33 s. wasm-bindgen-cli 0.2.130 installed into okkama-work/tools-wasm (not on PATH). Not yet:
+  the site page, the CI job (proposed in the report), `std.…` path completion in the playground.
 
 - [x] Release commit 0.6.5 (2026-11-27): version 0.6.5, CHANGELOG [0.6.5] with summary and compare links, Bible
   rebuilt (md/HTML/PDF, EN/RU), micro report `okkama-docs/benchmarks/reports/2026-11-27-v0.6.5/micro.html`

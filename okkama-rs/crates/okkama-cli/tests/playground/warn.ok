@@ -1,0 +1,5 @@
+module app v1.0.0;
+main() is int {
+    let n = 2;
+    for 0..n -> index { index; }
+}

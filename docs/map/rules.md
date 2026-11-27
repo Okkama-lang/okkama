@@ -18,13 +18,14 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (114)
+## Tags in one layer (116)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
 - BLADE_OKKAMA — other: `project.rs`
+- CARGO_CFG_TARGET_ARCH — other: `okkama-wasm/build.rs`
 - CARGO_MANIFEST_DIR — compiler: `ide/std_paths.rs`
-- CARGO_PKG_VERSION — other: `lib.rs`, `main.rs`
+- CARGO_PKG_VERSION — other: `lib.rs`, `lib.rs`, `main.rs`
 - CHACHA20_POLY1305_SHA256 — sparrow: `host/native_tls.rs`
 - CHACHA20_POLY1305_SHA384 — sparrow: `host/native_tls.rs`
 - D04 — front: `analysis/thir.rs`
@@ -59,6 +60,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - OKKAMA_TEST_CPU_CHILD — other: `native/host.rs`
 - OKKAMA_TRACE — cli: `main.rs`
 - OKKAMA_VERIFY_OWNERSHIP — lower: `lowering/mod.rs`
+- OUT_DIR — other: `okkama-wasm/build.rs`, `lib.rs`
 - PIPE_PIPE — front: `syntax/token.rs`
 - PR-N — other: `catalogue.rs`
 - QUESTION_DOT — front: `syntax/token.rs`
