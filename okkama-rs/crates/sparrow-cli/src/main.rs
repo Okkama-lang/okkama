@@ -93,9 +93,15 @@ fn worker_command(path: &Path) -> Vec<std::ffi::OsString> {
 
 /// An uncaught failure is the program's report; it ends with a newline.
 fn report(error: sparrow_core::Error) -> Result<u8, Failure> {
-    let text = error.0;
-    eprint!("{text}{}", if text.ends_with('\n') { "" } else { "\n" });
-    Ok(1)
+    outcome(Err(&error.0))
+}
+
+/// main's outcome as the process ends, by the one rule of `okkama run` and the playground (#1125, #1143): a result
+/// in 0..255 is the exit status; another result, or a failure, is status 1 with its report on standard error.
+fn outcome(result: Result<i64, &str>) -> Result<u8, Failure> {
+    let (code, stderr) = sparrow_core::main_outcome(result);
+    eprint!("{stderr}");
+    Ok(code)
 }
 
 /// Stop the process with the interrupt report one second after `flag` is
@@ -126,10 +132,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
     let _ = sparrow_core::stdout::flush();
     match result {
-        Ok(sparrow_core::Execution::Main(Ok(code))) => match u8::try_from(code) {
-            Ok(code) => Ok(code),
-            Err(_) => report(sparrow_core::Error(format!("main() must return an int in 0..255, got {code}"))),
-        },
+        Ok(sparrow_core::Execution::Main(Ok(code))) => outcome(Ok(code)),
         Ok(sparrow_core::Execution::Main(Err((error, trace)))) => {
             let code = report(error);
             eprint!("{trace}");

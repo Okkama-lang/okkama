@@ -547,6 +547,9 @@ fn execute(runtime: &mut Box<runtime::Runtime>) -> Result<i64, Box<(Error, Optio
 pub use okkama_runtime_core::failure::Uncaught;
 pub use okkama_runtime_core::failure::Site;
 pub use okkama_runtime_core::stdout;
+/// `main`'s result as the process's exit status and report: one rule for `okkama run`, `sparrow` and the
+/// playground (#1125, #1143).
+pub use okkama_runtime_core::failure::main_outcome;
 
 /// The call stack of an uncaught failure in Sparrow terms: function, number
 /// and text of the instruction of each frame. Empty for an empty stack.

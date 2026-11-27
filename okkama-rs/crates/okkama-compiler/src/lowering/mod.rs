@@ -381,6 +381,17 @@ pub fn check_linked_tests(files: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     check_roots(&roots(files), loader, true)
 }
 
+/// A lowering error as `okkama check` reports it. An internal error keeps the kind `okkama build` gives it,
+/// "internal compiler error", and its bare text (#1143).
+pub(crate) fn checked_lowering_error(module: usize, error: &LoweringError) -> crate::analysis::SemanticError {
+    use crate::analysis::SemanticError;
+    match error {
+        LoweringError::Unsupported { .. } => SemanticError::unsupported(module, error.span(), error.message()),
+        LoweringError::Invalid { .. } => SemanticError::invalid(module, error.span(), error.message()),
+        LoweringError::Internal { .. } => SemanticError::internal(module, error.span(), error.message()),
+    }
+}
+
 fn check_roots(
     roots: &[modules::Root<'_>],
     loader: &mut dyn ModuleLoader,
@@ -416,13 +427,7 @@ fn check_roots(
     // too: lowering finds the specialization limit, infinite recursion and
     // what IR lowering does not support yet (#317).
     if let Err((module, error)) = lower_analyzed(&analysis, roots[0].0, Vec::new(), test_mode, false) {
-        let error = match &error {
-            LoweringError::Unsupported { .. } => {
-                crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
-            }
-            LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
-            LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.to_string()),
-        };
+        let error = checked_lowering_error(module, &error);
         return Err(Ok(vec![CheckError {
             source: source_of(&graph, roots, module),
             error,

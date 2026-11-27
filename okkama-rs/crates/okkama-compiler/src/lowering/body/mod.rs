@@ -1277,15 +1277,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     }
 
     fn local_var(&self, local: LocalId, span: Span) -> Result<usize> {
-        self.local_vars[local.0].ok_or_else(|| {
-            LoweringError::invalid(
-                span,
-                format!(
-                    "internal compiler error: local \"{}\" has no value",
-                    self.body.locals[local.0].name
-                ),
-            )
-        })
+        self.local_vars[local.0].ok_or_else(|| local_without_value(span, &self.body.locals[local.0].name))
     }
 
     /// Переменные текущей позиции: все области и поля функции.
@@ -3472,5 +3464,25 @@ fn transferable(ty: &Type) -> bool {
         Type::Array(element) => transferable(element),
         Type::Map(key, value) => transferable(key) && transferable(value),
         _ => false,
+    }
+}
+
+/// A local read before lowering gave it a value: a compiler invariant, not the program's error (analysis checks
+/// definite assignment). The text is bare: the kind comes from `LoweringError::Internal` (#1093, #1143).
+fn local_without_value(span: Span, name: &str) -> LoweringError {
+    LoweringError::internal(span, format!("local \"{name}\" has no value"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1143: a local without a value in lowering is an internal error that names its kind once.
+    #[test]
+    fn a_local_without_a_value_is_an_internal_error() {
+        let error = local_without_value(Span::default(), "x");
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert_eq!(error.message(), "local \"x\" has no value");
+        assert_eq!(error.to_string(), "internal compiler error: local \"x\" has no value");
     }
 }
