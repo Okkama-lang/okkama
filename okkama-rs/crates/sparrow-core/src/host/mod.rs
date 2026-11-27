@@ -603,8 +603,6 @@ pub(crate) fn io_code(kind: std::io::ErrorKind) -> &'static str {
     }
 }
 
-pub(crate) type HandleBuild = crate::word::FastBuild;
-
 /// Natives this host provides.
 pub fn supported(native: Native) -> bool {
     provider(native).is_some()

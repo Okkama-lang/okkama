@@ -50,6 +50,37 @@ pub fn small_value(word: Word) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::hash::BuildHasher;
+
+    /// FastHasher mixes an integer key of any width as one 64-bit word (a
+    /// `u128` as two), so engine-assigned keys keep their cheap hash (#1103).
+    #[test]
+    fn fast_hasher_mixes_integer_keys_as_words_1103() {
+        let build = FastBuild::default();
+        let word = 0x517c_c1b7_2722_0a95_u64.wrapping_mul(7);
+        for hash in [
+            build.hash_one(7u8),
+            build.hash_one(7u16),
+            build.hash_one(7u32),
+            build.hash_one(7u64),
+            build.hash_one(7usize),
+            build.hash_one(7i32),
+        ] {
+            assert_eq!(hash, word);
+        }
+        assert_eq!(build.hash_one(7u128), build.hash_one((7u64, 0u64)));
+        assert_ne!(build.hash_one((1u64, 2u64)), build.hash_one((2u64, 1u64)));
+    }
+
+    /// FastHasher is predictable, so a text key (which may come from outside
+    /// the process) must not reach it: debug builds refuse the byte write
+    /// (#1103).
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "engine-assigned integers only")]
+    fn fast_hasher_refuses_text_keys_1103() {
+        FastBuild::default().hash_one("id");
+    }
 
     #[test]
     fn small_integers_round_trip_and_never_look_like_pointers_or_unbound() {
@@ -85,9 +116,16 @@ mod tests {
     }
 }
 
-/// Multiplicative hashing for engine-assigned keys (heap addresses, handle ids)
-/// and short strings: SipHash's flooding resistance buys nothing there and it
-/// showed up in native-call profiles.
+/// Unkeyed multiplicative hashing, only for keys the engine assigns: heap
+/// addresses, handle ids, function and type indices. SipHash showed up in
+/// native-call profiles for these, and nobody outside the process chooses them.
+///
+/// It is predictable, so it must never key text or bytes that come from
+/// outside the process (column names from a database server, JSON members,
+/// headers): anyone can compute colliding keys, and a seed does not help, since
+/// `"id"` and `"id\0"` collide under every seed. Such keys use std's keyed
+/// `RandomState` (SipHash-1-3, #1103). Integer writes are mixed directly; a
+/// byte write means a text or byte key, which debug builds refuse.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FastHasher(u64);
 impl std::hash::Hasher for FastHasher {
@@ -95,11 +133,31 @@ impl std::hash::Hasher for FastHasher {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
+        debug_assert!(
+            false,
+            "FastHasher keys engine-assigned integers only; text and bytes take a keyed hash (#1103)"
+        );
         for chunk in bytes.chunks(8) {
             let mut word = [0; 8];
             word[..chunk.len()].copy_from_slice(chunk);
             self.write_u64(u64::from_le_bytes(word));
         }
+    }
+    fn write_u8(&mut self, n: u8) {
+        self.write_u64(n.into());
+    }
+    fn write_u16(&mut self, n: u16) {
+        self.write_u64(n.into());
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(n.into());
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+    fn write_u128(&mut self, n: u128) {
+        self.write_u64(n as u64);
+        self.write_u64((n >> 64) as u64);
     }
     fn write_u64(&mut self, n: u64) {
         self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
