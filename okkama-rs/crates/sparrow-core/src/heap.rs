@@ -2194,7 +2194,8 @@ mod tests {
         Layouts {
             // 0: Node { next: ref, value: int }   1: Pair { left, right: ref }
             objects: vec![vec![Repr::Ref, Repr::Int], vec![Repr::Ref, Repr::Ref]],
-            closures: vec![vec![Repr::Ref, Repr::Int]],
+            // A closure: its entry word (#1110), then a ref and an int parameter.
+            closures: vec![vec![Repr::Raw, Repr::Ref, Repr::Int]],
             frames: vec![],
         }
     }

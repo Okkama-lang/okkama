@@ -9,7 +9,8 @@ fn gc_layout_empty_and_all_raw_objects_and_closures() {
     for width in [0, 8] {
         let mut heap = Heap::new(Layouts {
             objects: vec![vec![Repr::Raw; width]],
-            closures: vec![vec![Repr::Raw; width]],
+            // A closure's layout starts with its entry word (#1110).
+            closures: vec![vec![Repr::Raw; width + 1]],
             ..Layouts::default()
         });
         heap.set_stress(true);
@@ -36,7 +37,8 @@ fn gc_layout_mixed_objects_and_closures() {
         for kind in [heap::OBJECT, heap::CLOSURE] {
             let mut heap = Heap::new(Layouts {
                 objects: vec![layout.clone()],
-                closures: vec![layout.clone()],
+                // A closure's layout starts with its entry word, then its parameters (#1110).
+                closures: vec![std::iter::once(Repr::Raw).chain(layout.iter().copied()).collect()],
                 frames: vec![layout.clone()],
             });
             heap.set_stress(stress);
@@ -50,13 +52,15 @@ fn gc_layout_mixed_objects_and_closures() {
                 heap::CLOSURE => heap.closure_new(0, &fields[..5]),
                 _ => unreachable!(),
             };
+            // An object's fields and a closure's captures, by the same index (#1110: captures after the entry).
+            let slot = |heap: &Heap, index: usize| if kind == heap::CLOSURE { heap.capture(object, index) } else { heap.field(object, index) };
             for _ in 0..3 {
                 heap.collect(|visit| visit(object, Repr::Ref));
-                assert_eq!(heap.text(heap.field(object, 1)), "live through a sparse layout");
-                assert_eq!(heap.integer(heap.field(object, 2)).to_string(), i64::MAX.to_string());
-                assert_eq!(heap.integer(heap.field(object, 4)), Integer::Small(-7));
-                assert_eq!(heap.field(object, 5), UNBOUND);
-                assert_eq!(heap.field(object, 6), UNBOUND);
+                assert_eq!(heap.text(slot(&heap, 1)), "live through a sparse layout");
+                assert_eq!(heap.integer(slot(&heap, 2)).to_string(), i64::MAX.to_string());
+                assert_eq!(heap.integer(slot(&heap, 4)), Integer::Small(-7));
+                assert_eq!(slot(&heap, 5), UNBOUND);
+                assert_eq!(slot(&heap, 6), UNBOUND);
                 assert_eq!(heap::kind(heap.header_of(raw)), heap::FREE);
             }
             heap.collect(|_| {});
