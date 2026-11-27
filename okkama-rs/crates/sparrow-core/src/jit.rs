@@ -657,14 +657,61 @@ fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
 /// Compile `function`: its ordinary entry, or with `captures` its closure entry for closures holding that many
 /// captures (#1110), which takes the remaining arguments and then the closure; `version` says which version of a
 /// function with a small-int one it is (#1113).
+/// The code of `function` (or its closure entry for `captures`, or a version of it): emitted, compiled by Cranelift
+/// and installed (#1147: three steps, so the middle one can run elsewhere).
 fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<u64, Error> {
+    match emit_unit(runtime, function, captures, version)? {
+        Emitted::Published(address) => Ok(address),
+        Emitted::Unit(mut unit) => {
+            let symbol = runtime.loaded.program.functions[function].symbol.clone();
+            codegen(&runtime.jit, &mut unit, &symbol)?;
+            install(runtime, unit)
+        }
+    }
+}
+
+/// #1147: an emitted function waiting for its machine code.
+struct Unit {
+    function: usize,
+    captures: Option<usize>,
+    version: Version,
+    id: FuncId,
+    context: cranelift_codegen::Context,
+    call_sites: [u64; 3],
+    clif: Option<(usize, usize)>,
+    started: Option<std::time::Instant>,
+    marks: Vec<std::time::Instant>,
+    dump: bool,
+    /// `SPARROW_CORE_UNOPTIMIZED` names it.
+    unoptimized: bool,
+}
+
+enum Emitted {
+    /// Already compiled: its code.
+    Published(u64),
+    Unit(Unit),
+}
+
+/// Cranelift's code generation of an emitted unit, at the JIT's level (or without optimizations where
+/// `SPARROW_CORE_UNOPTIMIZED` says so).
+fn codegen(jit: &Jit, unit: &mut Unit, symbol: &str) -> Result<(), Error> {
+    let isa: &dyn cranelift_codegen::isa::TargetIsa = match &jit.unoptimized_isa {
+        Some(isa) if unit.unoptimized => &**isa,
+        _ => jit.module.isa(),
+    };
+    // The text `define_function` gave a Cranelift error.
+    unit.context.compile(isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: Compilation({:?})", e.inner)))?;
+    Ok(())
+}
+
+fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<Emitted, Error> {
     let published = match (captures, version) {
         (_, Version::General) => runtime.jit.general.get(&function).map_or(0, |slot| **slot),
         (None, _) => runtime.invocations[function].code,
         (Some(captures), _) => runtime.jit.closure_entries.get(&(function, captures)).map_or(0, |slot| **slot),
     };
     if published != 0 {
-        return Ok(published);
+        return Ok(Emitted::Published(published));
     }
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
@@ -841,19 +888,35 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
         eprintln!("; CLIF of {symbol} (f{function}), before Cranelift's passes\n{callees}{}", context.func.display());
         context.set_disasm(true);
     }
-    match &jit.unoptimized_isa {
-        Some(isa) if jit.unoptimized.has(symbol) => {
-            // What `define_function` does, with the unoptimizing target.
-            context.compile(&**isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: {:?}", e.inner)))?;
-            let compiled = context.compiled_code().expect("compiled function");
-            let alignment = u64::from(compiled.buffer.min_alignment);
-            let relocs: Vec<ModuleReloc> =
-                compiled.buffer.relocs().iter().map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, id)).collect();
-            jit.module
-                .define_function_bytes(id, alignment, compiled.code_buffer(), &relocs)
-                .map_err(|e| Error(format!("{symbol}: {e:?}")))?;
-        }
-        _ => jit.module.define_function(id, &mut context).map_err(|e| Error(format!("{symbol}: {e:?}")))?,
+    let unoptimized = jit.unoptimized_isa.is_some() && jit.unoptimized.has(symbol);
+    Ok(Emitted::Unit(Unit { function, captures, version, id, context, call_sites, clif, started, marks, dump, unoptimized }))
+}
+
+/// #1147: the second half of a compile: the compiled unit's code defined, finalized, registered and published.
+fn install(runtime: &mut Runtime, unit: Unit) -> Result<u64, Error> {
+    let Unit { function, captures, version, id, context, call_sites, clif, started, mut marks, dump, .. } = unit;
+    let Runtime { loaded, jit, invocations, stats, .. } = runtime;
+    let profiling = jit.profile.is_some();
+    macro_rules! mark {
+        () => {
+            if profiling {
+                marks.push(std::time::Instant::now());
+            }
+        };
+    }
+    let source = &loaded.program.functions[function];
+    let symbol = source.symbol.as_str();
+    {
+        let compiled = context.compiled_code().expect("compiled function");
+        let isa = jit.module.isa();
+        let alignment = u64::from(compiled.buffer.min_alignment)
+            .max(u64::from(isa.function_alignment().minimum))
+            .max(isa.symbol_alignment());
+        let relocs: Vec<ModuleReloc> =
+            compiled.buffer.relocs().iter().map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, id)).collect();
+        jit.module
+            .define_function_bytes(id, alignment, compiled.code_buffer(), &relocs)
+            .map_err(|e| Error(format!("{symbol}: {e:?}")))?;
     }
     mark!();
     let compiled = context.compiled_code().expect("compiled function");
