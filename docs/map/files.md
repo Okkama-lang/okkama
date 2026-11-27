@@ -121,7 +121,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 70 files, 38088 lines
+## sparrow — 70 files, 38104 lines
 
 - `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
@@ -173,7 +173,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_io.rs` 265 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
 - `sparrow-core/src/host/native_multicast.rs` 251 — Memberships use socket2's safe platform wrappers. The UDP owner retains
 - `sparrow-core/src/host/native_net.rs` 137 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
-- `sparrow-core/src/host/native_network.rs` 795 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
+- `sparrow-core/src/host/native_network.rs` 811 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
 - `sparrow-core/src/host/native_numbers.rs` 171 — Decimal text (validity, canonical form, coefficient, exponent, order) and the
 - `sparrow-core/src/host/native_origin.rs` 227 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the

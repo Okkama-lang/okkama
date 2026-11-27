@@ -791,9 +791,28 @@ mod tests {
         let address = socket.local_addr().unwrap().as_socket().unwrap();
         assert_eq!(connected(address, 1), 0, "bound but not listening refuses peers");
         start_listening(SockRef::from(&socket), 1).unwrap();
-        // macOS queues `backlog` peers, Linux `backlog + 1`; nobody accepts.
-        let queued = connected(address, 8);
-        assert!((1..=3).contains(&queued), "backlog 1 queued {queued} peers");
+        assert!(connected(address, 1) >= 1, "a listening socket takes a peer");
+        // #1169: counting queued peers is not reliable on macOS, which completed 8 of 8 handshakes for a backlog of
+        // 1 under a parallel test run; its kernel reports the queue's limit instead (SO_LISTENQLIMIT).
+        #[cfg(target_vendor = "apple")]
+        {
+            use std::os::fd::AsRawFd;
+            const SO_LISTENQLIMIT: libc::c_int = 0x1100;
+            let mut limit: libc::c_int = 0;
+            let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            // SAFETY: a valid descriptor and a buffer of the option's size.
+            let status = unsafe {
+                libc::getsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, SO_LISTENQLIMIT, (&raw mut limit).cast(), &mut size)
+            };
+            assert_eq!(status, 0, "SO_LISTENQLIMIT");
+            assert_eq!(limit, 1, "the queue's limit is the program's backlog");
+        }
+        // Linux queues `backlog + 1` peers; nobody accepts.
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            let queued = connected(address, 8);
+            assert!((1..=3).contains(&queued), "backlog 1 queued {queued} peers");
+        }
 
         let roomy = bound_listener(loopback(), true, false).unwrap();
         let address = roomy.local_addr().unwrap().as_socket().unwrap();
