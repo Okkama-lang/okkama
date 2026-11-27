@@ -207,7 +207,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 78 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 71 files, 22970 lines
+## other — 71 files, 22977 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -248,7 +248,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/rat.rs` 243 — Точное рациональное `rat` (OIR-1 §16.2): несократимая дробь с
 - `okkama-runtime-core/src/scalar.rs` 53 — Exact scalar conversions shared by compiler constants, natives and Sparrow.
 - `okkama-runtime-core/src/sched.rs` 343 — Promise delivery for Sparrow's native bridge.
-- `okkama-runtime-core/src/stdout.rs` 172 — Standard output of the process, buffered (#132). Every `Stdout` value, the
+- `okkama-runtime-core/src/stdout.rs` 179 — Standard output of the process, buffered (#132). Every `Stdout` value, the
 - `okkama-runtime-core/src/strings.rs` 149 — Позиции строк измеряются Unicode code points; диапазон [start, end).
 - `okkama-runtime-core/src/testing.rs` 324 — Состояние текущего теста (§14), общее для исполнителя тестов, intrinsics
 - `okkama-runtime-core/src/value.rs` 164
