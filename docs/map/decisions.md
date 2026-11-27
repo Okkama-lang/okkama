@@ -879,3 +879,24 @@ every declaration is open (#1005, owner decision).
   base, op and lang; sixteen examples whose output depends on the program alone; every single-file conformance
   case expecting a run-time failure that builds (at least 50). Whole corpora stay #1123's (`sparrow-interp`
   configurations).
+
+## The interpreter in the test runs (#1123, 2026-11-27; design Fable §6.2–6.3; implementer's choices)
+
+- **One exceptions file for every runner.** `okkama-rs/tools/engines/interp-exceptions.txt`, read by
+  `differ.py`, `tools/t/run.py` and (through `differ.py ocs`) the Wave and the gate. Selectors: `refusal:` (the
+  interpreter's own refusal), `both:` (both outputs contain it, statuses equal), `either:`, `jit:`, `path:`; each
+  line names a ticket or §6.3, or the file does not load. The fuzz `exec` differential mode keeps the same four
+  rules in Rust (`linking::differ`), with no file reader in the fuzz target.
+- **A memory budget is `either`, not `both`.** The interpreter's register stack is allocated memory and the JIT's
+  machine stack is not, so a deep recursion under the fuzz budgets stops on steps under the JIT and on memory
+  under the interpreter (found by the differential test). §6.3 lists the moment of memory exhaustion as a known
+  divergence; the exception follows it, for either side.
+- **Report-only first.** The Wave's `sparrow-interp` matrix branch has `continue-on-error`, the gate's step
+  records `informative`; both become blocking after the first green run (design decision 11). The JIT's
+  branch is unchanged: `SPARROW_CORE_INTERPRET` is empty there, which the switch rule reads as off.
+- **The interpreter's t/ run compares with the JIT in one invocation** (`--configs sparrow,sparrow-interp,
+  sparrow-interp-gc-stress`): t/run.py already requires one TAP stream of all configurations. The GC-stress
+  interpreter gets four times the timeout (#1120's 105 s file).
+- **The seeded JIT defect needs no reference build.** The mutated build's interpreter does not run the emitter's
+  code, so `okgen.py --engines sparrow,sparrow-interp` on that one build finds it; the existing shared-helper
+  mutant keeps its unmutated reference.

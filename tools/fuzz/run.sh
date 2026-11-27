@@ -7,7 +7,9 @@
 # lex, parse (drops the AST, re-parses formatted source), analyze (lowering
 # verifies), ir_verify (mutated OIR), spb (decode, verify, intrinsic
 # contracts), exec (programs linked against the repository's std, on the
-# Sparrow core under budgets, no host natives). Needs nightly Rust and cargo-fuzz; mass
+# Sparrow core under budgets, no host natives; with OKKAMA_FUZZ_DIFFERENTIAL=1
+# each program runs on the JIT and on the interpreter too, and the two must agree
+# but for the design's known divergences, #1123). Needs nightly Rust and cargo-fuzz; mass
 # runs belong in a container or on CI (.github/workflows/fuzz.yml). Corpora grow in
 # okkama-rs/fuzz/corpus/<target> (seeded from std, conformance, examples and
 # compiled SPB; past findings from okkama-rs/fuzz/regressions/<target>),

@@ -2,6 +2,20 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1123 Interpreter 4 (feature/1123 from release/066 32f74e98b, not committed; worktree okkama-work/hf-1123,
+  target t-1123): `okkama-rs/tools/engines/{differ.py, interp-exceptions.txt, test_differ.py}`; t/run.py configs
+  `sparrow-interp`, `sparrow-interp-gc-stress` (×4 timeout, exceptions → "skipped" with reason); wave.yml
+  conformance matrix `[sparrow, sparrow-interp]` (interp `continue-on-error`, `--adapter-env
+  SPARROW_CORE_INTERPRET=1 --timeout-scale 4`, `differ.py ocs`, corpora with the interp configs and `differ.py
+  run examples`; actionlint clean, not yet run on GitHub); gate.sh step "interpreter" (informative); okgen
+  `--engines sparrow,sparrow-interp`; mutants.sh JIT mutant `sparrow-jit` (+ `MUTANTS_ONLY/TARGET/OUT`); fuzz
+  exec `OKKAMA_FUZZ_DIFFERENTIAL=1` (`linking::differ`, test in okkama-compiler `fuzz_lowering`). Local runs:
+  conformance on the interpreter (okkama-dev, gate-like) 986/1075 PASS, 89 async refusals explained, 0
+  unexplained; t/ 142 files on sparrow + both interp configs: all ok, 3 async skipped (213 s, cage); differ.py
+  examples: 211 same, 52 async excepted, 0 differ; okgen 30 seeds clean: 0 disagreements; mutants.sh
+  sparrow-jit: 8/30 seeds disagree, minimized to 1 statement. Found by the fuzz differential test: a deep
+  recursion stops on steps under the JIT and on memory under the interpreter (§6.3, `either:` exception).
+  Docker volumes okkama-gate-target-hf-1123{,-mutants}; results in okkama-work/ocs-1123.
 - [x] #1121 Interpreter 2 (feature/1121 from release/066 c828a2d62, not committed; worktree okkama-work/hf-1121,
   target t-1121): handlers and `catch` in `interp.rs` (`unwind` returns whether a handler caught; `fail!` in the
   loop resumes there; `jump_then!` shared by catch and the lookups); `sparrow_core::{Engine, Observed, observe}`,

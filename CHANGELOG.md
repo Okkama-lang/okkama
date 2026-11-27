@@ -27,6 +27,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **The playground keeps a panic's message and lists the IR passes (#1118).** okkama-wasm keeps the message and
   location of a compiler panic, which a wasm trap loses, for a new export `lastPanic()`; `version()` names the IR
   passes in their order (`lowering::PASSES`), so the page no longer reads them from an error.
+- **The interpreter is an oracle in the test runs (#1123, fourth part of #1079).** t/ has the configurations
+  `sparrow-interp` and `sparrow-interp-gc-stress` (four times the timeout); the Wave's conformance-and-corpora
+  matrix has a `sparrow-interp` branch (conformance with `SPARROW_CORE_INTERPRET=1`, t/ on the JIT and both
+  interpreter configurations, bench/micro, examples, the Bible's examples, and `differ.py` on examples), report-only
+  until its first green run; the gate has an informative "interpreter" step with the same three. A difference
+  from the JIT is a defect unless `okkama-rs/tools/engines/interp-exceptions.txt` explains it, each line with
+  its reason and ticket: async bodies (#1122), a stack overflow reached on both, a memory budget run out on either
+  side, the JIT's compile limits (design §6.3). `okkama-rs/tools/engines/differ.py` compares programs without
+  expectations byte for byte (`run`) and explains an interpreter conformance run (`ocs`); t/run.py reports an
+  explained interpreter run as skipped with its reason. `tools/gen/okgen.py --engines sparrow,sparrow-interp`
+  compares generated programs on both engines, and `tools/gen/mutants.sh` has a seeded JIT defect (the inline
+  multiplication) that the mutated build's own interpreter finds. The fuzz `exec` target has a differential
+  mode, `OKKAMA_FUZZ_DIFFERENTIAL=1`. LLM-GUIDE §9 has the three runs (interpreter, plain unoptimized JIT,
+  JIT) that locate a disagreement. Local results: conformance on the interpreter 986 of 1075 cases pass, the 89
+  others async refusals, none unexplained; t/ (142 files, 50972 checks) identical on the JIT and both
+  interpreter configurations but 3 async files; examples 211 identical, 52 async, none different.
 - **Sparrow's interpreter runs failure handlers (#1121, second part of #1079).** A failure follows the JIT's
   status protocol: each activation it reaches is recorded once, at the instruction it reached, and the first
   handler covering that instruction takes it (the activations above it left, the handler's edge moves taken,

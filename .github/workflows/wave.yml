@@ -85,7 +85,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [sparrow]
+        # sparrow-interp: Sparrow's interpreter (SPARROW_CORE_INTERPRET=1) on the same cases and corpora, each
+        # difference from the JIT explained by okkama-rs/tools/engines/interp-exceptions.txt or a defect (#1123).
+        # Report-only until its first green run (design #1079, decision 11): its failures do not fail the wave.
+        engine: [sparrow, sparrow-interp]
+    continue-on-error: ${{ matrix.engine == 'sparrow-interp' }}
+    env:
+      # Empty is off (the switch rule): the JIT's branch runs as before.
+      SPARROW_CORE_INTERPRET: ${{ matrix.engine == 'sparrow-interp' && '1' || '' }}
     # SQLite 3.41+ for std db/sqlite.
     runs-on: ubuntu-24.04
     steps:
@@ -101,7 +108,9 @@ jobs:
             ~/.cargo/git
             conformance/adapters/rust/.target
           key: wave-ocs-${{ matrix.engine }}-${{ hashFiles('okkama-rs/Cargo.lock') }}
-          restore-keys: wave-ocs-${{ matrix.engine }}-
+          restore-keys: |
+            wave-ocs-${{ matrix.engine }}-
+            wave-ocs-
       - name: Fetch crates
         working-directory: okkama-rs
         run: cargo fetch --locked
@@ -112,9 +121,20 @@ jobs:
           # A failing case fails the job (as in the release CI), after the
           # artifact and the corpora below; a missing results.jsonl fails here.
           set +e
-          CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet \
+          engine=()
+          if [ -n "$SPARROW_CORE_INTERPRET" ]; then
+            engine=(--adapter-env SPARROW_CORE_INTERPRET=1 --timeout-scale 4)
+          fi
+          CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet "${engine[@]}" \
             --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" | tee ocs.log
           status=${PIPESTATUS[0]}
+          if [ -n "$SPARROW_CORE_INTERPRET" ]; then
+            # The interpreter's cases that did not pass, each explained by an exception or named unexplained.
+            python3 ../okkama-rs/tools/engines/differ.py ocs "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/results.jsonl" \
+              | tee "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/explained.txt"
+            status=${PIPESTATUS[0]}
+            { echo '### Conformance on sparrow-interp'; echo '```'; tail -40 "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/explained.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
           set -e
           grep -E '^\[ *[0-9]+/ *[0-9]+\] +[A-Z_]+ ' ocs.log | grep -v '\] PASS ' | head -50 |
             while IFS= read -r line; do echo "::error title=OCS ${{ matrix.engine }}::$line"; done
@@ -132,6 +152,10 @@ jobs:
           mkdir -p out/corpora
           bin=conformance/adapters/rust/.target/debug/okkama
           t="--configs sparrow --okkama $bin"; pipeline=""
+          if [ -n "$SPARROW_CORE_INTERPRET" ]; then
+            # The interpreter's branch compares its TAP with the JIT's, file by file, and with GC stress.
+            t="--configs sparrow,sparrow-interp,sparrow-interp-gc-stress --okkama $bin"
+          fi
           status=0
           run() {
             name=$1; shift
@@ -150,6 +174,10 @@ jobs:
           run std-fmt sh -c "find std -name '*.ok' -print0 | sort -z | xargs -0 $bin fmt --check"
           run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
           run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
+          if [ -n "$SPARROW_CORE_INTERPRET" ]; then
+            # Programs without expectations: the JIT's output, byte for byte (#1123).
+            run differ python3 okkama-rs/tools/engines/differ.py run --okkama $bin --jobs 4 examples
+          fi
           exit $status
       - uses: actions/upload-artifact@v5
         if: always()

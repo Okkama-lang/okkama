@@ -18,7 +18,11 @@
 #      std в форме `okkama fmt`
 #      (fmt --check, #1006); встроенные тесты std на Sparrow;
 #   4. t/ на sparrow, sparrow-passes-off, sparrow-gc-stress;
-#      TAP-потоки конфигураций обязаны совпадать.
+#      TAP-потоки конфигураций обязаны совпадать;
+#   5. интерпретатор Sparrow (#1123): conformance sparrow-interp, t/ на
+#      sparrow-interp и sparrow-interp-gc-stress, differ.py на examples/ —
+#      пока только отчёт (informative): блокирующими станут после первого
+#      зелёного прогона (дизайн #1079, решение 11).
 #
 # Статус каждого шага — код выхода его команды (ocs: 0 только если прошли все
 # обязательные кейсы). Итог — gate.json в каталоге журналов: коммит, шаги со
@@ -145,6 +149,18 @@ if [[ $QUICK -eq 0 ]]; then
     fi
 fi
 
+# report NAME COMMAND...: a step that informs and does not fail the gate (the interpreter's, #1123).
+report() {
+    local name="$1"; shift
+    started=$SECONDS
+    if "$@" >"$LOGS/$name.log" 2>&1; then
+        record "$name" pass $((SECONDS - started))
+    else
+        record "$name" informative $((SECONDS - started))
+        printf '.. %s did not pass (informative): %s\n' "$name" "$(tail -1 "$LOGS/$name.log")"
+    fi
+}
+
 conformance() {
     local name="$1"; shift
     local out="$LOGS/conformance-$name"
@@ -231,5 +247,17 @@ else
     record "t suite" fail $((SECONDS - started))
     fail "t/ suite"
 fi
+
+# Sparrow's interpreter against the JIT (#1123): the same cases, files and programs; a difference that
+# okkama-rs/tools/engines/interp-exceptions.txt does not explain is a defect. Informative until its first
+# green run.
+step "interpreter"
+report conformance-sparrow-interp sh -c "cd '$ROOT/conformance' && ./ocs run --adapter adapters/rust/adapter.json \
+    --profile full-release --stdlib-root ../std -j 6 --timeout-scale 4 --out '$LOGS/conformance-sparrow-interp' \
+    --adapter-env OCS_RUST_ENGINE=sparrow --adapter-env SPARROW_CORE_INTERPRET=1 >/dev/null; \
+    python3 '$ROOT/okkama-rs/tools/engines/differ.py' ocs '$LOGS/conformance-sparrow-interp/results.jsonl'"
+report t-sparrow-interp python3 "$ROOT/tools/t/run.py" --no-generate --configs sparrow,sparrow-interp,sparrow-interp-gc-stress \
+    --okkama "$OKKAMA"
+report differ-examples python3 "$ROOT/okkama-rs/tools/engines/differ.py" run --okkama "$OKKAMA" "$ROOT/examples"
 
 finish
