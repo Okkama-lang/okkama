@@ -2,6 +2,15 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1127 workers (owner's decision 8; feature/1127w from release/066 9d42172fd, not committed; worktree
+  okkama-work/hf-1127w, targets t-1127w and t-1127w-nd): `worker_emulated.rs` (replaces `worker_absent.rs`),
+  `worker_wire.rs` (codec moved out of `worker.rs`), `Runtime::emulated_workers`, `State::WorkerBinding` without
+  the host (`WorkerPoolRef`), `Loaded`/`FunctionInfo` Clone, `system_cpu_count` = 1 without the host (profile
+  allows it), `permits_workers` without the profile refusal. Tests: `embedding_tests::workers_are_emulated_in_the_
+  same_instance` (both builds), `one_processor_without_the_host`; playground_run
+  `the_playground_emulates_workers_as_the_cli_runs_them` over `tests/playground/workers/` (6 programs, equal to
+  the CLI's process workers); smoke: parallel map and worker output in wasm. sparrow_wasm_bg.wasm 3,846,641 bytes,
+  1,887,848 gzip.
 - [x] #1136 (feature/1136 from release/066 554a3f99c, not committed; worktree okkama-work/hf-1136, targets t-1136
   and t-1136-nd): `stdout::{with_tick, tick}`, `rt_poll` ticks; `Batching {Write, Window}`, `BATCH_BYTES`,
   `Receiver` (replaces `piece_sink`); `Limits::slice`/`Profile::slice`/`SLICE_PLAYGROUND` (= SLICE after

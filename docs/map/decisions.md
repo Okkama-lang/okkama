@@ -935,7 +935,8 @@ every declaration is open (#1005, owner decision).
   SPARROW_CORE_INTERPRET`), `invoke`/`resume` call the interpreter directly, the collector's JIT branch is
   `unreachable!`, `frame_pointer!` is 0. The JIT path's `invoke`/`resume`/`*_cold` bodies are unchanged under
   `cfg(feature = "jit")`.
-- **Process workers without the host behave as a runtime without a worker command** (`worker_absent.rs`): `bind`
+- **Process workers without the host behave as a runtime without a worker command** (`worker_absent.rs`; replaced
+  by the emulation of #1127, below): `bind`
   copies the action (`Runtime::closure_copy`, shared with `worker.rs`), a pool hands the plain action back, closing
   one is done, `spawn` refuses with `texts::NO_WORKER_COMMAND` (the text `worker.rs` gives without a command). The
   `WorkerBinding`/`WorkerPool` states exist only with the host.
@@ -1089,6 +1090,26 @@ every declaration is open (#1005, owner decision).
   the known values (SHA-256 "abc", HMAC-SHA256, HKDF, UUID 5 of example.com, CRC-32, Adler-32).
 - **CLDR on demand** (design §8 item 8, first point) was done in #1125 (`provide`, `files`).
 - **Left for the owner:** workers' emulation (§9 #8) and the resumable scheduler (§9 #3).
+
+- **Workers emulated in the instance (#1127, owner's decision 8: emulation; decision 3: time stays
+  fast-forward).** Without the host (`worker_emulated.rs`, and with it when `Runtime::emulated_workers`: the
+  playground's embedding natively, `run_embedded`/`run_tests_embedded`), `worker.spawn` runs the worker at the spawn
+  on a runtime of its own: a clone of the parent's `Loaded` (no second load), the parent's engine and budgets
+  (each worker its own steps, memory and output, the same interrupt flag), empty standard input. Receiver fields
+  and arguments cross by the process codec, moved to `worker_wire.rs` (so `spawn cannot transfer …` and every
+  decoding rule are the same), the result back the same way; a failure comes back as the worker's report text;
+  its stdout and stderr are captured and handed over when the parent takes the result, before it. The Future's
+  driver waits one scheduler round at the spawn (as a process worker's reply comes after the parent goes on), so
+  the parent's own writes after a spawn come first; a cancelled worker reports nothing. Nondeterminism of real
+  workers resolved as one valid order: workers finish at their spawn, their outputs reach the parent in the order
+  their drivers run (spawn order). Pools reuse nothing (every spawn is a fresh runtime). `system_cpu_count` is 1
+  without the host (one processor runs the emulated workers in turn), offered by the profile, so `ParallelMapped`
+  with its default bound runs. `permits_workers` no longer refuses under the profile; its text went. Differences
+  from the CLI, recorded: a CLI worker runs without budgets (the playground's does, so a spinning worker ends
+  with the budget's text as the parent's failure), a worker's stderr is written through `write_error` (ordered
+  with stdout; the CLI writes the child's stderr directly). No Bible example uses workers (chapter 20 says its
+  examples do not); the parity uses `okkama-cli/tests/playground/workers/` (two workers, output, failure, bound
+  action, parallel map, a compile-time transfer refusal), all equal to the CLI's process workers.
 
 ### JSON shapes of the playground's runtime (sparrow-wasm; #1125, #1134, #1135, #1127)
 

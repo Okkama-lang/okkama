@@ -78,16 +78,19 @@ pub struct Profile {
 }
 
 /// The playground (#1079 §5.2, #1125): Sparrow without `jit` and `host`, in a browser. Clocks and secure
-/// randomness come from the page; standard input is a buffer given before the run; what reaches files, sockets,
-/// processes, workers, the environment or the terminal is refused, and so are the pure providers left out of the
-/// wasm build: zstd and Brotli (`compression` codecs 3 and 4 fail inside the codec instead), collation (the
-/// system's ICU), X.509 and RSA/ECC/AEAD (aws-lc). Its budgets are the starting ones of §5.5. The owner's
-/// decisions 4 and 6–10 of §9 are taken as recommended there and await the owner.
+/// randomness come from the page; standard input is a buffer given before the run; workers are emulated in the same
+/// instance (#1127, owner's decision 8); what reaches files, sockets, processes, the environment or the terminal is
+/// refused, and so are the pure providers left out of the wasm build: zstd and Brotli (`compression` codecs 3 and 4
+/// fail inside the codec instead), collation (the system's ICU), X.509 and RSA/ECC/AEAD (aws-lc). Its budgets are
+/// the starting ones of §5.5. The owner's decisions 4, 6, 7, 9 and 10 of §9 are taken as recommended there and
+/// await the owner; 8 (workers) and 3 (time fast-forward) are decided.
 pub const PLAYGROUND: Profile = Profile {
     name: "playground",
     groups: &[NativeGroup::Clock, NativeGroup::Random],
     allowed: &[
         ("runtime/stdio", "stdin_"),
+        // The processors workers can use (#1127): one in the playground, whose workers are emulated one at a time.
+        ("runtime/system", "system_cpu_count"),
     ],
     refused: &[("runtime/collation", ""), ("runtime/x509", "")],
     steps: 50_000_000,
@@ -261,12 +264,9 @@ impl Limits {
         }
     }
 
-    /// May the program start a process worker? Under a profile, never (owner's decision 8 of #1079, awaiting
-    /// the owner): the playground has one instance and no processes.
+    /// May the program start a worker? With the `Process` group when the groups are restricted. The playground's
+    /// profile allows them: its workers are emulated in the same instance (owner's decision 8 of #1079, #1127).
     pub fn permits_workers(&self) -> Result<(), String> {
-        if let Some(profile) = self.profile {
-            return Err(format!("Process workers are not available in the {}", profile.name));
-        }
         match &self.natives {
             Some(allowed) if !allowed.contains(&NativeGroup::Process) => Err("Process workers need the Process permission".to_string()),
             _ => Ok(()),
@@ -589,7 +589,7 @@ mod tests {
         for symbol in ["runtime/net@1::ip_parse", "runtime/input_state@1::", "runtime/time@1::wall_clock", "runtime/system@1::secure_random", "runtime/stdio@1::stdin_read/", "runtime/stdio@1::stdout_write", "runtime/json@", "runtime/random@"] {
             assert_eq!(limits.permits(native(symbol)), Ok(()), "{symbol}");
         }
-        assert_eq!(limits.permits_workers().unwrap_err(), "Process workers are not available in the playground");
+        assert_eq!(limits.permits_workers(), Ok(()), "#1127: the playground's workers are emulated");
         let groups = Limits { natives: Some(vec![NativeGroup::Clock]), ..Limits::default() };
         assert!(groups.permits(native("runtime/fs@1::")).unwrap_err().ends_with("needs the Fs permission"));
         assert_eq!(groups.permits_workers().unwrap_err(), "Process workers need the Process permission");

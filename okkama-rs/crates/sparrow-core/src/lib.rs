@@ -61,10 +61,15 @@ pub mod test_report;
 pub mod word;
 #[cfg(feature = "host")]
 pub mod worker;
-// #1124: without the host no worker command can exist; spawn refuses as it does without one.
+// #1127: without the host (wasm32, the playground) workers are emulated in the same instance.
 #[cfg(not(feature = "host"))]
-#[path = "worker_absent.rs"]
+#[path = "worker_emulated.rs"]
 pub mod worker;
+/// The values that cross into a worker, process or emulated.
+mod worker_wire;
+// #1127: with the host, the emulation serves an embedding that asks for it (`Runtime::emulated_workers`).
+#[cfg(feature = "host")]
+mod worker_emulated;
 #[cfg(feature = "host")]
 mod worker_process;
 
@@ -242,6 +247,8 @@ pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Er
         let Embedding { arguments, stdin, limits, pieces: streamed, batching } = embedding;
         let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
         runtime.use_engine(Engine::Interpreter);
+        // The playground's workers, natively too (#1127).
+        runtime.emulated_workers = true;
         if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
             host.set_stdin(bytes);
         }
@@ -341,7 +348,7 @@ pub fn run_tests_embedded(bytes: Vec<u8>, embedding: Embedding, plan: test_repor
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         let Embedding { arguments: _, stdin, limits, pieces: streamed, batching } = embedding;
-        let setup = TestSetup { engine: Some(Engine::Interpreter), stdin };
+        let setup = TestSetup { engine: Some(Engine::Interpreter), stdin, emulated_workers: true };
         let (report, output) = Receiver::receive(&Receiver::new(streamed, batching), || {
             // A line at a time: the report is written in fragments, and each write is a piece the page receives.
             test_profile(program, plan, Some(Box::new(std::io::LineWriter::new(stdout::Buffered))), Vec::new(), &limits, &setup)
@@ -355,6 +362,8 @@ pub fn run_tests_embedded(bytes: Vec<u8>, embedding: Embedding, plan: test_repor
 struct TestSetup {
     engine: Option<Engine>,
     stdin: Option<Vec<u8>>,
+    /// Workers emulated in this instance (#1127).
+    emulated_workers: bool,
 }
 
 /// The natives of an SPB program, each once, in the ABI's order (#1125, #1135).
@@ -674,6 +683,7 @@ fn test_program(
         if let Some(engine) = setup.engine {
             runtime.use_engine(engine);
         }
+        runtime.emulated_workers |= setup.emulated_workers;
         if let (Some(bytes), Some(host)) = (&setup.stdin, runtime.host.as_mut()) {
             host.set_stdin(bytes.clone());
         }

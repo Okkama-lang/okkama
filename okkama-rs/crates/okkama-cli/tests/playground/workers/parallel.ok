@@ -1,0 +1,23 @@
+module workers/parallel v1.0.0;
+
+// An ordered parallel map over bounded batches of workers.
+
+import "io/stdout" take Stdout;
+import "parallel/map" take ParallelMapped;
+
+object Squarer {
+    Squarer() {}
+
+    run(value is int) is int {
+        value * value;
+    }
+}
+
+async main() is int {
+    let mapped = ParallelMapped(origins: [1, 2, 3, 4, 5, 6, 7], action: Squarer().run, workers: 3);
+    let values = await mapped.results();
+    for values -> value {
+        Stdout().writeln(value.string());
+    }
+    0;
+}

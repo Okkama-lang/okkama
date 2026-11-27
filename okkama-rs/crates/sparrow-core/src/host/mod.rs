@@ -723,7 +723,8 @@ fn classify(native: Native) -> Option<Provider> {
             | Native::TestingTestStateSize
             | Native::TestingTestStateClose
             | Native::TestingTestContextActive
-    ) {
+    ) || (!cfg!(feature = "host") && native == Native::SystemSystemCpuCount)
+    {
         Provider::Core
     } else if native_postgres::handles(native) {
         Provider::Postgres
@@ -861,6 +862,8 @@ impl Heap {
                 },
             ),
             Native::SystemSystemByteOrder => text(self, if cfg!(target_endian = "little") { "little" } else { "big" }),
+            // #1127: without the host one processor runs everything, emulated workers too, one after another.
+            Native::SystemSystemCpuCount => self.allocate(BigInt::from(1)).map(Outcome::Value),
             _ => Err(Error("unsupported native invocation".into())),
         }
     }

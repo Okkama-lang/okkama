@@ -6,7 +6,7 @@
 // the program runs: a run in a worker that prints and then spins is stopped, and what it printed has arrived; the
 // interruption text comes from version(). requirements names what a run can reach, and what is declared (#1135).
 // A test build's tests run as `okkama run -t` runs them, the report streamed (#1127); digests, HMAC, HKDF, a named
-// UUID and checksums give what the CLI gives.
+// UUID and checksums give what the CLI gives. Workers are emulated in the instance (#1127).
 //
 //     wasm-bindgen --target nodejs --out-dir DIR okkama_wasm.wasm sparrow_wasm.wasm (one call each)
 //     node okkama-rs/tools/playground/smoke.mjs DIR
@@ -208,5 +208,16 @@ uuid5 cfbff0d1-9375-5685-968c-48ce8b15ae17
 crc32 2286445522
 adler32 19726487
 `);
+
+// Workers, emulated in this instance (#1127): an ordered parallel map, and a worker's output passed on whole before
+// its result (the programs of okkama-cli/tests/playground/workers, which the parity test compares with the CLI).
+const workers = join(dirname(fileURLToPath(import.meta.url)), "../../crates/okkama-cli/tests/playground/workers");
+const mapped = JSON.parse(runtime.run(build(readFileSync(join(workers, "parallel.ok"), "utf8")), "{}"));
+assert.equal(mapped.exit, 0, JSON.stringify(mapped));
+assert.equal(mapped.output.map((chunk) => chunk.text).join(""), "1\n4\n9\n16\n25\n36\n49\n");
+const reported = JSON.parse(runtime.run(build(readFileSync(join(workers, "output.ok"), "utf8")), "{}"));
+const streamOf = (name) => reported.output.filter((chunk) => chunk.stream === name).map((chunk) => chunk.text).join("");
+assert.equal(streamOf("stdout"), "parent waits\nw line 0\nw line 1\nw line 2\nparent got 3\n");
+assert.equal(streamOf("stderr"), "w done\n");
 
 console.log(`playground smoke: ok (run ${elapsed.toFixed(0)} ms, ${needs.refused.length} of ${needs.declared.length} declared refused natives reachable, a stopped run kept its output)`);

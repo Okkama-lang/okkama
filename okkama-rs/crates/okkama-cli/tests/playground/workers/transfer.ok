@@ -1,0 +1,35 @@
+module workers/transfer v1.0.0;
+
+// Only values cross: a spawn whose receiver holds an object fails at once.
+
+import "io/stdout" take Stdout;
+
+object Box {
+    has value is int;
+
+    value() is int {
+        value;
+    }
+
+    Box(value is int) {
+        self.value = value;
+    }
+}
+
+object Holder {
+    has box is Box;
+
+    Holder(box is Box) {
+        self.box = box;
+    }
+
+    read() is int {
+        box.value();
+    }
+}
+
+async main() is int {
+    Stdout().writeln("before");
+    let read = spawn Holder(box: Box(value: 4)).read();
+    await read;
+}

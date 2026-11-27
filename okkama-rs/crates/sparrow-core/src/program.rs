@@ -44,7 +44,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionInfo {
     pub kinds: Vec<Kind>,
     /// Proven pointer-free for every definition of this SPB register (#535).
@@ -61,7 +61,8 @@ pub struct FunctionInfo {
     pub held_at: Option<u64>,
 }
 
-#[derive(Debug)]
+/// Clone: an emulated worker (#1127) runs the parent's program on a runtime of its own, without loading it again.
+#[derive(Debug, Clone)]
 pub struct Loaded {
     pub program: Program,
     pub functions: Vec<FunctionInfo>,

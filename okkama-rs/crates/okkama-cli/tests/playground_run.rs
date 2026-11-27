@@ -310,7 +310,7 @@ fn the_playground_runs_tests_as_okkama_run_t() {
         "json", "csv", "diff", "statistics", "calendar", "cell", "strings/join", "strings/format", "strings/buffer", "toml/parse",
         "toml/value", "plist/parse", "crypto/hmac", "crypto/kdf", "crypto/constant_time", "digest/sha2", "digest/sha3",
         "digest/blake2", "digest/legacy", "digest/host", "uuid/value", "uuid/generation", "checksum/crc", "checksum/adler32",
-        "checksum/state",
+        "checksum/state", "parallel/map",
     ];
     for module in modules {
         cases.push((Case { dir: root.clone(), name: format!("std/{module}.ok") }, "std".to_string()));
@@ -332,7 +332,7 @@ fn the_playground_runs_tests_as_okkama_run_t() {
     }
     eprintln!("playground tests: {compared} compared ({failing} failing), {} refused: {refused:?}", refused.len());
     assert!(differences.is_empty(), "{} of {compared} differ:\n{}", differences.len(), differences.join("\n"));
-    assert!(compared >= 35, "only {compared} test suites ran in the playground");
+    assert!(compared >= 36, "only {compared} test suites ran in the playground");
 }
 
 
@@ -346,4 +346,31 @@ fn the_playground_hashes_as_the_cli_does() {
     assert_eq!(played, cli(&case));
     assert_eq!(played.code, 0, "{}", played.stderr);
     assert!(played.stdout.starts_with("sha256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"), "{}", played.stdout);
+}
+
+/// #1127 (owner's decision 8): workers are emulated in the playground's instance and give what the CLI's process
+/// workers give: results, a worker's output passed on whole before its result, a failure as text, a bound action's
+/// receiver rebuilt, an ordered parallel map, and a value that cannot cross refused (tests/playground/workers/).
+#[test]
+fn the_playground_emulates_workers_as_the_cli_runs_them() {
+    let std_dir = canonical(&tree::std_dir()).display().to_string();
+    let dir = canonical(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/playground/workers"));
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".ok"))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 6, "{names:?}");
+    let mut differences = Vec::new();
+    for name in names {
+        let case = Case { dir: dir.clone(), name };
+        let played = playground(&case, &std_dir).unwrap_or_else(|| panic!("{}: the profile admits workers", case.name));
+        let shown = cli(&case);
+        if played != shown {
+            differences.push(format!("{}:\n  cli:        {shown:?}\n  playground: {played:?}", case.name));
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
 }

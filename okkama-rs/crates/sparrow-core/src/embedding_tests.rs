@@ -198,3 +198,100 @@ entry f4
     );
     assert_eq!(streamed_pieces(&large), [(Stream::Output, half), (Stream::Output, half)]);
 }
+
+/// Workers (#1127): `twice` prints "worker <n>" and doubles it; `fails` fails; `unboxed` takes an object.
+const WORKERS: &str = r#"type t4 fn [t0] -> t0
+type t5 future t0
+type t6 object obj0
+type t7 fn [t6] -> t0
+object obj0 "Box" { field "n" t0 }
+function f4 "twice" {
+    registers [t0, t0, t1, t1, t1, t3]
+    params [r0]
+    result t0
+    0: int.add r1, r0, r0
+    1: cvt r2, r0
+    2: const r3, str "worker "
+    3: str.concat r4, r3, r2
+    4: const r3, str "\n"
+    5: str.concat r4, r4, r3
+    6: str.utf8 r5, r4
+    7: call _, f0, [r5]
+    8: ret r1
+}
+function f5 "fails" {
+    registers [t0, t1]
+    params [r0]
+    result t0
+    0: const r1, str "worker gave up"
+    1: panic r1
+}
+function f6 "unboxed" {
+    registers [t6, t0]
+    params [r0]
+    result t0
+    0: obj.get r1, r0, 0
+    1: ret r1
+}
+function f7 "spins" {
+    registers [t0]
+    params [r0]
+    result t0
+    0: jmp @0
+}
+"#;
+
+/// `main` of a worker program: registers r0 int, r1 r2 actions, r3 future, r4 int, r5 text, r6 bytes, r7 box,
+/// r8 box action.
+fn workers(body: &str) -> Vec<u8> {
+    let source = format!(
+        "{HEAD}{WORKERS}function f8 \"main\" async {{\n    registers [t0, t4, t4, t5, t0, t1, t3, t6, t7]\n    params []\n    result t0\n{body}}}\nentry f8\n"
+    );
+    let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+    okkama_sparrow::encode(&program).unwrap()
+}
+
+fn emulated(body: &str) -> (Result<i64, (String, Option<crate::Uncaught>)>, String) {
+    emulated_under(body, Limits::playground())
+}
+
+fn emulated_under(body: &str, limits: Limits) -> (Result<i64, (String, Option<crate::Uncaught>)>, String) {
+    let run = run_embedded(workers(body), Embedding { limits, ..Embedding::default() }).unwrap();
+    let text = run.output.iter().map(|piece| String::from_utf8_lossy(&piece.bytes).into_owned()).collect();
+    (run.result, text)
+}
+
+/// #1127: a worker runs at its spawn on a runtime of its own; its output reaches the parent whole when the parent
+/// takes its result, before the result; its failure comes back as text; an object does not cross.
+#[test]
+fn workers_are_emulated_in_the_same_instance() {
+    let spawn_twice = "    0: const r0, int 20\n    1: fn.closure r1, f4, []\n    2: worker.bind r2, r1, r1, []\n    3: worker.spawn r3, r2, [r0], false\n";
+    let (result, text) = emulated(&format!(
+        "{spawn_twice}    4: const r5, str \"parent\\n\"\n    5: str.utf8 r6, r5\n    6: call _, f0, [r6]\n    7: await r4, r3\n    8: cvt r5, r4\n    9: const r0, int 0\n    10: ret r4\n"
+    ));
+    assert_eq!(result, Ok(40));
+    assert_eq!(text, "parent\nworker 20\n");
+    let (result, text) = emulated("    0: const r0, int 1\n    1: fn.closure r1, f5, []\n    2: worker.bind r2, r1, r1, []\n    3: worker.spawn r3, r2, [r0], false\n    4: await r4, r3\n    5: ret r4\n");
+    let (report, _) = result.unwrap_err();
+    assert!(report.contains("worker gave up"), "{report}");
+    assert_eq!(text, "");
+    let (result, _) = emulated("    0: const r0, int 1\n    1: obj.new r7, obj0, [r0]\n    2: fn.closure r8, f6, []\n    3: worker.spawn r3, r8, [r7], true\n    4: await r4, r3\n    5: ret r4\n");
+    let (report, _) = result.unwrap_err();
+    assert!(report.contains("spawn cannot transfer objects"), "{report}");
+    // The worker's budgets are the parent's: one that spins runs out of its steps, and the parent's await fails
+    // with that text.
+    let few = Limits { steps: Some(10_000), ..Limits::playground() };
+    let (result, _) = emulated_under("    0: const r0, int 1\n    1: fn.closure r1, f7, []\n    2: worker.spawn r3, r1, [r0], true\n    3: await r4, r3\n    4: ret r4\n", few);
+    let (report, _) = result.unwrap_err();
+    assert!(report.contains("Execution budget exhausted: steps"), "{report}");
+}
+
+/// #1127: without the host one processor runs everything, emulated workers too.
+#[cfg(not(feature = "host"))]
+#[test]
+fn one_processor_without_the_host() {
+    let source = "sparrow 18\nmodule \"cpus\" \"1.0.0\"\ntype t0 int\nfunction f0 \"cpus\" native \"runtime/system@1::system_cpu_count/0\" {\n    registers []\n    params []\n    result t0\n}\nfunction f1 \"main\" {\n    registers [t0]\n    params []\n    result t0\n    0: call r0, f0, []\n    1: ret r0\n}\nentry f1\n";
+    let bytes = okkama_sparrow::encode(&okkama_sparrow::assemble(source).unwrap()).unwrap();
+    let run = run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap();
+    assert_eq!(run.result, Ok(1));
+}

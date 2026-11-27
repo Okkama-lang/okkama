@@ -166,6 +166,9 @@ pub struct Runtime {
     /// The command (`sparrow`, FILE.spb) process workers run; empty
     /// when the embedder configured none.
     pub worker_command: Vec<std::ffi::OsString>,
+    /// Workers run in this instance, each on a runtime of its own (#1127: `worker_emulated`): always without the
+    /// host; with it, for an embedding that asks (the playground's native run), instead of processes.
+    pub emulated_workers: bool,
     /// Budgets of the next run (`budget::Limits`); set before it starts.
     pub limits: crate::budget::Limits,
     /// A native panicked: the runtime's state is unknown and it runs nothing more.
@@ -468,6 +471,7 @@ impl Runtime {
             stats: crate::env_switch::enabled("SPARROW_CORE_STATS").then(Box::default),
             created: crate::clock::Instant::now(),
             worker_command: Vec::new(),
+            emulated_workers: !cfg!(feature = "host"),
             limits: crate::budget::Limits::default(),
             poisoned: false,
             budget: Budget::default(),

@@ -7,6 +7,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Added
+- **Workers run in the playground (#1127, the owner's decision).** Without the host (and so in sparrow-wasm),
+  `spawn` of a synchronous action and std's `ParallelMapped` run the worker in the same instance, on a runtime of
+  its own: the same program with fresh globals, only values crossing by the process workers' codec, its output
+  passed on whole before its result, its failure as text, budgets per worker; one valid order where process
+  workers are nondeterministic (each finishes at its spawn). `system_cpu_count` is 1 there. The playground's
+  refusal of workers is gone. Programs with two workers, worker output, a failing worker, a bound action and a
+  parallel map give the CLI's output (whose workers are processes, unchanged).
 - **The playground's output comes in batches, handed over at the budget polls (#1136).** A streamed run joins a
   stream's writes within a 16 ms window into one chunk (`window` in the request; 0 keeps a chunk per write) and
   hands it over at the next budget poll, every 65 536 steps (a few milliseconds in wasm), so nothing waits while a

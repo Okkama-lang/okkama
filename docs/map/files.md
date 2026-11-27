@@ -121,9 +121,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 69 files, 37497 lines
+## sparrow — 70 files, 37641 lines
 
-- `sparrow-core/src/budget.rs` 445 — Execution budgets (hardening H-04): steps, memory, output and external
+- `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
@@ -133,26 +133,27 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2952 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 842 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 848 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
 - `sparrow-core/src/ops.rs` 1953 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
-- `sparrow-core/src/primitives.rs` 398 — State of the async primitives (Atomic, Event and Cancellation, Lock and
+- `sparrow-core/src/primitives.rs` 400 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 403 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/reach.rs` 276 — The functions a run of an SPB program can reach (#1135): what the playground warns about is what a run can cal
-- `sparrow-core/src/runtime.rs` 1287 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1289 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
-- `sparrow-core/src/texts.rs` 8 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
+- `sparrow-core/src/texts.rs` 9 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
 - `sparrow-core/src/word.rs` 75 — One machine word per value. The representation is chosen by the static SPB
-- `sparrow-core/src/worker.rs` 657 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-- `sparrow-core/src/worker_absent.rs` 18 — Process workers in a build without the host (#1124): no worker command can exist there (wasm32 has no
+- `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
+- `sparrow-core/src/worker_emulated.rs` 141 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
 - `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
+- `sparrow-core/src/worker_wire.rs` 247 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 148 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 924 — Native provider host. The providers (`native_*`) see a [`Heap`] and
+- `sparrow-core/src/host/mod.rs` 926 — Native provider host. The providers (`native_*`) see a [`Heap`] and
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently

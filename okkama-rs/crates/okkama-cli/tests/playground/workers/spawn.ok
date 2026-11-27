@@ -1,0 +1,24 @@
+module workers/spawn v1.0.0;
+
+// Two workers compute at once; the parent sums their results (the Bible's Section 20.4 program).
+
+import "io/stdout" take Stdout;
+
+object Worker {
+    has seed is int;
+
+    Worker(seed is int) {
+        self.seed = seed;
+    }
+
+    calculate(input is int) is int {
+        seed * input + input * input;
+    }
+}
+
+async main() is int {
+    let left is Future<int> = spawn Worker(seed: 7).calculate(input: 20);
+    let right is Future<int> = spawn Worker(seed: 9).calculate(input: 6);
+    Stdout().writeln("sum " + ((await left) + (await right)).string());
+    0;
+}
