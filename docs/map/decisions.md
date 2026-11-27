@@ -1298,6 +1298,14 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## Keys from outside the process take a keyed hash (#1103, 2026-11-28; owner: research first)
+
+- Text or bytes that come from outside (DB column names, JSON members, headers) key std's RandomState
+  (SipHash-1-3); FastHasher (unkeyed multiplicative) is for engine-assigned integers only and asserts so in debug.
+- foldhash was 2–5× faster but claims no HashDoS resistance; ahash is not in the lock file; a seeded FastHasher
+  keeps seed-independent collisions (zero padding, a bit-63/bit-4 differential). Security wins: the cost is
+  nanoseconds once per result set.
+
 ## Small-int function versions (#1113, 2026-11-28; owner: a guarded prototype; #1107's spill prerequisite rejected)
 
 - Only functions without effects get one: the instructions are int add/sub/mul/mod/cmp, bool not/cmp, moves,

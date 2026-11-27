@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Database column names take a keyed hash (#1103).** A result set's schema keyed its column names, which the
+  server chooses, by the engine's unkeyed FastHasher: 1024 colliding names of 4096 bytes made a schema take 66 ms
+  instead of 1.3 ms and every `row.get(name)` 63 µs. The schema now uses std's keyed RandomState (SipHash-1-3); a
+  100-column schema costs ~0.5 µs more, lookups are slightly faster. A per-process seed would not have helped
+  (`"id"` and `"id\0"` collide under every seed). FastHasher is documented for engine-assigned keys only and
+  refuses text and byte keys in debug builds; every other FastMap/FastSet keys engine-assigned integers.
 - **Small-int versions of pure int functions (#1113).** A synchronous function made only of int arithmetic and
   comparisons, moves, small constants, branches and returns (a receiver only passed on) is compiled as a small-int
   version: its ints are untagged machine words without tag checks or stack maps. A result outside −2^62..2^62−1, a

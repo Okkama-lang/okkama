@@ -7,6 +7,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1103 DB schema → std RandomState (Opus agent, feature/1103, cherry-picked): benchmarks in the ticket
+  comment (scratchpad hbench), FastHasher `write` debug_assert (no text keys), integer writes mixed directly;
+  tests `cargo test -p sparrow-core --lib 1103` (4, mutation-checked). Audit: no other FastMap with external keys.
 - [x] #1113 small-int function versions (feature/1110; toolchains micro-tc/f1113a tagged, f1113b untagged):
   `jit::{small_eligible, Version, GENERAL_VERSION}`, `Jit::{general, general_ids, small_ints}`, Emitter
   `small`/`entry_args`/`restart`; `compile` makes the small version as the code, `rt_compile(f | GENERAL_VERSION)`
