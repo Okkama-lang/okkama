@@ -55,6 +55,7 @@ pub(crate) enum DbHandle {
     /// The names come from the database server, so the map takes std's keyed
     /// hash, never `FastHasher` (#1103).
     /// Boxed: a keyed map is 48 bytes, past a handle's six words (#439).
+    #[allow(clippy::box_collection, reason = "keeps every arena slot within six words (#439)")]
     Schema(Box<HashMap<Rc<str>, i64>>),
 }
 pub(crate) fn handles(native: Native) -> bool {
