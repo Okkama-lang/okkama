@@ -519,3 +519,39 @@ function f1 "caller" {
     assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
     assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
 }
+
+/// #1147 (A1): handlers with the same target and failure register share one failure exit: two ranges covering three
+/// calls leave one `trace` call (one per handler index before), and the function still runs.
+#[test]
+fn handlers_with_one_target_share_one_failure_exit() {
+    let text = r#"
+sparrow 18
+module "shared-handler-exit" "1.0.0"
+type t0 int
+type t1 failure
+function f0 "identity" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "caller" {
+ registers [t0, t0, t1]
+ params [r0]
+ result t0
+ handler 0 1 @4 r2
+ handler 1 3 @4 r2
+ 0: call r1, f0, [r0]
+ 1: call r1, f0, [r1]
+ 2: call r1, f0, [r1]
+ 3: ret r1
+ 4: ret r0
+}
+"#;
+    let mut runtime = runtime(text, true);
+    compile(&mut runtime, 0).unwrap();
+    compile(&mut runtime, 1).unwrap();
+    assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
+    assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
+    assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
+}

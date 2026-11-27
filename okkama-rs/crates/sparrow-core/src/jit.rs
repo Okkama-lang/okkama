@@ -797,6 +797,7 @@ fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>
             inlined: 0,
             no_inline,
             exits: BTreeMap::new(),
+            fail_return: None,
             closure_captures: captures,
             small: general_code,
             entry_args: Vec::new(),
@@ -1030,8 +1031,13 @@ struct Emitter<'a, 'b> {
     inlined: usize,
     /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
     no_inline: bool,
-    /// #1108: the shared failure exit of each (function, inlined activation, handler), entered with the pc.
-    exits: BTreeMap<(usize, Option<Block>, Option<usize>), Block>,
+    /// #1108: the shared failure exit of each (function, inlined activation, handler), entered with the pc. #1147:
+    /// handlers with the same target and failure register share one (the first of them stands for all), and under
+    /// polling so do only sites on the same side of the target (its backward edge polls).
+    exits: BTreeMap<(usize, Option<Block>, Option<usize>, bool), Block>,
+    /// #1147: the cold `return 0` the second and later failure and stop exits of this function share (`None`: no
+    /// exit yet; `Some(None)`: one, which returned in place).
+    fail_return: Option<Option<Block>>,
     /// #1110: compiling the closure entry for this many captures: they come from the trailing closure argument.
     closure_captures: Option<usize>,
     /// #1113: compiling the small-int version: the slot of the general version's code, which its restart calls
@@ -1277,10 +1283,12 @@ impl Emitter<'_, '_> {
         // instruction cold trampoline; the hot path is the same load and branch. An async body with explicit roots
         // reports different words at each call, so it keeps an exit per call.
         if self.roots.is_none() {
-            let handler = self.loaded.program.functions[self.function]
-                .handlers
-                .iter()
-                .position(|h| (h.start as usize..h.end as usize).contains(&pc));
+            let handlers = &self.loaded.program.functions[self.function].handlers;
+            let handler = handlers.iter().position(|h| (h.start as usize..h.end as usize).contains(&pc)).map(|index| {
+                let (target, failure) = (&handlers[index].target, handlers[index].failure);
+                handlers.iter().position(|h| h.target == *target && h.failure == failure).unwrap_or(index)
+            });
+            let backward = self.polled && handler.is_some_and(|index| handlers[index].target.pc as usize <= pc);
             let ctx = self.ctx();
             let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
             let trampoline = self.builder.create_block();
@@ -1288,7 +1296,7 @@ impl Emitter<'_, '_> {
             self.builder.set_cold_block(trampoline);
             self.builder.ins().brif(status, trampoline, &[], next, &[]);
             self.builder.switch_to_block(trampoline);
-            let key = (self.function, self.inline.map(|inline| inline.fail), handler);
+            let key = (self.function, self.inline.map(|inline| inline.fail), handler, backward);
             let (exit, fresh) = match self.exits.get(&key) {
                 Some(exit) => (*exit, false),
                 None => {
@@ -1454,8 +1462,28 @@ impl Emitter<'_, '_> {
                 self.builder.ins().jump(inline.fail, &[]);
             }
             None => {
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                // #1147: every failure and stop of this function leaves through one cold block.
+                // The block that jumps here is filled first; callers switch to their next block after this. A
+                // function with one exit keeps it in place.
+                match self.fail_return {
+                    None => {
+                        let zero = self.iconst(0);
+                        self.builder.ins().return_(&[zero]);
+                        self.fail_return = Some(None);
+                    }
+                    Some(Some(exit)) => {
+                        self.builder.ins().jump(exit, &[]);
+                    }
+                    Some(None) => {
+                        let exit = self.builder.create_block();
+                        self.builder.set_cold_block(exit);
+                        self.builder.ins().jump(exit, &[]);
+                        self.builder.switch_to_block(exit);
+                        let zero = self.iconst(0);
+                        self.builder.ins().return_(&[zero]);
+                        self.fail_return = Some(Some(exit));
+                    }
+                }
             }
         }
     }
