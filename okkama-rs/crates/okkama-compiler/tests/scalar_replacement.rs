@@ -127,3 +127,27 @@ fn a_parameter_a_lookup_fills_is_not_split() {
     let module = lower(&body, "all");
     okkama_compiler::ir::verify(&module).unwrap();
 }
+
+/// A successor with branches (a particle's step with `if`s) is inlined as blocks between the call and a
+/// continuation, and the loop it steps then carries the particle's fields.
+#[test]
+fn a_branched_successor_is_inlined_and_its_loop_carries_fields() {
+    let body = "object Ball {
+    has x is int;
+    has v is int;
+    Ball(:x, :v);
+    stepped() is ^Ball {
+        let ahead = x + v;
+        let hit = ahead < 0 || ahead > 100;
+        ^v = if hit { 0 - v; } else { v; };
+        ^x = if hit { x; } else { ahead; };
+    }
+    x() is int { x; }
+}
+main() is int { let ball = Ball(x: 3, v: 7); for 0..50 -> step { ball = ball.stepped(); } ball.x(); }
+";
+    let module = lower(body, "all");
+    okkama_compiler::ir::verify(&module).unwrap();
+    let main = kinds(&module, "main");
+    assert!(!main.iter().any(|kind| matches!(*kind, "call" | "obj.new" | "obj.next" | "obj.get")), "{main:?}");
+}
