@@ -2547,7 +2547,8 @@ fn doctest_timeout_output_limits_and_temporary_cleanup() {
 #[cfg(unix)]
 fn doctest_sandbox_denies_host_effects_and_repository_writes() {
     for (name, import, call, permission) in [
-        ("net", "runtime/net\" take ip_parse", "ip_parse(1, \"127.0.0.1\", 1)", "Net"),
+        // A socket, not ip_parse: address text is pure since #1133.
+        ("net", "runtime/network\" take socket", "socket(2, 1, 0)", "Net"),
         ("env", "runtime/environment\" take environment_snapshot", "environment_snapshot()", "Env"),
         ("fs", "runtime/fs\" take path_encode", "path_encode(\"must-not-create\")", "Fs"),
     ] {
