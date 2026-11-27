@@ -1272,3 +1272,16 @@ every declaration is open (#1005, owner decision).
 - Hover and definition take zero-based line/character in UTF-16 units against the text of the inspection that
   answers (the last analysed), as `okkama lsp` does; completion and signature help against the current source.
 
+## Block parameters in the linearity check (#1138, 2026-11-27; agent, accepted by the lead)
+
+- A branch moves every argument's ownership state into its parameter reading the state before the branch (all
+  sources cleared, then all destinations set, so swaps keep their resources). A destination that may hold a FREE
+  resource the branch does not pass on is refused: "%P takes a new value at the branch from block X to block Y
+  while the one it holds may be in no region". One shape stays refused as on release/065 (a dominating value
+  passed to the same parameter twice); lowering does not produce it.
+
+## Worker failures (#1141, 2026-11-27; agent, accepted)
+
+- A worker's run error crosses without its "RuntimeError: " prefix (`worker_wire::failure_text`), so the parent's
+  report has it once; other report names (a panic's "Panic: …") are kept.
+

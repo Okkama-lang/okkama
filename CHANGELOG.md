@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Fixes (2).** The ownership check refuses again a loop that overwrites a resource held in a block parameter
+  while it may be in no region (a regression of #1093, #1138). An async main's interpreter stack obeys the memory
+  budget, a worker spawned by an emulated worker is emulated too, and a worker's failure reads "RuntimeError:"
+  once (#1141). Without aws-lc (the playground) ECDSA verification works through RustCrypto for P-256 and P-384
+  with the same answers as aws-lc (#1142).
 - **Fixes.** The playground refuses failureText offsets outside the report instead of trapping, recovers after a
   trapped call, places hover and definition as the language server does and completes the page's own std/
   modules (#1139). The fuzz differential mode reads the one exceptions list, `differ.py` fails when nothing was
