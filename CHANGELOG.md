@@ -6,6 +6,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Strings look at their bytes less (#1149, part).** Pieces and flat concatenations of ASCII strings are flagged
+  ASCII without a scan; split by one character searches the character; split and replace search line-sized texts
+  directly instead of building a two-way searcher per call; replace copies its pieces once. 05-strings steady −5%.
 - **Faster marking (#1174).** The collector's object tracing is generic over its visitor, so marking's visitor is
   inlined into the field loops, and objects with nothing to trace (plain strings, big integers, arrays of raw words)
   are marked without being queued. bench/gc marking: burst −33%, deep −30%, payload −16%, ownership −8%; steady

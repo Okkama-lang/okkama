@@ -7,6 +7,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [~] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
+  search ≤ 256 bytes), one-copy replace; tests `ops::strings_1149_tests` (4, mutations caught). 05-strings −5%; the rest
+  is copying the pieces (views over flat strings need care: concat grows SHARED buffers in place) — open.
 - [x] #1174 marking: generic `trace_object<P>`, leaf kinds unqueued in `mark_and_queue`; test
   `heap::tests::leaves_are_marked_without_tracing_and_containers_still_trace_1174` (mutation caught); corpus under
   GC stress unchanged (457/457).
