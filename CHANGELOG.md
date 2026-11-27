@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **A safepoint that is not due costs almost nothing (#1175).** Every allocating helper asked the heap whether a
+  collection was due through a huge out-of-line function (its prologue ran before the check) and a thread-local
+  lookup in another crate (a call on macOS) for the map-node count. The check is now inline, the collection out
+  of line, and the heap reads its thread's node counter through a pointer it takes once. 10-app −6%, 05-strings
+  −7%, 06-collections −7%, 11-ownership −3%, 08-roles −2% (steady).
 - **Long integer addition and subtraction faster without an add-carry intrinsic (#1148).** num-bigint's fallback
   carry (`b || d`) became a branch per digit on aarch64 (and every target but x86). Okkama now carries num-bigint
   0.4.8 in `okkama-rs/vendor/` with `|` in its add and subtract carries and four digits per addition step, until

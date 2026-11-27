@@ -1298,6 +1298,12 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
+
+- The not-due check is inline at every allocating helper; the collection is a cold out-of-line function.
+- The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
+  thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
+
 ## Vendored num-bigint (#1148, 2026-11-28; owner: vendor + upstream PR)
 
 - num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with a Rust-native change (`|` carries, 4-digit add

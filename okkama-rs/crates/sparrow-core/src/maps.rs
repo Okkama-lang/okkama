@@ -46,6 +46,11 @@ pub fn node_memory() -> (usize, usize) {
     pmap::memory()
 }
 
+/// This thread's node counters, read without a thread-local lookup (#1175).
+pub(crate) fn node_memory_cell() -> *const std::cell::Cell<(usize, usize)> {
+    pmap::memory_cell()
+}
+
 thread_local! {
     static PASS: Cell<u64> = const { Cell::new(0) };
 }

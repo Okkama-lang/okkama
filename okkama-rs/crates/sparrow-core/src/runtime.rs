@@ -503,10 +503,18 @@ impl Runtime {
     /// Collect when the heap asks for it. `frame` is the frame pointer of a
     /// runtime helper called directly from machine code; `extra` are words
     /// the helper still holds.
+    #[inline(always)]
     pub fn safepoint(&mut self, frame: u64, ctx: &Ctx, extra: &[(Word, Repr)]) {
-        if !self.heap.needs_collection() {
-            return;
+        // #1175: the check is inline in every allocating helper; the collection is out of line, so a safepoint
+        // that is not due pays for neither its frame nor its prologue.
+        if self.heap.needs_collection() {
+            self.collect_at_safepoint(frame, ctx, extra);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn collect_at_safepoint(&mut self, frame: u64, ctx: &Ctx, extra: &[(Word, Repr)]) {
         self.count(|_| "gc collection".into());
         let started = self.heap.allocations.is_some().then(crate::clock::Instant::now);
         self.prune_spawned();

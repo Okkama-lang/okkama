@@ -39,6 +39,13 @@ pub fn memory() -> (usize, usize) {
     MEMORY.with(Cell::get)
 }
 
+/// #1175: this thread's counter cell, for a reader that lives on this thread only and reads it often (the heap's
+/// not-due collection check): a thread-local lookup is a call on some targets. It stays valid while the thread
+/// runs (the cell has no destructor).
+pub fn memory_cell() -> *const Cell<(usize, usize)> {
+    MEMORY.with(|memory| memory as *const Cell<(usize, usize)>)
+}
+
 fn grew(bytes: usize) {
     MEMORY.with(|m| {
         let (allocated, live) = m.get();

@@ -443,6 +443,8 @@ pub struct Heap {
     /// collection ended (`maps::node_memory`): their growth since is
     /// pressure, their live bytes part of `external_live`.
     nodes_at_collection: usize,
+    /// #1175: this thread's map node counters (`maps::node_memory`), read by every not-due check.
+    node_counters: *const std::cell::Cell<(usize, usize)>,
     live_sum: usize,
     worklist: Vec<Word>,
     /// Objects whose death must be reported (resource identities).
@@ -601,6 +603,7 @@ impl Heap {
             allocated_before: 0,
             external_before: 0,
             nodes_at_collection: 0,
+            node_counters: crate::maps::node_memory_cell(),
             live_sum: 0,
             worklist: Vec::new(),
             watched: crate::word::FastSet::default(),
@@ -622,6 +625,7 @@ impl Heap {
     }
 
     /// Allocation-triggered collection is proportional to the live heap.
+    #[inline]
     pub fn needs_collection(&self) -> bool {
         self.allocated + self.external + self.node_growth() >= self.threshold
     }
@@ -635,8 +639,12 @@ impl Heap {
     }
 
     /// Bytes of persistent map nodes allocated since the last collection.
+    #[inline]
     fn node_growth(&self) -> usize {
-        crate::maps::node_memory().0.saturating_sub(self.nodes_at_collection)
+        // SAFETY: the counter cell of the thread that made this heap, which the heap never leaves (the pointer
+        // makes it !Send), valid while that thread runs.
+        let (allocated, _) = unsafe { (*self.node_counters).get() };
+        allocated.saturating_sub(self.nodes_at_collection)
     }
 
     /// Charge Rust memory that a heap object owns and just took on (a
@@ -3042,6 +3050,42 @@ mod tests {
             before.sort_unstable();
             assert_eq!(again, before, "the same cells, each once");
         }
+    }
+
+    /// #1175: the not-due check counts the map nodes this heap's thread made since the last collection (read
+    /// through the cached counter cell): nodes alone bring a collection due, a collection resets the count, and
+    /// nodes another thread makes do not count.
+    #[test]
+    fn map_nodes_of_this_thread_bring_a_collection_due_1175() {
+        use crate::maps::Entries;
+        use crate::ops::Key;
+        const DUE: usize = 64 << 10;
+        let mut heap = Heap::new(layouts());
+        heap.threshold = DUE;
+        assert!(!heap.needs_collection());
+        let grow = |entries: &mut Entries, from: i64| {
+            let before = crate::maps::node_memory().0;
+            let mut n = from;
+            while crate::maps::node_memory().0 - before < DUE + 4096 {
+                entries.insert(Key::Small(n), (0, 0));
+                // Past a few entries the map turns persistent: its nodes are counted from then on.
+                entries.make_persistent();
+                n += 1;
+                assert!(n - from < 1 << 20, "map nodes are not counted");
+            }
+            n
+        };
+        // Another thread's nodes are its own.
+        std::thread::spawn(move || grow(&mut Entries::default(), 0)).join().unwrap();
+        assert!(!heap.needs_collection(), "another thread's nodes counted");
+        let mut entries = Entries::default();
+        let next = grow(&mut entries, 0);
+        assert!(heap.needs_collection(), "this thread's nodes not counted");
+        heap.collect(|_| {});
+        heap.threshold = DUE;
+        assert!(!heap.needs_collection(), "a collection resets the count");
+        grow(&mut entries, next);
+        assert!(heap.needs_collection());
     }
 
     /// #1148: the vendored num-bigint's addition (an ADCS chain on aarch64) gives the sums a digit-by-digit

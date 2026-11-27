@@ -7,6 +7,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1175 safepoint not-due check: `Runtime::safepoint` inline + `collect_at_safepoint` cold; `Heap.node_counters`
+  (`pmap::memory_cell`, Heap !Send by the pointer); test `heap::tests::map_nodes_of_this_thread_bring_a_collection_due_1175`
+  (mutation: node growth ignored, caught). Steady: 10-app −6.2%, 05 −7.2%, 06 −7.1%, 11 −2.8%, 08 −2%.
 - [x] #1148 bigint add/sub: vendor/num-bigint (0.4.8 + `|` carries, 4-digit add step; OKKAMA.md), workspace
   `exclude = ["vendor"]`, `[patch.crates-io]`; test `heap::tests::bigint_addition_matches_a_reference_1148`
   (mutations caught); micro cell int-big-add + oracle. 04-bigint 205 → 118 ms (an ADCS asm variant: 104 ms,
