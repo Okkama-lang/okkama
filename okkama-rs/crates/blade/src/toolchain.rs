@@ -626,7 +626,17 @@ mod tests {
         temp.write("other/io/stdout.ok", "module io/stdout; // other\n");
         temp.write("std-dir", &temp.0.join("std").display().to_string());
         let cache = temp.0.join("target/app.spb.blade-cache");
-        let probe = || Probe::start(&okkama, &temp.0, &cache).finish().unwrap();
+        // A test thread that forks while `script` holds the file open for writing leaves the child holding it
+        // until its exec: running the file then fails with ETXTBSY for a moment. Wait it out.
+        let probe = || {
+            for _ in 0..200 {
+                match Probe::start(&okkama, &temp.0, &cache).finish() {
+                    Err(error) if error.contains("os error 26") => std::thread::sleep(std::time::Duration::from_millis(10)),
+                    result => return result.unwrap(),
+                }
+            }
+            panic!("{} stayed busy", okkama.display())
+        };
 
         let first = probe();
         assert_eq!(first.version, "okkama 0.6.5");
