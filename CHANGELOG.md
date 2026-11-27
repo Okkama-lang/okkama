@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Fixes.** Blade's run and build no longer fail with status 2 on a symlink loop in an import or std tree: the
+  walk skips a link back to a directory it is inside (#1140). An internal compiler error reads the same in
+  `okkama check` and `okkama build`, with its prefix once; `sparrow` reports main's result outside 0..255 by the
+  one rule `okkama run` uses (#1143). The listen-backlog test reads the queue's limit on macOS instead of counting
+  peers (#1169).
 - **Smaller binaries (#1109).** Release packages ship stripped binaries (re-signed on macOS) with a separate
   `-symbols.tar.gz` for crash addresses; the REPL's line editor, Markdown, TOML, Brotli, regex-syntax and SQLite's
   bundled C are optimised for size; the core reads the runtime tables from one module instead of a second copy.

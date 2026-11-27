@@ -1251,3 +1251,9 @@ every declaration is open (#1005, owner decision).
 - A function's code range overlaps no other's, so its maps are one sorted batch spliced in at their place; code
   addresses need not grow from function to function (`register_code`, tested with addresses in random order).
 
+## An internal compiler error has one kind in check and build (#1143, 2026-11-27; lead — the ticket left it to the owner, no owner comment)
+
+- `okkama check` and `okkama build` both say `internal compiler error: <text>` for a lowering invariant failure
+  (`SemanticError::internal`, `Finding::semantic`): it is a compiler bug, not a semantic error of the program.
+  Other kinds still differ between the two commands ("analysis limitation" vs "lowering error"); left as they are.
+
