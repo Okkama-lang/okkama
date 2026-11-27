@@ -34,6 +34,8 @@ rustyline = { version = "14.0.0", default-features = false, features = ["with-fi
 [dev-dependencies]
 # The playground's API (#1078), compared with this binary by tests/playground.rs.
 okkama-wasm = { path = "../okkama-wasm" }
+# The playground's runtime (#1125), compared with this binary's `okkama run` by tests/playground_run.rs.
+sparrow-wasm = { path = "../sparrow-wasm" }
 
 # The doctest child monitors its whole-process RSS as a backstop for natives.
 [target.'cfg(unix)'.dependencies]

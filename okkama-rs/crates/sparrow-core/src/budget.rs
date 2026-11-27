@@ -49,6 +49,69 @@ pub struct Limits {
     /// CLIs). Natives outside every group (pure computation, stdout and
     /// stderr) are always allowed. Process workers need `Process`.
     pub natives: Option<Vec<NativeGroup>>,
+    /// The natives an embedding offers, by name (#1125, [`Profile`]); `None` is every native. It is checked
+    /// before `natives`, with its own refusal text.
+    pub profile: Option<&'static Profile>,
+}
+
+/// What an embedding of Sparrow offers a program, as data (#1125): the host groups it allows, the natives it
+/// allows inside the groups it refuses, and the pure natives it lacks. The same profile refuses the same
+/// natives with the same text natively and in wasm, so a native run under [`Limits::playground`] shows what the
+/// playground shows. Natives are named by module and the beginning of their name (`""`: the whole module).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// The refusal's "Native X is not available in the {name}".
+    pub name: &'static str,
+    pub groups: &'static [NativeGroup],
+    /// Allowed although their group is not.
+    pub allowed: &'static [(&'static str, &'static str)],
+    /// Pure, and refused: their provider is not in the embedding.
+    pub refused: &'static [(&'static str, &'static str)],
+    pub steps: u64,
+    pub memory: u64,
+    pub output: u64,
+}
+
+/// The playground (#1079 §5.2, #1125): Sparrow without `jit` and `host`, in a browser. Clocks and secure
+/// randomness come from the page; standard input is a buffer given before the run; what reaches files, sockets,
+/// processes, workers, the environment or the terminal is refused, and so are the pure providers left out of the
+/// wasm build: zstd and Brotli (`compression` codecs 3 and 4 fail inside the codec instead), collation (the
+/// system's ICU), X.509 and RSA/ECC/AEAD (aws-lc). Its budgets are the starting ones of §5.5. The owner's
+/// decisions 4 and 6–10 of §9 are taken as recommended there and await the owner.
+pub const PLAYGROUND: Profile = Profile {
+    name: "playground",
+    groups: &[NativeGroup::Clock, NativeGroup::Random],
+    allowed: &[
+        ("runtime/stdio", "stdin_"),
+        // Pure, though their modules sit in a group: the line buffer of standard input, IP text, PostgreSQL's
+        // result pages, the local date-times of a named zone, and what the build is (wasm32 in a page).
+        ("runtime/input_state", ""),
+        ("runtime/net", "ip_"),
+        ("runtime/postgres", "pg_page"),
+        ("runtime/time_zone", "timezone_local_"),
+        ("runtime/system", "system_platform"),
+        ("runtime/system", "system_architecture"),
+        ("runtime/system", "system_byte_order"),
+    ],
+    refused: &[("runtime/collation", ""), ("runtime/x509", "")],
+    steps: 50_000_000,
+    memory: 256 << 20,
+    output: 1 << 20,
+};
+
+impl Profile {
+    /// Does the profile offer `native`?
+    pub fn offers(&self, native: okkama_runtime_abi::Native) -> bool {
+        let symbol = native.symbol();
+        let module = symbol.split('@').next().unwrap_or(symbol);
+        let name = symbol.split("::").nth(1).unwrap_or("");
+        let named = |list: &[(&str, &str)]| list.iter().any(|&(m, prefix)| m == module && name.starts_with(prefix));
+        match Reach::of(native) {
+            Reach::Group(group) => self.groups.contains(&group) || named(self.allowed),
+            Reach::Pure => !named(self.refused),
+            Reach::Unclassified => false,
+        }
+    }
 }
 
 /// Natives that reach the host, by what they reach (H-14).
@@ -149,6 +212,11 @@ impl Limits {
     /// Is `native` allowed? The refusal names its group.
     #[inline]
     pub fn permits(&self, native: okkama_runtime_abi::Native) -> Result<(), String> {
+        if let Some(profile) = self.profile
+            && !profile.offers(native)
+        {
+            return Err(format!("Native {} is not available in the {}", native.symbol(), profile.name));
+        }
         let Some(allowed) = &self.natives else {
             return Ok(());
         };
@@ -166,6 +234,31 @@ impl Limits {
 }
 
 impl Limits {
+    /// The playground's limits (#1125): its [`PLAYGROUND`] profile and budgets, memory measured on the runtime's
+    /// own heap (one runtime per page worker, no process allocator to read).
+    pub fn playground() -> Self {
+        Self {
+            steps: Some(PLAYGROUND.steps),
+            memory: Some(PLAYGROUND.memory),
+            memory_scope: MemoryScope::Runtime,
+            output: Some(PLAYGROUND.output),
+            profile: Some(&PLAYGROUND),
+            ..Self::default()
+        }
+    }
+
+    /// May the program start a process worker? Under a profile, never (owner's decision 8 of #1079, awaiting
+    /// the owner): the playground has one instance and no processes.
+    pub fn permits_workers(&self) -> Result<(), String> {
+        if let Some(profile) = self.profile {
+            return Err(format!("Process workers are not available in the {}", profile.name));
+        }
+        match &self.natives {
+            Some(allowed) if !allowed.contains(&NativeGroup::Process) => Err("Process workers need the Process permission".to_string()),
+            _ => Ok(()),
+        }
+    }
+
     /// Does machine code poll (any budget or interruption set)?
     pub fn polled(&self) -> bool {
         self.steps.is_some() || self.memory.is_some() || self.interrupt.is_some()
@@ -417,5 +510,50 @@ mod tests {
         assert!(limits.permits(native).unwrap_err().contains("needs the Env permission"));
         let everything = Limits::default();
         assert!(everything.permits(native).is_ok());
+    }
+
+    fn native(symbol: &str) -> Native {
+        *Native::ALL.iter().find(|native| native.symbol().starts_with(symbol)).unwrap_or_else(|| panic!("{symbol}"))
+    }
+
+    /// #1125: the playground refuses with its own text whatever it lacks, a group it allows or a stdin exception
+    /// passes, a pure native passes unless its provider is left out, and without the profile the texts are the old ones.
+    #[test]
+    fn the_playground_profile_refuses_with_its_own_text() {
+        let limits = Limits::playground();
+        let refused = |symbol: &str| limits.permits(native(symbol)).unwrap_err();
+        assert_eq!(refused("runtime/fs@1::"), format!("Native {} is not available in the playground", native("runtime/fs@1::").symbol()));
+        assert!(refused("runtime/collation@1::").ends_with("is not available in the playground"));
+        assert!(refused("runtime/x509@1::certificate_facts").ends_with("is not available in the playground"));
+        assert!(refused("runtime/system@1::system_host_name").ends_with("is not available in the playground"));
+        assert!(refused("runtime/application@").ends_with("is not available in the playground"));
+        assert!(refused("runtime/network@1::").ends_with("is not available in the playground"));
+        for symbol in ["runtime/net@1::ip_parse", "runtime/input_state@1::", "runtime/time@1::wall_clock", "runtime/system@1::secure_random", "runtime/stdio@1::stdin_read/", "runtime/stdio@1::stdout_write", "runtime/json@", "runtime/random@"] {
+            assert_eq!(limits.permits(native(symbol)), Ok(()), "{symbol}");
+        }
+        assert_eq!(limits.permits_workers().unwrap_err(), "Process workers are not available in the playground");
+        let groups = Limits { natives: Some(vec![NativeGroup::Clock]), ..Limits::default() };
+        assert!(groups.permits(native("runtime/fs@1::")).unwrap_err().ends_with("needs the Fs permission"));
+        assert_eq!(groups.permits_workers().unwrap_err(), "Process workers need the Process permission");
+        assert_eq!(Limits::default().permits_workers(), Ok(()));
+        assert_eq!((limits.steps, limits.memory, limits.output), (Some(50_000_000), Some(256 << 20), Some(1 << 20)));
+        assert_eq!(limits.memory_scope, MemoryScope::Runtime);
+    }
+
+    /// #1079 §5.2: built as the playground is (no `jit`, no `host`), the profile offers a native exactly when the
+    /// build has its provider, so the profile's refusal is the only one a playground program meets.
+    #[cfg(not(feature = "host"))]
+    #[test]
+    fn the_playground_profile_is_what_the_pure_build_provides() {
+        let mut offered_unprovided = Vec::new();
+        let mut provided_refused = Vec::new();
+        for &native in Native::ALL {
+            match (PLAYGROUND.offers(native), crate::natives::supported(native)) {
+                (true, false) => offered_unprovided.push(native.symbol()),
+                (false, true) => provided_refused.push(native.symbol()),
+                _ => {}
+            }
+        }
+        assert!(offered_unprovided.is_empty() && provided_refused.is_empty(), "offered without a provider: {offered_unprovided:?}\nprovided but refused: {provided_refused:?}");
     }
 }

@@ -1,6 +1,8 @@
 //! The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
 //! assembly of `okkama build`, and the editor's hover, completion, definition and signature help, over a std
-//! bundled into the crate. Nothing runs: there is no Sparrow here.
+//! bundled into the crate. Nothing runs here: the playground's runtime is sparrow-wasm, a module of its own (#1125);
+//! [`Workspace::build`] makes the SPB it runs and keeps the module, so that [`Workspace::failure_text`] draws an
+//! uncaught failure's stack in the sources, as `okkama run` does.
 //!
 //! Every call takes one JSON request and returns one JSON response (shapes in `docs/map/decisions.md`, #1078).
 //! The text a command prints comes from `okkama_compiler::commands`, the CLI's own, so the playground and
@@ -24,6 +26,7 @@ use okkama_compiler::lowering::{self, LoadedModule, ModuleLoader};
 use okkama_compiler::source::SourceFile;
 use okkama_compiler::syntax::ParseMode;
 use okkama_compiler::syntax::print::{Format, PrintOptions};
+use okkama_runtime_core::failure::{Site, Uncaught};
 use serde_json::{Value, json};
 
 mod bundle {
@@ -52,6 +55,19 @@ pub struct Workspace {
     files: BTreeMap<String, String>,
     import_dirs: Vec<String>,
     parsed: RefCell<HashMap<String, Parsed>>,
+    built: RefCell<Option<Built>>,
+}
+
+/// The last [`Workspace::build`]: the SPB and the module its stacks are placed by.
+struct Built {
+    module: okkama_compiler::ir::Module,
+    spb: Vec<u8>,
+}
+
+impl std::fmt::Debug for Built {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Built").field("spb", &self.spb.len()).finish_non_exhaustive()
+    }
 }
 
 /// The text a file last parsed from and its inspection.
@@ -69,7 +85,7 @@ impl Workspace {
     pub fn new(std_root: &str) -> Self {
         let std_root = normalize(std_root);
         let std = bundle::FILES.iter().map(|(path, text)| (join(&std_root, path), *text)).collect();
-        Self { std_root, std, files: BTreeMap::new(), import_dirs: Vec::new(), parsed: RefCell::default() }
+        Self { std_root, std, files: BTreeMap::new(), import_dirs: Vec::new(), parsed: RefCell::default(), built: RefCell::default() }
     }
 
     /// The page's own files besides the one being checked, which it may import (`path` → text).
@@ -208,6 +224,53 @@ impl Workspace {
             }
             Err(error) => self.failure(Report::listed(vec![Finding::rendered(format!("{error}\n"))]), &source),
         }
+    }
+
+    /// `okkama build` for a run (#1125): request `{source, path, tests?}`; the warnings on `stderr` (or the
+    /// diagnostics, `ok` false), the size of the SPB in `spbBytes`. The workspace keeps the SPB ([`Self::built_spb`])
+    /// and the module; a failed build forgets the previous one.
+    pub fn build(&self, request: &Value) -> Value {
+        self.built.replace(None);
+        let source = match self.source(request) {
+            Ok(source) => source,
+            Err(response) => return response,
+        };
+        let name = source.name().rsplit('/').next().unwrap_or_default();
+        let name = name.strip_suffix(".ok").unwrap_or(name);
+        let compiled = commands::compile(std::slice::from_ref(&source), flag(request, "tests"), &mut |test_mode| self.loader(test_mode), name);
+        let (artifact, module, warnings) = match compiled {
+            Ok(compiled) => compiled,
+            Err(report) => return self.failure(report, &source),
+        };
+        let spb = artifact.main().to_vec();
+        let mut response = self.outcome(String::new(), warnings, &source);
+        response["spbBytes"] = json!(spb.len());
+        self.built.replace(Some(Built { module, spb }));
+        response
+    }
+
+    /// The SPB of the last successful [`Self::build`]; empty without one.
+    pub fn built_spb(&self) -> Vec<u8> {
+        self.built.borrow().as_ref().map(|built| built.spb.clone()).unwrap_or_default()
+    }
+
+    /// The text `okkama run` prints for a failed run of the last build (#1125): request `{report, uncaught?,
+    /// cwd?}`, where `report` and `uncaught` are what sparrow-wasm's `run` answered and `cwd` is the directory file
+    /// names are shown relative to; `{ok, text}`: the report with the failure's place and stack in the sources.
+    pub fn failure_text(&self, request: &Value) -> Value {
+        let report = text_field(request, "report").unwrap_or_default();
+        let uncaught = match request.get("uncaught") {
+            None | Some(Value::Null) => return json!({"ok": true, "text": report}),
+            Some(described) => match uncaught_from(described) {
+                Some(uncaught) => uncaught,
+                None => return usage("`uncaught` is not a failure sparrow-wasm described"),
+            },
+        };
+        let built = self.built.borrow();
+        let Some(built) = built.as_ref() else { return usage("nothing was built") };
+        let cwd = text_field(request, "cwd");
+        let text = uncaught.render_report(report, |sites| commands::trace::render_trace(&built.module, sites, cwd));
+        json!({"ok": true, "text": text})
     }
 
     /// Hover at `{source, path, line, character}` (zero-based, UTF-16): `{hover: {markdown, range} | null}`.
@@ -497,6 +560,33 @@ fn usage(message: &str) -> Value {
     json!({"ok": false, "code": EXIT_USAGE, "stdout": "", "stderr": text, "diagnostics": []})
 }
 
+/// sparrow-wasm's description of an uncaught failure (its `uncaught_json`): stacks as runs `[function, pc, count]`.
+fn uncaught_from(value: &Value) -> Option<Uncaught> {
+    fn sites(value: &Value) -> Option<Vec<Site>> {
+        let mut sites = Vec::new();
+        for run in value.as_array()? {
+            let [function, pc, count] = run.as_array()?.as_slice() else { return None };
+            let site = Site { function: u32::try_from(function.as_u64()?).ok()?, pc: u32::try_from(pc.as_u64()?).ok()? };
+            sites.extend(std::iter::repeat_n(site, usize::try_from(count.as_u64()?).ok()?));
+        }
+        Some(sites)
+    }
+    let mut cause_traces = Vec::new();
+    for cause in value.get("causeTraces")?.as_array()? {
+        let [offset, trace, omitted] = cause.as_array()?.as_slice() else { return None };
+        cause_traces.push((usize::try_from(offset.as_u64()?).ok()?, sites(trace)?, omitted.as_u64()?));
+    }
+    Some(Uncaught {
+        category: Uncaught::category_named(value.get("category")?.as_str()?)?,
+        error_type: value.get("errorType").and_then(Value::as_str).map(str::to_string),
+        message: value.get("message")?.as_str()?.to_string(),
+        trace: sites(value.get("trace")?)?,
+        trace_omitted: value.get("traceOmitted")?.as_u64()?,
+        trace_offset: usize::try_from(value.get("traceOffset")?.as_u64()?).ok()?,
+        cause_traces,
+    })
+}
+
 fn range(range: ide::Range) -> Value {
     json!({
         "start": {"line": range.start.line, "character": range.start.character},
@@ -617,6 +707,12 @@ pub fn set_files(request: &str) -> String {
     json!({"ok": true}).to_string()
 }
 
+/// The SPB of the last successful `build` (#1125), for sparrow-wasm's `run`; empty without one.
+pub fn built_spb() -> Vec<u8> {
+    forget_panic();
+    WORKSPACE.with(|workspace| workspace.borrow().built_spb())
+}
+
 /// The compiler's version, the bundled std and the IR passes in their order (`okkama ir --passes`, #1118):
 /// `{version, stdModules, stdBytes, passes}`.
 pub fn version() -> String {
@@ -679,6 +775,21 @@ mod bindings {
     #[wasm_bindgen]
     pub fn spa(request: &str) -> String {
         handle(request, Workspace::spa)
+    }
+
+    #[wasm_bindgen]
+    pub fn build(request: &str) -> String {
+        handle(request, Workspace::build)
+    }
+
+    #[wasm_bindgen(js_name = builtSpb)]
+    pub fn built_spb() -> Vec<u8> {
+        super::built_spb()
+    }
+
+    #[wasm_bindgen(js_name = failureText)]
+    pub fn failure_text(request: &str) -> String {
+        handle(request, Workspace::failure_text)
     }
 
     #[wasm_bindgen]

@@ -34,7 +34,6 @@ mod lsp;
 mod man;
 mod ocs;
 mod repl;
-mod trace;
 mod workers;
 
 use blade::manifest;
@@ -408,13 +407,9 @@ fn watchdog(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 
 /// main's result on the core: the exit status, or the failure report (exit 1).
 fn core_outcome(result: Result<i64, sparrow_core::Error>) -> Outcome {
-    match result {
-        Ok(value) => match u8::try_from(value) {
-            Ok(code) => Outcome { stdout: String::new(), stderr: String::new(), code },
-            Err(_) => Outcome::failure(format!("main() must return an int in 0..255, got {value}\n"), 1),
-        },
-        Err(error) => Outcome::failure(core::report(error), 1),
-    }
+    // One rule with the playground (#1125).
+    let (code, stderr) = okkama_runtime_core::failure::main_outcome(result.as_ref().copied().map_err(|error| error.0.as_str()));
+    Outcome { stdout: String::new(), stderr, code }
 }
 
 /// Диагностика отказа программы (код 1) и его место со стеком вызовов;
@@ -1641,7 +1636,7 @@ fn run_command(args: &[String]) -> Outcome {
     }
     // Номера функций и инструкций ядра совпадают с OIR: место — по исходнику.
     let (outcome, trace) = core_described(sparrow_core::run_described(bytes, arguments, false, command, limits));
-    with_trace(outcome, trace, |sites| trace::render_trace(&module, sites))
+    with_trace(outcome, trace, |sites| okkama_compiler::commands::trace::render_trace(&module, sites, current_dir().as_deref()))
 }
 
 /// The system import directories, in search order: `OKKAMA_IMPORT_DIRS`

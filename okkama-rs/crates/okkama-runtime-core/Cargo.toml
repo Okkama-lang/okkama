@@ -12,12 +12,16 @@ default = ["native"]
 allocation-scopes = ["dep:okkama-allocation-counter"]
 # Every native provider (#1078): what every runtime with a host turns on. The compiler leaves it off: it uses the
 # value types, exact arithmetic and constant folding only, and builds for wasm32 without it. The parts (#1124):
-native = ["providers", "host", "zstd", "brotli", "crypto"]
+native = ["providers", "host", "zstd", "brotli", "crypto", "cldr"]
 # The pure providers, which build for wasm32-unknown-unknown: the runtime tables (`data`), text, numbers, Unicode,
 # formats, JSON splitting, IDNA, time zones, CLDR, diff and layout, DEFLATE/zlib/gzip (miniz_oxide), UUIDs.
 providers = [
     "dep:miniz_oxide", "dep:unicode-normalization", "dep:unicode-segmentation", "dep:md-5", "dep:sha1",
 ]
+# The CLDR tables in the binary (#1125). Without them a family is there once its file is given
+# (`native::provide_cldr`): the playground's runtime fetches the files a program needs (0.9 MB compressed) instead of
+# carrying them within its 2 MB.
+cldr = ["providers"]
 # Digests through okkama-native's RustCrypto (pure Rust; aws-lc stays behind `host`).
 crypto = ["providers", "dep:okkama-native"]
 # The host: the process's directory and environment (`host`), the file system, signals, the terminal and

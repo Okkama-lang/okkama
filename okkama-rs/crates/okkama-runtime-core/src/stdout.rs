@@ -20,6 +20,44 @@ thread_local! {
     /// Standard error of a run inside [`capture_streams`] (#1121).
     static CAPTURE_ERROR: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
     static TO_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The receiver of a run inside [`with_sink`] (#1125).
+    static SINK: std::cell::RefCell<Option<Sink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The stream a [`with_sink`] receiver gets bytes of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Output,
+    Error,
+}
+
+/// What [`with_sink`] hands every write to, as it happens.
+pub type Sink = Box<dyn FnMut(Stream, &[u8])>;
+
+/// Hand what the run on the current VM thread writes to standard output and, through [`write_error`], to
+/// standard error to `sink` while `body` runs, each write as it happens and nothing buffered (#1125): the
+/// playground marks every piece with the time it was written. A [`capture`] inside it takes precedence; the
+/// guard restores the previous receiver even if `body` panics. The sink must not write here itself.
+pub fn with_sink<T>(sink: Sink, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Sink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SINK.with(|current| *current.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(SINK.with(|current| current.replace(Some(sink))));
+    body()
+}
+
+/// Hand `bytes` to the [`with_sink`] receiver in progress, if any.
+fn sunk(stream: Stream, bytes: &[u8]) -> bool {
+    SINK.with(|current| match current.borrow_mut().as_mut() {
+        Some(sink) => {
+            sink(stream, bytes);
+            true
+        }
+        None => false,
+    })
 }
 
 /// Send what the program on the current VM thread writes to standard output
@@ -81,7 +119,7 @@ pub fn write_error(bytes: &[u8]) -> io::Result<()> {
         }
         None => false,
     });
-    if captured {
+    if captured || sunk(Stream::Error, bytes) {
         return Ok(());
     }
     flush()?;
@@ -128,7 +166,8 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
         } else {
             false
         }
-    }) {
+    }) || sunk(Stream::Output, bytes)
+    {
         return Ok(());
     }
     if TO_STDERR.with(std::cell::Cell::get) {
@@ -157,7 +196,7 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
 
 /// Write out everything pending.
 pub fn flush() -> io::Result<()> {
-    if CAPTURE.with(|capture| capture.borrow().is_some()) {
+    if CAPTURE.with(|capture| capture.borrow().is_some()) || SINK.with(|current| current.borrow().is_some()) {
         return Ok(());
     }
     let mut pending = pending();
@@ -230,6 +269,25 @@ mod tests {
         });
         assert_eq!((output.as_slice(), error.as_slice()), (&b"out!"[..], &b"err"[..]));
         assert!(CAPTURE_ERROR.with(|capture| capture.borrow().is_none()));
+    }
+
+    /// #1125: a sink gets both streams' writes in order, apart, as they happen; a capture inside it wins,
+    /// and outside it nothing reaches the sink.
+    #[test]
+    fn a_sink_gets_both_streams_in_order() {
+        let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let into = pieces.clone();
+        let captured = with_sink(Box::new(move |stream, bytes| into.borrow_mut().push((stream, bytes.to_vec()))), || {
+            write(b"a").unwrap();
+            write_error(b"b").unwrap();
+            flush().unwrap();
+            write(b"c").unwrap();
+            capture(|| write(b"hidden").unwrap()).1
+        });
+        assert_eq!(captured, b"hidden");
+        let expected = vec![(Stream::Output, b"a".to_vec()), (Stream::Error, b"b".to_vec()), (Stream::Output, b"c".to_vec())];
+        assert_eq!(*pieces.borrow(), expected);
+        assert!(SINK.with(|current| current.borrow().is_none()));
     }
 
     /// #1011: after write_through nothing waits in the buffer, so a process

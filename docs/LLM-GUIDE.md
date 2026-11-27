@@ -147,7 +147,9 @@ okkama-new/
 │   │   │                       check/fmt/tokens/ast/ir/build report (one text for CLI and playground)
 │   │   ├── okkama-cli          `okkama`: run/build/exec/check/fmt/lint/lsp, OCS adapter
 │   │   ├── okkama-wasm         the playground (#1078): the compiler in wasm32, JSON API, bundled std,
-│   │   │                       no execution; parity test okkama-cli/tests/playground.rs
+│   │   │                       builds what sparrow-wasm runs; parity test okkama-cli/tests/playground.rs
+│   │   ├── sparrow-wasm        the playground's runtime (#1125): Sparrow's interpreter without jit/host
+│   │   │                       under `Limits::playground()`; parity test okkama-cli/tests/playground_run.rs
 │   │   ├── okkama-runtime-core native providers (feature `native`, default), bridge values, scheduler
 │   │   │                       `sched`; also compiler constants and shared exact arithmetic (the
 │   │   │                       compiler takes it without `native`, so it builds for wasm32)
@@ -197,7 +199,7 @@ Wave's `wasm` part and CI's "Playground wasm" job:
 |---|---|---|
 | `sparrow-core` | `jit` (default) | `jit.rs`, `jit/`, `code_memory.rs`, Cranelift, `Runtime.jit`, `rt_compile`, `frame_pointer!`; without it every function runs on the interpreter (`interp.rs`) and no code is published |
 | `sparrow-core` | `host` (default) | Tokio and the Tokio wait (`io.rs`), files, sockets, DNS, TLS, SQLite, processes, the environment (`host/native_{directory,dns,environment,file,file_state,fs,glob,multicast,network,process,root,sqlite,temporary,tls,udp,unix,watch}.rs`, `path_regex.rs`, `path_syntax.rs`, `process_host.rs`, `file_lock.rs`), process workers (`worker.rs`, `worker_process.rs`; without the host `worker_absent.rs` refuses a spawn as a runtime without a worker command does), the VM thread's host session, `run_worker`/`serve_worker`/`default_environment`, runtime-core's `native` and okkama-native's `aws-lc` |
-| `okkama-runtime-core` | `native` (default) = `providers` + `host` + `zstd` + `brotli` + `crypto` | `providers`: `data` and the pure providers of `native` (text, numbers, JSON splitting, Unicode, formats, time zones, CLDR, diff and layout, DEFLATE, UUIDs); `crypto`: digests (okkama-native's RustCrypto); `host`: the `host` module (cwd and environment), `native::{application, collation, fs, host, idna, net, signal, x509}` and aws-lc; `zstd`, `brotli`: the codecs (without them the format is refused as unsupported). The compiler takes none |
+| `okkama-runtime-core` | `native` (default) = `providers` + `host` + `zstd` + `brotli` + `crypto` + `cldr` | `providers`: `data` and the pure providers of `native` (text, numbers, JSON splitting, Unicode, formats, time zones, CLDR, diff and layout, DEFLATE, UUIDs); `crypto`: digests (okkama-native's RustCrypto); `host`: the `host` module (cwd and environment), `native::{application, collation, fs, host, idna, net, signal, x509}` and aws-lc; `zstd`, `brotli`: the codecs (without them the format is refused as unsupported); `cldr` (#1125): the CLDR tables in the binary, without it a family is there once `native::provide_cldr` gave its file (the playground fetches them, 0.9 MB gzip) and is a `core.cldr` `unavailable` failure before. The compiler takes none |
 | `okkama-native` | `aws-lc` (default) | `rsa_public`, `x509`, the RSA operations and the ECDSA verification fast path; without it they are refused as unsupported and the rest is pure RustCrypto. On wasm32 `getrandom` uses its `wasm_js` backend |
 
 ```sh
@@ -223,8 +225,20 @@ wasm-bindgen --target web --remove-name-section --remove-producers-section \
 ```
 
 `OUT/okkama_wasm.js` exports `check`, `fmt`, `tokens`, `ast`, `ir`, `spa`, `hover`, `complete`, `definition`,
-`signature` (each takes and returns JSON text), `setFiles` and `version`. `cargo check -p okkama-compiler
---target wasm32-unknown-unknown` keeps the compiler wasm-clean.
+`signature`, `build`, `failureText` (each takes and returns JSON text), `builtSpb`, `setFiles` and `version`.
+`cargo check -p okkama-compiler --target wasm32-unknown-unknown` keeps the compiler wasm-clean.
+
+The playground's runtime (#1125) is a second module, built alone (with okkama-wasm in one invocation the features
+of okkama-runtime-core unify): `cargo build -p sparrow-wasm --release --target wasm32-unknown-unknown`, then the
+same `wasm-bindgen`. It exports `run(spb, request)`, `requirements(spb)`, `provide(name, bytes)`, `version` and
+`lastPanic`. A run: `okkama_wasm.build({source, path})` → `builtSpb()` → `sparrow_wasm.requirements` (refused
+natives, CLDR files to `provide`) → `sparrow_wasm.run(spb, {stdin})` → `{exit, output: [{stream, text, t}],
+report, uncaught}` → for a failure `okkama_wasm.failureText({report, uncaught})`, the text `okkama run` prints.
+Budget: 2.0 MB gzip (CI checks it). `node okkama-rs/tools/playground/smoke.mjs DIR` runs both modules built with
+`wasm-bindgen --target nodejs --out-dir DIR`. The playground's profile is data (`sparrow_core::budget::PLAYGROUND`):
+natively `Limits::playground()` refuses the same natives with the same text; a native added to the ABI must fit
+the profile's consistency test (`budget::tests::the_playground_profile_is_what_the_pure_build_provides`, build
+without default features).
 
 Running programs:
 

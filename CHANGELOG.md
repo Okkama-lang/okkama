@@ -7,6 +7,23 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 ## [Unreleased]
 
 ### Added
+- **The playground runs programs (#1125, sixth part of #1079).** A new crate `sparrow-wasm` (cdylib, wasm-bindgen)
+  is Sparrow without the JIT and the host: it runs the SPB that okkama-wasm's new `build` makes on the interpreter
+  under `Limits::playground()`, with standard input from the request and every write to stdout and stderr marked
+  with its moment on the virtual timeline (a sleep shows as time between pieces and is not waited for). The
+  playground's profile (`sparrow_core::budget::PLAYGROUND`) is data, not a build flag: clocks and secure
+  randomness are allowed, standard input reads the buffer, files, sockets, processes, workers, the environment and
+  the terminal are refused as "Native X is not available in the playground" (natively too under the same limits),
+  and so are collation and X.509, whose providers are not in the module; budgets 5·10⁷ steps, 256 MiB of the
+  runtime's heap, 1 MiB of output. `requirements(spb)` names before a run what the profile refuses and the data
+  files to `provide`: the CLDR tables leave the module (okkama-runtime-core feature `cldr`, on in every native
+  build) and come only to a program that reads CLDR. okkama-wasm's `failureText` draws an uncaught failure's place
+  and stack in the sources as `okkama run` does: the stack renderer moved from the CLI to
+  `okkama_compiler::commands::trace`, `Uncaught` and the exit-status rule (`main_outcome`) to
+  okkama-runtime-core. The `secure_*` randomness natives moved into a pure provider of their own.
+  `okkama-cli/tests/playground_run.rs` runs the Bible's and the Book's examples on both sides: the 160 the profile
+  admits (8 of them failing, with stacks) give the CLI's stdout, stderr and exit status byte for byte. CI builds
+  the module alone, checks it within 2.0 MB gzip (1,854,972 bytes gzip of 3,749,216) and runs a Node smoke test of the two modules.
 - **The compiler builds for WebAssembly, for the playground (#1078).** A new crate `okkama-wasm` (cdylib,
   wasm-bindgen) answers `check`, `fmt`, `tokens`, `ast`, `ir` (with `passes`/`after`), `spa` (the Sparrow
   assembly of the built SPB), `hover`, `complete`, `definition` and `signature` as JSON, over the repository's

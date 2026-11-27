@@ -16,6 +16,8 @@ use crate::source::{SourceFile, Span};
 use crate::syntax::print::{Format, PrintOptions, print_program, tokens_json, tokens_text};
 use crate::syntax::{self, ParseMode, ParseOptions, ast, lexer, prune};
 
+pub mod trace;
+
 /// One diagnostic as a command prints it, and where it points.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
@@ -260,10 +262,21 @@ pub fn build<L: ModuleLoader>(
     loader: &mut impl FnMut(bool) -> L,
     artifact_name: &str,
 ) -> Result<(Artifact, Report), Report> {
+    compile(sources, tests, loader, artifact_name).map(|(artifact, _, warnings)| (artifact, warnings))
+}
+
+/// [`build`], keeping the module too (#1125): its debug information places a failure's stack in the source
+/// ([`trace::render_trace`]), as the playground does after a run.
+pub fn compile<L: ModuleLoader>(
+    sources: &[SourceFile],
+    tests: bool,
+    loader: &mut impl FnMut(bool) -> L,
+    artifact_name: &str,
+) -> Result<(Artifact, ir::Module, Report), Report> {
     let (module, warnings) = lower(sources, tests, loader)?;
     let options = CodegenOptions { artifact_name: artifact_name.to_string() };
     match codegen::generate(&module, Backend::Sparrow, &options) {
-        Ok(artifact) => Ok((artifact, warnings)),
+        Ok(artifact) => Ok((artifact, module, warnings)),
         Err(error) => Err(Report::listed(vec![Finding::rendered(format!("okkama: codegen error: {error}\n"))])),
     }
 }

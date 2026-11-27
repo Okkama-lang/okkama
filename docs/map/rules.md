@@ -25,7 +25,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - BLADE_OKKAMA — other: `project.rs`
 - CARGO_CFG_TARGET_ARCH — other: `okkama-wasm/build.rs`
 - CARGO_MANIFEST_DIR — compiler: `host.rs`, `ide/std_paths.rs`
-- CARGO_PKG_VERSION — other: `lib.rs`, `lib.rs`, `main.rs`
+- CARGO_PKG_VERSION — other: `lib.rs`, `lib.rs`, `main.rs` …
 - CHACHA20_POLY1305_SHA256 — sparrow: `host/native_tls.rs`
 - CHACHA20_POLY1305_SHA384 — sparrow: `host/native_tls.rs`
 - D04 — front: `analysis/thir.rs`

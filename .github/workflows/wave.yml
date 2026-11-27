@@ -40,8 +40,8 @@ jobs:
         # debug: the dev profile of the crates whose checks are debug-only (the ownership linearity check,
         # debug_assertions), off in the gate profile; before, only the nightly gate ran them (#1100, #1093).
         # wasm: Sparrow without its default features (the interpreter and the pure providers) for wasm32, next to the
-        # playground compiler's crates as CI's wasm job builds them, its suite natively, and the jit-only and
-        # host-only builds clean (#1124).
+        # playground compiler's crates and its runtime (sparrow-wasm, #1125) as CI's wasm job builds them, its suite
+        # natively, and the jit-only and host-only builds clean (#1124).
         part: [compiler, sparrow, cli, rest, clippy, debug, wasm]
     runs-on: ubuntu-24.04
     steps:
@@ -86,11 +86,14 @@ jobs:
               rustup target add wasm32-unknown-unknown
               cargo clippy --locked -p sparrow-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
               cargo clippy --locked -p okkama-compiler -p okkama-wasm --target wasm32-unknown-unknown -- -D warnings
+              cargo clippy --locked -p sparrow-wasm --target wasm32-unknown-unknown -- -D warnings
               cargo clippy $gate -p sparrow-core --no-default-features --all-targets -- -D warnings
               cargo clippy $gate -p sparrow-core --no-default-features --features jit --all-targets -- -D warnings
               cargo clippy $gate -p sparrow-core --no-default-features --features host --all-targets -- -D warnings
               cargo clippy $gate -p okkama-runtime-core --no-default-features --features providers,crypto --all-targets -- -D warnings
               cargo test $gate --no-fail-fast -p sparrow-core --no-default-features
+              # Alone, as the playground builds it: okkama-runtime-core without its CLDR tables (#1125).
+              cargo test $gate -p sparrow-wasm
               cargo test $gate -p sparrow-core --no-default-features --features jit --test timer_wait
               cargo test $gate -p okkama-runtime-core --no-default-features --features providers,crypto --lib ;;
           esac

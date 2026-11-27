@@ -995,3 +995,39 @@ every declaration is open (#1005, owner decision).
   frame pointer (#926). Ticket filed for the record.
 - **The interpreter's branches block.** With async running and every difference explained, the Wave's
   `sparrow-interp` matrix branch loses `continue-on-error` and the gate's interpreter step fails the gate.
+
+## The playground's runtime (#1125, 2026-11-27; design Fable §5, §8 item 6; implementer's choices; owner's §9 answers taken as recommended, awaiting the owner)
+
+- **Owner's decisions provisional.** §9 #4 (profile text "Native X is not available in the playground"), #6 (hashes
+  and HMAC in; ECC, AEAD, RSA, X.509 out — ECC's RustCrypto code is still linked through okkama-native, the profile
+  only names what has no provider), #7 (two modules, 2.0 MB gzip), #8 (workers refused:
+  `Limits::permits_workers`, "Process workers are not available in the playground"), #9 (real clocks through
+  `performance.now`/`Date.now`, real randomness through getrandom's `wasm_js`), #10 (5·10⁷ steps, 256 MiB
+  `MemoryScope::Runtime`, 1 MiB output) are implemented as recommended and await the owner.
+- **No `okkama run --profile playground` (#5).** The parity test calls the two crates' Rust functions (rlib), so the
+  CLI surface was not needed; not built.
+- **The profile is data beside `PURE`.** `Profile {name, groups, allowed, refused, budgets}`, checked first in
+  `Limits::permits`; `allowed` names natives of refused groups the playground offers: `stdin_*` (the buffer) and
+  natives that compute although their module sits in a group (`input_state`, net `ip_*`, postgres `pg_page*`,
+  `timezone_local_*`, `system_platform/architecture/byte_order`). The consistency test (build without default
+  features) requires offers ⇔ `natives::supported`. Reclassifying those natives in `Reach::classify` was left
+  out: the companion catalogue of the compiler (#569 C7) agrees with the groups by test, so it is a compiler
+  change; the profile does not depend on it.
+- **CLDR out of the module.** Measured 2.80 MB gzip with the tables in; the five CLDR files are 0.94 MB of gzip
+  that does not compress further. okkama-runtime-core feature `cldr` (in `native`) embeds them; without it
+  `native::provide_cldr(file, gzip)` installs a family (checked: gzip, UTF-8, three-part records), and a table of a
+  missing family fails `core.cldr`/`unavailable`. `requirements` lists all five files for any program declaring a
+  CLDR native: which family it reads shows only when it runs. tzdb, Unicode, IDNA and PSL stay in.
+- **Paths stay under `host`.** `host/path_syntax.rs` depends on `path_regex.rs` (fancy-regex) and serves the fs,
+  glob, temporary and watch providers: not cheap to move, and the playground refuses fs anyway.
+- **Output as pieces.** `stdout::with_sink` hands every write of both streams to a closure on the VM thread (after
+  `capture`, before buffering); `run_embedded` marks each piece with nanoseconds since the run's start on
+  `clock::Instant` and joins consecutive writes of one stream at the same moment. sparrow-wasm turns pieces into
+  text holding back a character split between writes of one stream. The whole list comes back when the run ends
+  (one synchronous call); streaming through an import during the run is the page ticket's (§8 item 7).
+- **Uncaught across modules.** sparrow-wasm describes the failure as JSON (`category`, `errorType`, `message`,
+  stacks as runs `[function, pc, count]`, offsets, causes); okkama-wasm reads it back (`Uncaught::category_named`)
+  and renders with the module of its last `build`. `main_outcome` is the CLI's 0..255 rule and report newline.
+- **stdin.** `Heap::set_stdin` puts a `Cursor` in `Stdin`; `Stdin::read` reads it instead of the process's; after
+  it, end of input. The playground always passes a buffer (empty without the field).
+

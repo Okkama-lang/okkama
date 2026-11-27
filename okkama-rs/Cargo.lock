@@ -1262,6 +1262,7 @@ dependencies = [
  "rustyline",
  "serde_json",
  "sparrow-core",
+ "sparrow-wasm",
 ]
 
 [[package]]
@@ -1352,6 +1353,7 @@ name = "okkama-wasm"
 version = "0.6.5"
 dependencies = [
  "okkama-compiler",
+ "okkama-runtime-core",
  "okkama-sparrow",
  "serde_json",
  "wasm-bindgen",
@@ -1960,6 +1962,17 @@ dependencies = [
  "unicode-normalization",
  "wasmtime-internal-jit-icache-coherence",
  "zeroize",
+]
+
+[[package]]
+name = "sparrow-wasm"
+version = "0.6.5"
+dependencies = [
+ "okkama-runtime-core",
+ "okkama-sparrow",
+ "serde_json",
+ "sparrow-core",
+ "wasm-bindgen",
 ]
 
 [[package]]

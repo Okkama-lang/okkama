@@ -2,6 +2,15 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1125 Playground runtime (feature/1125 from release/066, rebased on f5e49d602, not committed; worktree
+  okkama-work/hf-1125, targets t-1125 and t-1125-nd): crate `sparrow-wasm` (run/requirements/provide/version/
+  lastPanic, clocks from the page); `budget::Profile`/`PLAYGROUND`/`Limits::playground()`/`permits_workers`;
+  `stdout::with_sink`; `run_embedded`, `program_natives`, `refused_natives`, `Heap::set_stdin`; `native/secure.rs`;
+  runtime-core feature `cldr` + `provide_cldr`, `gunzip_checked`; `Uncaught`/`main_outcome` in runtime-core
+  `failure.rs`; `okkama_compiler::commands::{compile, trace}`; okkama-wasm `build`/`builtSpb`/`failureText`;
+  `okkama-cli/tests/playground_run.rs` (160 compared, 8 failing, 10 refused, all equal); `tools/playground/
+  smoke.mjs`; CI wasm job and Wave `wasm` part. Size: sparrow_wasm_bg.wasm 3,749,216 bytes, 1,854,972 gzip (budget 2,000,000; okkama_wasm_bg.wasm 2,437,086 gzip). Owner's §9 #4, #6–#10
+  provisional (decisions.md); no `--profile playground` flag.
 - [x] #1122 follow-up (feature/1122b from release/066 9bbd43bce, not committed; worktree okkama-work/hf-1122b,
   target t-1122b): release/066 red after #1122. `Runtime::extend` loads an interpreter session's extension
   without the pointer-free proofs (3 session tests of the no-default suite; new

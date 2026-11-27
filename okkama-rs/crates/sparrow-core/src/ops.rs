@@ -1167,11 +1167,9 @@ pub extern "C" fn rt_exec(
         // Spawning runs the worker's driver now: it needs the context.
         I::WorkerSpawn { entry, args, direct, .. } => {
             let arguments: Vec<Word> = args.iter().map(value).collect();
-            match &runtime.limits.natives {
-                Some(allowed) if !allowed.contains(&crate::budget::NativeGroup::Process) => {
-                    Err("Process workers need the Process permission".to_string())
-                }
-                _ => crate::worker::spawn(runtime, &mut *ctx, value(entry), &arguments, *direct),
+            match runtime.limits.permits_workers() {
+                Err(message) => Err(message),
+                Ok(()) => crate::worker::spawn(runtime, &mut *ctx, value(entry), &arguments, *direct),
             }
         }
         // The init of a constant runs machine code: it needs the context.

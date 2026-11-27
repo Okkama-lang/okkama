@@ -1,6 +1,6 @@
 [package]
 name = "okkama-wasm"
-description = "The Okkama compiler for the playground (#1078): check, fmt, the debug views and the IDE layer over a bundled std, as a JSON API in WebAssembly; nothing runs"
+description = "The Okkama compiler for the playground (#1078): check, fmt, the debug views, the IDE layer and the builds sparrow-wasm runs, over a bundled std, as a JSON API in WebAssembly"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 okkama-compiler = { path = "../okkama-compiler" }
 okkama-sparrow = { path = "../okkama-sparrow" }
+# The uncaught failure a run of sparrow-wasm describes, drawn here with the module's sources (#1125).
+okkama-runtime-core = { path = "../okkama-runtime-core", default-features = false }
 serde_json = "1"
 
 # Only the wasm build exports the API to JavaScript; native code calls the Rust functions.

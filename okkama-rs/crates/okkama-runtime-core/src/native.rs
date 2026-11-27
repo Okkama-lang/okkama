@@ -34,6 +34,8 @@ pub(crate) mod misc;
 #[cfg(feature = "host")]
 pub(crate) mod net;
 pub mod regex;
+#[cfg(feature = "crypto")]
+pub(crate) mod secure;
 #[cfg(feature = "host")]
 pub(crate) mod signal;
 pub(crate) mod text;
@@ -101,6 +103,8 @@ pub fn execute(
         #[cfg(feature = "host")]
         Some(Provider::Signal) => signal::execute(native, args),
         Some(Provider::Cldr) => cldr::execute(native, args),
+        #[cfg(feature = "crypto")]
+        Some(Provider::Secure) => secure::execute(native, args),
         None => Err(not_provided(native)),
     }
 }
@@ -109,6 +113,15 @@ pub fn execute(
 /// with [`Error::Unsupported`]. Sparrow checks its `ORIGIN` routes against it.
 pub fn provides(native: Native) -> bool {
     provider(native).is_some()
+}
+
+/// The CLDR files and their families (#1125: what a program that reads CLDR needs, in a build without them).
+pub use cldr::FILES as CLDR_FILES;
+
+/// Give the CLDR family of `file` (`cldr-dates.dat`: gzip text, as in `data/`) to a build without the tables
+/// (feature `cldr` off); a family already there stays. The playground fetches the files a program needs first.
+pub fn provide_cldr(file: &str, gzip: &[u8]) -> Result<(), String> {
+    cldr::provide(file, gzip)
 }
 
 /// The refusal for a native Sparrow provides itself (#1016).
@@ -142,6 +155,8 @@ enum Provider {
     #[cfg(feature = "host")]
     Signal,
     Cldr,
+    #[cfg(feature = "crypto")]
+    Secure,
 }
 
 /// Provider native по таблице, заполненной один раз [`route`]: при вызове —
@@ -173,6 +188,8 @@ fn route(native: Native) -> Option<Provider> {
         "runtime/json" if name.starts_with("json_split_") => Provider::Json,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => Provider::Math,
         "runtime/random" => Provider::Math,
+        #[cfg(feature = "crypto")]
+        "runtime/system" if name.starts_with("secure_") => Provider::Secure,
         #[cfg(feature = "host")]
         "runtime/system"
             if !matches!(

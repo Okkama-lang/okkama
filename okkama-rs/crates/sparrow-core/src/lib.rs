@@ -167,6 +167,86 @@ pub fn observe(engine: Engine, bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: 
     })
 }
 
+/// What an embedding gives a run (#1125: the playground, and the native run that checks it).
+#[derive(Debug, Default)]
+pub struct Embedding {
+    pub arguments: Vec<Vec<u8>>,
+    /// Standard input: these bytes, then end of input; `None` reads the process's.
+    pub stdin: Option<Vec<u8>>,
+    pub limits: budget::Limits,
+}
+
+/// One write of a run to a stream, `nanos` after the run started on Sparrow's clock (`clock`; on wasm32 the
+/// virtual timeline, so a sleep shows as time between pieces without being waited for).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Piece {
+    pub stream: stdout::Stream,
+    pub bytes: Vec<u8>,
+    pub nanos: u64,
+}
+
+/// What an embedded run shows: `main`'s result, or the report and the uncaught failure, and the program's writes
+/// in order (consecutive writes to one stream at one moment are one piece).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Embedded {
+    pub result: Result<i64, (String, Option<Uncaught>)>,
+    pub output: Vec<Piece>,
+}
+
+/// Run on the interpreter, as the playground does (#1125), under `embedding`'s limits, with its standard input,
+/// every write marked with its moment.
+pub fn run_embedded(bytes: Vec<u8>, embedding: Embedding) -> Result<Embedded, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
+        let Embedding { arguments, stdin, limits } = embedding;
+        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
+        runtime.use_engine(Engine::Interpreter);
+        if let (Some(bytes), Some(host)) = (stdin, runtime.host.as_mut()) {
+            host.set_stdin(bytes);
+        }
+        let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Piece>::new()));
+        let into = pieces.clone();
+        let start = clock::Instant::now();
+        let sink: stdout::Sink = Box::new(move |stream, bytes| {
+            if bytes.is_empty() {
+                return;
+            }
+            let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let mut pieces = into.borrow_mut();
+            match pieces.last_mut() {
+                Some(last) if last.stream == stream && last.nanos == nanos => last.bytes.extend_from_slice(bytes),
+                _ => pieces.push(Piece { stream, bytes: bytes.to_vec(), nanos }),
+            }
+        });
+        let result = stdout::with_sink(sink, || execute(&mut runtime)).map_err(|failure| {
+            let (error, uncaught) = *failure;
+            (error.0, uncaught)
+        });
+        let output = std::mem::take(&mut *pieces.borrow_mut());
+        Ok(Embedded { result, output })
+    })
+}
+
+/// The natives an SPB program declares, each once, in the ABI's order (#1125: what the playground needs for it).
+pub fn program_natives(bytes: &[u8]) -> Result<Vec<okkama_runtime_abi::Native>, Error> {
+    let DecodedProgram::Legacy(program) = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
+    let mut natives: Vec<okkama_runtime_abi::Native> = program.functions.iter()
+        .filter_map(|function| function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve))
+        .collect();
+    natives.sort_unstable_by_key(|native| *native as usize);
+    natives.dedup();
+    Ok(natives)
+}
+
+/// The natives of an SPB program that `profile` refuses, by symbol, sorted, each once (#1125: the playground warns
+/// before a run, and the site marks the examples that run).
+pub fn refused_natives(bytes: &[u8], profile: &budget::Profile) -> Result<Vec<&'static str>, Error> {
+    let mut refused: Vec<&'static str> =
+        program_natives(bytes)?.into_iter().filter(|native| !profile.offers(*native)).map(|native| native.symbol()).collect();
+    refused.sort_unstable();
+    Ok(refused)
+}
+
 /// CLI execution result. Loading failures remain the outer `Err`; runtime
 /// failures carry the report prefix and an already rendered Sparrow trace
 /// followed by cause reports with their own stacks. With tracing disabled,
@@ -297,68 +377,9 @@ fn execute(runtime: &mut Box<runtime::Runtime>) -> Result<i64, Box<(Error, Optio
     result.map_err(|error| Box::new((error, runtime.uncaught.take())))
 }
 
-/// An uncaught failure of `main`: its OCS category (`uncaught-error`,
-/// `runtime`, `panic`), the error type of a thrown value or `NativeFailure`,
-/// its message, and the activations it unwound through, innermost first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Uncaught {
-    pub category: &'static str,
-    pub error_type: Option<String>,
-    pub message: String,
-    /// Function and instruction numbers; they are shared with OIR, so a
-    /// compiler can map them to source (`okkama-cli/src/trace.rs`).
-    pub trace: Vec<Site>,
-    /// Activations of the root's unwind past the recorded limit (#1009),
-    /// missing between the innermost and the outermost ones of `trace` (#1034).
-    pub trace_omitted: u64,
-    /// Byte offset after the root and its secondaries in the plain report,
-    /// before its cause entries.
-    pub trace_offset: usize,
-    /// Byte offsets after cause entries, their original unwind stacks and the
-    /// activations each left out (#1034). Secondary cleanup failures
-    /// deliberately have no diagnostic stack.
-    pub cause_traces: Vec<(usize, Vec<Site>, u64)>,
-}
-
-impl Uncaught {
-    /// Add source or SPB stacks to the plain report, keeping cause stacks
-    /// indented under their entries. Only called when traces are requested.
-    pub fn render_report(&self, report: &str, render: impl Fn(&[Site]) -> String) -> String {
-        let mut output = String::new();
-        let mut start = 0;
-        let mut traces: Vec<_> = self.cause_traces.iter()
-            .map(|(offset, trace, omitted)| (*offset, trace.as_slice(), *omitted, "  "))
-            .chain(std::iter::once((self.trace_offset, self.trace.as_slice(), self.trace_omitted, "")))
-            .collect();
-        traces.sort_by_key(|entry| entry.0);
-        for (offset, trace, omitted, indent) in traces {
-            output.push_str(&report[start..offset]);
-            let mut stack = render(trace);
-            // The stack shows the innermost and the outermost activations; the
-            // ones between were only counted (#1009, #1034).
-            if omitted > 0 && !stack.is_empty() {
-                stack = format!(
-                    "{}\n... and {omitted} more activations in the middle, not recorded\n",
-                    stack.trim_end_matches('\n')
-                );
-            }
-            if !stack.is_empty() {
-                output.push('\n');
-                for (index, line) in stack.trim_end_matches('\n').split('\n').enumerate() {
-                    if index != 0 {
-                        output.push('\n');
-                    }
-                    output.push_str(indent);
-                    output.push_str(line);
-                }
-            }
-            start = offset;
-        }
-        output.push_str(&report[start..]);
-        output
-    }
-}
-
+/// An uncaught failure of `main` (`okkama_runtime_core::failure::Uncaught` since #1125: the playground's compiler
+/// renders it without Sparrow).
+pub use okkama_runtime_core::failure::Uncaught;
 pub use okkama_runtime_core::failure::Site;
 pub use okkama_runtime_core::stdout;
 
@@ -820,6 +841,9 @@ fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecE
 
 #[cfg(test)]
 mod session_tests;
+
+#[cfg(test)]
+mod embedding_tests;
 
 #[cfg(test)]
 mod uncaught_report_tests {
