@@ -3044,6 +3044,60 @@ mod tests {
         }
     }
 
+    /// #1148: the vendored num-bigint's addition (an ADCS chain on aarch64) gives the sums a digit-by-digit
+    /// reference gives: every length up to 41 digits (whole steps of four and remainders), carries that run
+    /// through all-ones digits, and both signs.
+    #[test]
+    fn bigint_addition_matches_a_reference_1148() {
+        use num_bigint::{BigInt, BigUint, Sign};
+        fn reference(a: &[u64], b: &[u64]) -> Vec<u64> {
+            let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+            let mut out = Vec::with_capacity(long.len() + 1);
+            let mut carry = 0u128;
+            for (i, &x) in long.iter().enumerate() {
+                let sum = x as u128 + *short.get(i).unwrap_or(&0) as u128 + carry;
+                out.push(sum as u64);
+                carry = sum >> 64;
+            }
+            out.push(carry as u64);
+            out
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for la in 0..=41usize {
+            for lb in 0..=la {
+                for pattern in 0..3 {
+                    let digit = |i: usize, next: &mut dyn FnMut() -> u64| match pattern {
+                        0 => u64::MAX,
+                        1 => if i % 5 == 4 { 0 } else { u64::MAX },
+                        _ => next(),
+                    };
+                    let a: Vec<u64> = (0..la).map(|i| digit(i, &mut next)).collect();
+                    let b: Vec<u64> = (0..lb).map(|i| if pattern == 0 { 1 } else { digit(i, &mut next) }).collect();
+                    let to_big = |digits: &[u64]| {
+                        BigUint::from_slice(&digits.iter().flat_map(|&d| [d as u32, (d >> 32) as u32]).collect::<Vec<_>>())
+                    };
+                    let expected = to_big(&reference(&a, &b));
+                    let (x, y) = (to_big(&a), to_big(&b));
+                    assert_eq!(&x + &y, expected, "{la} + {lb} digits, pattern {pattern}");
+                    assert_eq!(&y + &x, expected);
+                    let mut z = x.clone();
+                    z += &y;
+                    assert_eq!(z, expected);
+                    // Signed: -x + -y == -(x + y), and (x + y) - y == x.
+                    let (sx, sy) = (BigInt::from_biguint(Sign::Minus, x.clone()), BigInt::from_biguint(Sign::Minus, y.clone()));
+                    assert_eq!(sx + sy, BigInt::from_biguint(Sign::Minus, expected.clone()));
+                    assert_eq!(&expected - &y, x);
+                }
+            }
+        }
+    }
+
     /// #1114: big integers and payloads live only on owner pages, other cells only on general pages, so a dead
     /// general cell never owns Rust memory; every owner still drops in the collection that finds it dead.
     #[test]

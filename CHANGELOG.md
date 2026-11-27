@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Long integer addition twice as fast on aarch64 (#1148).** num-bigint adds digits on aarch64 through a
+  double-width sum (about 4 cycles per 64-bit digit; only x86_64 has a fast path). Okkama now carries num-bigint
+  0.4.8 in `okkama-rs/vendor/` with an ADCS chain over four digits per step, until upstream has one (owner's
+  decision). 04-bigint steady 201 → 101 ms with the same output (Go: 100 ms); new micro cell `int-big-add`
+  (eight additions of a 4096-bit integer per iteration).
 - **The sweep skips pages with no live cell (#1114).** Big integers and payloads get page classes of their own,
   so a general page never holds Rust memory to release. Marking sets a byte per 4 KiB of the pages' span, and a
   general page whose bytes stay clear goes back whole without reading a cell; its free list is threaded when the

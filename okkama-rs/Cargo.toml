@@ -1,5 +1,7 @@
 [workspace]
 resolver = "3"
+# #1148: vendored dependencies are not members (their tests and lints are their own).
+exclude = ["vendor"]
 members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace", "crates/okkama-wasm", "crates/sparrow-wasm"]
 
 [workspace.package]
@@ -78,3 +80,7 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.regalloc2]
 opt-level = 2
+
+# #1148: num-bigint 0.4.8 with an ADCS addition path on aarch64 (vendor/num-bigint/OKKAMA.md); upstream PR pending.
+[patch.crates-io]
+num-bigint = { path = "vendor/num-bigint" }

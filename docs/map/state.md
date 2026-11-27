@@ -7,6 +7,9 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1148 bigint addition: vendor/num-bigint (0.4.8 + `add_lo` ADCS on aarch64, OKKAMA.md), workspace
+  `exclude = ["vendor"]`, `[patch.crates-io]`; test `heap::tests::bigint_addition_matches_a_reference_1148`
+  (mutation `cset cc` caught); micro cell int-big-add + oracle. 04-bigint 201 → 101 ms. Upstream PR: owner yes.
 - [x] #1114 GC: steps 1–2 done (design Fable on the ticket): `OWNER_BIG`/`OWNER_PAYLOAD`, `CELL_WORDS`,
   `Liveness` (granule 4 KiB, cap 2^20), `Marker`, `Reserved { head, bytes, page, threaded }`, `thread()`,
   `dead_pages_unread`; poison after `release_empty_pages`. Tests `heap::tests::*_1114` (3, mutations: owner

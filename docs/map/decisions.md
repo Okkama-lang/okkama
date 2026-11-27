@@ -1298,6 +1298,11 @@ every declaration is open (#1005, owner decision).
   by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
   instructions.
 
+## Vendored num-bigint (#1148, 2026-11-28; owner: vendor + upstream PR)
+
+- num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with one change (aarch64 ADCS addition); it is not a
+  workspace member. Drop it and the patch entry when upstream ships an equivalent.
+
 ## Sweep by page (#1114, 2026-11-28; owner: measured prototype; design Fable)
 
 - Payloads and big integers live on owner pages; general pages never hold Rust state. Owner pages are swept

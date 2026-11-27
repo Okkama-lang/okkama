@@ -150,6 +150,7 @@ def contribution(name, i):
     if name=='float':return (3*i)%7
     if name in {'for-loop','method-call'}:return i%7
     if name=='int-big':return ((2*(9223372036854775807+i))%1000)%7
+    if name=='int-big-add':return (8*18446744073709551557**64+i)%7
     if name=='int-small':return rem(i*3+i%5-7,7)
     if name=='map-index':return (i+2)%7
     if name=='map-int-literal':return (i+3)%7
