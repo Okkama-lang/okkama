@@ -1049,6 +1049,12 @@ pub(crate) enum NaturalOrder {
 pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: NaturalOrder)
     -> Result<(), crate::budget::Exhausted>
 {
+    // #1150: small ints with no budget to poll: their tagged words order as the ints (2v + 1), and equal ones are
+    // indistinguishable, so an unstable sort of the words is the stable sort of the values.
+    if order == NaturalOrder::Int && !runtime.polled() && items.iter().all(|&word| word & 1 == 1) {
+        items.sort_unstable_by_key(|&word| word as i64);
+        return Ok(());
+    }
     let mut compared = 0u32;
     sort_or_stop(items, |&a, &b| {
         compared = compared.wrapping_add(1);
@@ -1226,6 +1232,42 @@ mod sort_tests {
             if merge { merge_sort_or_stop(&mut items, compare) } else { sort_or_stop(&mut items, compare) }.expect("no stop");
             assert_eq!(items.len(), 10_001);
             assert!(items.windows(2).all(|w| w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 < w[1].1)), "merge: {merge}");
+        }
+    }
+
+    /// #1150: small ints sort by their tagged words, with or without big ones among them: the same order as their
+    /// values, negatives, duplicates and the small range's ends included.
+    #[test]
+    fn ints_sort_in_value_order_small_or_big() {
+        use crate::word;
+        let program = okkama_sparrow::assemble(
+            "sparrow 18\nmodule \"sort\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
+        )
+        .unwrap();
+        let mut runtime = crate::runtime::Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut values: Vec<i64> = (0..5000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % 2001) as i64 - 1000
+            })
+            .collect();
+        values.extend([word::SMALL_MIN, word::SMALL_MAX, 0, -1, word::SMALL_MIN, 7, 7]);
+        for big in [false, true] {
+            let mut items: Vec<u64> = values.iter().map(|&n| word::small(n).unwrap()).collect();
+            if big {
+                items.push(runtime.heap.big(num_bigint::BigInt::from(word::SMALL_MAX) * 4));
+                items.push(runtime.heap.big(num_bigint::BigInt::from(word::SMALL_MIN) * 4));
+            }
+            super::sort_natural(&runtime, &mut items, super::NaturalOrder::Int).unwrap();
+            let sorted: Vec<num_bigint::BigInt> = items.iter().map(|&w| match runtime.heap.integer(w) {
+                crate::heap::Integer::Small(n) => num_bigint::BigInt::from(n),
+                crate::heap::Integer::Big(n) => n.clone(),
+            }).collect();
+            assert!(sorted.windows(2).all(|pair| pair[0] <= pair[1]), "big: {big}");
+            assert_eq!(sorted.len(), values.len() + if big { 2 } else { 0 });
         }
     }
 }
