@@ -2062,10 +2062,14 @@ mod length_tests {
     fn header_lengths_up_to_u32_max_pass_and_longer_ones_stop() {
         assert_eq!(length(0), 0);
         assert_eq!(length(u32::MAX as usize), u32::MAX);
-        let longer = std::panic::catch_unwind(|| length(u32::MAX as usize + 1));
-        let message = longer.expect_err("must stop");
-        let text = message.downcast_ref::<String>().cloned().unwrap_or_default();
-        assert!(text.contains("passes the 4 GiB limit"), "{text}");
+        // A 32-bit target (#1131) has no longer length to give.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let longer = std::panic::catch_unwind(|| length(u32::MAX as usize + 1));
+            let message = longer.expect_err("must stop");
+            let text = message.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(text.contains("passes the 4 GiB limit"), "{text}");
+        }
     }
 }
 

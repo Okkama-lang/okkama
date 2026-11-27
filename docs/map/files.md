@@ -121,14 +121,18 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
+<<<<<<< HEAD
 ## sparrow — 68 files, 36899 lines
+=======
+## sparrow — 68 files, 36918 lines
+>>>>>>> 9ed55b3fb (Sparrow: a map key's depth walks a stack of its own — Runtime::is_key/key, Key::cmp_other, owned_bytes, data_bytes and the drop of nested object keys (Key::Object holds Fields, whose Drop takes nested levels apart one at a time) keep an explicit stack instead of recursing, out of line of the hot paths, with the same results (300 keys of every kind against the recursive definitions); a key 100 000 levels deep works on a 1 MiB stack, with and without the JIT; micro A/B of the 14 map cells −0.6% (#1130); on 32-bit targets the suite without default features runs on i686 (static musl, rust-lld; the Wave's wasm part runs it) and found that a 1 GiB VM stack per run exhausts a 32-bit address space (STACK_BYTES is 128 MiB there) and a 64-bit-only length test (#1131))
 
 - `sparrow-core/src/budget.rs` 397 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/heap.rs` 2324 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/heap.rs` 2327 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1103 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
@@ -136,7 +140,11 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/lib.rs` 724 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
+<<<<<<< HEAD
 - `sparrow-core/src/ops.rs` 1803 — Exact semantics of value instructions, where machine code has no inline
+=======
+- `sparrow-core/src/ops.rs` 1955 — Exact semantics of value instructions, where machine code has no inline
+>>>>>>> 9ed55b3fb (Sparrow: a map key's depth walks a stack of its own — Runtime::is_key/key, Key::cmp_other, owned_bytes, data_bytes and the drop of nested object keys (Key::Object holds Fields, whose Drop takes nested levels apart one at a time) keep an explicit stack instead of recursing, out of line of the hot paths, with the same results (300 keys of every kind against the recursive definitions); a key 100 000 levels deep works on a 1 MiB stack, with and without the JIT; micro A/B of the 14 map cells −0.6% (#1130); on 32-bit targets the suite without default features runs on i686 (static musl, rust-lld; the Wave's wasm part runs it) and found that a 1 GiB VM stack per run exhausts a 32-bit address space (STACK_BYTES is 128 MiB there) and a 64-bit-only length test (#1131))
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 398 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 403 — Static facts about a loaded SPB program: the machine representation of every

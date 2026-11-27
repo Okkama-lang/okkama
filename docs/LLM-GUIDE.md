@@ -206,6 +206,10 @@ Wave's `wasm` part and CI's "Playground wasm" job:
 cargo check -p sparrow-core --no-default-features --target wasm32-unknown-unknown   # the playground's runtime
 cargo test -p sparrow-core --no-default-features --lib <filter>      # natively: the interpreter is the only engine
 cargo test -p sparrow-core --no-default-features --features jit --test timer_wait   # the sleeping wait
+# 32 bits, wasm32's pointer width (#1131): a static i686 build, run in a linux/386 container (or the Wave's runner)
+CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_LINKER=rust-lld cargo test -p sparrow-core --no-default-features \
+    --target i686-unknown-linux-musl --lib <filter> --no-run
+docker run --rm --platform linux/386 --network none -v $PWD:$PWD:ro -v BIN:/t/bin:ro -w $PWD/okkama-rs/crates/sparrow-core alpine /t/bin <filter>
 ```
 
 Without `jit` every test runs on the interpreter (async bodies and handlers too since #1121/#1122), and the

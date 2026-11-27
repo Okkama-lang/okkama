@@ -16,6 +16,22 @@
   without the pointer-free proofs (3 session tests of the no-default suite; new
   `session_tests::a_session_on_the_interpreter_extends_as_on_the_jit`, fails with the fix removed); t/run.py
   `sparrow-interp-gc-stress` timeout ×10 (persistence/04 121 s locally on debug, CI ran out of 240 s).
+- [x] #1130 and #1131 (feature/1130 from release/066 9bbd43bce, not committed; worktree okkama-work/hf-1130,
+  target t-1130). #1130: `ops.rs` key walks on explicit stacks (`is_object_key`, `object_key`, `cmp_fields`,
+  `owned_object_bytes`, `object_data_bytes`, `Fields` + `take_apart` for the drop; all out of line), tests
+  `ops/key_depth_tests.rs` (100 000-deep key on a 1 MiB thread, default and no-default builds; 300 keys against
+  the recursive definitions); mutations caught: compare order, no drop walk, recursive build (stack overflow).
+  Micro A/B (toolchain.sh at seeds 1 and 2, release/066 9bbd43bce vs candidate, A1 B1 B2 A2, n = 25 000 and
+  100 000, 5 runs, 14 map cells): round 1 +1.5% (map-long-key +4%, the new walks inlined into `cmp_other`); with
+  them out of line, round 2 −0.6% geomean, slope −0.9%, every cell within ±7% and within the protocol's noise
+  (map-miss +3–4% in both rounds, inside its band; worth a look in the release A/B). Toolchains and results in
+  okkama-work/micro-tc/1130-{base,cand}{1,2}, 1130-results (round 2) and 1130-results-round1.
+  #1131: i686-unknown-linux-musl build of sparrow-core's no-default suite (rust-lld, host target added with
+  rustup), run in `linux/386` alpine containers by module filter and per integration file: every lib module and
+  all 13 files pass after the fixes (`budget` 155 s emulated in the gate profile). Found: 1 GiB VM stacks exhaust
+  the 32-bit address space (`STACK_BYTES` 128 MiB on 32-bit), `length_tests` 64-bit only, and a #1122 regression
+  in the no-JIT build (a session on the interpreter refused every extension: pointer-free proofs). Wave `wasm`
+  part runs the i686 suite on the runner (gate profile).
 - [x] #1122 Interpreter 3 (feature/1122 from release/066 29d0bf49e, not committed; worktree okkama-work/hf-1122,
   target t-1122): `interp::resume` (registers in the Future's frame, `RESUME`, a step per resumption), await,
   await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +

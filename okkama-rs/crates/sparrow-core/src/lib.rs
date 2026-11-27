@@ -67,8 +67,10 @@ pub mod worker;
 mod worker_process;
 
 /// Machine stack of the VM thread (R2): deep recursion is bounded by this
-/// reservation; physical memory is committed only as frames are used.
-pub const STACK_BYTES: u64 = 1 << 30;
+/// reservation; physical memory is committed only as frames are used. 1 GiB on
+/// 64-bit targets; a 32-bit address space (wasm32, i686: #1131) holds a few
+/// runs' reservations of 128 MiB, where 1 GiB each fails the second thread.
+pub const STACK_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 1 << 27 };
 
 /// Load and run an SPB program's entry on a VM thread.
 pub fn run(bytes: Vec<u8>) -> Result<i64, Error> {

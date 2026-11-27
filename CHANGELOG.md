@@ -158,6 +158,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `SPARROW_CORE_INTERPRET=1` and the session tests of the build without the JIT failed. An extension now loads as
   its runtime did. The interpreter's t/ run under GC stress gets ten times the timeout instead of four:
   t/gen/persistence/04–07 ran out of it on the Wave's debug adapter.
+- **A map key's depth no longer uses the machine stack (#1130).** Checking that a value object can key a map,
+  building its key, comparing two keys, sizing one and dropping it each recursed once per level of nested value
+  objects; a key nested deeper than the stack (about 1 MiB on wasm32) would have crashed the run. Each now walks
+  the levels on a stack of its own, with the same results (checked against the recursive definitions on keys of
+  every kind), and a key 100 000 levels deep works on a 1 MiB stack, also without the JIT. The 14 map cells of the micro A/B are within noise (geomean −0.6%, every cell within ±7%).
+- **Sparrow on 32-bit targets (#1131).** Sparrow's suite without default features runs on i686, the pointer width
+  of wasm32 (in the Wave's `wasm` part, a static musl build on the x86_64 runner). It found that the VM thread
+  reserved 1 GiB of stack on every target, so a second run at once could not start in a 32-bit address space:
+  32-bit targets reserve 128 MiB. A session runtime on the interpreter refused every extension ("the extension
+  changes published function metadata"): the extension's functions kept the pointer-free proofs its runtime had
+  dropped (#1122); they drop them too now.
 
 ## [0.6.5] — 2026-11-27
 

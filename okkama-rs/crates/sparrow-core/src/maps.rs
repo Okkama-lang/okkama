@@ -391,8 +391,8 @@ mod tests {
             Key::Float(2.5),
             Key::Raw(3),
             rat(1, 3),
-            Key::Object(1, Rc::from(vec![Key::text(Rc::from("abcdefgh")), Key::Small(1)])),
-            Key::Object(1, Rc::from(vec![Key::Object(2, Rc::from(vec![Key::Small(2)]))])),
+            Key::Object(1, vec![Key::text(Rc::from("abcdefgh")), Key::Small(1)].into()),
+            Key::Object(1, vec![Key::Object(2, vec![Key::Small(2)].into())].into()),
         ];
         for padding in [0usize, SMALL * 3] {
             let mut keys: Vec<Key> = texts.iter().map(|text| Key::text(Rc::from(text.as_str()))).collect();

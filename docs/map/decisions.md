@@ -1031,3 +1031,30 @@ every declaration is open (#1005, owner decision).
 - **stdin.** `Heap::set_stdin` puts a `Cursor` in `Stdin`; `Stdin::read` reads it instead of the process's; after
   it, end of input. The playground always passes a buffer (empty without the field).
 
+## Map keys walk their depth on their own stack (#1130, 2026-11-27, from the #1124 audit)
+
+- **What is iterative.** `Runtime::is_key`/`key` (their object arms, `is_object_key`/`object_key`, `#[cold]`),
+  `Key::cmp_other`'s object arm (`cmp_fields`: the open levels as slice pairs), `owned_bytes` and `data_bytes`
+  (`owned_object_bytes` bottom-up, since each level divides by its own owners; `object_data_bytes` a plain sum)
+  and the drop of nested keys. The scalar and string arms, `Key::cmp`'s inline fast path and every map entry
+  layout are unchanged.
+- **The drop.** `Key::Object` holds `Fields(Rc<[Key]>)` (same size as before) whose `Drop` returns at once when
+  no field is an object key; otherwise the last owner moves each nested level's `Rc` out of its parent (leaving an
+  empty slice) onto a list before the parent is freed, so no drop goes more than one level down.
+- **Same results** are a test, not an argument: 300 keys of every kind, objects three deep and partly shared,
+  compared pairwise and sized against the recursive definitions kept in the test (`ops/key_depth_tests.rs`); a
+  100 000-deep key is checked, built, compared, sized and dropped on a 1 MiB thread, in both builds.
+
+## Sparrow on 32-bit targets (#1131, 2026-11-27)
+
+- **How it runs.** The suite of sparrow-core without default features is built for `i686-unknown-linux-musl`
+  (static, linked by rust-lld with the target's self-contained musl, no C toolchain) and run on a 32-bit Linux:
+  locally a `linux/386` alpine container (Docker's emulation on the arm64 Mac), on the Wave's x86_64 runner
+  directly (`wasm` part). Locally it ran by module filters and one integration file at a time.
+- **`STACK_BYTES` is 1 GiB on 64-bit targets and 128 MiB on 32-bit ones**: a 1 GiB reservation per VM thread left
+  no room for a second run's thread in a 32-bit address space ("VM thread: Resource temporarily unavailable"). The
+  interpreter's register stack takes the same bound (so 128 MiB on wasm32).
+- **Tests.** `length_tests`' past-4 GiB case exists only on 64-bit targets (a 32-bit `usize` has no such length).
+- **A session on the interpreter** (`extend`) drops the pointer-free proofs of the extension's functions as
+  `assemble`/`use_engine` drop its own (#1122); the published-metadata check refused every extension before. Found by
+  this run; it fails natively without default features too.
