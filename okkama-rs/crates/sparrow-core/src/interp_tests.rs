@@ -806,6 +806,48 @@ entry f5
     assert_eq!(message(&interpreted), message(&jit));
 }
 
+/// #1141: a memory budget caps the stack of a run, so a recursion deeper than the budget exhausts it, under a
+/// synchronous `main` and under an async one alike: the register stack is capped by it as the machine stack is.
+/// Without a budget the same recursion (half a million frames) returns.
+#[test]
+fn a_memory_budget_caps_the_stack_of_a_sync_and_of_an_async_main() {
+    let down = r#"
+function f4 "down" {
+    registers [t0, t0, t4, t0]
+    params [r0]
+    result t0
+    0: const r1, int 0
+    1: int.cmp eq, r2, r0, r1
+    2: br r2, @3, @4
+    3: ret r0
+    4: const r1, int 1
+    5: int.sub r3, r0, r1
+    6: call r3, f4, [r3]
+    7: ret r3
+}
+"#;
+    let budget = Limits { memory: Some(2 << 20), memory_scope: crate::budget::MemoryScope::Runtime, ..Limits::default() };
+    for asynchronous in ["", " async"] {
+        let source = program("", "", &format!(r#"{down}
+function f5 "main"{asynchronous} {{
+    registers [t0, t0]
+    params []
+    result t0
+    0: const r0, int 500000
+    1: call r1, f4, [r0]
+    2: ret r1
+}}
+entry f5
+"#));
+        assert_eq!(engines(&source).result, Ok(0), "main{asynchronous} without a budget");
+        let outcome = engines_with(&source, budget.clone());
+        assert!(
+            outcome.result.as_ref().is_err_and(|error| error.contains("Execution budget exhausted: memory")),
+            "main{asynchronous} under a budget of 2 MiB: {outcome:?}"
+        );
+    }
+}
+
 /// #1121: a failure at an instruction a handler covers goes to the handler, with the failure in its register;
 /// one outside every range leaves the function.
 #[test]

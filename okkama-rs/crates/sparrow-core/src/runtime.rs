@@ -1133,6 +1133,10 @@ impl Runtime {
         // A memory budget also bounds the machine stack.
         self.budget.stack_capped = self.limits.memory.is_some_and(|memory| memory.max(2 << 20) < stack);
         let stack = self.limits.memory.map_or(stack, |memory| stack.min(memory.max(2 << 20)));
+        if let Some(interp) = &mut self.interp {
+            // #1120, #1141: the register stack is bounded as the machine stack is, for a sync and an async entry.
+            interp.limit(stack);
+        }
         let marker = 0u8;
         let mut ctx = Ctx {
             status: OK,
@@ -1184,10 +1188,6 @@ impl Runtime {
             self.drop_root(root);
             result
         } else {
-            if let Some(interp) = &mut self.interp {
-                // #1120: the register stack is bounded as the machine stack is.
-                interp.limit(stack);
-            }
             match self.invoke(&mut ctx, entry, arguments) {
                 Ok(result) => result,
                 Err(error) => {

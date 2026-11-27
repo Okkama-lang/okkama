@@ -121,7 +121,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 70 files, 38180 lines
+## sparrow — 70 files, 38210 lines
 
 - `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
@@ -146,10 +146,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/texts.rs` 9 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
 - `sparrow-core/src/word.rs` 75 — One machine word per value. The representation is chosen by the static SPB
-- `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-- `sparrow-core/src/worker_emulated.rs` 141 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
+- `sparrow-core/src/worker.rs` 443 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
+- `sparrow-core/src/worker_emulated.rs` 142 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
 - `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
-- `sparrow-core/src/worker_wire.rs` 247 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
+- `sparrow-core/src/worker_wire.rs` 253 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 148 — Typed native state in the engine's generational arena. No legacy Value or

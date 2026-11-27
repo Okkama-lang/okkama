@@ -24,7 +24,7 @@ use crate::heap::Payload;
 use crate::primitives::State;
 use crate::runtime::{Ctx, FailureKind, Runtime};
 use crate::word::{Repr, UNBOUND, Word};
-use crate::worker_wire::{Reader, encode};
+use crate::worker_wire::{Reader, encode, failure_text};
 use okkama_sparrow::TypeRef;
 
 /// The receiver fields a bound action (`worker.bind`) passes to its worker entry ahead of the call's arguments.
@@ -118,6 +118,9 @@ fn work(parent: &Runtime, limit: u64, function: usize, types: &[TypeRef], result
         runtime.use_engine(crate::Engine::Interpreter);
     }
     runtime.limits = parent.limits.clone();
+    // #1141: a worker's own workers are emulated too, as its parent's are (the flag is only set on a runtime that
+    // emulates, so nested spawns never take the host's process path).
+    runtime.emulated_workers = parent.emulated_workers;
     if let Some(host) = runtime.host.as_mut() {
         host.set_stdin(Vec::new());
     }
@@ -136,7 +139,7 @@ fn work(parent: &Runtime, limit: u64, function: usize, types: &[TypeRef], result
     let stack = (&marker as *const u8 as u64).saturating_sub(limit).saturating_add(crate::runtime::STACK_HEADROOM);
     let (value, stdout, stderr) =
         okkama_runtime_core::stdout::capture_streams(|| runtime.run_function_with(function, &arguments, stack));
-    let outcome = value.map_err(|error| error.0).and_then(|value| {
+    let outcome = value.map_err(|error| failure_text(error.0)).and_then(|value| {
         let mut bytes = Vec::new();
         match result {
             Some(ty) => encode(&runtime, &mut bytes, value, ty)?,

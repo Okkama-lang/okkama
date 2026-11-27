@@ -14,7 +14,7 @@ use crate::primitives::State;
 use crate::runtime::{Ctx, FailureKind, Runtime};
 use crate::word::{Repr, Word};
 use crate::worker_process::{Failure, Output, Request};
-use crate::worker_wire::{Reader, count, encode, text};
+use crate::worker_wire::{Reader, count, encode, failure_text, text};
 use okkama_sparrow::TypeRef;
 use std::io::Write;
 use std::rc::Rc;
@@ -305,7 +305,7 @@ pub fn respond(runtime: &mut Box<Runtime>, request: &[u8], stack: u64) -> Vec<u8
             return Err("worker working directory is not a directory".into());
         }
         okkama_runtime_core::host::set_cwd(path);
-        let value = runtime.run_function_with(entry, &arguments, stack).map_err(|e| e.0)?;
+        let value = runtime.run_function_with(entry, &arguments, stack).map_err(|e| failure_text(e.0))?;
         let mut bytes = Vec::new();
         match result {
             Some(ty) => encode(runtime, &mut bytes, value, ty)?,
@@ -390,6 +390,32 @@ mod wire_tests {
         let mut again = Vec::new();
         encode(&runtime, &mut again, value, TypeRef(4)).unwrap();
         assert_eq!(again, wire);
+    }
+
+    /// #1141: the child's response carries its failure as the text the parent reports as its own runtime failure,
+    /// so the parent prints one prefix ("RuntimeError: confirm failed"), not the child's report under a second one.
+    #[test]
+    fn a_worker_failure_reaches_the_parent_as_its_message() {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                let program = okkama_sparrow::assemble(
+                    "sparrow 18\nmodule \"failing\" \"1.0.0\"\ntype t0 int\n\
+                     function f0 \"confirms\" {\nregisters [t0]\nparams []\nresult t0\n0: trap confirm, \"confirm failed\"\n}\n",
+                )
+                .unwrap();
+                let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
+                let mut request = Vec::new();
+                text(&mut request, &std::env::current_dir().unwrap().to_string_lossy()).unwrap();
+                text(&mut request, "confirms").unwrap();
+                count(&mut request, 0).unwrap();
+                let response = respond(&mut runtime, &request, 32 << 20);
+                let output = Output { stdout: response, stderr: Vec::new(), success: true, code: Some(0) };
+                assert_eq!(settle(&mut runtime, &output, None), Err("confirm failed".to_owned()));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
     #[test]
     fn pool_binding_is_run_local_and_preserves_the_original_executor_and_action() {

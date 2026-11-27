@@ -368,6 +368,12 @@ fn the_playground_emulates_workers_as_the_cli_runs_them() {
         let case = Case { dir: dir.clone(), name };
         let played = playground(&case, &std_dir).unwrap_or_else(|| panic!("{}: the profile admits workers", case.name));
         let shown = cli(&case);
+        if case.name == "failure.ok" {
+            // #1141: the worker's failure is the parent's runtime failure with one prefix, as the CLI prints the same
+            // failure of the parent's own.
+            let stderr = &shown.stderr;
+            assert!(stderr.contains("RuntimeError: confirm failed") && !stderr.contains("RuntimeError: RuntimeError"), "{shown:?}");
+        }
         if played != shown {
             differences.push(format!("{}:\n  cli:        {shown:?}\n  playground: {played:?}", case.name));
         }
