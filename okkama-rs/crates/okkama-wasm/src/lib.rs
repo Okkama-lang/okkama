@@ -14,7 +14,7 @@
 //! A compiler panic is a trap on wasm32 (`RuntimeError: unreachable`), which carries no message: the panic
 //! hook keeps the message and location of the last one for [`last_panic`] (#1118).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
@@ -256,7 +256,9 @@ impl Workspace {
     /// The text `okkama run` prints for a failed run of the last build (#1125): request `{report, uncaught?,
     /// cwd?}`, where `report` and `uncaught` are what sparrow-wasm's `run` answered (streamed or not, #1134) and
     /// `cwd` is the directory file names are shown relative to; `{ok, text}`: the report with the failure's place
-    /// and stack in the sources (`commands::trace::render_trace`).
+    /// and stack in the sources (`commands::trace::render_trace`). An `uncaught` whose offsets are not places in
+    /// `report` (past its end, inside a character) is a usage error, as is one that is not sparrow-wasm's shape
+    /// (#1139).
     pub fn failure_text(&self, request: &Value) -> Value {
         let report = text_field(request, "report").unwrap_or_default();
         let uncaught = match request.get("uncaught") {
@@ -266,6 +268,10 @@ impl Workspace {
                 None => return usage("`uncaught` is not a failure sparrow-wasm described"),
             },
         };
+        let mut offsets = std::iter::once(uncaught.trace_offset).chain(uncaught.cause_traces.iter().map(|(offset, ..)| *offset));
+        if let Some(offset) = offsets.find(|offset| !report.is_char_boundary(*offset)) {
+            return usage(&format!("`uncaught` places a stack at byte {offset}, which is not a place in the {}-byte `report`", report.len()));
+        }
         let built = self.built.borrow();
         let Some(built) = built.as_ref() else { return usage("nothing was built") };
         let cwd = text_field(request, "cwd");
@@ -273,29 +279,36 @@ impl Workspace {
         json!({"ok": true, "text": text})
     }
 
-    /// Hover at `{source, path, line, character}` (zero-based, UTF-16): `{hover: {markdown, range} | null}`.
+    /// Hover at `{source, path, line, character}` (zero-based, UTF-16): `{hover: {markdown, range} | null}`. The
+    /// position is one in the text the answering inspection analysed, and the range too, as the language server's
+    /// hover places them (#1139): while `source` does not parse, that is the last text that did.
     pub fn hover(&self, request: &Value) -> Value {
-        let Some((_, offset, text, inspection)) = self.at(request) else { return json!({"ok": true, "hover": null}) };
+        let Some((_, position, text, inspection)) = self.at(request) else { return json!({"ok": true, "hover": null}) };
+        let offset = LineIndex::new(&text).offset(position);
         let hover = inspection.symbol_at(offset).map(|symbol| {
             json!({"markdown": symbol.hover, "range": range(LineIndex::new(&text).range(symbol.span))})
         });
         json!({"ok": true, "hover": hover})
     }
 
-    /// Go to definition at `{source, path, line, character}`: `{definition: {path, range} | null}`.
+    /// Go to definition at `{source, path, line, character}`: `{definition: {path, range} | null}`. The position
+    /// is one in the analysed text, as for [`Self::hover`] (#1139).
     pub fn definition(&self, request: &Value) -> Value {
-        let Some((_, offset, _, inspection)) = self.at(request) else { return json!({"ok": true, "definition": null}) };
+        let Some((_, position, text, inspection)) = self.at(request) else { return json!({"ok": true, "definition": null}) };
+        let offset = LineIndex::new(&text).offset(position);
         let definition = inspection.symbol_at(offset).and_then(|symbol| symbol.definition.as_ref()).map(|location| {
             json!({"path": location.path, "range": range(location.range)})
         });
         json!({"ok": true, "definition": definition})
     }
 
-    /// Signature help at `{source, path, line, character}`: `{signature: {label, parameters, active} | null}`.
+    /// Signature help at `{source, path, line, character}`: `{signature: {label, parameters, active} | null}`. The
+    /// position is one in `source`, as the language server's signature help and completion take it.
     pub fn signature(&self, request: &Value) -> Value {
-        let Some((source, offset, text, inspection)) = self.at(request) else {
+        let Some((source, position, text, inspection)) = self.at(request) else {
             return json!({"ok": true, "signature": null});
         };
+        let offset = LineIndex::new(source.text()).offset(position);
         let signature = inspection.signature(&text, source.text(), offset).map(|(label, parameters, active)| {
             json!({"label": label, "parameters": parameters, "active": active})
         });
@@ -314,7 +327,8 @@ impl Workspace {
         if let Some(found) = self.std_path(request) {
             return json!({"ok": true, "items": found});
         }
-        let Some((source, offset, text, inspection)) = self.at(request) else { return json!({"ok": true, "items": []}) };
+        let Some((source, position, text, inspection)) = self.at(request) else { return json!({"ok": true, "items": []}) };
+        let offset = LineIndex::new(source.text()).offset(position);
         let found = if matches!(trigger, Some("(" | ",")) {
             inspection.argument_names(&text, source.text(), offset)
         } else {
@@ -336,20 +350,21 @@ impl Workspace {
         Some(found.iter().map(std_completion).collect())
     }
 
-    /// The request's file, its offset of `line`/`character`, and the inspection that answers about it, with the
-    /// text it inspected.
-    fn at(&self, request: &Value) -> Option<(SourceFile, u32, Rc<str>, Rc<Inspection>)> {
+    /// The request's file, its position (`line`, `character`: zero-based, in UTF-16 code units, the language
+    /// server's default encoding), and the inspection that answers about it, with the text it inspected. Which
+    /// text the position is in is the caller's, as in the language server (#1139): hover and definition place it in
+    /// the inspected text, completion and signature help in `source`.
+    fn at(&self, request: &Value) -> Option<(SourceFile, Position, Rc<str>, Rc<Inspection>)> {
         let source = self.source(request).ok()?;
         let line = request.get("line")?.as_u64()? as u32;
         let character = request.get("character")?.as_u64()? as u32;
-        let offset = LineIndex::new(source.text()).offset(Position { line, character });
         let inspection = Rc::new(commands::inspect(&source, &mut |test_mode| self.loader(test_mode)));
         let mut answers = self.answers.borrow_mut();
         // The language server's rule (#1128): the last analysed inspection answers.
         let answers = answers.entry(source.name().to_string()).or_default();
         answers.record(&Rc::from(source.text()), &inspection);
         let (text, inspection) = answers.answering()?;
-        Some((source, offset, Rc::clone(text), Rc::clone(inspection)))
+        Some((source, Position { line, character }, Rc::clone(text), Rc::clone(inspection)))
     }
 
     /// The request's `source`, named by its `path` (`main.ok` without one).
@@ -463,8 +478,10 @@ impl ModuleLoader for Loader<'_> {
     }
 }
 
-/// The bundled std as `std.…` completion reads it (#1115); the page's files under the std root come in front of
-/// it, as imports see them, like the editor's unsaved texts. The bundle never changes, so its index is built once.
+/// The bundled std as `std.…` completion reads it (#1115), with the page's files under the std root over it, as
+/// imports see them (#1139): a page file replaces the bundled module of its name, like the editor's unsaved text,
+/// and one the bundle does not have is a module of the tree as well. The bundle never changes, so its index is
+/// built once for each set of modules.
 #[derive(Debug)]
 struct BundledStd<'w> {
     workspace: &'w Workspace,
@@ -482,11 +499,20 @@ impl StdTree for BundledStd<'_> {
     }
 
     fn modules(&self) -> Vec<String> {
-        bundle::FILES.iter().filter_map(|(path, _)| path.strip_suffix(".ok")).map(str::to_string).collect()
+        let bundled = bundle::FILES.iter().filter_map(|(path, _)| path.strip_suffix(".ok"));
+        let page = self.workspace.files.keys().filter_map(|file| {
+            file.strip_prefix(self.workspace.std_root.as_str())?.strip_prefix('/')?.strip_suffix(".ok")
+        });
+        let mut modules: Vec<String> = bundled.chain(page).map(str::to_string).collect();
+        modules.sort();
+        modules.dedup();
+        modules
     }
 
-    fn stamp(&self, _modules: &[String]) -> Option<Stamp> {
-        Some(Stamp::default())
+    /// The modules alone: their stored texts are the bundle's, which never change, and a page's module has none
+    /// (its text is unsaved, never cached).
+    fn stamp(&self, modules: &[String]) -> Option<Stamp> {
+        Some(Stamp(modules.iter().map(|module| (module.clone(), 0, 0)).collect()))
     }
 
     fn entries(&self, folder: &[String]) -> Vec<(String, bool)> {
@@ -560,6 +586,10 @@ fn usage(message: &str) -> Value {
     json!({"ok": false, "code": EXIT_USAGE, "stdout": "", "stderr": text, "diagnostics": []})
 }
 
+/// The most activations a stack of sparrow-wasm records (sparrow-core's `TRACE_LIMIT`, #1009): a description with
+/// more is not one it made, and is refused rather than expanded (#1139).
+const TRACE_LIMIT: usize = 1 << 20;
+
 /// sparrow-wasm's description of an uncaught failure (its `uncaught_json`): stacks as runs `[function, pc, count]`.
 fn uncaught_from(value: &Value) -> Option<Uncaught> {
     fn sites(value: &Value) -> Option<Vec<Site>> {
@@ -567,7 +597,11 @@ fn uncaught_from(value: &Value) -> Option<Uncaught> {
         for run in value.as_array()? {
             let [function, pc, count] = run.as_array()?.as_slice() else { return None };
             let site = Site { function: u32::try_from(function.as_u64()?).ok()?, pc: u32::try_from(pc.as_u64()?).ok()? };
-            sites.extend(std::iter::repeat_n(site, usize::try_from(count.as_u64()?).ok()?));
+            let count = usize::try_from(count.as_u64()?).ok()?;
+            if count > TRACE_LIMIT - sites.len() {
+                return None;
+            }
+            sites.extend(std::iter::repeat_n(site, count));
         }
         Some(sites)
     }
@@ -630,9 +664,21 @@ fn completion(found: &Completion) -> Value {
     })
 }
 
+/// The page's files and import directories as the last `setFiles` gave them, which a new workspace starts from.
+#[derive(Debug, Default)]
+struct Page {
+    files: Vec<(String, String)>,
+    import_dirs: Vec<String>,
+}
+
 thread_local! {
-    /// The playground's one workspace: the bundled std under `std/` and the page's files.
-    static WORKSPACE: RefCell<Workspace> = RefCell::new(Workspace::default());
+    /// The playground's one workspace: the bundled std under `std/` and the page's files. A call takes it out of
+    /// the cell and puts it back when it returns ([`with_workspace`]), so nothing stays borrowed across calls: a
+    /// call that traps (a panic on wasm32 unwinds nothing) never puts it back, and the next call starts a new one
+    /// over the page's files rather than finding the old one's borrows held (#1139).
+    static WORKSPACE: Cell<Option<Box<Workspace>>> = const { Cell::new(None) };
+    /// The last `setFiles`, kept outside the workspace for a new one.
+    static PAGE: Cell<Option<Rc<Page>>> = const { Cell::new(None) };
     /// The message and location of the last call's panic (#1118).
     static LAST_PANIC: RefCell<Option<(String, Option<String>)>> = const { RefCell::new(None) };
 }
@@ -676,11 +722,33 @@ fn forget_panic() {
     LAST_PANIC.with(|last| *last.borrow_mut() = None);
 }
 
+/// The page of the last `setFiles`; empty before one.
+fn page() -> Rc<Page> {
+    let page = PAGE.take().unwrap_or_default();
+    PAGE.set(Some(Rc::clone(&page)));
+    page
+}
+
+/// Run `use_it` on the playground's workspace, out of its cell for the call: the one the last call put back, or
+/// a new one over the page's files when there is none (the first call, or the last one trapped, #1139).
+fn with_workspace<R>(use_it: impl FnOnce(&mut Workspace) -> R) -> R {
+    let mut workspace = WORKSPACE.take().unwrap_or_else(|| {
+        let page = page();
+        let mut workspace = Box::new(Workspace::default());
+        workspace.set_files(page.files.iter().cloned());
+        workspace.set_import_dirs(page.import_dirs.iter().cloned());
+        workspace
+    });
+    let result = use_it(&mut workspace);
+    WORKSPACE.set(Some(workspace));
+    result
+}
+
 /// Parse `request`, run `command` on the playground's workspace, and print the response.
 pub fn handle(request: &str, command: fn(&Workspace, &Value) -> Value) -> String {
     forget_panic();
     let response = match serde_json::from_str::<Value>(request) {
-        Ok(request) => WORKSPACE.with(|workspace| command(&workspace.borrow(), &request)),
+        Ok(request) => with_workspace(|workspace| command(workspace, &request)),
         Err(error) => usage(&format!("the request is not JSON: {error}")),
     };
     response.to_string()
@@ -699,10 +767,11 @@ pub fn set_files(request: &str) -> String {
     let dirs = request.get("importDirs").and_then(Value::as_array).map(|dirs| {
         dirs.iter().filter_map(|dir| dir.as_str().map(str::to_string)).collect::<Vec<_>>()
     });
-    WORKSPACE.with(|workspace| {
-        let mut workspace = workspace.borrow_mut();
-        workspace.set_files(files.unwrap_or_default());
-        workspace.set_import_dirs(dirs.unwrap_or_default());
+    let page = Rc::new(Page { files: files.unwrap_or_default(), import_dirs: dirs.unwrap_or_default() });
+    PAGE.set(Some(Rc::clone(&page)));
+    with_workspace(|workspace| {
+        workspace.set_files(page.files.iter().cloned());
+        workspace.set_import_dirs(page.import_dirs.iter().cloned());
     });
     json!({"ok": true}).to_string()
 }
@@ -710,7 +779,7 @@ pub fn set_files(request: &str) -> String {
 /// The SPB of the last successful `build` (#1125), for sparrow-wasm's `run`; empty without one.
 pub fn built_spb() -> Vec<u8> {
     forget_panic();
-    WORKSPACE.with(|workspace| workspace.borrow().built_spb())
+    with_workspace(|workspace| workspace.built_spb())
 }
 
 /// The compiler's version, the bundled std and the IR passes in their order (`okkama ir --passes`, #1118):
@@ -926,6 +995,113 @@ mod tests {
         assert!(page.contains(&("Page".into(), "enum".into())) && !page.iter().any(|(label, _)| label == "Order"), "{page:?}");
         let deep = labels(&at(&workspace, "module play;\nmain() is int { std.Pag"));
         assert!(deep.contains(&("compare.Page".into(), "enum".into())), "{deep:?}");
+    }
+
+    /// #1139: a page file under std/ that the bundle does not have is a module of `std.…` completion, as the
+    /// loader finds it: at its level, in whole paths, with its declarations, and its folder at the root.
+    #[test]
+    fn std_completion_sees_the_page_modules_the_bundle_lacks() {
+        let mut workspace = Workspace::default();
+        let at = |workspace: &Workspace, text: &str| {
+            let line = text.lines().count() - 1;
+            let character = text.lines().last().unwrap().encode_utf16().count();
+            labels(&workspace.complete(&json!({"source": text, "line": line, "character": character, "trigger": "."})))
+        };
+        let page = "module pagemod;\n\n// A page enum.\nenum Paged = (one, two);\n".to_string();
+        workspace.set_files([("std/pagemod.ok".to_string(), page.clone()), ("std/mine/tool.ok".to_string(), page)]);
+        let root = at(&workspace, "module play;\nmain() is int { std.");
+        assert!(root.contains(&("pagemod".into(), "module".into())), "{root:?}");
+        assert!(root.contains(&("mine".into(), "folder".into())), "{root:?}");
+        assert!(root.contains(&("mine.tool".into(), "module".into())), "{root:?}");
+        assert!(root.contains(&("io".into(), "folder".into())), "{root:?}");
+        let module = at(&workspace, "module play;\nmain() is int { std.pagemod.");
+        assert!(module.contains(&("Paged".into(), "enum".into())), "{module:?}");
+        let deep = at(&workspace, "module play;\nmain() is int { std.Page");
+        assert!(deep.contains(&("pagemod.Paged".into(), "enum".into())), "{deep:?}");
+        // The loader finds the same module.
+        assert_eq!(workspace.loader(false).resolve_std("pagemod", "main.ok").unwrap().as_deref(), Some("std/pagemod.ok"));
+        // Without the page's files, the bundle alone.
+        workspace.set_files([]);
+        let root = at(&workspace, "module play;\nmain() is int { std.");
+        assert!(!root.iter().any(|(label, _)| label == "pagemod" || label == "mine"), "{root:?}");
+    }
+
+    /// #1139: hover and definition place the position in the text the answering inspection analysed, as `okkama
+    /// lsp` does, not in the text being typed.
+    #[test]
+    fn hover_and_definition_place_the_position_in_the_analysed_text() {
+        let workspace = Workspace::default();
+        let source = "module play v1.0.0;\n\nmain() is int {\n    let total = 1;\n    let other = total;\n    other;\n}\n";
+        let analysed = workspace.hover(&json!({"source": source, "line": 4, "character": 18}));
+        // A line that does not parse, typed above: the answer is still the analysed text's `total` at 4:18.
+        let typing = source.replace("main() is int {\n", "main() is int {\n    let not_yet_parsed = ;\n");
+        let hover = workspace.hover(&json!({"source": typing, "line": 4, "character": 18}));
+        assert_eq!(hover, analysed, "{hover}");
+        assert!(hover["hover"]["markdown"].as_str().is_some_and(|text| text.contains("total")), "{hover}");
+        assert_eq!(hover["hover"]["range"]["start"], json!({"line": 4, "character": 16}), "{hover}");
+        let definition = workspace.definition(&json!({"source": typing, "line": 4, "character": 18}));
+        assert_eq!(definition["definition"]["path"], "main.ok", "{definition}");
+        assert_eq!(definition["definition"]["range"]["start"]["line"], 3, "{definition}");
+    }
+
+    fn uncaught(trace_offset: usize, causes: Value, count: u64) -> Value {
+        json!({
+            "category": "runtime", "errorType": null, "message": "boom", "trace": [[0, 0, count]], "traceOmitted": 0,
+            "traceOffset": trace_offset, "causeTraces": causes,
+        })
+    }
+
+    /// #1139: `failureText` refuses offsets that are not places in the report (past its end, inside a character)
+    /// and stacks longer than sparrow-wasm records, as usage errors, and the workspace keeps answering.
+    #[test]
+    fn failure_text_refuses_offsets_outside_the_report() {
+        let workspace = Workspace::default();
+        let source = "module play v1.0.0;\n\nmain() is int {\n    0;\n}\n";
+        assert_eq!(workspace.build(&json!({"source": source}))["ok"], true);
+        let report = "error: é\n";
+        for (name, described) in [
+            ("past the end", uncaught(report.len() + 1, json!([]), 1)),
+            ("inside a character", uncaught(8, json!([]), 1)),
+            ("a cause past the end", uncaught(0, json!([[report.len() + 5, [[0, 0, 1]], 0]]), 1)),
+            ("a stack too long", uncaught(0, json!([]), u64::MAX)),
+        ] {
+            let refused = workspace.failure_text(&json!({"report": report, "uncaught": described}));
+            assert_eq!(refused["code"], EXIT_USAGE, "{name}: {refused}");
+            assert!(refused["stderr"].as_str().unwrap().starts_with("okkama: "), "{name}: {refused}");
+        }
+        // The end of the report and its start are places.
+        for offset in [0, report.len()] {
+            let text = workspace.failure_text(&json!({"report": report, "uncaught": uncaught(offset, json!([]), 1)}));
+            assert_eq!(text["ok"], true, "{text}");
+        }
+        assert_eq!(workspace.build(&json!({"source": source}))["ok"], true);
+    }
+
+    /// #1139: a call that traps leaves nothing borrowed for the next ones: they run on a new workspace over the
+    /// page's files. The trap is played by a call that leaks a borrow of the workspace's state and panics, as a
+    /// trap on wasm32 leaves its borrows held.
+    #[test]
+    fn a_trapped_call_leaves_the_next_calls_working() {
+        let util = "module lib/util;\n\nobject Util {\n    Util() {}\n    double(n is int) is int { n * 2; }\n}\n";
+        assert_eq!(set_files(&json!({"files": {"lib/util.ok": util}}).to_string()), "{\"ok\":true}");
+        let source = "module play v1.0.0;\n\nimport \"lib/util\" take Util;\n\nmain() is int {\n    Util().double(0);\n}\n";
+        let request = json!({"source": source}).to_string();
+        let built: Value = serde_json::from_str(&handle(&request, Workspace::build)).unwrap();
+        assert_eq!(built["ok"], true, "{built}");
+        let trapped = std::panic::catch_unwind(|| {
+            handle(&request, |workspace, _| {
+                std::mem::forget(workspace.built.borrow_mut());
+                std::mem::forget(workspace.answers.borrow_mut());
+                panic!("a trap");
+            })
+        });
+        assert!(trapped.is_err());
+        let built: Value = serde_json::from_str(&handle(&request, Workspace::build)).unwrap();
+        assert_eq!(built["ok"], true, "{built}");
+        assert!(!built_spb().is_empty());
+        let hover: Value = serde_json::from_str(&handle(&json!({"source": source, "line": 5, "character": 6}).to_string(), Workspace::hover)).unwrap();
+        assert!(hover["hover"]["markdown"].as_str().is_some_and(|text| text.contains("Util")), "{hover}");
+        assert_eq!(set_files("{\"files\": {}}"), "{\"ok\":true}");
     }
 
     /// #1118: the version names the IR passes in their order, the one list `okkama ir --passes` takes.
