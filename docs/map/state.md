@@ -2,6 +2,14 @@
 
 ## Release 0.6.6 (release/066)
 
+- [x] #1133 and #1128 (feature/1133 from release/066 d7e6c5d79, not committed; worktree okkama-work/hf-1133,
+  target t-1133). #1133: `budget.rs` (`Reach::classify`, `PURE`, `SYSTEM_CONSTANTS`, PLAYGROUND `allowed` = stdin
+  only) and `okkama-runtime-abi/src/catalogue.rs` (PURE/HOST lists, `effect`, counts 275/3/264); five family tests
+  (`pure_family`), green in default and no-default builds with the companion test and the profile-consistency test;
+  mutation (net back in Net) fails three tests. #1128: `ide::Answering` + `Inspection::analysed`, used by
+  `lsp.rs` and okkama-wasm; unit test `answers_come_from_the_last_analysed_inspection` (mutation: record parsed
+  fails it); `tests/playground.rs` completes `bottle.` after `std.coll` (failed before: the LSP offered nothing);
+  `cli.rs` lsp_* green; Bible `build.py --check` without the replace: 249 examples, 0 failures (gate build of the tree).
 - [x] #1125 Playground runtime (feature/1125 from release/066, rebased on f5e49d602, not committed; worktree
   okkama-work/hf-1125, targets t-1125 and t-1125-nd): crate `sparrow-wasm` (run/requirements/provide/version/
   lastPanic, clocks from the page); `budget::Profile`/`PLAYGROUND`/`Limits::playground()`/`permits_workers`;

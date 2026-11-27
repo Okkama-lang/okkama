@@ -785,6 +785,7 @@ pub fn inspect_parsed(
     inspection.members = index.members;
     inspection.scopes = index.scopes;
     inspection.globals = index.globals;
+    inspection.analysed = true;
     inspection
 }
 

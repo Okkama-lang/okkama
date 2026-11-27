@@ -83,15 +83,6 @@ pub const PLAYGROUND: Profile = Profile {
     groups: &[NativeGroup::Clock, NativeGroup::Random],
     allowed: &[
         ("runtime/stdio", "stdin_"),
-        // Pure, though their modules sit in a group: the line buffer of standard input, IP text, PostgreSQL's
-        // result pages, the local date-times of a named zone, and what the build is (wasm32 in a page).
-        ("runtime/input_state", ""),
-        ("runtime/net", "ip_"),
-        ("runtime/postgres", "pg_page"),
-        ("runtime/time_zone", "timezone_local_"),
-        ("runtime/system", "system_platform"),
-        ("runtime/system", "system_architecture"),
-        ("runtime/system", "system_byte_order"),
     ],
     refused: &[("runtime/collation", ""), ("runtime/x509", "")],
     steps: 50_000_000,
@@ -123,7 +114,8 @@ pub enum NativeGroup {
     Net,
     /// Child processes (and process workers).
     Process,
-    /// Environment variables, users and groups, host facts, the local zone.
+    /// Environment variables, users and groups, host facts (host name, CPUs, storage), the preferred languages
+    /// and the system's certificates.
     Env,
     /// Wall and monotonic clocks, sleeping.
     Clock,
@@ -143,6 +135,10 @@ pub enum Reach {
     Unclassified,
 }
 
+/// The natives of `runtime/system` that state what the build is (its platform, architecture and byte order):
+/// constants of the binary, not facts of the host it runs on (#1133).
+const SYSTEM_CONSTANTS: &[&str] = &["system_platform", "system_architecture", "system_byte_order"];
+
 /// Modules whose natives compute without reaching the host. A module added
 /// to the runtime is in no list until someone puts it in one, and the test
 /// `every_native_is_classified` fails until then.
@@ -150,8 +146,8 @@ const PURE: &[&str] = &[
     "runtime/bigint", "runtime/binary", "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation", "runtime/compression",
     "runtime/collections", "runtime/crypto", "runtime/db", "runtime/debug",
     "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex", "runtime/host_crypto",
-    "runtime/hpack", "runtime/idna", "runtime/io_decorators", "runtime/json",
-    "runtime/layout", "runtime/math_aggregate", "runtime/number_text", "runtime/pem",
+    "runtime/hpack", "runtime/idna", "runtime/input_state", "runtime/io_decorators", "runtime/json",
+    "runtime/layout", "runtime/math_aggregate", "runtime/net", "runtime/number_text", "runtime/pem", "runtime/postgres",
     "runtime/public_suffix", "runtime/quoted_printable", "runtime/random_distribution",
     "runtime/regex", "runtime/secret", "runtime/single_byte", "runtime/statistics",
     "runtime/template", "runtime/testing", "runtime/time_zone",
@@ -190,17 +186,18 @@ impl Reach {
         let name = symbol.split("::").nth(1).unwrap_or("");
         Self::Group(match module {
             "runtime/fs" | "runtime/fs_root" | "runtime/snapshot" | "runtime/database" => NativeGroup::Fs,
-            "runtime/network" | "runtime/net" | "runtime/tls_transport" | "runtime/postgres" => NativeGroup::Net,
+            "runtime/network" | "runtime/tls_transport" => NativeGroup::Net,
             "runtime/process" | "runtime/signal" => NativeGroup::Process,
             "runtime/system" if name.starts_with("secure_") => NativeGroup::Random,
+            // What the build is, a constant of the binary (#1133).
+            "runtime/system" if SYSTEM_CONSTANTS.iter().any(|constant| name.split('/').next() == Some(constant)) => return Self::Pure,
             "runtime/environment" | "runtime/account" | "runtime/system" => NativeGroup::Env,
-            "runtime/time_zone" if name.starts_with("timezone_local") => NativeGroup::Env,
             // The host's language preferences and trust anchors (#361).
             "runtime/locale" => NativeGroup::Env,
             "runtime/x509" if name.starts_with("system_certificates") => NativeGroup::Env,
             "runtime/time" => NativeGroup::Clock,
             "runtime/random" => NativeGroup::Random,
-            "runtime/application" | "runtime/input_state" => NativeGroup::Terminal,
+            "runtime/application" => NativeGroup::Terminal,
             "runtime/stdio" if name.starts_with("stdin") => NativeGroup::Terminal,
             _ if PURE.contains(&module) => return Self::Pure,
             _ => return Self::Unclassified,
@@ -514,6 +511,50 @@ mod tests {
 
     fn native(symbol: &str) -> Native {
         *Native::ALL.iter().find(|native| native.symbol().starts_with(symbol)).unwrap_or_else(|| panic!("{symbol}"))
+    }
+
+    /// #1133: every native of `prefix` computes without the host: pure, so a run with every group denied runs it,
+    /// while `neighbour`, of the same module or the group it was in, still needs `group`.
+    fn pure_family(prefix: &str, count: usize, neighbour: &str, group: NativeGroup) {
+        let family: Vec<Native> = Native::ALL.iter().copied().filter(|native| native.symbol().starts_with(prefix)).collect();
+        assert_eq!(family.len(), count, "{prefix}");
+        let denied = Limits { natives: Some(Vec::new()), ..Limits::default() };
+        for native in family {
+            assert_eq!(Reach::of(native), Reach::Pure, "{}", native.symbol());
+            assert_eq!(denied.permits(native), Ok(()), "{}", native.symbol());
+            assert!(PLAYGROUND.offers(native), "{}", native.symbol());
+        }
+        let neighbour = native(neighbour);
+        assert_eq!(Reach::of(neighbour), Reach::Group(group), "{}", neighbour.symbol());
+        assert!(denied.permits(neighbour).unwrap_err().ends_with(&format!("needs the {group:?} permission")));
+    }
+
+    #[test]
+    fn standard_input_line_buffers_are_pure() {
+        pure_family("runtime/input_state@1::", 9, "runtime/stdio@1::stdin_read/", NativeGroup::Terminal);
+    }
+
+    #[test]
+    fn ip_address_text_is_pure() {
+        pure_family("runtime/net@1::ip_", 2, "runtime/network@1::", NativeGroup::Net);
+    }
+
+    #[test]
+    fn postgres_result_pages_are_pure() {
+        pure_family("runtime/postgres@1::pg_page", 7, "runtime/tls_transport@1::", NativeGroup::Net);
+    }
+
+    #[test]
+    fn the_date_times_of_a_named_zone_are_pure() {
+        pure_family("runtime/time_zone@1::timezone_local_", 2, "runtime/locale@1::", NativeGroup::Env);
+    }
+
+    #[test]
+    fn what_the_build_is_is_pure() {
+        for name in SYSTEM_CONSTANTS {
+            pure_family(&format!("runtime/system@1::{name}/"), 1, "runtime/system@1::system_host_name", NativeGroup::Env);
+        }
+        assert_eq!(Reach::of(native("runtime/system@1::secure_random")), Reach::Group(NativeGroup::Random));
     }
 
     /// #1125: the playground refuses with its own text whatever it lacks, a group it allows or a stdin exception

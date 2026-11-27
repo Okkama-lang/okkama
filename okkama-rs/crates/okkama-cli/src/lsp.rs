@@ -42,11 +42,11 @@ use super::FileLoader;
 /// Открытый файл.
 struct Document {
     path: PathBuf,
-    /// Shared, not copied, with the loaders' overlays and `good` (#472).
+    /// Shared, not copied, with the loaders' overlays and `answers` (#472).
     text: Rc<str>,
     inspection: Rc<Inspection>,
-    /// Последний разобранный текст и его результат (наведение при ошибке разбора).
-    good: Option<(Rc<str>, Rc<Inspection>)>,
+    /// The inspection the editor's answers use: the last analysed one (`ide::Answering`, #1128).
+    answers: ide::Answering,
     /// Пути, в которые публиковались диагностики этого файла.
     published: Vec<String>,
     /// Версия текста от клиента: диагностики публикуются с ней (#48).
@@ -242,7 +242,7 @@ impl Server {
                         path,
                         text: Rc::from(text),
                         inspection: Rc::default(),
-                        good: None,
+                        answers: ide::Answering::default(),
                         published: Vec::new(),
                         version: document.get("version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok()),
                     },
@@ -378,9 +378,7 @@ impl Server {
             self.publish(&path, diagnostics, if own { version } else { None });
         }
         if let Some(document) = self.documents.get_mut(uri) {
-            if inspection.parsed {
-                document.good = Some((Rc::clone(&document.text), Rc::clone(&inspection)));
-            }
+            document.answers.record(&document.text, &inspection);
             document.inspection = inspection;
             document.published = published;
         }
@@ -491,12 +489,8 @@ impl Server {
         let character = params.pointer("/position/character")?.as_u64()? as u32;
         let document = self.documents.get(uri)?;
         let position = ide::Position { line, character };
-        let (text, inspection) = if document.inspection.parsed {
-            (&*document.text, &*document.inspection)
-        } else {
-            let (text, inspection) = document.good.as_ref()?;
-            (&**text, &**inspection)
-        };
+        let (text, inspection) = document.answers.answering()?;
+        let (text, inspection) = (&**text, &**inspection);
         let offset = LineIndex::new(text).offset(position);
         inspection.symbol_at(offset).cloned()
     }
@@ -509,12 +503,8 @@ impl Server {
         let character = params.pointer("/position/character")?.as_u64()? as u32;
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
-        let (text, inspection) = if document.inspection.parsed {
-            (&*document.text, &*document.inspection)
-        } else {
-            let (text, inspection) = document.good.as_ref()?;
-            (&**text, &**inspection)
-        };
+        let (text, inspection) = document.answers.answering()?;
+        let (text, inspection) = (&**text, &**inspection);
         Some((document, offset, text, inspection))
     }
 
@@ -867,10 +857,11 @@ impl Server {
     fn outline(&self, params: &Value) -> Option<DocumentSymbolResponse> {
         let uri = params.pointer("/textDocument/uri")?.as_str()?;
         let document = self.documents.get(uri)?;
+        // The outline is syntax: the current text's when it parses (#1128).
         let inspection = if document.inspection.parsed {
             &document.inspection
         } else {
-            &document.good.as_ref()?.1
+            document.answers.answering()?.1
         };
         Some(DocumentSymbolResponse::Nested(
             inspection.outline.iter().map(document_symbol).collect(),

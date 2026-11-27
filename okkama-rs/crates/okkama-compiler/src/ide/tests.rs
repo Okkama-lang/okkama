@@ -1021,3 +1021,34 @@ fn a_successor_action_completes_with_its_declared_result() {
     let labels: Vec<String> = inspection.complete(text, &chained, offset as u32).into_iter().map(|item| item.label).collect();
     assert!(labels.contains(&"state".to_string()) && labels.contains(&"open".to_string()), "{labels:?}");
 }
+
+/// #1128: an editor's answers come from the last analysed inspection. A text that parses but whose import does not
+/// resolve, or that does not parse, is not analysed: the earlier inspection keeps answering, with its symbols.
+#[test]
+fn answers_come_from_the_last_analysed_inspection() {
+    let mut answers = super::Answering::default();
+    assert!(answers.answering().is_none());
+    let good = inspect(MAIN);
+    assert!(good.parsed && good.analysed && !good.symbols.is_empty());
+    let good_text: std::rc::Rc<str> = std::rc::Rc::from(MAIN);
+    answers.record(&good_text, &std::rc::Rc::new(good));
+    for (text, parsed) in [
+        (MAIN.replace("shop/money", "shop/missing"), true),
+        (MAIN.replace("let _kind = Currency.euro;", "let _kind = std.coll;"), true),
+        (MAIN.replace("let _kind = Currency.euro;", "wallet."), false),
+    ] {
+        let inspection = inspect(&text);
+        assert_eq!(inspection.parsed, parsed, "{text}");
+        assert!(!inspection.analysed && inspection.symbols.is_empty(), "{text}");
+        assert!(!inspection.diagnostics.is_empty(), "{text}");
+        answers.record(&std::rc::Rc::from(text.as_str()), &std::rc::Rc::new(inspection));
+        let (answering_text, answering) = answers.answering().unwrap();
+        assert_eq!(&**answering_text, MAIN, "{text}");
+        assert!(!answering.symbols.is_empty(), "{text}");
+    }
+    let changed = MAIN.replace("let _kind = Currency.euro;", "let _kind = Currency.dollar;");
+    let inspection = inspect(&changed);
+    assert!(inspection.analysed, "an analysed text with an error in its body still answers");
+    answers.record(&std::rc::Rc::from(changed.as_str()), &std::rc::Rc::new(inspection));
+    assert_eq!(&**answers.answering().unwrap().0, changed);
+}

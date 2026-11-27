@@ -150,6 +150,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   and process calls.
 
 ### Fixed
+- **A deny flag refuses only real host access (#1133).** The natives that compute without the host were counted as
+  host access, so `--deny env`, `--deny net` or a restricted embedding refused them: standard input's line buffers
+  (`input_state`, was Terminal), IP address text (`net` `ip_*`, was Net), PostgreSQL result pages (`pg_page*`, was
+  Net), the date-times of a named zone (`timezone_local_*`, was Env) and what the build is (`system_platform`,
+  `system_architecture`, `system_byte_order`, was Env). They are pure in Sparrow's permission groups and in the
+  compiler's companion catalogue alike (23 natives), and the playground profile no longer lists them as exceptions.
+- **The editor keeps its answers while an import or a std path is being typed (#1128).** The language server and
+  the playground answered hover, completion and definition from the last text that parsed, so a text that parsed
+  but did not resolve (`std.coll` half typed) cost every symbol in the language server: completion after `bottle.`
+  offered nothing. Both now answer from the last inspection that was analysed (`ide::Answering`, one rule for both);
+  the unresolved text's diagnostics are still shown. The Bible's example check compares the CLI's own names of
+  imported files, without rewriting them.
 - **Completion showed a successor action's result with two carets (#1117).** After `bottle.`, `open` had the
   detail `() is ^^Bottle` in the language server and the playground; it is `() is ^Bottle`, as declared.
 - **A session on the interpreter refused every extension (#1122).** The interpreter's runtime loads without the

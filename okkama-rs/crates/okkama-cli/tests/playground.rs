@@ -355,7 +355,8 @@ fn completion_answers_as_the_language_server_does() {
     let uri = format!("file://{}", file.display());
     let workspace = Workspace::default();
     let mut lsp = Lsp::start();
-    // Both answer from the last text that parsed (the typed ones do not).
+    // Both answer from the last inspection that was analysed (#1128): the typed texts do not parse, and `std.coll`
+    // parses but does not resolve.
     lsp.notify("textDocument/didOpen", json!({"textDocument": {"uri": uri, "version": 0, "languageId": "okkama", "text": program}}));
     lsp.request("textDocument/documentSymbol", json!({"textDocument": {"uri": uri}}));
     workspace.hover(&json!({"source": program, "path": file.display().to_string(), "line": 0, "character": 0}));
@@ -363,6 +364,8 @@ fn completion_answers_as_the_language_server_does() {
     let mut compared = 0;
     for typed in [
         "bottle.", "let x = std.", "std.io.", "std.io.stdout.", "std.compare.Order.", "std.Stdo", "std.json.", "std.coll",
+        // #1128: after a std path that does not resolve, both answer from the same inspection.
+        "bottle.",
     ] {
         let text = if typed == "bottle." {
             program.replace("bottle.state();", typed)

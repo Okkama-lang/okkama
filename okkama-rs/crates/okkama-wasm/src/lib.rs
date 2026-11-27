@@ -46,15 +46,15 @@ const EXIT_DIAGNOSTICS: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 
 /// The files a program can import: the bundled std under its root, the page's own files, and import
-/// directories (`OKKAMA_IMPORT_DIRS`). It keeps the last inspection of each file that parsed, as the language
-/// server does, so completion works while the text being typed does not parse.
+/// directories (`OKKAMA_IMPORT_DIRS`). It keeps the last analysed inspection of each file (`ide::Answering`, the
+/// language server's rule, #1128), so completion works while the text being typed does not parse or resolve.
 #[derive(Debug)]
 pub struct Workspace {
     std_root: String,
     std: HashMap<String, &'static str>,
     files: BTreeMap<String, String>,
     import_dirs: Vec<String>,
-    parsed: RefCell<HashMap<String, Parsed>>,
+    answers: RefCell<HashMap<String, ide::Answering>>,
     built: RefCell<Option<Built>>,
 }
 
@@ -70,8 +70,6 @@ impl std::fmt::Debug for Built {
     }
 }
 
-/// The text a file last parsed from and its inspection.
-type Parsed = (Rc<str>, Rc<Inspection>);
 
 impl Default for Workspace {
     fn default() -> Self {
@@ -85,13 +83,13 @@ impl Workspace {
     pub fn new(std_root: &str) -> Self {
         let std_root = normalize(std_root);
         let std = bundle::FILES.iter().map(|(path, text)| (join(&std_root, path), *text)).collect();
-        Self { std_root, std, files: BTreeMap::new(), import_dirs: Vec::new(), parsed: RefCell::default(), built: RefCell::default() }
+        Self { std_root, std, files: BTreeMap::new(), import_dirs: Vec::new(), answers: RefCell::default(), built: RefCell::default() }
     }
 
     /// The page's own files besides the one being checked, which it may import (`path` → text).
     pub fn set_files(&mut self, files: impl IntoIterator<Item = (String, String)>) {
         self.files = files.into_iter().map(|(path, text)| (normalize(&path), text)).collect();
-        self.parsed.borrow_mut().clear();
+        self.answers.borrow_mut().clear();
     }
 
     /// Directories searched after the importing file's own, before std (`OKKAMA_IMPORT_DIRS`).
@@ -336,20 +334,20 @@ impl Workspace {
         Some(found.iter().map(std_completion).collect())
     }
 
-    /// The request's file, its offset of `line`/`character`, and the last inspection of it that parsed, with
-    /// the text it inspected.
+    /// The request's file, its offset of `line`/`character`, and the inspection that answers about it, with the
+    /// text it inspected.
     fn at(&self, request: &Value) -> Option<(SourceFile, u32, Rc<str>, Rc<Inspection>)> {
         let source = self.source(request).ok()?;
         let line = request.get("line")?.as_u64()? as u32;
         let character = request.get("character")?.as_u64()? as u32;
         let offset = LineIndex::new(source.text()).offset(Position { line, character });
-        let inspection = commands::inspect(&source, &mut |test_mode| self.loader(test_mode));
-        let mut parsed = self.parsed.borrow_mut();
-        if inspection.parsed {
-            parsed.insert(source.name().to_string(), (Rc::from(source.text()), Rc::new(inspection)));
-        }
-        let (text, inspection) = parsed.get(source.name())?.clone();
-        Some((source, offset, text, inspection))
+        let inspection = Rc::new(commands::inspect(&source, &mut |test_mode| self.loader(test_mode)));
+        let mut answers = self.answers.borrow_mut();
+        // The language server's rule (#1128): the last analysed inspection answers.
+        let answers = answers.entry(source.name().to_string()).or_default();
+        answers.record(&Rc::from(source.text()), &inspection);
+        let (text, inspection) = answers.answering()?;
+        Some((source, offset, Rc::clone(text), Rc::clone(inspection)))
     }
 
     /// The request's `source`, named by its `path` (`main.ok` without one).

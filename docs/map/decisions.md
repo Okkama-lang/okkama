@@ -1058,3 +1058,25 @@ every declaration is open (#1005, owner decision).
 - **A session on the interpreter** (`extend`) drops the pointer-free proofs of the extension's functions as
   `assemble`/`use_engine` drop its own (#1122); the published-metadata check refused every extension before. Found by
   this run; it fails natively without default features too.
+
+## Pure natives are pure in both classifications (#1133, 2026-11-27)
+
+- `input_state`, `net` (`ip_*` only) and `postgres` (`pg_page*` only) are pure modules in `budget::PURE` and the
+  companion catalogue's `PURE`; `timezone_local_*` falls to `time_zone`'s pure; `system_platform`,
+  `system_architecture`, `system_byte_order` are pure by name (`budget::SYSTEM_CONSTANTS`, the catalogue's
+  `effect`), the rest of `runtime/system` stays Env (host name, CPUs, storage) or Random (`secure_*`). Effect counts
+  of the catalogue: pure 275, stdio 3, host 264. The playground's `allowed` keeps only `stdin_*`.
+
+## One rule for the inspection an editor's answer uses (#1128, 2026-11-27)
+
+- **`Inspection::analysed`**: parsed, std paths desugared, the import graph loaded and analysis ran.
+  **`ide::Answering`** keeps the last analysed inspection and its text; the language server records every
+  inspection (each change) and okkama-wasm every IDE call's, and both answer hover, completion, definition and
+  signature from it. A std path or import that does not resolve no longer costs the language server every symbol:
+  the earlier answers stay, the new diagnostics are published. The outline is syntax: the current text's when it
+  parses, else the answering one's.
+- **Left as it is:** the playground inspects only at IDE calls, so a text that was analysed between two calls and
+  never sent is not seen; with the rule above that changes an answer only when such a text differs in its symbols
+  from both neighbours.
+- `docs/OkkamaBible/build.py --check` no longer rewrites `examples/` out of the output: since #1119 the CLI names
+  imported files relative to the current directory (249 examples, unchanged).

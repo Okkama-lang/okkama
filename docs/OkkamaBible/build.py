@@ -221,9 +221,10 @@ def check():
             p = subprocess.run(cage + [OKKAMA, "run", *tests, *flag, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
                                env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB, "OKKAMA_TRACE": "off"})
-            # A rejected example is shown with the compiler's diagnostic; a
-            # module the example imports is named relative to examples/.
-            shown = (p.stderr if stem.endswith("-rejected") else p.stdout).replace(examples + os.sep, "")
+            # A rejected example is shown with the compiler's diagnostic. It runs
+            # in examples/, so the CLI names a module it imports relative to it
+            # (#1119): the check compares the CLI's own naming (#1128).
+            shown = p.stderr if stem.endswith("-rejected") else p.stdout
             output = shown.rstrip("\n").splitlines() if shown else []
             if p.returncode != 0 and not stem.endswith("-rejected"):
                 output.append(f"exit {p.returncode}")

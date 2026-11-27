@@ -178,6 +178,32 @@ pub struct Inspection {
     pub globals: Vec<Completion>,
     /// Корневой файл разобран: символы и структура соответствуют тексту.
     pub parsed: bool,
+    /// The file parsed, its std paths and imports resolved and analysis ran: its symbols, members and scopes
+    /// describe the text (#1128). A file whose import or std path does not resolve parsed but has none.
+    pub analysed: bool,
+}
+
+/// The inspection an editor's answer about a file uses (#1128), one rule for the language server and the
+/// playground: the last one that was analysed ([`Inspection::analysed`]). A text that does not parse, or whose
+/// std path or import does not resolve (`std.coll` while it is being typed), keeps the earlier answers instead of
+/// costing every symbol; its diagnostics are still shown. The outline needs only a parse.
+#[derive(Clone, Debug, Default)]
+pub struct Answering {
+    last: Option<(std::rc::Rc<str>, std::rc::Rc<Inspection>)>,
+}
+
+impl Answering {
+    /// `inspection` of `text` was made: it answers from now on if it was analysed.
+    pub fn record(&mut self, text: &std::rc::Rc<str>, inspection: &std::rc::Rc<Inspection>) {
+        if inspection.analysed {
+            self.last = Some((std::rc::Rc::clone(text), std::rc::Rc::clone(inspection)));
+        }
+    }
+
+    /// The text and inspection that answer: the last analysed one, if any.
+    pub fn answering(&self) -> Option<(&std::rc::Rc<str>, &std::rc::Rc<Inspection>)> {
+        self.last.as_ref().map(|(text, inspection)| (text, inspection))
+    }
 }
 
 impl Inspection {
