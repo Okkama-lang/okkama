@@ -132,7 +132,7 @@ mod tests {
     fn a_dev_output_is_written_only_when_its_switch_names_a_file() {
         let file = std::env::temp_dir().join(format!("okkama-host-dev-output-{}", std::process::id()));
         super::write_to(None, || unreachable!("built only when the switch names a file"));
-        super::dev_output("OKKAMA_HOST_TEST_UNSET_1116", || unreachable!("an unset switch writes nothing"));
+        super::dev_output("HOST_TEST_UNSET_SWITCH_1116", || unreachable!("an unset switch writes nothing"));
         super::write_to(Some(file.clone().into_os_string()), || "report".to_string());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "report");
         std::fs::remove_file(file).unwrap();
