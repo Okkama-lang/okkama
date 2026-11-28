@@ -46,13 +46,13 @@ impl Call<'_> {
         Ok(())
     }
 
-    fn entry(&self, token: okk_slot) -> Result<Slot> {
+    pub(super) fn entry(&self, token: okk_slot) -> Result<Slot> {
         let index = token.bits as u32 as usize;
         if token.bits >> 32 != self.serial || index >= self.count { return Err(OKK_BAD_TOKEN); }
         let slot = if index < self.inline.len() { self.inline[index] } else { self.overflow[index - self.inline.len()] };
         let kind = match slot.kind() {
             h::BIG => OKK_BIGINT, h::RAT => OKK_RAT, h::STR => OKK_STRING,
-            h::ARRAY => OKK_ARRAY, h::MAP => OKK_MAP, _ => return Err(OKK_BAD_KIND),
+            h::ARRAY => OKK_ARRAY, h::MAP => OKK_MAP, h::HANDLE => OKK_STATE, _ => return Err(OKK_BAD_KIND),
         };
         if token.kind != kind { return Err(OKK_BAD_KIND); }
         Ok(slot)
@@ -64,7 +64,7 @@ impl Call<'_> {
             h::RAT => Shape::Rat, h::BOOL => Shape::Bool, h::BYTE => Shape::Byte,
             h::CHAR => Shape::Char, h::FLOAT => Shape::Float, h::STR => Shape::Str,
             h::ARRAY => Shape::Array((slot.tag >> 8) as usize),
-            h::MAP | h::MAYBE => self.host.shapes[(slot.tag >> 8) as usize].clone(),
+            h::MAP | h::MAYBE | h::HANDLE => self.host.shapes[(slot.tag >> 8) as usize].clone(),
             _ => Shape::Unknown,
         }
     }
@@ -80,6 +80,10 @@ impl Call<'_> {
             h::BYTE => scalar(slot.bits, OKK_BYTE), h::CHAR => scalar(slot.bits, OKK_CHAR),
             h::STR => self.token(slot, OKK_STRING), h::RAT => self.token(slot, OKK_RAT),
             h::ARRAY => self.token(slot, OKK_ARRAY), h::MAP => self.token(slot, OKK_MAP),
+            h::HANDLE => {
+                self.external(slot)?;
+                self.token(slot, OKK_STATE)
+            }
             h::MAYBE => {
                 let Shape::Maybe(inner, some, none) = self.shape(slot) else { return Err(OKK_BAD_SHAPE); };
                 let descriptor = crate::heap::payload(self.host.core().header_of(slot.bits));
@@ -107,7 +111,7 @@ impl Call<'_> {
                 }
                 h::FLOAT
             }
-            OKK_BIGINT | OKK_RAT | OKK_STRING | OKK_ARRAY | OKK_MAP => return self.entry(value),
+            OKK_BIGINT | OKK_RAT | OKK_STRING | OKK_ARRAY | OKK_MAP | OKK_STATE => return self.entry(value),
             _ => return Err(OKK_BAD_KIND),
         };
         Ok(Slot { bits: value.bits, tag })
@@ -131,7 +135,7 @@ impl Call<'_> {
             (Shape::Unknown, OKK_NONE) | (Shape::Int, OKK_INT | OKK_BIGINT) | (Shape::Rat, OKK_RAT)
             | (Shape::Float, OKK_FLOAT) | (Shape::Bool, OKK_BOOL) | (Shape::Byte, OKK_BYTE)
             | (Shape::Char, OKK_CHAR) | (Shape::Str, OKK_STRING) | (Shape::Array(_), OKK_ARRAY)
-            | (Shape::Map(..), OKK_MAP));
+            | (Shape::Map(..), OKK_MAP) | (Shape::External(..), OKK_STATE));
         if !kind_matches { return Err(OKK_BAD_KIND); }
         let slot = self.import(value)?;
         if exact {

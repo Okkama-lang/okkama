@@ -424,6 +424,9 @@ fn ext_c_header_matches_rust_layout() {
     layout!(okk_host; text, bytes, text_new, bytes_new, bytes_reserve, bigint_read, bigint_new, rat_parts, rat_new,
         array_len, array_get, array_read, array_new, map_len, map_entries, map_new, state_new, state_get, state_release, fail, interrupted);
     for (field, args) in [
+        ("state_new", "okk_call *, const okk_state_type *, void *, size_t, okk_slot *"),
+        ("state_get", "okk_call *, okk_slot, const okk_state_type *, void **"),
+        ("state_release", "okk_call *, okk_slot, const okk_state_type *"),
         ("bytes_reserve", "okk_call *, size_t, uint8_t **, okk_slot *"),
         ("bigint_read", "okk_call *, okk_slot, int32_t *, const uint8_t **, size_t *"),
         ("bigint_new", "okk_call *, int32_t, const uint8_t *, size_t, okk_slot *"),
@@ -566,9 +569,24 @@ fn ext_fuzz_seeds() {
         include_bytes!("../../../../fuzz/seeds/ext/memory").as_slice()] {
         ext_fuzz::exercise(seed);
     }
-    for op in 0..24 {
-        for selector in [0, 1, 7, 255] {
-            let mut seed = [0; 25]; seed[1] = op; seed[2] = selector; seed[3] = selector % 8;
+    // Create/read/release, then a closed-state read; retain the source token.
+    let mut state_seed = vec![0];
+    for op in [25, 26, 25] {
+        let mut packet = [0; 24];
+        packet[0] = op; packet[1] = 1; packet[2] = 8; packet[23] = 7;
+        state_seed.extend(packet);
+    }
+    ext_fuzz::exercise(&state_seed);
+    for ty in 0..4 {
+        for op in 24..27 {
+            let mut seed = [0; 25];
+            seed[1] = op; seed[2] = 1; seed[3] = 8; seed[22] = ty;
+            ext_fuzz::exercise(&seed);
+        }
+    }
+    for op in 0..27 {
+        for selector in [0, 1, 7, 8, 9, 255] {
+            let mut seed = [0; 25]; seed[1] = op; seed[2] = selector; seed[3] = selector % 16;
             seed[13] = selector; seed[21] = selector % 17;
             ext_fuzz::exercise(&seed);
         }

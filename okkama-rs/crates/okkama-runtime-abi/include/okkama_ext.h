@@ -62,6 +62,14 @@ extern const okk_extension okkama_extension;
  * map_entries copies the first count keys and values in key order; count
  * beyond map_len is RANGE. Empty input/output buffers may be null.
  * Maybe is NONE (bits = 0) or its inner slot, never a token for the wrapper.
+ * State types are pointers into this extension's states table; names are short
+ * native object names in the export's module. Payloads are opaque, including null.
+ * Successful state_new transfers the payload: drop runs exactly once on this
+ * runtime's VM thread at release, dead-cell sweep, or runtime teardown.
+ * On failure state_new leaves payload ownership with the caller.
+ * bytes charges collector pressure. States carry no language ownership token.
+ * state_get/release require the same type; a foreign type is a contract fault.
+ * After release both set NativeFailure already_closed and return OKK_FAILED.
  * Unimplemented entries return OKK_UNSUPPORTED without changing outputs. */
 struct okk_host {
     uint32_t (*text)(okk_call *, okk_slot, const uint8_t * *, size_t *);
@@ -82,7 +90,7 @@ struct okk_host {
     uint32_t (*map_new)(okk_call *, const okk_slot *, const okk_slot *, size_t, okk_slot *);
     uint32_t (*state_new)(okk_call *, const okk_state_type *, void *, size_t, okk_slot *);
     uint32_t (*state_get)(okk_call *, okk_slot, const okk_state_type *, void * *);
-    uint32_t (*state_release)(okk_call *, okk_slot);
+    uint32_t (*state_release)(okk_call *, okk_slot, const okk_state_type *);
     uint32_t (*fail)(okk_call *, const uint8_t *, size_t, const uint8_t *, size_t);
     uint32_t (*interrupted)(okk_call *, uint32_t *);
 };

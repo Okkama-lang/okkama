@@ -13,45 +13,57 @@ pub(crate) struct Binding {
     params: Box<[Shape]>,
     result: Shape,
     bytes_tag: u64,
+    states: Box<[(&'static okk_state_type, Shape)]>,
 }
 
 impl Binding {
     pub(crate) fn new(host: &mut Heap, program: &okkama_sparrow::Program, function: &okkama_sparrow::Function,
-        symbol: &'static str, signature: &Signature, sync: Option<okk_sync>) -> Result<Self, Error>
+        symbol: &'static str, signature: &Signature, sync: Option<okk_sync>, states: &'static [okk_state_type]) -> Result<Self, Error>
     {
         let Some(sync) = sync.filter(|_| !signature.is_async) else {
             return Err(Error(format!("native {symbol}: async extensions are not in this step")));
         };
+        let module = symbol.split('@').next().unwrap_or("").replace('/', ".");
+        let states: Box<[_]> = states.iter().filter_map(|state| {
+            // Registration validated the immutable descriptor strings.
+            let name = unsafe { std::ffi::CStr::from_ptr(state.name) }.to_str().unwrap();
+            program.handles.iter().position(|h| h == &format!("{module}::{name}"))
+                .map(|id| (state, Shape::External(id as u32, state as *const _ as usize)))
+        }).collect();
+        for (_, shape) in &states { host.intern(shape.clone()); }
         let params = signature.params.iter().zip(&function.params).map(|(ty, reg)| {
-            value_shape(host, program, function.registers[reg.0 as usize], ty)
+            value_shape(host, program, function.registers[reg.0 as usize], ty, &states)
         }).collect::<Result<_, _>>()?;
         let result = match function.result {
-            Some(ty) => value_shape(host, program, ty, &signature.result)?,
+            Some(ty) => value_shape(host, program, ty, &signature.result, &states)?,
             None => Shape::Unknown,
         };
         let Shape::Array(byte) = host.shape(&Type::bytes()) else { unreachable!() };
-        Ok(Self { symbol, sync, params, result, bytes_tag: super::ARRAY | ((byte as u64) << 8) })
+        Ok(Self { symbol, sync, params, result, states, bytes_tag: super::ARRAY | ((byte as u64) << 8) })
     }
 }
 
-fn value_shape(host: &mut Heap, program: &okkama_sparrow::Program, ty: okkama_sparrow::TypeRef, abi: &Type) -> Result<Shape, Error> {
+fn value_shape(host: &mut Heap, program: &okkama_sparrow::Program, ty: okkama_sparrow::TypeRef, abi: &Type, states: &[(&okk_state_type, Shape)]) -> Result<Shape, Error> {
     use okkama_sparrow::Type as T;
     let shape = match (&program.types[ty.0 as usize], abi) {
+        (T::Handle(id), Type::Handle(_)) => states.iter().find_map(|(_, shape)| {
+            matches!(shape, Shape::External(h, _) if h == id).then(|| shape.clone())
+        }).ok_or_else(|| Error(format!("extension state {} is not registered", program.handles[*id as usize])))?,
         (T::Rat, Type::Rat) => Shape::Rat,
         (T::Array(t), Type::Array(a)) => {
-            let element = value_shape(host, program, *t, a)?;
+            let element = value_shape(host, program, *t, a, states)?;
             Shape::Array(host.intern(element))
         }
         (T::Map(k, v), Type::Map(a, b)) => {
-            let key = value_shape(host, program, *k, a)?;
-            let value = value_shape(host, program, *v, b)?;
+            let key = value_shape(host, program, *k, a, states)?;
+            let value = value_shape(host, program, *v, b, states)?;
             Shape::Map(host.intern(key), host.intern(value))
         }
         (T::Variant(v), Type::Maybe(a)) => {
             let variant = &program.variants[v.0 as usize];
             let some = variant.cases.iter().find(|(n, _)| n == "some").unwrap().1;
             let none = variant.cases.iter().find(|(n, _)| n == "none").unwrap().1;
-            let inner = value_shape(host, program, program.objects[some.0 as usize].fields[0].1, a)?;
+            let inner = value_shape(host, program, program.objects[some.0 as usize].fields[0].1, a, states)?;
             if matches!(inner, Shape::Maybe(..)) { return Err(Error("nested Maybe is not in ABI 1".into())); }
             Shape::Maybe(host.intern(inner), some.0, none.0)
         }
@@ -279,20 +291,8 @@ unsafe extern "C" fn interrupted(call: *mut okk_call, result: *mut u32) -> u32 {
     }) }
 }
 
-macro_rules! deferred {
-    ($($name:ident($($arg:ident: $ty:ty),*);)*) => { $(
-        unsafe extern "C" fn $name($($arg: $ty),*) -> u32 {
-            $(let _ = $arg;)*
-            OKK_UNSUPPORTED
-        }
-    )* };
-}
-
-deferred! {
-    state_new(c: *mut okk_call, t: *const okk_state_type, p: *mut c_void, n: usize, r: *mut okk_slot);
-    state_get(c: *mut okk_call, v: okk_slot, t: *const okk_state_type, p: *mut *mut c_void);
-    state_release(c: *mut okk_call, v: okk_slot);
-}
+pub(crate) mod states;
+use states::*;
 
 static HOST: okk_host = okk_host {
     text, bytes, text_new, bytes_new, bytes_reserve, bigint_read, bigint_new, rat_parts, rat_new,

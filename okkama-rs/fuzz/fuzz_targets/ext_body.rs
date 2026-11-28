@@ -3,25 +3,42 @@
 #[cfg(test)]
 use crate as sparrow_core;
 use okkama_runtime_abi::ext::*;
-use std::{cell::RefCell, ptr};
+use std::{cell::{Cell, RefCell}, ptr};
 
 thread_local! {
+    static CREATED: Cell<usize> = const { Cell::new(0) };
+    static DROPPED: Cell<usize> = const { Cell::new(0) };
     static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static STALE: RefCell<okk_slot> = const { RefCell::new(okk_slot { bits: 0, kind: OKK_STRING }) };
+}
+
+unsafe extern "C" fn drop_state(_: *mut std::ffi::c_void) {
+    DROPPED.with(|d| { d.set(d.get() + 1); CREATED.with(|c| assert!(d.get() <= c.get())); });
+}
+static STATES: [okk_state_type; 2] = [
+    okk_state_type { name: c"State".as_ptr(), drop: drop_state },
+    okk_state_type { name: c"Other".as_ptr(), drop: drop_state },
+];
+unsafe fn new_state(c: *mut okk_call, ty: *const okk_state_type, bytes: usize, out: *mut okk_slot) -> u32 {
+    let status = unsafe { ((*(*c).host).state_new)(c, ty, ptr::null_mut(), bytes, out) };
+    if status == OKK_OK { CREATED.with(|n| n.set(n.get() + 1)); }
+    status
 }
 
 unsafe extern "C" fn hostile(c: *mut okk_call, _: *const okk_slot, out: *mut okk_slot) -> u32 {
     INPUT.with(|input| unsafe {
         let input = input.borrow();
         let h = &*(*c).host;
-        let mut slots = [okk_slot { bits: 0, kind: OKK_INT }; 16];
-        (h.text_new)(c, b"seed".as_ptr(), 4, &mut slots[1]);
-        (h.bytes_new)(c, b"bytes".as_ptr(), 5, &mut slots[2]);
-        (h.bigint_new)(c, 1, [255; 16].as_ptr(), 16, &mut slots[3]);
-        (h.rat_new)(c, okk_slot { bits: 6, kind: OKK_INT }, okk_slot { bits: 8, kind: OKK_INT }, &mut slots[4]);
-        (h.array_new)(c, slots.as_ptr(), 1, &mut slots[5]);
-        (h.map_new)(c, slots.as_ptr(), slots.as_ptr(), 1, &mut slots[6]);
-        slots[7] = STALE.with(|s| s.replace(slots[1]));
+        let mut bank = [okk_slot { bits: 0, kind: OKK_INT }; 16];
+        (h.text_new)(c, b"seed".as_ptr(), 4, &mut bank[1]);
+        (h.bytes_new)(c, b"bytes".as_ptr(), 5, &mut bank[2]);
+        (h.bigint_new)(c, 1, [255; 16].as_ptr(), 16, &mut bank[3]);
+        (h.rat_new)(c, okk_slot { bits: 6, kind: OKK_INT }, okk_slot { bits: 8, kind: OKK_INT }, &mut bank[4]);
+        (h.array_new)(c, bank.as_ptr(), 1, &mut bank[5]);
+        (h.map_new)(c, bank.as_ptr(), bank.as_ptr(), 1, &mut bank[6]);
+        bank[7] = STALE.with(|s| s.replace(bank[1]));
+        new_state(c, &STATES[0], 64, &mut bank[8]);
+        new_state(c, &STATES[1], 64, &mut bank[9]);
         let mut status = OKK_OK;
         // Bound work, not scalar/token bit patterns. Foreign pointers must still
         // address their advertised buffers; arbitrary addresses cannot be sandboxed.
@@ -30,15 +47,20 @@ unsafe extern "C" fn hostile(c: *mut okk_call, _: *const okk_slot, out: *mut okk
             let bits = u64::from_le_bytes(packet[4..12].try_into().unwrap());
             let kind = u64::from_le_bytes(packet[12..20].try_into().unwrap());
             let arbitrary = okk_slot { bits, kind };
-            let slot = if packet[1] & 1 == 0 { arbitrary } else { slots[packet[2] as usize % slots.len()] };
-            let other = slots[packet[3] as usize % slots.len()];
+            let slot = if packet[1] & 1 == 0 { arbitrary } else { bank[packet[2] as usize % bank.len()] };
+            let other = bank[packet[3] as usize % bank.len()];
             let mut result = okk_slot::default();
             let mut len = 0; let mut sign = 0; let mut view = ptr::null(); let mut buffer = ptr::null_mut();
             let mut keys = [okk_slot::default(); 16]; let mut values = keys;
             let mut scalar = 0;
             let count = packet[20] as usize % 17;
             let bytes = &packet[..count];
-            status = match packet[0] % 24 {
+            let ty = match packet[21] % 4 {
+                0 => &STATES[0] as *const _, 1 => &STATES[1] as *const _,
+                2 => ptr::null(), _ => bits as usize as *const okk_state_type,
+            };
+            let mut payload = ptr::null_mut();
+            status = match packet[0] % 27 {
                 0 => { result = arbitrary; u32::from_le_bytes(packet[20..24].try_into().unwrap()) },
                 1 => (h.text)(c, slot, &mut view, &mut len),
                 2 => (h.bytes)(c, slot, &mut view, &mut len),
@@ -67,9 +89,12 @@ unsafe extern "C" fn hostile(c: *mut okk_call, _: *const okk_slot, out: *mut okk
                 20 => (h.array_new)(c, ptr::null(), bits as usize, &mut result),
                 21 => (h.array_len)(c, slot, ptr::null_mut()),
                 22 => { result = slot; OKK_OK },
+                24 => new_state(c, ty, if packet[22] == 255 { usize::MAX } else { count }, &mut result),
+                25 => (h.state_get)(c, slot, ty, &mut payload),
+                26 => (h.state_release)(c, slot, ty),
                 _ => (h.bigint_read)(c, slot, ptr::null_mut(), &mut view, &mut len),
             };
-            slots[8 + packet[23] as usize % 8] = result;
+            bank[8 + packet[23] as usize % 8] = result;
             *out = result;
         }
         match input.first().copied().unwrap_or(0) % 4 {
@@ -81,11 +106,15 @@ unsafe extern "C" fn hostile(c: *mut okk_call, _: *const okk_slot, out: *mut okk
 static EXPORT: okk_export = okk_export { symbol: c"fuzz/ext@0::hostile/0".as_ptr(), signature: c"() -> int".as_ptr(),
     params: c"".as_ptr(), sync: Some(hostile), r#async: ptr::null() };
 static EXTENSION: okk_extension = okk_extension { abi: OKKAMA_EXT_ABI, size: std::mem::size_of::<okk_extension>() as u32,
-    name: c"hostile".as_ptr(), exports: &EXPORT, export_count: 1, states: ptr::null(), state_count: 0 };
+    name: c"hostile".as_ptr(), exports: &EXPORT, export_count: 1, states: STATES.as_ptr(), state_count: STATES.len() as u32 };
 
 pub fn exercise(data: &[u8]) {
+    CREATED.with(|n| n.set(0));
+    DROPPED.with(|n| n.set(0));
     let program = okkama_sparrow::assemble(r#"sparrow 19
 module "ext_fuzz" "1.0.0"
+handle "fuzz.ext::State"
+handle "fuzz.ext::Other"
 type t0 int
 type t1 str
 type t2 object obj0
@@ -116,4 +145,5 @@ entry f1
         ..Default::default()
     };
     let _ = sparrow_core::run_limited(okkama_sparrow::encode(&program).unwrap(), vec![], false, vec![], limits);
+    CREATED.with(|c| DROPPED.with(|d| assert_eq!(c.get(), d.get(), "teardown drops every state")));
 }

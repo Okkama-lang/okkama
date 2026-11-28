@@ -68,6 +68,7 @@ pub struct okk_export {
 
 #[repr(C)]
 #[derive(Debug)]
+/// Short native object name in the export module; drop runs on its runtime's VM thread.
 pub struct okk_state_type {
     pub name: *const c_char,
     pub drop: unsafe extern "C" fn(*mut c_void),
@@ -128,9 +129,13 @@ pub struct okk_host {
     pub map_entries: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut okk_slot, *mut okk_slot, usize) -> u32,
     /// Copy keys and values of one shape each; repeated keys return RANGE.
     pub map_new: unsafe extern "C" fn(*mut okk_call, *const okk_slot, *const okk_slot, usize, *mut okk_slot) -> u32,
+    /// Success transfers payload ownership until release, dead-cell sweep or teardown.
+    /// Failure leaves ownership with the caller; bytes charges collector pressure.
     pub state_new: unsafe extern "C" fn(*mut okk_call, *const okk_state_type, *mut c_void, usize, *mut okk_slot) -> u32,
+    /// Type pointers must identify this extension's registered state types.
+    /// Closed states set NativeFailure already_closed and return FAILED.
     pub state_get: unsafe extern "C" fn(*mut okk_call, okk_slot, *const okk_state_type, *mut *mut c_void) -> u32,
-    pub state_release: unsafe extern "C" fn(*mut okk_call, okk_slot) -> u32,
+    pub state_release: unsafe extern "C" fn(*mut okk_call, okk_slot, *const okk_state_type) -> u32,
     pub fail: unsafe extern "C" fn(*mut okk_call, *const u8, usize, *const u8, usize) -> u32,
     pub interrupted: unsafe extern "C" fn(*mut okk_call, *mut u32) -> u32,
 }

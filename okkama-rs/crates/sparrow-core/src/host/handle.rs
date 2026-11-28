@@ -4,6 +4,7 @@ use crate::host::*;
 use okkama_runtime_abi::{Native, NativeFailure};
 #[derive(Debug)]
 pub(crate) enum Handle {
+    External(crate::host::native_ext::states::External),
     Input(crate::host::native_input::Input),
     #[cfg(all(unix, feature = "host"))]
     Process(crate::host::native_process::ProcessHandle),
@@ -50,7 +51,8 @@ impl Handle {
     pub(crate) fn roots(&self, roots: &mut Vec<Slot>) {
         match self {
             Self::Json(json) => json.roots(roots),
-            Self::Input(_)
+            Self::External(_)
+            | Self::Input(_)
             | Self::Db(_)
             | Self::Regex(_)
             | Self::Secret(_)

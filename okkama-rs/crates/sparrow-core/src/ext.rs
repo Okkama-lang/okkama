@@ -18,6 +18,7 @@ struct Export {
 #[derive(Debug, Clone)]
 pub struct Extension {
     exports: Arc<[Export]>,
+    states: &'static [okk_state_type],
 }
 
 impl Extension {
@@ -77,10 +78,15 @@ impl Extension {
         let states = if descriptor.state_count == 0 { &[][..] } else {
             unsafe { std::slice::from_raw_parts(descriptor.states, descriptor.state_count as usize) }
         };
+        let mut names = std::collections::HashSet::new();
         for state in states {
-            unsafe { text(state.name)? };
+            let name = unsafe { text(state.name)? };
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                return Err(Error(format!("invalid extension state name {name}")));
+            }
+            if !names.insert(name) { return Err(Error(format!("duplicate extension state {name}"))); }
         }
-        Ok(Self { exports: parsed.into() })
+        Ok(Self { exports: parsed.into(), states })
     }
 }
 
@@ -97,14 +103,14 @@ pub(crate) fn bind(loaded: &Loaded, extensions: &[Extension], host: &mut host::H
     let mut exports = HashMap::new();
     for extension in extensions {
         for export in extension.exports.iter() {
-            if exports.insert(export.symbol, export).is_some() {
+            if exports.insert(export.symbol, (export, extension.states)).is_some() {
                 return Err(Error(format!("duplicate extension symbol {} in two extensions", export.symbol)));
             }
         }
     }
     let program = &loaded.program;
     program.functions.iter().map(|function| {
-        let Some(export) = function.native.as_deref().and_then(|s| exports.get(s)) else { return Ok(None); };
+        let Some((export, states)) = function.native.as_deref().and_then(|s| exports.get(s)) else { return Ok(None); };
         let signature = &export.signature;
         let matches = signature.is_async == function.is_async
             && signature.params.len() == function.params.len()
@@ -122,7 +128,7 @@ pub(crate) fn bind(loaded: &Loaded, extensions: &[Extension], host: &mut host::H
             return Err(Error(format!("native {} signature mismatch: program {asynchronous}({}) -> {result}; extension {}",
                 export.symbol, params.join(", "), export.text)));
         }
-        host::native_ext::Binding::new(host, program, function, export.symbol, signature, export.sync).map(|b| Some(Rc::new(b)))
+        host::native_ext::Binding::new(host, program, function, export.symbol, signature, export.sync, states).map(|b| Some(Rc::new(b)))
     }).collect()
 }
 

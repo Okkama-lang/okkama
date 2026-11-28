@@ -1952,6 +1952,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "okkama-compiler",
  "okkama-devtrace",
  "okkama-native",
  "okkama-persistent",

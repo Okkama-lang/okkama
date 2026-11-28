@@ -204,6 +204,8 @@ pub(crate) enum Shape {
     Float,
     Str,
     Handle,
+    // The program handle and descriptor identity distinguish foreign states.
+    External(u32, usize),
     Array(usize),
     Map(usize, usize),
 }
@@ -344,6 +346,10 @@ impl Heap {
             Shape::Str => Slot { bits: word, tag: STR },
             // A handle cell holds its id (see `handle_object`).
             Shape::Handle => Slot { bits: if word == crate::word::UNBOUND { u64::MAX } else { self.core().field(word, 0) }, tag: HANDLE },
+            Shape::External(..) => Slot {
+                bits: if word == crate::word::UNBOUND { u64::MAX } else { self.core().field(word, 0) },
+                tag: HANDLE | ((self.shape_index[shape] as u64) << 8),
+            },
             Shape::Array(element) => Slot { bits: word, tag: ARRAY | ((element as u64) << 8) },
             Shape::Map(..) => {
                 let index = self.shape_index.get(shape).copied().unwrap_or(0);
@@ -1064,3 +1070,6 @@ pub fn cancel(runtime: &mut Runtime, id: u64) -> bool {
 
 #[cfg(test)]
 mod ext_tests;
+
+#[cfg(test)]
+mod ext_states_tests;

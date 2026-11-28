@@ -72,6 +72,8 @@ cranelift-native = { version = "0.137", optional = true }
 wasmtime-jit-icache-coherence = { package = "wasmtime-internal-jit-icache-coherence", version = "50.0.0", optional = true }
 
 [dev-dependencies]
+# Exercise extension cleanup through real wrapper lowering.
+okkama-compiler = { path = "../okkama-compiler" }
 # The regex provider's tests compare its Unicode classes with fancy-regex's, also without the host (#1124).
 fancy-regex = "0.14"
 
