@@ -20,6 +20,12 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   feature/1083-values): host/native_ext/values.rs (bigint, rat, arrays, maps, bytes_reserve, ?T; memory stop is a
   sticky OKK_STOPPED → Exhausted::Memory), ext_values_tests, fuzz target `ext` (hostile extension). Next: step 3
   `1083-states` (extension states owned by the .ok wrapper, destroy).
+- [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
+  tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
+  Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust
+  and Python helpers; examples/check.py skips it), okkama-cli/tests/port.rs (builds the helpers with cargo into
+  CARGO_TARGET_TMPDIR), Bible 21.5.3. Appendix C (`build.py --std-index`) is refreshed at release. Blade packaging of
+  helpers waits for ABI step 6.
 - [x] #1082 CBOR (agent; feature/1082): std/cbor.ok over std/runtime/cbor.ok (39 natives, IDs 681–719),
   sparrow-core/src/cbor.rs (no recursion), host/native_cbor.rs, tests sparrow-core/tests/cbor.rs (14), std inline 12+2,
   examples/cbor/message.ok, fuzz target `cbor`. runtime/cbor is PURE (playground allowed).

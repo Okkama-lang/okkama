@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Helper processes: `os/port` (#1081).** Code in any language, called from Okkama through a helper process (the
+  Erlang "ports" model). `Port(command:, instances:)` starts a helper with the first call; `await port.call(method:,
+  payload:, bytes:, timeout:)` sends a JSON or CBOR payload and raw bytes and returns a `PortReply`. Calls carry ids,
+  so many run at once on one helper; a pool sends each call to the least busy helper. A helper that crashes, hangs
+  past the timeout or breaks the protocol is stopped and the next call starts a fresh one; the calls waiting on it
+  fail with a typed `PortFailure` (with the exit and the tail of its stderr for a crash), and the program goes on. The
+  protocol (`docs/port-protocol.md`, version 1): length-prefixed frames, JSON or CBOR messages, raw bytes in frames
+  of their own. The Rust crate `okkama-port` writes the helper side in a few lines (`okkama_port::serve`); a Python
+  helper written from the spec alone answers the same example. Bible 21.5.3.
 - **CBOR in std (#1082).** `import "cbor"`: `Cbor`, an immutable CBOR (RFC 8949) value read without casts and built
   in code; `ParsedCbor(bytes).root()` decodes one item with limits on depth, items and size (malformed input fails
   with a typed `CborError` and its byte offset; duplicate keys are refused); `CborItems` reads a CBOR sequence from a

@@ -4,6 +4,20 @@ The newest entries are at the top of each section. Each one gives its date, who 
 are. Working rules (testing, CI, roles) are in LLM-GUIDE §1 and are not repeated here. Seeded 2026-11-20 from
 the session's memory; older rulings live in the commits and tickets named.
 
+## Helper processes: `os/port` (#1081, 2026-11-28; agent's design, API ruled by me — the owner delegated decisions)
+
+- Module `os/port` (processes live in `os/`; there is no `process/`). `Port(command is Commanding, instances = 1,
+  frame_limit = 16 MiB)`; `async call(method:, payload: Json | Cbor, bytes:, timeout: 30 s) is PortReply`;
+  `close()`. `PortReply` gives `json()`, `cbor()`, `bytes()`; asking the other codec is `wrong_codec`.
+- `PortFailure`: unavailable, incompatible, unsupported, timed_out, crashed (exit + last 2 KiB of stderr),
+  malformed, refused (helper's code and message), wrong_codec, closed.
+- Protocol v1: frame = u32 BE length + body; first body byte is the type — `J` JSON message, `C` CBOR message, `B` raw
+  attachment bytes (no base64). Both sides send a JSON hello first; CBOR only to a helper naming it in `codecs`. The
+  codec is chosen per call, not per connection; a reply comes in its request's codec, in any order. Unknown fields,
+  kinds and ids are ignored (so `cancel` can come later without a version bump). At most 1024 attachments.
+- A timeout stops the helper (a hung helper holds up every call after it); calls in flight there fail `crashed`.
+  A helper starts on the first call; a helper's failure never fails the program.
+
 ## CBOR in std (#1082, 2026-11-28; agent's design under std-principles, the owner delegated the API)
 
 - Module `cbor` at the top level beside json/toml/xml (a data format, not a byte-to-text encoding).
