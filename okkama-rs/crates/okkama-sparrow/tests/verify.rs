@@ -334,15 +334,45 @@ fn a_rotation_needs_a_count_and_only_rotations_take_one() {
     assert!(refusal.contains("only rotations take a count"), "{refusal}");
 }
 
-/// #976: native ABI types name a handle by its short name, so a program may not hold two
-/// modules' handles of one name; distinct names, or the same handle once, are fine.
+/// #1083: native ABI types name a handle with its module (`runtime.host_crypto::DigestState`), as SPB does, so two
+/// modules may each have a handle of one short name; a native is typed against the handle of its own module only.
 #[test]
-fn handles_of_one_short_name_from_two_modules_are_rejected() {
+fn handles_are_matched_by_their_full_name() {
     let mut program = sample();
     program.handles = vec!["runtime.buffer::State".into(), "runtime.other::State".into()];
-    assert!(message(&program).contains("share the name State"), "{}", message(&program));
-    program.handles = vec!["runtime.buffer::State".into(), "runtime.other::Cursor".into()];
-    assert_eq!(program.verify(), Ok(()));
+    assert_eq!(program.verify(), Ok(()), "one short name in two modules");
+    let digest = |handle: &str| {
+        okkama_sparrow::assemble(&format!(
+            r#"sparrow 19
+module "handles-1083" "1.0.0"
+type t0 int
+type t1 handle 0
+type t2 byte
+type t3 array t2
+handle "{handle}"
+function f0 "digest_bytes" native "runtime/host_crypto@1::digest_bytes/2" {{
+ registers [t1, t0, t3]
+ params [r0, r1]
+ result t3
+}}
+function f1 "main" {{
+ registers [t0]
+ params []
+ result t0
+ 0: const r0, int 0
+ 1: ret r0
+}}
+entry f1
+"#
+        ))
+    };
+    // Assembling verifies: the handle of the native's own module passes, another module's of the same short name
+    // (and the bare short name, as tables before #1083 spelled it) is refused.
+    assert_eq!(digest("runtime.host_crypto::DigestState").expect("its own module's handle").verify(), Ok(()));
+    for handle in ["runtime.other::DigestState", "DigestState"] {
+        let refusal = digest(handle).expect_err("another handle").to_string();
+        assert!(refusal.contains("does not match the signature of native runtime/host_crypto@1::digest_bytes/2"), "{handle}: {refusal}");
+    }
 }
 
 /// A function `last(n)` in the shape the compiler gives a `for` in value position: `ran` (r1)

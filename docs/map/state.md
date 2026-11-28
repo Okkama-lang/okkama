@@ -10,6 +10,11 @@ first**: #1083 native ABI (design by Fable, then implementation) with #1081 help
 if it falls out) → #1189 style guide, #1191 trial → web logging #1179 → #1180 (if needed) → #1181 → at the very end,
 after every feature branch is merged, rewrite the implementer books. Micro A/B after each ticket that can move speed.
 
+- [~] #1083 native ABI (Fable's design: okkama-docs/runtime/native-abi-1083.md, steps 0–7). Step 0 done
+  (feature/1083-handle-names): full handle names in the table (gen-abi qualifies, refuses one name in two modules),
+  `Type::Maybe`/`?T`, `Signature::try_parse`; typing and lowering compare full names, `Maybe` by `$variant_Maybe_N`
+  shape; verify.rs #976 rule removed. Tests: runtime-abi `signatures_parse_or_say_why_not`, okkama-sparrow verify
+  `handles_are_matched_by_their_full_name` (mutation caught). Next: step 1 `1083-seam`.
 - [x] #1188 language reference for agents (agent; 8945e8acf): docs/agents/language.md (50 KB, 31 checked examples),
   docs/agents/check.py (fences okkama / okkama,run / okkama,test / okkama,fail / okkama,ignore), Wave "Corpora" step.
   Findings fixed: LLM-GUIDE §8 arguments line. Bible ch.17 gap (unbounded type parameter answers no action) noted.

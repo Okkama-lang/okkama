@@ -1109,12 +1109,20 @@ impl<'a> Typing<'a> {
             | (Type::Char, A::Char)
             | (Type::Str, A::Str)
             | (Type::Any, A::Any) => true,
-            // Handle SPB назван с модулем: `runtime.buffer::BufferState`.
-            (Type::Handle(h), A::Handle(name)) => self
-                .program
-                .handles
-                .get(*h as usize)
-                .is_some_and(|h| h.rsplit("::").next() == Some(name)),
+            // #1083: handle ABI назван полностью, как SPB: `runtime.buffer::BufferState`.
+            (Type::Handle(h), A::Handle(name)) => self.program.handles.get(*h as usize).is_some_and(|h| h == name),
+            // #1083: `?T` — вариант `Maybe<T>` (`$variant_Maybe_N`): случаи `some` с одним полем `value` типа `T` и
+            // `none` без полей.
+            (Type::Variant(v), A::Maybe(inner)) => self.program.variants.get(v.0 as usize).is_some_and(|variant| {
+                let name = variant.name.rsplit("::").next().unwrap_or(&variant.name);
+                let case = |wanted: &str| variant.cases.iter().find(|(case, _)| case == wanted).map(|(_, object)| *object);
+                name.starts_with("$variant_Maybe_")
+                    && variant.cases.len() == 2
+                    && case("none").and_then(|o| self.program.objects.get(o.0 as usize)).is_some_and(|o| o.fields.is_empty())
+                    && case("some").and_then(|o| self.program.objects.get(o.0 as usize)).is_some_and(|o| {
+                        matches!(o.fields.as_slice(), [(field, ty)] if field == "value" && self.abi(self.resolve(*ty), inner))
+                    })
+            }),
             (Type::Array(e), A::Array(item)) => self.abi(self.resolve(*e), item),
             (Type::Map(k, v), A::Map(key, value)) => self.abi(self.resolve(*k), key) && self.abi(self.resolve(*v), value),
             _ => false,

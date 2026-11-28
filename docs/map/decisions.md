@@ -4,6 +4,17 @@ The newest entries are at the top of each section. Each one gives its date, who 
 are. Working rules (testing, CI, roles) are in LLM-GUIDE §1 and are not repeated here. Seeded 2026-11-20 from
 the session's memory; older rulings live in the commits and tickets named.
 
+## Native-extension ABI (#1083, 2026-11-28; design Fable, the owner delegated the decisions)
+
+- The design is okkama-docs/runtime/native-abi-1083.md (supersedes native-extension-abi-design.md): a C ABI of opaque
+  slots over host::Slot/Shape, one data export `okkama_extension`, `abi` = 1 matched exactly until beta; no language,
+  compiler or SPB change, binding by symbol at runtime creation; `native object` carries no ownership (the `.ok`
+  wrapper with `destroy` does), payload dropped exactly once; no calls into Okkama, `any`, objects or persistent refs
+  in ABI 1; async = prepare/execute/complete over native_io; only the host names a library (`--ext`, Blade allow-list,
+  Limits.extensions), `--no-native`; Blade `[native]` + root allow-list, cargo at `blade build`; prebuilt at beta.
+- Step 0: handle types are named in full (`module::Name`) everywhere; the #976 short-name rule is gone. `Maybe` is
+  recognised by its variant's shape (`$variant_Maybe_N`, cases `some(value)` and `none`): SPB has no other mark.
+
 ## `okkama agents`: texts built into the binary (#1190, 2026-11-28; owner's request, epic #1191)
 
 - The agent texts (docs/agents/language.md, style.md, workflow.md) are `include_str!`-ed into okkama-cli instead of

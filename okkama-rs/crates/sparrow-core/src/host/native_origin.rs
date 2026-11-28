@@ -176,7 +176,8 @@ impl Heap {
                 Some(rational) => Value::Rat(Rc::new(rational.0.clone())),
                 None => return Err(Error("expected a rat".into())),
             },
-            Type::Void => return Err(Error("native argument type is not bridged".into())),
+            // #1083: `?T` comes with extensions (#1083 step 2); no std native takes it.
+            Type::Void | Type::Maybe(_) => return Err(Error("native argument type is not bridged".into())),
         })
     }
 

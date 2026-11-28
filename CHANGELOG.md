@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Native extensions, step 0: one signature language (#1083).** The native table names a `native object` with
+  its module, as SPB does (`runtime.host_crypto::DigestState`), so two modules may declare handles of one short name
+  and a native is typed against its own module's handle only; the #976 rule refusing such programs is gone. The
+  signature language gains `?T` (`Maybe<T>`), and `Signature::try_parse` reports a malformed signature instead of
+  panicking, for signatures that extensions will bring. Groundwork of the native-extension ABI designed in
+  okkama-docs/runtime/native-abi-1083.md.
 - **`okkama agents`, the toolchain teaching AI agents (#1190, #1188).** `okkama help` opens with a line for agents,
   and `okkama agents` prints an entry page: what Okkama is, the workflow (`check`, `fmt -w`, `lint`, `run -t`), where
   std lives and how to look things up. Its sections are built into the binary, so they always describe it:

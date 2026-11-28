@@ -14,7 +14,7 @@ use crate::analysis::registry::NativeInfo;
 use crate::ir::{ResultType, Type};
 
 /// Whether OIR type `ty` is the table's type `abi`, as the SPB verifier
-/// compares them (a handle by its name, without the module).
+/// compares them: a handle by its full name `module::Name` (#1083), `?T` as `Maybe<T>`.
 fn same(ctx: &Ctx<'_, '_>, ty: &Type, abi: &Abi) -> bool {
     match (ty, abi) {
         (Type::Int, Abi::Int)
@@ -25,7 +25,21 @@ fn same(ctx: &Ctx<'_, '_>, ty: &Type, abi: &Abi) -> bool {
         | (Type::Char, Abi::Char)
         | (Type::Str, Abi::Str)
         | (Type::Any, Abi::Any) => true,
-        (Type::Handle(handle), Abi::Handle(name)) => ctx.reg.handles.get(handle.0).is_some_and(|decl| decl.name == *name),
+        (Type::Handle(handle), Abi::Handle(name)) => ctx
+            .reg
+            .handles
+            .get(handle.0)
+            .is_some_and(|decl| format!("{}{}", ctx.prefixes[decl.module], decl.name) == *name),
+        (Type::Variant(variant), Abi::Maybe(inner)) => ctx.variants.get(variant.0).is_some_and(|variant| {
+            let name = variant.name.rsplit("::").next().unwrap_or(&variant.name);
+            let case = |wanted: &str| variant.cases.iter().find(|(case, _)| case == wanted).map(|(_, object)| *object);
+            name.starts_with("$variant_Maybe_")
+                && variant.cases.len() == 2
+                && case("none").and_then(|o| ctx.objects.get(o.0)).is_some_and(|o| o.fields.is_empty())
+                && case("some").and_then(|o| ctx.objects.get(o.0)).is_some_and(|o| {
+                    matches!(o.fields.as_slice(), [(field, ty, _)] if field == "value" && same(ctx, ty, inner))
+                })
+        }),
         (Type::Array(element), Abi::Array(item)) => same(ctx, element, item),
         (Type::Map(key, value), Abi::Map(k, v)) => same(ctx, key, k) && same(ctx, value, v),
         _ => false,
