@@ -85,6 +85,7 @@ fn total(kind: &InstKind) -> bool {
         | InstKind::ArrayNew(_)
         | InstKind::ArrayLen(_)
         | InstKind::BuilderNew
+        | InstKind::BuilderSized(_)
         | InstKind::IntAbs(_)
         | InstKind::IntSign(_)
         | InstKind::ByteCompare { .. }

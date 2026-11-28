@@ -4,7 +4,7 @@ use crate::budget::{Limits, PLAYGROUND};
 use crate::stdout::Stream;
 use crate::{Embedding, Piece, refused_natives, run_embedded};
 
-const HEAD: &str = r#"sparrow 18
+const HEAD: &str = r#"sparrow 19
 module "embedding" "1.0.0"
 type t0 int
 type t1 str
@@ -336,7 +336,7 @@ fn a_worker_failure_is_reported_with_one_prefix() {
 #[cfg(not(feature = "host"))]
 #[test]
 fn one_processor_without_the_host() {
-    let source = "sparrow 18\nmodule \"cpus\" \"1.0.0\"\ntype t0 int\nfunction f0 \"cpus\" native \"runtime/system@1::system_cpu_count/0\" {\n    registers []\n    params []\n    result t0\n}\nfunction f1 \"main\" {\n    registers [t0]\n    params []\n    result t0\n    0: call r0, f0, []\n    1: ret r0\n}\nentry f1\n";
+    let source = "sparrow 19\nmodule \"cpus\" \"1.0.0\"\ntype t0 int\nfunction f0 \"cpus\" native \"runtime/system@1::system_cpu_count/0\" {\n    registers []\n    params []\n    result t0\n}\nfunction f1 \"main\" {\n    registers [t0]\n    params []\n    result t0\n    0: call r0, f0, []\n    1: ret r0\n}\nentry f1\n";
     let bytes = okkama_sparrow::encode(&okkama_sparrow::assemble(source).unwrap()).unwrap();
     let run = run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap();
     assert_eq!(run.result, Ok(1));

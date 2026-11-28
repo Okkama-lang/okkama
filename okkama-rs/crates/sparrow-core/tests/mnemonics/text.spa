@@ -1,6 +1,6 @@
 ; Text instructions on both engines (#1121): comparison, slicing, splitting, replacing, trimming, the str.fn
 ; family and structural equality.
-sparrow 18
+sparrow 19
 module "mnemonics-text" "1.0.0"
 type t0 int
 type t1 str

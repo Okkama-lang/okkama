@@ -733,6 +733,13 @@ impl<'a> Typing<'a> {
                 Type::Builder(_) => Ok(()),
                 other => Err(format!("builder.new defines a builder, not {}", self.name(other))),
             },
+            I::BuilderSized { dst, count } => {
+                self.expect(*count, &Type::Int)?;
+                match self.ty(dst.0) {
+                    Type::Builder(_) => Ok(()),
+                    other => Err(format!("builder.sized defines a builder, not {}", self.name(other))),
+                }
+            }
             I::BuilderPush { dst, builder, value } => {
                 let ty = self.ty(*builder);
                 let Type::Builder(e) = ty else {

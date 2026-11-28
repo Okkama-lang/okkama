@@ -17,7 +17,7 @@ fn runtime(source: &str, plain: bool, stress: bool) -> Box<Runtime> {
 
 fn source(types: &str, registers: &str, params: &str, result: &str, code: &[String]) -> String {
     let body: String = code.iter().enumerate().map(|(pc, line)| format!(" {pc}: {line}\n")).collect();
-    format!("sparrow 18\nmodule \"dispatch-537\" \"1.0.0\"\n{types}\nfunction f0 \"main\" {{\n registers [{registers}]\n params [{params}]\n result {result}\n{body}}}\n")
+    format!("sparrow 19\nmodule \"dispatch-537\" \"1.0.0\"\n{types}\nfunction f0 \"main\" {{\n registers [{registers}]\n params [{params}]\n result {result}\n{body}}}\n")
 }
 
 fn event(runtime: &Runtime, name: &str) -> u64 {
@@ -247,16 +247,12 @@ fn dispatch_537_builders_reuse_grow_and_trace_all_element_reprs() {
                         rt.roots.push((array, Repr::Ref));
                         published.push(array);
                         let fresh = rt.run_function(1, 1 << 24).unwrap();
-                        let payload = rt.heap.payload::<crate::ops::Builder>(fresh).unwrap();
-                        assert!(payload.items.is_empty());
-                        assert_eq!(payload.repr, repr);
-                        if length <= heap::SPARE_CAPACITY {
-                            assert!(payload.items.capacity() >= length, "spare capacity was lost");
-                        } else {
-                            assert_eq!(payload.items.capacity(), 0, "oversized capacity was retained");
-                        }
-                        // The spare is reused by a new builder before these
-                        // checks: previously published arrays stay immutable.
+                        // #1171: a fresh builder is an empty heap builder of the element's representation.
+                        assert_eq!(heap::kind(rt.heap.header_of(fresh)), heap::BUILDER);
+                        assert_eq!(rt.heap.builder_length(fresh), 0);
+                        assert_eq!(heap::element_repr(rt.heap.header_of(fresh)), repr);
+                        // A finished buffer became its array in place: arrays published before stay immutable
+                        // while new builders fill buffers of their own.
                         for item in published.iter().flat_map(|&array| rt.heap.elements(array).into_owned()) {
                             match repr {
                                 Repr::Ref => assert_eq!(rt.heap.text(item), "live reference"),

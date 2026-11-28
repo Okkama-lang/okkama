@@ -1414,6 +1414,16 @@ impl<'a> FunctionVerifier<'a> {
                 }
                 return Ok(());
             }
+            InstKind::BuilderSized(count) => {
+                self.expect_type(*count, &Type::Int)?;
+                let Some(result) = result else {
+                    return Err("`builder.sized` must define a value".to_string());
+                };
+                let Type::Builder(_) = self.ty(result)? else {
+                    return Err(format!("{result} must have a builder type"));
+                };
+                return Ok(());
+            }
             InstKind::BuilderNew => {
                 let Some(result) = result else {
                     return Err("`builder.new` must define a value".to_string());

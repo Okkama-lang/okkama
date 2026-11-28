@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn the_cached_walk_reports_the_mapped_slots_of_every_frame() {
     let program = okkama_sparrow::assemble(
-        "sparrow 18\nmodule \"roots\" \"1.0.0\"\ntype t0 int\n\
+        "sparrow 19\nmodule \"roots\" \"1.0.0\"\ntype t0 int\n\
          function f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
     ).unwrap();
     let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());

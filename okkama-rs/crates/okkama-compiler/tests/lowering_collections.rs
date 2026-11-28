@@ -35,15 +35,17 @@ fn map_threads_a_linear_builder_through_the_loop_header() {
             "    %0: int = const 1\n",
             "    %1: int = const 2\n",
             "    %2: array<int> = array.new [%0, %1]\n",
-            "    %3: builder<int> = builder.new\n",
-            "    %4: int = const 0\n",
-            "    %5: int = array.len %2\n",
+            // #1171: длина источника известна заранее — сборщик сразу с местом под неё,
+            // а цикл читает ту же длину.
+            "    %3: int = array.len %2\n",
+            "    %4: builder<int> = builder.sized %3\n",
+            "    %5: int = const 0\n",
             // Константы тела цикла вынесены во вход (`ir::hoist`).
             "    %10: int = const 2\n",
             "    %13: int = const 1\n",
-            "    br ^b1(%4, %3)\n",
+            "    br ^b1(%5, %4)\n",
             "^b1(%6: int, %7: builder<int>):\n",
-            "    %8: bool = int.lt %6, %5\n",
+            "    %8: bool = int.lt %6, %3\n",
             "    cond %8, ^b2, ^b3\n",
             // Шаг тела и переход к заголовку — один блок (`ir::cfg::merge_blocks`).
             "^b2:\n",

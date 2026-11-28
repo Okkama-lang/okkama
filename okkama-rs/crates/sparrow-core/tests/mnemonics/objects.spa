@@ -1,5 +1,5 @@
 ; Objects, roles, caps, closures and a cold Future on both engines (#1121).
-sparrow 18
+sparrow 19
 module "mnemonics-objects" "1.0.0"
 type t0 int
 type t1 str

@@ -423,6 +423,7 @@ pub(crate) fn generic(instruction: &Instruction) -> bool {
             | Instruction::MapMerge { .. }
             | Instruction::MapDiff { .. }
             | Instruction::BuilderNew { .. }
+            | Instruction::BuilderSized { .. }
             | Instruction::BuilderPush { .. }
             | Instruction::BuilderAppend { .. }
             | Instruction::BuilderRange { .. }
@@ -450,7 +451,7 @@ mod worker_tests {
     #[test]
     fn loading_reuses_the_workers_a_program_already_has() {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
+            "sparrow 19\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
              function f0 \"work\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
              function f1 \"spawner\" async {\n registers [t1, t2]\n params []\n result t2\n 0: fn.closure r0, f0, []\n 1: worker.spawn r1, r0, [], false\n 2: ret r1\n}\n",
         ).unwrap();
@@ -465,7 +466,7 @@ mod worker_tests {
     fn worker_reuse_excludes_programs_that_can_launch_descendants() {
         use okkama_runtime_abi::Native;
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
+            "sparrow 19\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
         ).unwrap();
         assert!(Loaded::new(program.clone()).worker_reuse_safe);
         for (native, safe) in [
@@ -500,7 +501,7 @@ mod switch_tests {
             );
         }
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
+            "sparrow 19\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
              params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n",
         ).unwrap();
         let loaded = Loaded::new(program);

@@ -1,7 +1,7 @@
 //! #956: an object whose state the runtime holds compares by identity.
 use super::*;
 
-const PROGRAM: &str = r#"sparrow 18
+const PROGRAM: &str = r#"sparrow 19
 module "held-956" "1.0.0"
 type t0 int
 type t1 object obj0

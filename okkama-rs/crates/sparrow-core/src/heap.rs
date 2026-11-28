@@ -30,6 +30,18 @@ pub const CLOSURE: u8 = 6;
 pub const CLOSURE_ENTRY: i32 = 8;
 pub const CLOSURE_CAPTURES: i32 = 16;
 pub const FRAME: u8 = 7;
+/// #1171: an array under construction, `[header|repr] [length] [capacity] [buffer]`. The buffer is an array cell
+/// with room for `capacity` elements whose header says length 0 (a leaf the collector marks and does not trace);
+/// the builder traces its first `length` slots. `finish` turns the buffer into the array in place when its cell
+/// fits the length, so the elements are written once. Machine code pushes while the length is below the capacity.
+pub const BUILDER: u8 = 8;
+/// #1171: the byte offsets of a builder's length, capacity and buffer.
+pub const BUILDER_LENGTH: i32 = 8;
+pub const BUILDER_CAPACITY: i32 = 16;
+pub const BUILDER_BUFFER: i32 = 24;
+const BUILDER_WORDS: usize = 4;
+/// #1171: the capacity of a builder's first buffer.
+const BUILDER_FIRST: usize = 4;
 
 const MARK: u64 = 1 << 8;
 /// An array of bytes stored one per byte (`@byte`), not one per word.
@@ -155,6 +167,8 @@ const COLLECTION_FLOOR: usize = 4 << 20;
 /// [`SPARE_CAPACITY`] words.
 const SPARE_PAYLOADS: usize = 64;
 pub const SPARE_CAPACITY: usize = 512;
+/// #1171: spare builder buffers kept at most between collections.
+const SPARE_BUFFERS: usize = 16;
 /// Empty pages kept beyond what the next cycle needs (#435).
 const EMPTY_PAGES_SLACK: usize = 16;
 
@@ -170,6 +184,15 @@ pub fn header(kind: u8, repr: Repr, payload: u32) -> u64 {
 #[inline]
 pub(crate) fn length(len: usize) -> u32 {
     u32::try_from(len).unwrap_or_else(|_| too_long(len))
+}
+
+/// #1171: the capacity of a builder buffer for at least `at_least` elements: a small cell's whole room (its class
+/// less the header), or exactly that many in a large cell.
+fn builder_room(at_least: usize) -> usize {
+    match Heap::class_of(at_least + 1) {
+        Some(class) => CLASSES[class] - 1,
+        None => at_least,
+    }
 }
 
 /// Would a string, byte array or array of `len` bytes or elements pass what its header holds? The
@@ -463,6 +486,9 @@ pub struct Heap {
     /// in the sweep and brings no collection closer. The owning box moves
     /// between the pool and a PAYLOAD cell without another Rust allocation.
     spare: Vec<Box<dyn Payload>>,
+    /// #1171: buffers builders left (outgrown, or copied from at `finish`), as (capacity, buffer), for the next
+    /// builders until the next collection, which drops them (nothing refers to them, so the sweep frees them).
+    spare_buffers: Vec<(usize, Word)>,
     live: usize,
     external_live: usize,
     collections: usize,
@@ -559,6 +585,7 @@ fn kind_name(kind: u8) -> &'static str {
         PAYLOAD => "payload",
         CLOSURE => "closure",
         FRAME => "frame",
+        BUILDER => "builder",
         _ => "other",
     }
 }
@@ -626,6 +653,7 @@ impl Heap {
             external: 0,
             threshold: COLLECTION_FLOOR,
             spare: Vec::new(),
+            spare_buffers: Vec::new(),
             live: 0,
             external_live: 0,
             collections: 0,
@@ -715,7 +743,7 @@ impl Heap {
                 next.insert(address);
                 add(if was_old { 0 } else { 1 }, bytes);
                 let mutable = match kind(header) {
-                    FRAME | PAYLOAD => true,
+                    FRAME | PAYLOAD | BUILDER => true,
                     ARRAY => header & BUFFER != 0,
                     _ => false,
                 };
@@ -1372,6 +1400,183 @@ impl Heap {
         }
     }
 
+    // ---- builders (#1171) ----
+
+    /// An empty builder of `repr` elements with room for `capacity` of them (0: the first push makes the buffer).
+    pub fn allocate_builder(&mut self, repr: Repr, capacity: usize) -> Word {
+        let capacity = if capacity == 0 { 0 } else { builder_room(capacity) };
+        let buffer = if capacity == 0 { 0 } else { self.allocate_builder_buffer(capacity) };
+        self.counted("builder", 0, BUILDER_WORDS);
+        let builder = self.allocate(BUILDER_WORDS);
+        // SAFETY: four words.
+        unsafe {
+            *(builder as *mut u64) = header(BUILDER, repr, 0);
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = 0;
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = capacity as u64;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = buffer;
+        }
+        builder
+    }
+
+    /// A buffer cell with room for `capacity` elements: length 0, so the collector marks it without tracing it.
+    fn allocate_builder_buffer(&mut self, capacity: usize) -> Word {
+        self.counted("builder buffer", 0, capacity + 1);
+        let buffer = self.allocate(capacity + 1);
+        // SAFETY: room for the header.
+        unsafe { *(buffer as *mut u64) = header(ARRAY, Repr::Raw, 0) };
+        buffer
+    }
+
+    /// The length, capacity and buffer of a builder.
+    #[inline]
+    fn builder_parts(builder: Word) -> (usize, usize, Word) {
+        // SAFETY: a builder word is a live builder of four words (its type says so; machine code passes no other).
+        unsafe {
+            (
+                *((builder + BUILDER_LENGTH as Word) as *const u64) as usize,
+                *((builder + BUILDER_CAPACITY as Word) as *const u64) as usize,
+                *((builder + BUILDER_BUFFER as Word) as *const u64),
+            )
+        }
+    }
+
+    /// The elements pushed so far.
+    pub fn builder_items(&self, builder: Word) -> &[Word] {
+        let (length, _, buffer) = Self::builder_parts(builder);
+        if length == 0 {
+            return &[];
+        }
+        // SAFETY: the first `length` slots of the buffer are written.
+        unsafe { std::slice::from_raw_parts((buffer + 8) as *const u64, length) }
+    }
+
+    /// Room for `extra` more elements: a new buffer of at least twice the capacity, the elements copied over.
+    /// The old buffer is garbage (nothing else refers to it).
+    pub fn builder_reserve(&mut self, builder: Word, extra: usize) {
+        let (length, capacity, buffer) = Self::builder_parts(builder);
+        let old_capacity = capacity;
+        let needed = length.checked_add(extra).expect("builder length");
+        if needed <= capacity {
+            return;
+        }
+        let wanted = needed.max(capacity.saturating_mul(2)).max(BUILDER_FIRST);
+        let (capacity, grown) = match self.take_spare_buffer(wanted) {
+            Some(spare) => spare,
+            None => {
+                let capacity = builder_room(wanted);
+                (capacity, self.allocate_builder_buffer(capacity))
+            }
+        };
+        // SAFETY: both buffers have room for `length` elements; distinct cells.
+        unsafe {
+            if length > 0 {
+                std::ptr::copy_nonoverlapping((buffer + 8) as *const u64, (grown + 8) as *mut u64, length);
+            }
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = capacity as u64;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = grown;
+        }
+        if buffer != 0 {
+            self.keep_spare_buffer(old_capacity, buffer);
+        }
+    }
+
+    /// The most recent spare buffer with room for `wanted` elements.
+    fn take_spare_buffer(&mut self, wanted: usize) -> Option<(usize, Word)> {
+        let position = self.spare_buffers.iter().rposition(|&(capacity, _)| capacity >= wanted)?;
+        Some(self.spare_buffers.swap_remove(position))
+    }
+
+    /// Keep a buffer no builder uses any more for the next ones, when it is small and there is room.
+    fn keep_spare_buffer(&mut self, capacity: usize, buffer: Word) {
+        if capacity <= SPARE_CAPACITY && self.spare_buffers.len() < SPARE_BUFFERS {
+            self.spare_buffers.push((capacity, buffer));
+        }
+    }
+
+    /// Append `items` to a builder.
+    pub fn builder_extend(&mut self, builder: Word, items: &[Word]) {
+        if items.is_empty() {
+            return;
+        }
+        self.builder_reserve(builder, items.len());
+        let (length, _, buffer) = Self::builder_parts(builder);
+        // SAFETY: room reserved; `items` is not in this buffer (a builder's elements never alias its own buffer:
+        // a builder is no array value).
+        unsafe {
+            std::ptr::copy_nonoverlapping(items.as_ptr(), (buffer + 8 + length as Word * 8) as *mut u64, items.len());
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + items.len()) as u64;
+        }
+    }
+
+    /// Append `count` elements, the `n`th being `item(n)`, written straight into the buffer.
+    pub fn builder_fill(&mut self, builder: Word, count: usize, mut item: impl FnMut(usize) -> Word) {
+        self.builder_reserve(builder, count);
+        let (length, _, buffer) = Self::builder_parts(builder);
+        for n in 0..count {
+            // SAFETY: room reserved.
+            unsafe { *((buffer + 8 + (length + n) as Word * 8) as *mut u64) = item(n) };
+        }
+        // SAFETY: four words.
+        unsafe { *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + count) as u64 };
+    }
+
+    /// Append one element.
+    #[inline]
+    pub fn builder_push(&mut self, builder: Word, item: Word) {
+        self.builder_reserve(builder, 1);
+        let (length, _, buffer) = Self::builder_parts(builder);
+        // SAFETY: room reserved.
+        unsafe {
+            *((buffer + 8 + length as Word * 8) as *mut u64) = item;
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + 1) as u64;
+        }
+    }
+
+    /// The array of a builder's elements (at least one; the caller checked the length limit), as `repr`
+    /// elements, or bytes when `packed`. The buffer becomes the array in place when its cell fits the length
+    /// (the same size class, or a large cell at most an eighth bigger); otherwise the elements are copied into an
+    /// array of their own. The builder is left empty, without a buffer.
+    pub fn builder_finish(&mut self, builder: Word, packed: bool) -> Word {
+        let (count, capacity, buffer) = Self::builder_parts(builder);
+        debug_assert!(count > 0, "an empty builder finishes as the shared empty array");
+        let repr = element_repr(self.header_of(builder));
+        let in_place = !packed
+            && match (Self::class_of(count + 1), Self::class_of(capacity + 1)) {
+                (Some(used), Some(room)) => used == room,
+                (None, None) => capacity - count <= capacity / 8,
+                _ => false,
+            };
+        let array = if in_place {
+            self.counted("builder finished in place", 0, 0);
+            // SAFETY: the buffer's first `count` slots are written; its header becomes an array's.
+            unsafe { *(buffer as *mut u64) = header(ARRAY, repr, length(count)) };
+            buffer
+        } else {
+            // SAFETY: the first `count` slots are written; allocation neither moves nor frees the buffer.
+            let items = unsafe { std::slice::from_raw_parts((buffer + 8) as *const u64, count) };
+            let array = if packed {
+                let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
+                self.allocate_bytes(&bytes)
+            } else {
+                self.allocate_array(repr, items)
+            };
+            self.keep_spare_buffer(capacity, buffer);
+            array
+        };
+        // SAFETY: four words.
+        unsafe {
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = 0;
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = 0;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = 0;
+        }
+        array
+    }
+
+    /// The elements of a builder (`length`), for checks before `finish`.
+    pub fn builder_length(&self, builder: Word) -> usize {
+        Self::builder_parts(builder).0
+    }
+
     /// Is `array` a buffer of shared arrays ([`BUFFER`])?
     pub fn is_buffer(&self, array: Word) -> bool {
         self.header_of(array) & BUFFER != 0
@@ -1734,17 +1939,6 @@ impl Heap {
             .and_then(|p| p.as_any_mut().downcast_mut())
     }
 
-    /// #1150: the payload of `object`, known to be a `T` (the program's types say so, as for a builder's word):
-    /// no virtual downcast. Debug builds check it.
-    ///
-    /// SAFETY: `object` is a live PAYLOAD object whose owner is a `T`.
-    pub(crate) unsafe fn payload_mut_unchecked<T: Payload>(&mut self, object: Word) -> &mut T {
-        debug_assert!(self.payload_mut::<T>(object).is_some(), "not the payload type the caller knows");
-        // SAFETY: as the caller promises; uniquely borrowed through &mut self.
-        let owner = unsafe { (*(object as *mut PayloadCell)).owner.as_deref_mut().unwrap_unchecked() };
-        unsafe { &mut *(owner as *mut dyn Payload as *mut T) }
-    }
-
     /// A PAYLOAD object around a spare payload that `reuse` takes (and
     /// resets), or none when there is no spare.
     pub fn allocate_spare(&mut self, reuse: impl FnOnce(&mut dyn Payload) -> bool) -> Option<Word> {
@@ -1827,6 +2021,8 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "collect");
         // A freed string's address may be reused for another one.
         self.positions = Positions::default();
+        // #1171: spare builder buffers are no roots; the sweep frees them.
+        self.spare_buffers.clear();
         let started = self.allocations.is_some().then(crate::clock::Instant::now);
         self.collect_inner(roots, &mut ephemerons);
         if let (Some(allocations), Some(started)) = (&mut self.allocations, started) {
@@ -2023,6 +2219,22 @@ impl Heap {
                                 unsafe { *((object + 8 + index as Word * 8) as *const u64) },
                                 repr,
                             );
+                        }
+                    }
+                }
+                // #1171: the buffer is marked as a leaf; the builder traces the slots below its length.
+                BUILDER => {
+                    // SAFETY: a builder has four words; its buffer, when it has one, `capacity` slots.
+                    let (length, buffer) = unsafe {
+                        (*((object + BUILDER_LENGTH as Word) as *const u64), *((object + BUILDER_BUFFER as Word) as *const u64))
+                    };
+                    if buffer != 0 {
+                        push(buffer, Repr::Ref);
+                        let repr = element_repr(header);
+                        if repr != Repr::Raw {
+                            for index in 0..length as Word {
+                                push(unsafe { *((buffer + 8 + index * 8) as *const u64) }, repr);
+                            }
                         }
                     }
                 }
@@ -3567,3 +3779,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "builders_1171_tests.rs"]
+mod builders_1171_tests;

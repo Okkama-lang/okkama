@@ -261,7 +261,7 @@ fn variant_accesses_must_match_the_case_layouts() {
 /// #974: a global's type outside the type table is a verification error, not a panic in typing.
 #[test]
 fn rejects_a_global_whose_type_is_out_of_bounds() {
-    let text = "sparrow 18\nmodule \"bad\" \"1\"\ntype t0 int\nglobal g0 t99 f0\n\
+    let text = "sparrow 19\nmodule \"bad\" \"1\"\ntype t0 int\nglobal g0 t99 f0\n\
                 function f0 \"main\" { registers [t0] params [] result t0  0: const r0, int 0  1: ret r0 }\nentry f0\n";
     let error = okkama_sparrow::assemble(text).expect_err("must be rejected").to_string();
     assert!(error.contains("global g0 has type t99, which is out of bounds"), "{error}");
@@ -347,7 +347,7 @@ fn handles_of_one_short_name_from_two_modules_are_rejected() {
 
 /// A function `last(n)` in the shape the compiler gives a `for` in value position: `ran` (r1)
 /// is `false` while `last` (r2) holds the stub of `undef`, and `br ran` is the binding check.
-const BINDING_CHECK: &str = r#"sparrow 18
+const BINDING_CHECK: &str = r#"sparrow 19
 module "stub" "v1.0.0"
 type t0 int
 type t1 bool
@@ -390,7 +390,7 @@ fn a_stub_of_undef_is_read_only_under_a_binding_check() {
     // #1069: `undef r0` and a use of r0 crashed Sparrow (the stub is the word 0).
     let main = |registers: &str, code: &str| {
         format!(
-            "sparrow 18\nmodule \"undef\" \"v1.0.0\"\ntype t0 int\ntype t1 str\ntype t2 object obj0\n\
+            "sparrow 19\nmodule \"undef\" \"v1.0.0\"\ntype t0 int\ntype t1 str\ntype t2 object obj0\n\
              object obj0 \"Box\" {{\n    field \"name\" t1\n}}\n\
              function f0 \"main\" {{\n    registers [{registers}]\n    params []\n    result t0\n{code}}}\nentry f0\n"
         )
@@ -474,7 +474,7 @@ fn a_guard_moved_with_its_stub_keeps_guarding_it() {
 
 #[test]
 fn a_condition_is_false_on_its_else_edge_and_guards_a_stub_there() {
-    let text = r#"sparrow 18
+    let text = r#"sparrow 19
 module "stub" "v1.0.0"
 type t0 int
 type t1 bool
@@ -502,7 +502,7 @@ function f0 "pick" {
 #[test]
 fn the_fields_a_stub_may_reach_are_those_obj_new_and_obj_init_store_it_in() {
     // #1076: Sparrow checks reads of exactly these fields for the stub.
-    let text = r#"sparrow 18
+    let text = r#"sparrow 19
 module "stub" "v1.0.0"
 type t0 int
 type t1 str

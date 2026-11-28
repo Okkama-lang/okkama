@@ -423,7 +423,7 @@ impl Flow {
                 match &inst.kind {
                     InstKind::ObjNew { .. } | InstKind::VariantNew { .. }
                     | InstKind::ArrayNew(_) | InstKind::MapNew(_)
-                    | InstKind::BuilderNew | InstKind::MapBuilderNew => {
+                    | InstKind::BuilderNew | InstKind::BuilderSized(_) | InstKind::MapBuilderNew => {
                         site = Some(name(&inst.kind));
                         if let Some(to) = result {
                             for &from in &operands {

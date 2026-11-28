@@ -602,6 +602,7 @@ fn write_inst(
         }
         InstKind::Retag(value) => write!(f, "array.retag {value}"),
         InstKind::BuilderNew => f.write_str("builder.new"),
+        InstKind::BuilderSized(count) => write!(f, "builder.sized {count}"),
         InstKind::BuilderPush { builder, value } => write!(f, "builder.push {builder}, {value}"),
         InstKind::BuilderAppend { builder, array } => {
             write!(f, "builder.append {builder}, {array}")

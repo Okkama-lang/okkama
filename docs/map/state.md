@@ -7,14 +7,21 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
-- [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`),
-  `Heap::payload_mut_unchecked` for builder pushes; 06-collections 10.9 → 7.4 ms. Target ≤ 6 ms: builders as a heap
-  kind (#1171, POSTPONED) is the rest.
+- [x] #1171 builders in the heap: `heap::BUILDER` cell (length, capacity, buffer: an ARRAY cell of length 0, a leaf
+  the builder traces up to its length), inline push in the JIT, `Heap::builder_finish` in place when the cell fits
+  (same class, large ≤ 1/8 room) else copy, spare buffers until the next collection (`Heap::spare_buffers`),
+  `builder.sized` (SPB 19, opcode 163; `map` over range/array/dictionary via `Lowerer::source_count`, capped at
+  4M); Builder payload and `payload_mut_unchecked` gone. Tests `heap::builders_1171_tests` (7, mutations caught),
+  dispatch_537, mnemonics. Steady 10-app −14%, 11 −14%, 08 −8%, 05 −3%, 06 ±0; 08 footprint 28.4 → 21.1 MB.
+  `filter` sized by its source rejected (06 −4…−6%, 10-app +5%).
+- [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`);
+  06-collections 10.9 → 7.5 ms. With #1171 the push is inline; what is left is the growth and copy of the large
+  `filter` results (200 000 sources) and the JIT code of the closures.
 - [~] #1151 roles: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
   lever is the frontend's spills around calls (#1147's deferred own root slots).
 - [~] #1152 ownership: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured
   (−4%, +6…21 MB footprint), not kept; first repetition ≤ 2× steady met by #1147. Steady ≤ 4 ms needs a model design.
-- [~] #1153 memory: breakdown on the ticket (builder Vec doubling 4.2 MB on 08-roles → #1171 `builder.sized`;
+- [~] #1153 memory: breakdown on the ticket (builder Vec doubling 4.2 MB on 08-roles → gone with #1171: 28.4 → 21.1 MB;
   collection floor #920; compile worker +2.6…4.4 MB); macOS `time -l` RSS of the `sparrow` binary reads ~1 MB (odd).
 - [x] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
   search ≤ 256 bytes), one-pass replace (`allocate_text_filled`), `Runtime.scratch_{offsets,ranges,words}`,
@@ -609,7 +616,7 @@ no full test suites, Docker, cargo fmt or clippy.
 - [x] #1057 (feature/1057): `session::place` names a changed item by (fresh position, item);
   constants by their init's symbol (`fresh_globals`); test `tests/session.rs`.
 
-- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 18` in every `.spa` and test
+- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 19` in every `.spa` and test
   source (51 files); `codec::tests::the_instruction_set_is_pinned_to_the_version` hashes
   `Instruction::SIGNATURES` (test-only) and the `op_enum!` codes. SparrowBook rebuilt
   (build.py gained the six missing mnemonics 157–162). Branches still writing `sparrow 16`

@@ -35,7 +35,7 @@ fn source(params: &[&str], result: &str, line: &str) -> String {
     let names: Vec<String> = (0..params.len()).map(|i| format!("r{i}")).collect();
     let dst = params.len();
     format!(
-        "sparrow 18\nmodule \"scalar-1106\" \"1.0.0\"\ntype t0 int\ntype t1 byte\ntype t2 float\nfunction f0 \"main\" {{\n registers [{}]\n params [{}]\n result {}\n 0: {}\n 1: ret r{dst}\n}}\n",
+        "sparrow 19\nmodule \"scalar-1106\" \"1.0.0\"\ntype t0 int\ntype t1 byte\ntype t2 float\nfunction f0 \"main\" {{\n registers [{}]\n params [{}]\n result {}\n 0: {}\n 1: ret r{dst}\n}}\n",
         registers.join(", "),
         names.join(", "),
         ty(result),

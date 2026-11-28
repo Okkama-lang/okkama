@@ -114,6 +114,7 @@ DESCRIPTIONS = {
     "arr.concat": ("`a + b + …`: one array allocated for the sum of the parts' lengths", "`a + b + …`: один массив, выделенный под сумму длин частей"),
     "arr.diff": ("`a - b - …`: the elements of the first array equal to no element of the others, in order", "`a - b - …`: элементы первого массива, не равные ни одному элементу остальных, по порядку"),
     "builder.new": ("an empty array builder", "пустой сборщик массива"),
+    "builder.sized": ("an empty builder with room for `count` elements (#1171): a hint when the length is known up front (`map` over a range, an array or a dictionary); the runtime caps it", "пустой сборщик с местом под `count` элементов (#1171): подсказка, когда длина известна заранее (`map` над диапазоном, массивом или словарём); рантайм её ограничивает"),
     "builder.push": ("append one element; the result is the builder to use next", "добавить элемент; результат — сборщик для дальнейшей работы"),
     "builder.append": ("append an array", "добавить массив"),
     "builder.range": ("append the integers of start..end", "добавить целые start..end"),

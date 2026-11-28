@@ -1246,6 +1246,9 @@ pub enum InstKind {
     Retag(ValueId),
     /// Пустой сборщик; тип элемента — из типа результата.
     BuilderNew,
+    /// Пустой сборщик с местом под `count` элементов (#1171): подсказка, когда длина результата
+    /// известна заранее (`map`); рантайм ограничивает её.
+    BuilderSized(ValueId),
     BuilderPush {
         builder: ValueId,
         value: ValueId,
@@ -1603,6 +1606,7 @@ macro_rules! instruction_operands {
                     std::iter::once($m!(base)).chain(removed.$iter().map(|v| $m!(v))).collect()
                 }
                 InstKind::BuilderNew => Vec::new(),
+                InstKind::BuilderSized(count) => vec![$m!(count)],
                 InstKind::BuilderPush { builder, value } => vec![$m!(builder), $m!(value)],
                 InstKind::BuilderAppend { builder, array } => vec![$m!(builder), $m!(array)],
                 InstKind::BuilderAppendRange {

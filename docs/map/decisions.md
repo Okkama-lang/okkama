@@ -1318,6 +1318,20 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## Builders in the heap (#1171, 2026-11-28; owner: back into 0.6.7; design Fable on #1111)
+
+- A builder is `heap::BUILDER` `[header|repr][length][capacity][buffer]`; the buffer is an ARRAY cell whose header
+  says length 0 (a leaf: marked, not traced); the builder traces slots below its length. Builders stay linear in
+  the IR, but the cell keeps one identity anyway: a push never changes the builder word.
+- Not a BUFFER array (#246) as the builder itself: the header has no room for an exact capacity (6 bits, powers of
+  two), and an exact capacity is what lets `builder.sized` finish in place.
+- `finish` in place when `class_of(length + 1) == class_of(capacity + 1)`, or for large cells when at most an eighth
+  is left; otherwise copy (memory of retained arrays stays exact). Spare buffers (≤ 16, ≤ 512 elements) live until
+  the next collection, which clears the list before marking: they are no roots.
+- `builder.sized` is a capacity hint, not a contract: a non-small or negative count is no hint, at most 4M
+  elements up front. Only `map` uses it; `filter` sized by its source cost 10-app +5% (filters that keep little).
+- Walkers treat BUILDER as they treated the Builder payload (may reach; no children; never summarized).
+
 ## 0.6.7 scope after the mid-release showcase (2026-11-28; owner)
 
 - Showcase mid-0.6.7 against v0.6.6: cold −23%, steady −32% (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7-mid).

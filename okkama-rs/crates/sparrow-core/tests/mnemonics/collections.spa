@@ -1,6 +1,6 @@
 ; Collections on both engines (#1121): arrays and their builders, maps and map builders, ranges, boxed values,
 ; enums, constants and the stub of `undef`.
-sparrow 18
+sparrow 19
 module "mnemonics-collections" "1.0.0"
 type t0 int
 type t1 str
@@ -80,7 +80,7 @@ function f4 "main" {
     17: const r0, int 1
     18: arr.slice r5, r3, r0, r2
     19: call _, f5, [r5]
-    20: builder.new r6
+    20: builder.sized r6, r19
     21: builder.push r6, r6, r19
     22: builder.append r6, r6, r3
     23: const r0, int 10

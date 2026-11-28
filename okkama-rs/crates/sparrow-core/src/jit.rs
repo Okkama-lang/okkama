@@ -124,8 +124,9 @@ helpers! {
     resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
     dev_site = crate::failures::rt_dev_site as (ctx, kind: u64, function: u64, pc: u64); [];
     resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
-    builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
+    builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [Allocates];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
+    builder_sized = crate::ops::rt_builder_sized as (ctx, repr: u64, count: Word) -> Word; [Allocates, Collects];
     builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects, Fails];
     rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
@@ -3599,6 +3600,18 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.set(&dst.0, result);
             }
+            I::BuilderSized { dst, count } => {
+                let Some(Type::Builder(element)) = self.register_type(&dst.0) else {
+                    self.generic_instruction(pc, instruction);
+                    return Ok(false);
+                };
+                let repr = Kind::of(program, *element).repr();
+                let repr = self.iconst(repr as i64);
+                let count = self.word(count);
+                let result = self.helper(|h| h.builder_sized, &[ctx, repr, count]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
             I::BuilderFinish { dst, builder } => {
                 let Some(Type::Array(element)) = self.register_type(&dst.0) else {
                     self.generic_instruction(pc, instruction);
@@ -3624,9 +3637,28 @@ impl Emitter<'_, '_> {
                 self.set(&dst.0, result);
             }
             I::BuilderPush { dst, builder, value } => {
+                // #1171: below the capacity, a push stores into the buffer and bumps the length; a full buffer goes
+                // to the helper, which moves the elements to one twice as big.
                 let (builder, value) = (self.get(builder), self.word(value));
-                let result = self.helper(|h| h.builder_push, &[ctx, builder, value]).expect("result");
-                self.set(&dst.0, result);
+                let length = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_LENGTH);
+                let capacity = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_CAPACITY);
+                let room = self.builder.ins().icmp(IntCC::UnsignedLessThan, length, capacity);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(room, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let buffer = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_BUFFER);
+                let offset = self.builder.ins().ishl_imm_u(length, 3);
+                let slot = self.builder.ins().iadd(buffer, offset);
+                self.builder.ins().store(MEMORY, value, slot, 8);
+                let longer = self.builder.ins().iadd_imm_s(length, 1);
+                self.builder.ins().store(MEMORY, longer, builder, heap::BUILDER_LENGTH);
+                self.builder.ins().jump(done, &[]);
+                self.builder.switch_to_block(slow);
+                self.helper(|h| h.builder_push, &[ctx, builder, value]).expect("result");
+                self.builder.ins().jump(done, &[]);
+                self.builder.switch_to_block(done);
+                self.set(&dst.0, builder);
             }
             I::Convert { dst, source }
                 if matches!(self.register_type(source), Some(Type::Int)) && matches!(self.register_type(&dst.0), Some(Type::Float)) =>
@@ -4168,7 +4200,7 @@ impl Emitter<'_, '_> {
             self.builder.ins().brif(summarized, never, &[], open, &[]);
             self.builder.switch_to_block(open);
         }
-        // A reference array (not packed) or a closure, payload or frame may reach one; nothing else can.
+        // A reference array (not packed) or a closure, payload, builder or frame may reach one; nothing else can.
         let is_array = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::ARRAY as i64);
         let (array, other) = (self.builder.create_block(), self.builder.create_block());
         self.builder.ins().brif(is_array, array, &[], other, &[]);
@@ -4181,8 +4213,11 @@ impl Emitter<'_, '_> {
         let closure = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::CLOSURE as i64);
         let payload = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::PAYLOAD as i64);
         let frame = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::FRAME as i64);
+        // #1171: a builder, as the payload it replaced.
+        let building = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::BUILDER as i64);
         let either = self.builder.ins().bor(closure, payload);
-        let any = self.builder.ins().bor(either, frame);
+        let some = self.builder.ins().bor(either, building);
+        let any = self.builder.ins().bor(some, frame);
         self.builder.ins().brif(any, maybe, &[], never, &[]);
     }
 
@@ -4388,7 +4423,7 @@ mod profile_tests {
         ]);
         crate::on_vm_thread(|| {
             let program = okkama_sparrow::assemble(
-                "sparrow 18\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
+                "sparrow 19\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
                  function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
                  0: const r0, int 7\n 1: ret r0\n}\nentry f0\n"
             ).unwrap();

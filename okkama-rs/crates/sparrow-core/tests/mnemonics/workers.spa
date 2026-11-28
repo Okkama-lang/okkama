@@ -1,7 +1,7 @@
 ; Workers on both engines, emulated in the same instance (#1121, #1127, #1144): an action bound to a field and its
 ; spawn, a direct spawn, a worker that fails (its failure caught at the await), and a panic at the end. Its test
 ; (interp_tests.rs) runs it with emulated workers, so every spawn here succeeds and needs no host.
-sparrow 18
+sparrow 19
 module "mnemonics-workers" "1.0.0"
 type t0 int
 type t1 str

@@ -29,11 +29,6 @@ type Outcome = Result<Word, String>;
 /// machine integers (#326).
 pub struct Rational(pub Rat);
 #[derive(Debug)]
-pub struct Builder {
-    pub repr: Repr,
-    pub items: Vec<Word>,
-}
-#[derive(Debug)]
 pub struct RangeValue {
     pub start: Word,
     pub end: Word,
@@ -78,8 +73,6 @@ macro_rules! payload {
 payload! {
     Rational => |_this, _visit| {}, owns |this| { rational_bytes(&this.0) }
     RangeValue => |this, visit| { visit(this.start, Repr::Int); visit(this.end, Repr::Int); }
-    Builder => |this, visit| { for &item in &this.items { visit(item, this.repr); } },
-        owns |this| { this.items.capacity() * 8 }
     AnyBox => |this, visit| { visit(this.value, this.repr); }
     MapValue => |this, visit| {
         this.entries.trace(|&(key, value)| {
@@ -1187,49 +1180,47 @@ pub extern "C" fn rt_map_len(ctx: *mut Ctx, map: Word) -> Word {
     word
 }
 
+/// #1171: a builder is a heap cell (`heap::BUILDER`); its first push makes its buffer.
 pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
-    let spare = runtime.heap.allocate_spare(|payload| {
-        match payload.as_any_mut().downcast_mut::<Builder>() {
-            Some(builder) => {
-                builder.repr = repr;
-                builder.items.clear();
-                true
-            }
-            None => false,
-        }
-    });
-    spare.unwrap_or_else(|| runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
+    runtime.heap.allocate_builder(repr, 0)
+}
+
+/// #1171: the most room `builder.sized` makes before the first push (32 MiB of words); past it the builder grows
+/// as it is filled. A larger count still works: a map over a huge range keeps failing at the length limit, without
+/// claiming its memory up front.
+const SIZED_LIMIT: i64 = 1 << 22;
+
+/// `builder.sized`: a builder with room for `count` elements (a small int between 0 and [`SIZED_LIMIT`]; anything
+/// else is no hint).
+pub(crate) fn builder_sized(runtime: &mut Runtime, repr: Repr, count: Word) -> Word {
+    let room = crate::word::small_value(count).map_or(0, |count| count.clamp(0, SIZED_LIMIT)) as usize;
+    runtime.heap.allocate_builder(repr, room)
+}
+
+#[inline(never)]
+pub extern "C" fn rt_builder_sized(ctx: *mut Ctx, repr: u64, count: Word) -> Word {
+    let frame = crate::runtime::frame_pointer!();
+    let ctx = unsafe { &mut *ctx };
+    let runtime = unsafe { &mut *ctx.runtime };
+    let word = builder_sized(runtime, Repr::from_bits(repr), count);
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
 }
 
 pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Outcome {
-    let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
+    let length = runtime.heap.builder_length(object);
     // An array or byte array holds at most 2^32 - 1 elements (#985): `map` or `filter` over a huge
     // range fails the program here, before the heap's length check would panic (#1033).
-    if crate::heap::passes_length_limit(builder.items.len()) {
+    if crate::heap::passes_length_limit(length) {
         return Err(array_limit());
     }
-    let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
     // #1111: an empty result (a filter that kept nothing, the common case in real code) is the shared empty array
     // of its representation (#1168): no allocation and no copy.
-    let array = if items.is_empty() {
-        runtime.heap.empty_array(if packed { crate::runtime::ARRAY_BYTES } else { repr as u64 })
-    } else if packed {
-        let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
-        runtime.heap.allocate_bytes(&bytes)
-    } else {
-        runtime.heap.allocate_array(repr, &items)
-    };
-    // #503: growth was charged as it happened. Preserve the capacity limit,
-    // discharge and retirement order exactly, including the large-buffer path.
-    runtime.heap.discharge_external(items.capacity() * 8);
-    if items.capacity() <= crate::heap::SPARE_CAPACITY {
-        items.clear();
-        if let Some(builder) = runtime.heap.payload_mut::<Builder>(object) {
-            builder.items = items;
-        }
-        runtime.heap.retire_payload(object);
+    if length == 0 {
+        let repr = crate::heap::element_repr(runtime.heap.header_of(object));
+        return Ok(runtime.heap.empty_array(if packed { crate::runtime::ARRAY_BYTES } else { repr as u64 }));
     }
-    Ok(array)
+    Ok(runtime.heap.builder_finish(object, packed))
 }
 
 /// The failure text of an array that would pass the 2^32 - 1 elements an array can hold (#1033).
@@ -1248,12 +1239,12 @@ fn map_len(runtime: &mut Runtime, map: Word) -> Word {
     runtime.heap.int(length as i64)
 }
 
-/// `builder.push`: append a word to a builder (no collection here: the
-/// items vector is Rust memory). Returns the builder.
+/// `builder.push`: append a word to a builder (no collection here: a full buffer is replaced by one twice as big,
+/// which the next safepoint counts). Returns the builder.
 #[inline(never)]
 pub extern "C" fn rt_builder_push(ctx: *mut Ctx, builder: Word, item: Word) -> Word {
     let runtime = unsafe { &mut *(*ctx).runtime };
-    grow_builder(&mut runtime.heap, builder, |items| items.push(item));
+    runtime.heap.builder_push(builder, item);
     builder
 }
 
@@ -1270,21 +1261,6 @@ pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word
 
 /// The most integers a range adds to a builder at once (#448).
 pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
-
-/// Grow a builder's items and charge the capacity its vector took on
-/// (#331): O(1), and nothing at all while the capacity holds.
-pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
-    let grown = {
-        // SAFETY: a builder word is a live builder (its type says so; machine code passes no other).
-        let items = &mut unsafe { heap.payload_mut_unchecked::<Builder>(builder) }.items;
-        let before = items.capacity();
-        grow(items);
-        items.capacity().saturating_sub(before)
-    };
-    if grown > 0 {
-        heap.charge_external(grown * 8);
-    }
-}
 
 /// Execute instruction `pc` of `function` with its used words at `uses`.
 ///
@@ -1613,9 +1589,16 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             };
             Ok(builder_new(runtime, repr))
         }
+        I::BuilderSized { dst, count } => {
+            let repr = match runtime.ty(function, dst.0) {
+                Some(Type::Builder(element)) => runtime.kind_of(*element).repr(),
+                _ => return Err("builder.sized needs a builder type".into()),
+            };
+            Ok(builder_sized(runtime, repr, value(count)))
+        }
         I::BuilderPush { builder, value: item, .. } => {
             let (builder, item) = (value(builder), value(item));
-            grow_builder(&mut runtime.heap, builder, |items| items.push(item));
+            runtime.heap.builder_push(builder, item);
             Ok(builder)
         }
         I::BuilderAppend { builder, array, .. } => {
@@ -1628,11 +1611,12 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 std::borrow::Cow::Borrowed(slots) => (None, slots.as_ptr(), slots.len()),
             };
             match owned {
-                Some(items) => grow_builder(&mut runtime.heap, builder, |all| all.extend(items)),
+                Some(items) => runtime.heap.builder_extend(builder, &items),
                 None => {
-                    // SAFETY: see above; heap objects are neither moved nor freed here.
+                    // SAFETY: see above; heap objects are neither moved nor freed here (a new buffer is another
+                    // cell, and the source is an array value, never a builder's buffer).
                     let slots = unsafe { std::slice::from_raw_parts(first, count) };
-                    grow_builder(&mut runtime.heap, builder, |all| all.extend_from_slice(slots));
+                    runtime.heap.builder_extend(builder, slots);
                 }
             }
             Ok(builder)
@@ -1651,8 +1635,8 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 let mut from = first;
                 while from <= stop {
                     let to = stop.min(from.saturating_add(RANGE_CHUNK - 1));
-                    grow_builder(&mut runtime.heap, builder, |all| {
-                        all.extend((from..=to).map(|n| crate::word::small(n).expect("between inline endpoints")));
+                    runtime.heap.builder_fill(builder, (to - from + 1) as usize, |n| {
+                        crate::word::small(from + n as i64).expect("between inline endpoints")
                     });
                     if to == stop {
                         break;
@@ -1671,7 +1655,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 items.push(integer_word(runtime, n.clone()));
                 n += 1;
             }
-            grow_builder(&mut runtime.heap, builder, |all| all.extend(items));
+            runtime.heap.builder_extend(builder, &items);
             Ok(builder)
         }
         I::BuilderFinish { dst, builder } => {

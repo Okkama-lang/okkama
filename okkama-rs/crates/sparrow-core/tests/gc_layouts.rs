@@ -74,7 +74,7 @@ fn gc_layout_mixed_objects_and_closures() {
 #[test]
 fn gc_layout_retained_arguments_survive_reused_async_registers() {
     let program = okkama_sparrow::assemble(
-        "sparrow 18\nmodule \"gc-layout-frame\" \"1.0.0\"\n\
+        "sparrow 19\nmodule \"gc-layout-frame\" \"1.0.0\"\n\
          type t0 int\ntype t1 str\ntype t2 float\ntype t3 bool\ntype t4 object obj0\n\
          object obj0 \"Lease\" {\n destroy f1\n}\n\
          function f0 \"pending\" async {\n\
@@ -145,7 +145,7 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
 
     // An Atomic<int> is declared fieldless too, but its hidden value can be BigInt.
     let program = okkama_sparrow::assemble(
-        "sparrow 18\nmodule \"gc-layout-atomic\" \"1.0.0\"\n\
+        "sparrow 19\nmodule \"gc-layout-atomic\" \"1.0.0\"\n\
          type t0 int\ntype t1 object obj0\nobject obj0 \"Atomic<int>\" {}\n\
          function f0 \"new\" intrinsic \"okkama.atomic.Atomic.new_value\" [obj0] [] {\n\
          registers [t0]\nparams [r0]\nresult t1\n}\n",

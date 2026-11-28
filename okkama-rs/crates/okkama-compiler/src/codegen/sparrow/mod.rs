@@ -291,6 +291,7 @@ impl FunctionGen<'_> {
             K::MapMerge(parts) => I::MapMerge { dst: dst()?, parts: regs(parts) },
             K::MapDifference { map, removed } => I::MapDiff { dst: dst()?, map: reg(*map), removed: regs(removed) },
             K::BuilderNew => I::BuilderNew { dst: dst()? },
+            K::BuilderSized(count) => I::BuilderSized { dst: dst()?, count: reg(*count) },
             K::BuilderPush { builder, value } => I::BuilderPush { dst: dst()?, builder: reg(*builder), value: reg(*value) },
             K::BuilderAppend { builder, array } => I::BuilderAppend { dst: dst()?, builder: reg(*builder), array: reg(*array) },
             K::BuilderAppendRange { builder, start, end, inclusive } => I::BuilderRange {

@@ -6,7 +6,7 @@ use super::*;
 /// The function of the ticket, branching on `r1` to `unreachable` (2) or to the return (3).
 fn program(condition: bool, handled: bool) -> String {
     format!(
-        r#"sparrow 18
+        r#"sparrow 19
 module "u" "v1.0.0"
 type t0 int
 type t1 bool

@@ -408,7 +408,7 @@ impl Runtime {
             match heap::kind(header) {
                 heap::OBJECT => header & heap::IDENTITY != 0,
                 heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
-                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
                 _ => false,
             }
         })
@@ -750,7 +750,7 @@ impl Runtime {
             match heap::kind(header) {
                 heap::OBJECT if !self.resources.flags[heap::payload(header) as usize] => continue,
                 heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => continue,
-                heap::OBJECT | heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::FRAME => {}
+                heap::OBJECT | heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => {}
                 _ => continue,
             }
             if !self.heap.visit(object) {
@@ -1073,7 +1073,7 @@ impl Runtime {
                     found.push(object);
                     continue;
                 }
-                heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::FRAME => {}
+                heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => {}
                 _ => continue,
             }
             if header & heap::SUMMARY != 0 && self.summary_holds(object, via, &mut oldest) {
@@ -1190,7 +1190,7 @@ impl Runtime {
                     }
                 }
                 heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => {}
-                heap::ARRAY | heap::PAYLOAD | heap::CLOSURE | heap::FRAME => {
+                heap::ARRAY | heap::PAYLOAD | heap::BUILDER | heap::CLOSURE | heap::FRAME => {
                     if header & heap::SUMMARY == 0 {
                         return;
                     }
@@ -1200,7 +1200,7 @@ impl Runtime {
             }
         }
         let header = self.heap.header_of(result);
-        if summarized && header & heap::SUMMARY == 0 && matches!(heap::kind(header), heap::ARRAY | heap::PAYLOAD) {
+        if summarized && header & heap::SUMMARY == 0 && matches!(heap::kind(header), heap::ARRAY | heap::PAYLOAD | heap::BUILDER) {
             okkama_devtrace::count!("runtime", "summary inherited");
             self.summarize(result);
         }
@@ -1278,7 +1278,7 @@ impl Runtime {
                 heap::OBJECT => header & heap::IDENTITY != 0,
                 heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
                     && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
-                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
                 _ => false,
             }
         }).collect()
@@ -1296,7 +1296,7 @@ impl Runtime {
                 header & heap::IDENTITY != 0 && self.owner_of(value) == Some(Owner::Free)
             }
             heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
-            heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+            heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
             _ => false,
         }
     }
@@ -2465,7 +2465,7 @@ mod cause_stack_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 19\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2573,7 +2573,7 @@ mod structure_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 19\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2618,7 +2618,7 @@ mod inline_identity_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+            "sparrow 19\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
              object obj0 \"Vault\" {\n field \"n\" t0\n destroy f1\n}\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\n\

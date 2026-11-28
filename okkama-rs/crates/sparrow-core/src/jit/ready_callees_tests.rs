@@ -5,7 +5,7 @@ use super::*;
 use cranelift_codegen::ir::{ExternalName, InstructionData, Opcode};
 
 const PAIR: &str = r#"
-sparrow 18
+sparrow 19
 module "ready-callees" "1.0.0"
 type t0 int
 function f0 "identity" {
@@ -184,7 +184,7 @@ fn ordinary_signatures_keep_register_and_stack_arguments() {
             let mut init = (0..arity).map(|i| format!(" {i}: const r{i}, int {}\n", 43 - arity + i)).collect::<String>();
             init.push_str(&format!(" {arity}: call r{arity}, f0, [{params}]\n {}: ret r{arity}", arity + 1));
             let text = format!(r#"
-sparrow 18
+sparrow 19
 module "arity" "1.0.0"
 type t0 int
 function f0 "callee" {{
@@ -211,7 +211,7 @@ function f1 "caller" {{
 #[test]
 fn native_trampolines_are_not_used_as_ready_static_ordinary_entries() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "native" "1.0.0"
 type t0 int
 function f0 "clock" native "runtime/time@1::wall_clock/0" {
@@ -302,7 +302,7 @@ fn lazy_compilation_failure_propagates_and_never_publishes_a_zero_entry() {
 #[test]
 fn bounded_self_and_mutual_recursion_keep_stack_and_step_checks() {
     let recursive = r#"
-sparrow 18
+sparrow 19
 module "recursion" "1.0.0"
 type t0 int
 type t1 bool
@@ -361,7 +361,7 @@ function f1 "caller" {
 #[test]
 fn ready_async_entries_still_construct_cold_futures() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "async-entry" "1.0.0"
 type t0 int
 type t1 future t0
@@ -391,7 +391,7 @@ function f1 "caller" {
 #[test]
 fn cap_fields_prove_the_target_and_use_the_ordinary_receiver_abi() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "cap-entry" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -428,7 +428,7 @@ function f1 "caller" {
 #[test]
 fn mixed_closure_captures_keep_the_existing_bridge_and_roots() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "captures" "1.0.0"
 type t0 int
 type t1 str
@@ -493,7 +493,7 @@ fn float_bits_use_the_same_word_entry_abi() {
 #[test]
 fn calls_share_one_failure_exit() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "shared-exit" "1.0.0"
 type t0 int
 function f0 "identity" {
@@ -526,7 +526,7 @@ function f1 "caller" {
 #[test]
 fn handlers_with_one_target_share_one_failure_exit() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "shared-handler-exit" "1.0.0"
 type t0 int
 type t1 failure
@@ -561,7 +561,7 @@ function f1 "caller" {
 /// `f` ahead; `f`'s unit left its call of `g` lazy, and `g` is published before `f` is first called, so that unit
 /// is stale and `f` is compiled again with a direct call, as a synchronous run compiles it.
 const STALE: &str = r#"
-sparrow 18
+sparrow 19
 module "background" "1.0.0"
 type t0 int
 function f0 "g" {

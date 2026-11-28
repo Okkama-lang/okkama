@@ -153,7 +153,7 @@ mod tests {
         okkama_sparrow::assemble(text).unwrap_or_else(|error| panic!("{error}\n{text}"))
     }
 
-    const HEAD: &str = r#"sparrow 18
+    const HEAD: &str = r#"sparrow 19
 module "reach" "1.0.0"
 type t0 int
 type t1 str
@@ -276,7 +276,7 @@ entry f5
     /// intrinsic, and this program has none.
     #[test]
     fn the_runtime_reaches_the_error_text_by_itself() {
-        let text = r#"sparrow 18
+        let text = r#"sparrow 19
 module "reach" "1.0.0"
 type t0 int
 type t1 str

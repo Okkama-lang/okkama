@@ -83,7 +83,7 @@ fn engines(source: &str) -> Outcome {
 /// functions (from t5 and f4).
 fn program(types: &str, declarations: &str, functions: &str) -> String {
     format!(
-        r#"sparrow 18
+        r#"sparrow 19
 module "interp" "1.0.0"
 type t0 int
 type t1 str
@@ -1338,7 +1338,7 @@ entry f5
 /// a traced kind (design #1079 §2.4: the oracle does not rest on the analysis it checks); the JIT's keeps the proofs.
 #[test]
 fn the_interpreter_loads_without_pointer_free_proofs() {
-    let source = "sparrow 18\nmodule \"ranges\" \"1\"\ntype t0 int\nfunction f0 \"rest\" async {\n registers [t0, t0, t0]\n \
+    let source = "sparrow 19\nmodule \"ranges\" \"1\"\ntype t0 int\nfunction f0 \"rest\" async {\n registers [t0, t0, t0]\n \
         params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n";
     let program = okkama_sparrow::assemble(source).unwrap();
     let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());

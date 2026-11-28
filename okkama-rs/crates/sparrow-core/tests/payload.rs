@@ -1,7 +1,7 @@
 //! #436: in-process payload owners, precise roots and immutable versions.
 use sparrow_core::heap::{Heap, Layouts};
 use sparrow_core::maps::Entries;
-use sparrow_core::ops::{AnyBox, Builder, Key, MapValue, RangeValue};
+use sparrow_core::ops::{AnyBox, Key, MapValue, RangeValue};
 use sparrow_core::program::Loaded;
 use sparrow_core::runtime::{Failure, FailureKind, Runtime};
 use sparrow_core::word::Repr;
@@ -48,7 +48,7 @@ fn payload_436_jit_maps_builders_and_versions() {
     ];
     let body: String = code.iter().enumerate().map(|(pc, line)| format!(" {pc}: {line}\n")).collect();
     for asynchronous in ["", " async"] {
-        let source = format!(r#"sparrow 18
+        let source = format!(r#"sparrow 19
 module "payload-436" "1.0.0"
 type t0 int
 type t1 str
@@ -86,7 +86,9 @@ fn payload_436_boxed_integer_and_reference_children() {
     let inline = heap.int(7);
     let range = heap.allocate_payload(Box::new(RangeValue { start: huge, end: inline, inclusive: true }));
     let text = heap.allocate_text("builder reference");
-    let builder = heap.allocate_payload(Box::new(Builder { repr: Repr::Ref, items: vec![text] }));
+    // #1171: a builder is a heap cell whose buffer slots below its length are traced.
+    let builder = heap.allocate_builder(Repr::Ref, 0);
+    heap.builder_push(builder, text);
     let boxed = heap.allocate_payload(Box::new(AnyBox { value: range, ty: okkama_sparrow::TypeRef(0), repr: Repr::Ref }));
     for _ in 0..3 {
         heap.collect(|visit| {
@@ -97,7 +99,7 @@ fn payload_436_boxed_integer_and_reference_children() {
         let range = heap.payload::<RangeValue>(range).unwrap();
         assert_eq!(heap.integer(range.start).to_string(), "123456789012345678901234567890");
         assert_eq!(heap.integer(range.end).to_string(), "7");
-        assert_eq!(heap.text(heap.payload::<Builder>(builder).unwrap().items[0]), "builder reference");
+        assert_eq!(heap.text(heap.builder_items(builder)[0]), "builder reference");
     }
     heap.collect(|_| {});
     assert_eq!(heap.stats().external_live_bytes, 0);
@@ -151,7 +153,7 @@ fn payload_436_persistent_map_versions_trace_shared_nodes() {
 
 #[test]
 fn payload_436_failure_causes_secondaries_and_cancellation() {
-    let program = okkama_sparrow::assemble("sparrow 18\nmodule \"failures\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n").unwrap();
+    let program = okkama_sparrow::assemble("sparrow 19\nmodule \"failures\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n").unwrap();
     let mut runtime = Runtime::new(Loaded::verified(program).unwrap()).unwrap();
     runtime.heap.set_stress(true);
     let thrown = runtime.heap.allocate_text("thrown value");

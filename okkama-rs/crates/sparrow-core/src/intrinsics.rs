@@ -1241,7 +1241,7 @@ mod sort_tests {
     fn ints_sort_in_value_order_small_or_big() {
         use crate::word;
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"sort\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
+            "sparrow 19\nmodule \"sort\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         )
         .unwrap();
         let mut runtime = crate::runtime::Runtime::new(crate::program::Loaded::new(program)).unwrap();

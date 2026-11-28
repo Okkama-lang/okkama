@@ -630,7 +630,7 @@ not needed (#292).
 
 | Формат | Где записывается | Где читается | Версия |
 |---|---|---|---|
-| SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 18 (every new opcode bumps it, #1061; 17 was Champ's) |
+| SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 19 (every new opcode bumps it, #1061; 17 was Champ's) |
 | Кадры process worker (`OKW2`) | `sparrow-core` workers | `sparrow-core` worker reader | OKW2 |
 | Дамп OIR-2 (`oir 2 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 2 (#1043) |
 | OCS cases, contracts, profiles, fixtures, adapter protocol/config и run/coverage/gate/diff/mutation reports | `conformance/runner/ocs`, suite files и `tools/write_schemas.py` | OCS runner/validators и consumers | schema/protocol 2 |

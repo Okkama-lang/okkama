@@ -3,7 +3,7 @@
 use super::*;
 
 const THREE: &str = r#"
-sparrow 18
+sparrow 19
 module "placement" "1.0.0"
 type t0 int
 function f0 "identity" {

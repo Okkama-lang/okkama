@@ -6,6 +6,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Builders in the heap (#1171).** An array under construction is a heap cell (`heap::BUILDER`: length,
+  capacity and a buffer in the heap) instead of a Rust payload with a vector: machine code pushes while the length
+  is below the capacity (a store and an increment, no helper call); a full buffer moves to one twice as big;
+  `finish` makes the buffer the array in place when its cell fits the length (same size class, or a large cell at
+  most an eighth bigger) and copies otherwise; outgrown and copied-from buffers serve the next builders until the
+  next collection. New instruction `builder.sized` (SPB 19, opcode 163; the assembly header is `sparrow 19`): a map
+  over a range, an array or a dictionary makes its builder with room for the source's length (capped at 4M
+  elements), so it never grows and its buffer becomes the array. Steady: 10-app −14%, 11-ownership −14%, 08-roles
+  −8%, 05-strings −3%, 06-collections unchanged; cold 10-app −10%, 08-roles −4%; 08-roles peak footprint
+  28.4 → 21.1 MB. Sizing `filter` by its source was measured and not done (06 −4…−6%, 10-app +5%).
 - **Faster collections (#1150).** Small ints sort by their tagged words without a comparison call when no budget
   polls (equal ints are indistinguishable, so the unstable sort of words is the stable sort of values), and a
   builder push reaches its items without a virtual downcast. 06-collections steady 10.9 → 7.4 ms (−32%), 10-app

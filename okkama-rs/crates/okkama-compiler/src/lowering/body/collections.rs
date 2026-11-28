@@ -30,6 +30,8 @@ enum Source {
     Array {
         array: ValueId,
         element: Type,
+        /// Its length, when [`Lowerer::source_count`] took it already (#1171).
+        size: Option<ValueId>,
     },
     Map {
         keys: ValueId,
@@ -275,6 +277,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 Ok(Some(Source::Array {
                     array: value.value,
                     element: (**element).clone(),
+                    size: None,
                 }))
             }
             thir::Source::Varargs(local) => {
@@ -286,6 +289,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 Ok(Some(Source::Array {
                     array: value.value,
                     element: (**element).clone(),
+                    size: None,
                 }))
             }
             thir::Source::Map(expr) => {
@@ -727,6 +731,32 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         Ok((out, state_params))
     }
 
+    /// #1171: how many elements a traversal of `source` visits, when that is known before it starts: the
+    /// length of a range (its end less its start, one more when inclusive; the runtime treats a negative or huge
+    /// count as no hint), an array or a dictionary. Cursors and batches are not counted.
+    fn source_count(&mut self, source: &mut Source, span: Span) -> Option<ValueId> {
+        match source {
+            &mut Source::Range { start, end, inclusive } => {
+                let difference = self
+                    .emit(InstKind::IntBinary { op: IntBinaryOp::Sub, left: end, right: start }, Type::Int, span)
+                    .value;
+                if !inclusive {
+                    return Some(difference);
+                }
+                let one = self.constant(Constant::Int(IntValue::from_i64(1)), span).value;
+                Some(self.emit(InstKind::IntBinary { op: IntBinaryOp::Add, left: difference, right: one }, Type::Int, span).value)
+            }
+            Source::Array { array, size, .. } => {
+                // The traversal reads the same length instead of taking it again.
+                let length = self.emit(InstKind::ArrayLen(*array), Type::Int, span).value;
+                *size = Some(length);
+                Some(length)
+            }
+            Source::Map { keys, .. } => Some(self.emit(InstKind::ArrayLen(*keys), Type::Int, span).value),
+            Source::Cursor { .. } | Source::Batch { .. } => None,
+        }
+    }
+
     /// Обход источника: тело получает элемент(ы) и состояние.
     fn traverse(
         &mut self,
@@ -774,12 +804,12 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     body(lowerer, vec![index], state)
                 },
             ),
-            Source::Array { array, element } => {
+            Source::Array { array, element, size } => {
                 let zero = self.constant(Constant::Int(IntValue::from_i64(0)), span);
-                let size = self.emit(InstKind::ArrayLen(array), Type::Int, span);
+                let size = size.unwrap_or_else(|| self.emit(InstKind::ArrayLen(array), Type::Int, span).value);
                 self.counted_loop(
                     zero.value,
-                    size.value,
+                    size,
                     false,
                     state,
                     scanned,
@@ -1030,6 +1060,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let source = Source::Array {
             array: value.value,
             element: *element,
+            size: None,
         };
         let (out, _) =
             self.traverse(source, Vec::new(), &empty, span, |lowerer, mut items, _| {
@@ -1072,7 +1103,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         expr: &'r thir::Expr,
         span: Span,
     ) -> Result<Out> {
-        let Some(source) = self.source(&functional.source, span)? else {
+        let Some(mut source) = self.source(&functional.source, span)? else {
             return Ok(Out::Diverged);
         };
         let items = source.items();
@@ -1092,7 +1123,12 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         span,
                     )));
                 }
-                let builder = self.emit(InstKind::BuilderNew, Type::Builder(output.clone()), span);
+                // #1171: a map over a range, an array or a dictionary knows its length: the builder gets that
+                // much room up front (no growth, and its buffer becomes the array in place).
+                let builder = match self.source_count(&mut source, span) {
+                    Some(count) => self.emit(InstKind::BuilderSized(count), Type::Builder(output.clone()), span),
+                    None => self.emit(InstKind::BuilderNew, Type::Builder(output.clone()), span),
+                };
                 let home = self.cleanups.len() - 1;
                 let (out, state) = self.traverse(
                     source,
@@ -1734,6 +1770,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         Source::Array {
                             array: array.value,
                             element: source_element,
+                            size: None,
                         },
                         vec![builder],
                         &empty,

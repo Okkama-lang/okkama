@@ -3,7 +3,7 @@ use super::*;
 
 fn program(code: &[&str]) -> String {
     let code: String = code.iter().enumerate().map(|(pc, op)| format!(" {pc}: {op}\n")).collect();
-    format!("sparrow 18\nmodule \"maps-954\" \"1\"\ntype t0 int\ntype t1 str\ntype t2 map t1 t0\nfunction f0 \"literal\" {{\n registers [t1, t1, t0, t0, t2, t0]\n params []\n result t0\n{code}}}\nentry f0\n")
+    format!("sparrow 19\nmodule \"maps-954\" \"1\"\ntype t0 int\ntype t1 str\ntype t2 map t1 t0\nfunction f0 \"literal\" {{\n registers [t1, t1, t0, t0, t2, t0]\n params []\n result t0\n{code}}}\nentry f0\n")
 }
 
 fn run(code: &[&str]) -> Result<String, String> {

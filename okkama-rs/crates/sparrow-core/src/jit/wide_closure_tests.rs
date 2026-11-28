@@ -25,7 +25,7 @@ fn program(params: usize, captures: usize, asynchronous: bool) -> String {
     };
     let mode = if asynchronous { " async" } else { "" };
     format!(
-        "sparrow 18\nmodule \"wide\" \"1.0.0\"\ntype t0 int\ntype t1 future t0\n{fn_type}\n\
+        "sparrow 19\nmodule \"wide\" \"1.0.0\"\ntype t0 int\ntype t1 future t0\n{fn_type}\n\
          function f0 \"body\"{mode} {{\n registers [{}]\n params [{}]\n result t0\n{body}}}\n\
          function f1 \"run\"{mode} {{\n registers [{}, t2, {}, t0]\n params []\n result t0\n{consts} {}: fn.closure r{closure}, f0, [{}]\n {}: call.fn r{called}, r{closure}, [{}]\n{tail}}}\n",
         ints(params + 1), list(0..params),
@@ -75,7 +75,7 @@ fn a_collection_during_a_wide_call_passes_over_the_adapter() {
     // traced only by the body's own frame, survive.
     let names: Vec<String> = (0..9).map(|i| format!("r{i}")).collect();
     let text = format!(
-        "sparrow 18\nmodule \"wide-gc\" \"1.0.0\"\ntype t0 int\ntype t1 str\ntype t2 bool\ntype t3 array t1\n\
+        "sparrow 19\nmodule \"wide-gc\" \"1.0.0\"\ntype t0 int\ntype t1 str\ntype t2 bool\ntype t3 array t1\n\
          type t4 fn [t1, t1, t1, t1, t1, t1] -> t0\n\
          function f0 \"body\" {{\n registers [t1, t1, t1, t1, t1, t1, t1, t1, t1, t0, t0, t0, t3, t2, t1, t0]\n\
          params [{}]\n result t0\n 0: const r9, int 0\n 1: const r10, int 200000\n 2: const r11, int 1\n\

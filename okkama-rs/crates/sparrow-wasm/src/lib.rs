@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(last_panic(), r#"{"panic":null}"#);
     }
 
-    const HEAD: &str = r#"sparrow 18
+    const HEAD: &str = r#"sparrow 19
 module "playground" "1.0.0"
 type t0 int
 type t1 str

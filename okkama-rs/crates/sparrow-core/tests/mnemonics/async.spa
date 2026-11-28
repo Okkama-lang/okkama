@@ -1,7 +1,7 @@
 ; Async bodies on both engines (#1122): await, await.take and fut.spawn; a region and a static resource that
 ; settle async destroys, on the normal path and on the failure path, one of them suspended until a spawned task
 ; opens its gate; at the end a failure that unwinds through a suspended settle (design #1079 §6.4).
-sparrow 18
+sparrow 19
 module "mnemonics-async" "1.0.0"
 type t0 int
 type t1 str

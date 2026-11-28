@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 /// `main` sleeps `NANOS` nanoseconds, then returns 7.
 fn sleeping(nanos: u64) -> Vec<u8> {
     let source = format!(
-        r#"sparrow 18
+        r#"sparrow 19
 module "timer-wait" "1.0.0"
 type t0 int
 type t1 str
