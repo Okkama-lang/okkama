@@ -174,3 +174,25 @@ fn typed_payloads_decode_and_encode() {
     let reply = Reply::json(&request).unwrap();
     assert_eq!(reply.payload, Some(call.payload.clone()));
 }
+
+#[test]
+fn a_panicking_handler_answers_its_call_with_a_failure_in_a_pool_too() {
+    for threads in [1, 3] {
+        let bodies = vec![
+            hello(),
+            json(r#"{"kind":"request","id":1,"method":"boom"}"#),
+            json(r#"{"kind":"request","id":2,"method":"fine"}"#),
+        ];
+        let sink = Sink::default();
+        let outcome = Server::new().threads(threads).serve_on(&framed(&bodies)[..], sink.clone(), |call: Call| {
+            if call.method() == "boom" { panic!("broken handler"); }
+            Ok(Reply::value(Value::from("ok")))
+        });
+        outcome.unwrap();
+        let frames = written(&sink);
+        let answer = |id: i64| frames[1..].iter().find(|f| f.get("id").and_then(Value::as_i64) == Some(id)).cloned().unwrap();
+        assert_eq!(answer(1).get("code"), Some(&Value::from("panic")), "threads {threads}");
+        assert_eq!(answer(1).get("message"), Some(&Value::from("broken handler")));
+        assert_eq!(answer(2).get("kind"), Some(&Value::from("reply")));
+    }
+}

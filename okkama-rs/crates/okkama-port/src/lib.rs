@@ -421,7 +421,13 @@ impl Server {
 /// Runs the handler on one call and writes its reply or failure whole.
 fn answer<W: Write>(output: &Mutex<W>, handler: &(dyn Fn(Call) -> Result<Reply, Failure> + Send + Sync), call: Call) -> io::Result<()> {
     let (id, codec) = (call.id, call.codec);
-    let outcome = handler(call);
+    // A panicking handler answers its call with a failure instead of leaving it to time out (a pool worker
+    // would die silently) or ending the helper with every other call in flight.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(call))).unwrap_or_else(|panic| {
+        let message = panic.downcast_ref::<&str>().map(|s| s.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_else(|| "the handler panicked".into());
+        Err(Failure::new("panic", message))
+    });
     let (message, attachments) = match outcome {
         Ok(reply) => {
             let mut entries = vec![("kind", Value::from("reply")), ("id", Value::from(id))];

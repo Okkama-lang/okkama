@@ -33,7 +33,13 @@ impl Extension {
         if self.exports.iter().any(|e| e.symbol.split('@').next() != Some(module)) {
             return Err(Error("extension exports more than one module; declare each module by hand".into()));
         }
-        let mut out = format!("module {module};\n\n");
+        // The symbol's major is the module's: a package module without a version is major 0.
+        let major = |e: &Export| e.symbol.split('@').nth(1).and_then(|rest| rest.split("::").next()).unwrap_or("0");
+        let first = self.exports.first().map(major).unwrap_or("0");
+        if self.exports.iter().any(|e| major(e) != first) {
+            return Err(Error("extension exports more than one major version of its module".into()));
+        }
+        let mut out = if first == "0" { format!("module {module};\n\n") } else { format!("module {module} v{first}.0.0;\n\n") };
         for state in self.states {
             let name = unsafe { text(state.name)? };
             out.push_str(&format!("native object {name};\n"));
@@ -328,6 +334,11 @@ mod declaration_tests {
         let extension = descriptor(vec![export(c"sample@0::convert/2", c"(@?int, %string:@byte) -> rat", c"values, entries")]);
         assert_eq!(extension.declarations().unwrap(), "module sample;\n\nnative convert(values is @Maybe<int>, entries is %string:@byte) is rat;\n");
         assert_eq!(descriptor(vec![]).declarations().unwrap(), "module empty/module;\n\n");
+        // A versioned module keeps its major, or its symbols would be `@0` and never bind.
+        let versioned = descriptor(vec![export(c"sample@2::f/0", c"() -> int", c"")]);
+        assert_eq!(versioned.declarations().unwrap(), "module sample v2.0.0;\n\nnative f() is int;\n");
+        let mixed = descriptor(vec![export(c"sample@1::f/0", c"() -> int", c""), export(c"sample@2::g/0", c"() -> int", c"")]);
+        assert!(mixed.declarations().unwrap_err().0.contains("more than one major"));
     }
     #[test]
     fn ext_declare_refuses_ambiguous_modules_and_invalid_parameter_names() {

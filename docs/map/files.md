@@ -123,7 +123,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 79 files, 42396 lines
+## sparrow — 79 files, 42404 lines
 
 - `sparrow-core/src/budget.rs` 481 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
@@ -131,7 +131,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1299 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/ext.rs` 305 — Trusted extension loading, descriptor validation and signature binding.
+- `sparrow-core/src/ext.rs` 314 — Trusted extension loading, descriptor validation and signature binding.
 - `sparrow-core/src/heap.rs` 3039 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1120 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1155 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
@@ -169,7 +169,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_dns.rs` 326 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 163 — The program's environment is the run's host session
-- `sparrow-core/src/host/native_ext.rs` 367 — Extension call scopes: scalar bits and call-scoped typed tokens.
+- `sparrow-core/src/host/native_ext.rs` 366 — Extension call scopes: scalar bits and call-scoped typed tokens.
 - `sparrow-core/src/host/native_file.rs` 190 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 639 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
 - `sparrow-core/src/host/native_fs.rs` 240 — Filesystem native boundary. Lexical paths are portable and independent of
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 27186 lines
+## other — 85 files, 27190 lines
 
 - `blade/src/install.rs` 1421 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 322 — Core library for the Blade command-line tool.
@@ -255,7 +255,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-port/examples/text_helper.rs` 32 — A text helper for Okkama's `os/port` (#1081): the Rust side of `examples/port/text.ok`.
 - `okkama-port/src/cbor.rs` 288 — A small CBOR (RFC 8949) codec for payloads: what Okkama's `cbor` module writes and what other helpers may
 - `okkama-port/src/frame.rs` 61 — Frames: a 4-byte big-endian length, then that many bytes, the first of which says what the frame is.
-- `okkama-port/src/lib.rs` 347 — The helper side of Okkama ports (#1081): a program that serves calls from an Okkama program over its standard
+- `okkama-port/src/lib.rs` 351 — The helper side of Okkama ports (#1081): a program that serves calls from an Okkama program over its standard
 - `okkama-port/src/value.rs` 266 — The payload data model: one value type for JSON and CBOR messages, so a helper reads a payload the same way
 - `okkama-runtime-abi/src/catalogue.rs` 267 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.

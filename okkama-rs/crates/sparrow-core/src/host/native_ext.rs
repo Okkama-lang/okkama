@@ -176,8 +176,9 @@ fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word], result_require
 {
     static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let checked = *CHECKED.get_or_init(|| crate::env_switch::enabled("OKKAMA_EXT_CHECK"));
-    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-    if serial > u64::from(u32::MAX) { return Err(fault(binding, "call token serial exhausted")); }
+    // Tokens carry 32 bits of the call's serial: it only tells this call's tokens from a recent one's, so it
+    // goes round (skipping 0) instead of running out after 2^32 calls in a long-lived process.
+    let serial = SERIAL.fetch_add(1, Ordering::Relaxed) % u64::from(u32::MAX) + 1;
     let shape_start = host.shapes.len();
     let mut call = Call {
         public: okk_call { host: &HOST }, host, binding, serial,
