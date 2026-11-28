@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Float code gets small-int versions (#1178).** A function whose registers include floats now also gets the
+  untagged small-int version of #1113 when its instructions are float arithmetic and comparisons besides small-int
+  arithmetic (no conversions): float arithmetic is pure, so a restart in the general version repeats nothing
+  observable. In 03-float's Mandelbrot loop the int counter's slow path (a helper call) disappeared, and with it the
+  floats' trips through the stack: steady 10.44 → 5.20 ms (−50%; Go 3.8 ms), the rest of the ladder within ±2.7%.
 - **No reloads of GC roots in loops (#1151).** A synchronous function with a loop keeps values that are live across
   a call in registers instead of reloading them from their stack-map slot after every call: the slot is still
   written at the definition and listed in every stack map, which is exact because the collector never moves

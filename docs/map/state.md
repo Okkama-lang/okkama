@@ -4,7 +4,7 @@
 
 **Owner on vacation 2026-11-28 → ~2026-12-12; release alone in /loop (memory vacation-release-0-6-7).** Authorized:
 merge PR release/067 → main, tag v0.6.7, GitHub Release, design decisions with Fable, close/postpone myself. Plan:
-#1177, #1176 done → #1152 (Fable's design in hand: structure index known at birth) → #1151 (Fable design pending; naive sync explicit roots measured 02 +122%, 09 +36%) → #1178 (float, owner returned it 2026-11-28) → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
+#1177, #1176 done → #1152 (Fable's design in hand: structure index known at birth) → #1151 (Fable design pending; naive sync explicit roots measured 02 +122%, 09 +36%) → #1178 done → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
 showcase, Bible, man, CHANGELOG, version, PR, merge, tag, release, install-pgo, cleanup). Line: worktree
 okkama-work/p-1110 (feature/1110) → release/067 + wave/067-*.
 
@@ -13,6 +13,10 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1178 floats: `small_eligible` admits Kind::Float and float add/sub/mul/div/neg/abs/sqrt/cmp and float constants
+  (not `Convert`, whose fast path reads an int tag); 03-float 10.44 → 5.20 ms. Test okkama-cli small_ints
+  `float_functions_get_small_int_versions_with_the_general_versions_results` (restart with live floats, a float
+  overflow's trace, on = off). Remaining 03 gap: per-op finiteness checks (fsub/fcmp/branch after each op).
 - [x] #1176 string slices: `Heap::text_chain` (SHARED and the storage is a BUFFER) guards `concat_text`/`concat_parts`;
   `text_buffer_write` asserts BUFFER; `substring` shares via `Heap::allocate_text_slice` when ≥ `SLICE_MIN` (64) and
   2×piece ≥ storage (`text_storage_bytes`: flat length or buffer room), never a view of a view. Tests

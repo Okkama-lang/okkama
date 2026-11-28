@@ -1318,6 +1318,15 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## Floats in small-int versions (#1178, 2026-11-28; owner returned the ticket to 0.6.7)
+
+- #1113's small-int versions now admit float registers and float arithmetic/comparisons/constants. Float arithmetic
+  has no effect, so the restart from the entry stays unobservable; a float failure fails the small version at the same
+  instruction as the general one (no handlers in such functions). `Convert` stays out (its fast path tests an int tag,
+  untagged in the small version).
+- Why it mattered: the general version kept a cold helper call in the hot loop (the int counter's slow path), and
+  register allocation spilled every float across it on every iteration.
+
 ## GC roots across calls in synchronous functions (#1151, 2026-11-28; design Fable)
 
 - Synchronous functions keep Cranelift's frontend stack maps (not `Roots`): the naive move to explicit roots lost

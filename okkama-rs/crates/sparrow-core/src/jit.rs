@@ -646,8 +646,8 @@ enum Version {
 }
 
 /// #1113: does `function` get a small-int version? A synchronous Okkama function whose registers are ints, raw
-/// words (bool, char, enum) and references and whose instructions are only small-int arithmetic and comparisons, moves, small
-/// constants, branches and returns: it has no effect, so a restart from its entry in the general version, when an
+/// words (bool, char, enum), floats (#1178) and references and whose instructions are only small-int arithmetic and
+/// comparisons, float arithmetic and comparisons, moves, small constants, branches and returns: it has no effect, so a restart from its entry in the general version, when an
 /// int leaves the tagged-small range, repeats nothing observable. Its ints then are untagged machine words: no tag
 /// checks or conversions, no stack maps.
 fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
@@ -657,7 +657,9 @@ fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
     }
     let kinds = &loaded.functions[function].kinds;
     // A reference (a receiver) is only passed on: nothing reads it, and no safepoint follows while it lives.
-    if !kinds.iter().all(|kind| matches!(kind, Kind::Int | Kind::Raw | Kind::Ref)) {
+    // #1178: floats too: their arithmetic is pure, so a restart repeats nothing observable, and a float failure
+    // fails this call at the same instruction as the general version would.
+    if !kinds.iter().all(|kind| matches!(kind, Kind::Int | Kind::Raw | Kind::Ref | Kind::Float)) {
         return false;
     }
     let mut arithmetic = false;
@@ -665,7 +667,10 @@ fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
         I::Const { value: Constant::Int(text), .. } => {
             text.parse::<i64>().is_ok_and(|n| (word::SMALL_MIN..=word::SMALL_MAX).contains(&n))
         }
-        I::Const { value: Constant::Bool(_) | Constant::Char(_), .. } => true,
+        I::Const { value: Constant::Bool(_) | Constant::Char(_) | Constant::Float(_), .. } => true,
+        // #1178: float arithmetic and comparisons (never a conversion: its fast path reads an int's tag).
+        I::FloatAdd { .. } | I::FloatSub { .. } | I::FloatMul { .. } | I::FloatDiv { .. } | I::FloatNeg { .. }
+        | I::FloatAbs { .. } | I::FloatSqrt { .. } | I::FloatCmp { .. } => true,
         I::IntAdd { .. } | I::IntSub { .. } | I::IntMul { .. } | I::IntMod { .. } | I::IntCmp { .. } => {
             arithmetic = true;
             true
