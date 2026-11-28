@@ -253,16 +253,15 @@ impl Loaded {
                     None => o.fields.iter().map(|(_, t)| Kind::of(p, *t).repr()).collect(),
                 })
                 .collect(),
-            // A closure object has one word per parameter of its function:
-            // captures fill a prefix, the rest stay unbound.
+            // A closure object has its entry word (#1110: the code a call jumps to, or 0), then one word per
+            // parameter of its function: captures fill a prefix, the rest stay unbound.
             closures: p
                 .functions
                 .iter()
                 .zip(&self.functions)
                 .map(|(f, info)| {
-                    f.params
-                        .iter()
-                        .map(|r| info.kinds[r.0 as usize].repr())
+                    std::iter::once(Repr::Raw)
+                        .chain(f.params.iter().map(|r| info.kinds[r.0 as usize].repr()))
                         .collect()
                 })
                 .collect(),
@@ -325,7 +324,8 @@ pub(crate) fn role_slot_is_async(program: &Program, role: okkama_sparrow::RoleRe
 
 /// An instruction that may suspend its async frame and is re-entered on
 /// resumption: `await` and the region closes that await async destroys (#154).
-/// The JIT's; the interpreter's async part (#1122) will read it too.
+/// The JIT's: the interpreter (#1122) handles each of these in its own dispatch
+/// and executes the instruction again on resumption, without asking this.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) fn suspends(instruction: &Instruction) -> bool {
     matches!(
@@ -423,6 +423,7 @@ pub(crate) fn generic(instruction: &Instruction) -> bool {
             | Instruction::MapMerge { .. }
             | Instruction::MapDiff { .. }
             | Instruction::BuilderNew { .. }
+            | Instruction::BuilderSized { .. }
             | Instruction::BuilderPush { .. }
             | Instruction::BuilderAppend { .. }
             | Instruction::BuilderRange { .. }
@@ -450,7 +451,7 @@ mod worker_tests {
     #[test]
     fn loading_reuses_the_workers_a_program_already_has() {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
+            "sparrow 19\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
              function f0 \"work\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
              function f1 \"spawner\" async {\n registers [t1, t2]\n params []\n result t2\n 0: fn.closure r0, f0, []\n 1: worker.spawn r1, r0, [], false\n 2: ret r1\n}\n",
         ).unwrap();
@@ -465,7 +466,7 @@ mod worker_tests {
     fn worker_reuse_excludes_programs_that_can_launch_descendants() {
         use okkama_runtime_abi::Native;
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
+            "sparrow 19\nmodule \"reuse\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\nregisters [t0]\nparams []\nresult t0\n0: const r0, int 0\n1: ret r0\n}\n"
         ).unwrap();
         assert!(Loaded::new(program.clone()).worker_reuse_safe);
         for (native, safe) in [
@@ -489,14 +490,18 @@ mod switch_tests {
 
     /// `SPARROW_CORE_POINTER_FREE` and `SPARROW_CORE_INT_RANGE` are on until set (9d7749f4e, after #1067 had
     /// turned both off by accident; one switch rule since #1095): a load with neither set keeps the registers the
-    /// range analysis proves small out of the GC roots, more than the analysis without ranges does.
+    /// range analysis proves small out of the GC roots, more than the analysis without ranges does. The test
+    /// states the default, so a run that sets either switch fails it by name rather than passing unchecked (#1144).
     #[test]
     fn the_pointer_free_and_range_analyses_are_on_until_set() {
-        if ["SPARROW_CORE_POINTER_FREE", "SPARROW_CORE_INT_RANGE"].iter().any(|name| std::env::var_os(name).is_some()) {
-            return; // The test states the default; a run that sets either switch has chosen otherwise.
+        for name in ["SPARROW_CORE_POINTER_FREE", "SPARROW_CORE_INT_RANGE"] {
+            assert!(
+                std::env::var_os(name).is_none(),
+                "{name} is set: this test states the switch's default and cannot check it; unset {name} to run it"
+            );
         }
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
+            "sparrow 19\nmodule \"ranges\" \"1.0.0\"\ntype t0 int\nfunction f0 \"rest\" {\n registers [t0, t0, t0]\n \
              params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n",
         ).unwrap();
         let loaded = Loaded::new(program);

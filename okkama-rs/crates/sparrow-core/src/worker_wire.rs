@@ -11,6 +11,17 @@ use okkama_sparrow::{Type, TypeRef};
 
 pub(crate) const NOT_TRANSFERABLE: &str = "spawn cannot transfer objects, closures, Futures or native handles";
 
+/// #1141: the failure text a worker hands its parent, from the report of its run. The parent reports it as its own
+/// runtime failure ("RuntimeError: …"), so a runtime failure's report gives up its prefix there, and the parent
+/// prints the one prefix it prints for the same failure of its own; any other report (a panic, a thrown error, a
+/// native failure, an exhausted budget) keeps its first line as it is.
+pub(crate) fn failure_text(report: String) -> String {
+    match report.strip_prefix("RuntimeError: ") {
+        Some(message) => message.to_owned(),
+        None => report,
+    }
+}
+
 pub(crate) fn text(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
     count(out, value.len())?;
     out.extend_from_slice(value.as_bytes());

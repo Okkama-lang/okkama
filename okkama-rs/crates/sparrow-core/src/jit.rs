@@ -18,7 +18,7 @@ use crate::program::{Kind, dispatch_table, failure_or_region, generic, suspends}
 use crate::runtime::{self, Ctx, FAILED, OK, Runtime};
 use crate::word::{self, Repr, Word};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind, Value, types};
+use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind, TrapCode, Value, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -104,6 +104,7 @@ helpers! {
     int = runtime::rt_int as (ctx, op: u64, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     int_order = runtime::rt_int_order as (ctx, left: Word, right: Word) -> i64; [];
     concat = runtime::rt_concat as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
+    concat_n = runtime::rt_concat_n as (ctx, parts: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     array = runtime::rt_array as (ctx, repr: u64, elements: *const Word, count: u64) -> Word; [Allocates, Collects];
     trap = runtime::rt_trap as (ctx, message: Word) -> Word; [Allocates, Fails];
     stack_overflow = runtime::rt_stack_overflow as (ctx) -> Word; [Allocates, Fails];
@@ -112,7 +113,6 @@ helpers! {
     native = runtime::rt_native as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     float = runtime::rt_float as (ctx, op: u64, left: u64, right: u64) -> u64; [Allocates, Fails];
     exec = crate::ops::rt_exec as (ctx, function: u64, pc: u64, uses: *const Word, registers: *const okkama_sparrow::Register, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
-    closure = runtime::rt_closure as (ctx, function: u64, captures: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     call_closure = runtime::rt_call_closure as (ctx, closure: Word, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     map_find = runtime::rt_map_find as (ctx, function: u64, pc: u64, map: Word, key: Word) -> u64; [];
     intrinsic = crate::intrinsics::rt_intrinsic as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
@@ -125,12 +125,12 @@ helpers! {
     resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
     dev_site = crate::failures::rt_dev_site as (ctx, kind: u64, function: u64, pc: u64); [];
     resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
-    builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
+    builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [Allocates];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
+    builder_sized = crate::ops::rt_builder_sized as (ctx, repr: u64, count: Word) -> Word; [Allocates, Collects];
     builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects, Fails];
     rat_new = crate::ops::rt_rat_new as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     map_len = crate::ops::rt_map_len as (ctx, map: Word) -> Word; [Allocates, Collects];
-    scalar_safepoint = crate::ops::rt_scalar_safepoint as (ctx, conversion: u64); [Collects];
     trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
     int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects, Fails];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
@@ -149,6 +149,26 @@ pub struct Jit {
     module: JITModule,
     helpers: Helpers,
     ids: BTreeMap<usize, FuncId>,
+    /// #1110: the closure entry of each (function, captures): a second compilation of the body whose prologue reads
+    /// the captures from the closure, its trailing argument; its slot holds the code once published (0 before).
+    closure_ids: BTreeMap<(usize, usize), FuncId>,
+    closure_entries: BTreeMap<(usize, usize), Box<u64>>,
+    /// Closure entries a compiled function's `fn.closure` asked for, compiled after it.
+    closure_requests: Vec<(usize, usize)>,
+    /// #1113: the general version of each function that got a small-int version (the published code), which
+    /// the small version restarts in when an int leaves the tagged-small range.
+    /// Compiled at the first restart (0 until then): a call that stays small never compiles it.
+    general: BTreeMap<usize, Box<u64>>,
+    general_ids: BTreeMap<usize, FuncId>,
+    /// #1147 (step 2): background codegen. `SPARROW_CORE_COMPILE_THREADS` workers (default 1 with a second core; 0: none,
+    /// every compile on the VM thread); the pool starts with the first speculation. `pending`: the functions emitted ahead of their first
+    /// call and submitted, with the static callees they left lazy (a unit is stale once one of them is published).
+    compile_threads: usize,
+    isa: cranelift_codegen::isa::OwnedTargetIsa,
+    pool: Option<background::Pool>,
+    pending: BTreeMap<usize, Vec<usize>>,
+    /// `SPARROW_CORE_SMALL_INTS=0` compiles no small-int versions (A/B in one binary).
+    small_ints: bool,
     /// Stack map of each call site: return address, the frame's FP-to-SP
     /// distance, and the SP offsets of its live words.
     maps: Vec<(u64, u32, Vec<u32>)>,
@@ -251,6 +271,9 @@ impl Jit {
     }
 }
 
+#[path = "jit/background.rs"]
+mod background;
+
 /// The target for compiled code, at a Cranelift optimization level.
 fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, Error> {
     let mut flags = settings::builder();
@@ -321,6 +344,7 @@ impl Jit {
         let isa = target("speed")?;
         let unoptimized = Chosen::from_env("SPARROW_CORE_UNOPTIMIZED");
         let unoptimized_isa = if unoptimized.any() { Some(target("none")?) } else { None };
+        let jit_isa = isa.clone();
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
         builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new(shift)));
         declare_helpers(&mut builder);
@@ -330,6 +354,21 @@ impl Jit {
             module,
             helpers,
             ids: BTreeMap::new(),
+            closure_ids: BTreeMap::new(),
+            closure_entries: BTreeMap::new(),
+            closure_requests: Vec::new(),
+            general: BTreeMap::new(),
+            general_ids: BTreeMap::new(),
+            // #1147: one worker where there is a second core (two were no faster on the ladder, for +3 MB more peak
+            // footprint: each worker's heap keeps Cranelift's working set); `SPARROW_CORE_COMPILE_THREADS=0` compiles
+            // everything on the VM thread.
+            compile_threads: std::env::var("SPARROW_CORE_COMPILE_THREADS").ok().and_then(|n| n.trim().parse().ok()).unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(0, |cores| cores.get().saturating_sub(1).min(1))
+            }),
+            isa: jit_isa,
+            pool: None,
+            pending: BTreeMap::new(),
+            small_ints: crate::env_switch::enabled_or("SPARROW_CORE_SMALL_INTS", true),
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
@@ -568,12 +607,248 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
 
 
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
-    if runtime.invocations[function].code != 0 {
-        return Ok(runtime.invocations[function].code);
+    let address = if function as u64 & GENERAL_VERSION != 0 {
+        // #1113: a small-int version's first restart.
+        compile_entry(runtime, (function as u64 & !GENERAL_VERSION) as usize, None, Version::General)?
+    } else if runtime.invocations[function].code == 0 && runtime.jit.small_ints && !runtime.polled() && small_eligible(&runtime.loaded, function) {
+        // #1113: the small-int version as the code; its general version waits for a restart.
+        runtime.jit.general.entry(function).or_insert_with(|| Box::new(0));
+        compile_entry(runtime, function, None, Version::Small)?
+    } else {
+        compile_ordinary(runtime, function)?
+    };
+    // #1110: the closure entries its closures will be called through. One that cannot be compiled stays 0, and
+    // those closures keep the general path.
+    while let Some((callee, captures)) = runtime.jit.closure_requests.pop() {
+        if runtime.jit.closure_entries.get(&(callee, captures)).is_some_and(|slot| **slot == 0) {
+            let _ = compile_entry(runtime, callee, Some(captures), Version::Ordinary);
+        }
+    }
+    Ok(address)
+}
+
+/// The largest function, in instructions, that gets a closure entry of its own (#1110): a second compilation of
+/// its body.
+const CLOSURE_ENTRY_INSTRUCTIONS: usize = 400;
+
+/// `rt_compile`'s request for the general version of a function with a small-int one (#1113).
+pub(crate) const GENERAL_VERSION: u64 = 1 << 63;
+
+/// Which code of a function `compile_entry` makes (#1113).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Version {
+    /// The only version: the function's code.
+    Ordinary,
+    /// The general version of a function that also gets a small-int one, which restarts in it.
+    General,
+    /// The small-int version, published as the function's code.
+    Small,
+}
+
+/// #1113: does `function` get a small-int version? A synchronous Okkama function whose registers are ints, raw
+/// words (bool, char, enum), floats (#1178) and references and whose instructions are only small-int arithmetic and
+/// comparisons, float arithmetic and comparisons, moves, small constants, branches and returns: it has no effect, so a restart from its entry in the general version, when an
+/// int leaves the tagged-small range, repeats nothing observable. Its ints then are untagged machine words: no tag
+/// checks or conversions, no stack maps.
+fn small_eligible(loaded: &crate::program::Loaded, function: usize) -> bool {
+    let source = &loaded.program.functions[function];
+    if source.is_async || source.native.is_some() || source.intrinsic.is_some() || !source.handlers.is_empty() {
+        return false;
+    }
+    let kinds = &loaded.functions[function].kinds;
+    // A reference (a receiver) is only passed on: nothing reads it, and no safepoint follows while it lives.
+    // #1178: floats too: their arithmetic is pure, so a restart repeats nothing observable, and a float failure
+    // fails this call at the same instruction as the general version would.
+    if !kinds.iter().all(|kind| matches!(kind, Kind::Int | Kind::Raw | Kind::Ref | Kind::Float)) {
+        return false;
+    }
+    let mut arithmetic = false;
+    let eligible = source.code.iter().all(|instruction| match instruction {
+        I::Const { value: Constant::Int(text), .. } => {
+            text.parse::<i64>().is_ok_and(|n| (word::SMALL_MIN..=word::SMALL_MAX).contains(&n))
+        }
+        I::Const { value: Constant::Bool(_) | Constant::Char(_) | Constant::Float(_), .. } => true,
+        // #1178: float arithmetic and comparisons (never a conversion: its fast path reads an int's tag).
+        I::FloatAdd { .. } | I::FloatSub { .. } | I::FloatMul { .. } | I::FloatDiv { .. } | I::FloatNeg { .. }
+        | I::FloatAbs { .. } | I::FloatSqrt { .. } | I::FloatCmp { .. } => true,
+        I::IntAdd { .. } | I::IntSub { .. } | I::IntMul { .. } | I::IntMod { .. } | I::IntCmp { .. } => {
+            arithmetic = true;
+            true
+        }
+        I::Move { .. } | I::BoolNot { .. } | I::BoolCmp { .. } | I::Jump { .. } | I::Branch { .. } | I::Return { .. } => true,
+        _ => false,
+    });
+    eligible && arithmetic
+}
+
+/// Compile `function`: its ordinary entry, or with `captures` its closure entry for closures holding that many
+/// captures (#1110), which takes the remaining arguments and then the closure; `version` says which version of a
+/// function with a small-int one it is (#1113).
+/// #1147 (step 2): a function's first compile. With background codegen on, a unit emitted ahead (by a caller's
+/// speculation) is taken back and installed; otherwise it is emitted now, its own lazy static callees are emitted
+/// and submitted for later, and it is compiled here.
+fn compile_ordinary(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
+    let background = background_allowed(runtime);
+    if background && let Some(address) = take_pending(runtime, function)? {
+        return Ok(address);
+    }
+    let mut unit = match emit_unit(runtime, function, None, Version::Ordinary)? {
+        Emitted::Published(address) => return Ok(address),
+        Emitted::Unit(unit) => unit,
+    };
+    if background {
+        let lazy = unit.lazy.clone();
+        speculate(runtime, &lazy, 0);
+    }
+    let symbol = unit.symbol.clone();
+    codegen(&runtime.jit, &mut unit, &symbol)?;
+    install(runtime, unit)
+}
+
+/// Background codegen only where nothing measures or bounds the compile: no statistics, profile or dump, no memory
+/// budget, no polling, no session (a session's tables grow in place).
+fn background_allowed(runtime: &Runtime) -> bool {
+    let jit = &runtime.jit;
+    jit.compile_threads > 0
+        && runtime.stats.is_none()
+        && jit.profile.is_none()
+        && !jit.dump.any()
+        && runtime.limits.memory.is_none()
+        && !runtime.polled()
+        && jit.object_capacity == 0
+}
+
+/// The unit emitted ahead for `function`, compiled and installed; None when there is none, or it is stale (a
+/// static callee it left lazy has been published since: compiled now, that call would be direct), or its codegen
+/// failed (compiled now, the error comes again).
+fn take_pending(runtime: &mut Runtime, function: usize) -> Result<Option<u64>, Error> {
+    let Some(lazy) = runtime.jit.pending.remove(&function) else { return Ok(None) };
+    let taken = runtime.jit.pool.as_ref().and_then(|pool| pool.take(function));
+    let stale = lazy.iter().any(|&callee| runtime.invocations[callee].code != 0);
+    let unit = match taken {
+        None => return Ok(None),
+        Some(_) if stale => {
+            okkama_devtrace::count!("jit", "background units stale");
+            return Ok(None);
+        }
+        Some(background::Taken::Queued(mut unit)) => {
+            okkama_devtrace::count!("jit", "background units taken back");
+            let symbol = unit.symbol.clone();
+            codegen(&runtime.jit, &mut unit, &symbol)?;
+            unit
+        }
+        Some(background::Taken::Done(Ok(unit))) => {
+            okkama_devtrace::count!("jit", "background units compiled");
+            unit
+        }
+        Some(background::Taken::Done(Err(_))) => return Ok(None),
+    };
+    install(runtime, unit).map(Some)
+}
+
+/// Functions emitted ahead per level, and the most waiting at once.
+const SPECULATION_DEPTH: usize = 2;
+const SPECULATION_PENDING: usize = 64;
+
+/// Emit `callees` (static, synchronous, not compiled, not waiting yet) ahead of their first call and submit them,
+/// with their own lazy callees to `SPECULATION_DEPTH`.
+fn speculate(runtime: &mut Runtime, callees: &[usize], depth: usize) {
+    for &callee in callees {
+        if runtime.jit.pending.len() >= SPECULATION_PENDING {
+            return;
+        }
+        if runtime.jit.pending.contains_key(&callee) || runtime.invocations[callee].code != 0 {
+            continue;
+        }
+        let source = &runtime.loaded.program.functions[callee];
+        if source.is_async || source.native.is_some() || source.intrinsic.is_some() {
+            continue;
+        }
+        if runtime.jit.small_ints && small_eligible(&runtime.loaded, callee) {
+            continue;
+        }
+        let Ok(Emitted::Unit(unit)) = emit_unit(runtime, callee, None, Version::Ordinary) else { continue };
+        let lazy = unit.lazy.clone();
+        runtime.jit.pending.insert(callee, lazy.clone());
+        let jit = &mut runtime.jit;
+        let (threads, isa, unoptimized) = (jit.compile_threads, jit.isa.clone(), jit.unoptimized_isa.clone());
+        jit.pool.get_or_insert_with(|| background::Pool::new(threads, isa, unoptimized)).submit(callee, unit);
+        if depth + 1 < SPECULATION_DEPTH {
+            speculate(runtime, &lazy, depth + 1);
+        }
+    }
+}
+
+/// The code of `function` (or its closure entry for `captures`, or a version of it): emitted, compiled by Cranelift
+/// and installed (#1147: three steps, so the middle one can run elsewhere).
+fn compile_entry(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<u64, Error> {
+    match emit_unit(runtime, function, captures, version)? {
+        Emitted::Published(address) => Ok(address),
+        Emitted::Unit(mut unit) => {
+            let symbol = runtime.loaded.program.functions[function].symbol.clone();
+            codegen(&runtime.jit, &mut unit, &symbol)?;
+            install(runtime, unit)
+        }
+    }
+}
+
+/// #1147: an emitted function waiting for its machine code.
+struct Unit {
+    function: usize,
+    captures: Option<usize>,
+    version: Version,
+    id: FuncId,
+    context: cranelift_codegen::Context,
+    call_sites: [u64; 3],
+    clif: Option<(usize, usize)>,
+    started: Option<std::time::Instant>,
+    marks: Vec<std::time::Instant>,
+    dump: bool,
+    /// `SPARROW_CORE_UNOPTIMIZED` names it.
+    unoptimized: bool,
+    symbol: String,
+    /// #1147: the static callees its calls left lazy (not compiled when it was emitted).
+    lazy: Vec<usize>,
+}
+
+// One value per compile, moved straight into codegen: boxing the unit would only add an allocation.
+#[allow(clippy::large_enum_variant)]
+enum Emitted {
+    /// Already compiled: its code.
+    Published(u64),
+    Unit(Unit),
+}
+
+/// Cranelift's code generation of an emitted unit, at the JIT's level (or without optimizations where
+/// `SPARROW_CORE_UNOPTIMIZED` says so).
+fn codegen(jit: &Jit, unit: &mut Unit, symbol: &str) -> Result<(), Error> {
+    let isa: &dyn cranelift_codegen::isa::TargetIsa = match &jit.unoptimized_isa {
+        Some(isa) if unit.unoptimized => &**isa,
+        _ => jit.module.isa(),
+    };
+    codegen_with(isa, unit, symbol)
+}
+
+/// Codegen with `isa`: what a compile worker runs (#1147).
+fn codegen_with(isa: &dyn cranelift_codegen::isa::TargetIsa, unit: &mut Unit, symbol: &str) -> Result<(), Error> {
+    // The text `define_function` gave a Cranelift error.
+    unit.context.compile(isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: Compilation({:?})", e.inner)))?;
+    Ok(())
+}
+
+fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, version: Version) -> Result<Emitted, Error> {
+    let published = match (captures, version) {
+        (_, Version::General) => runtime.jit.general.get(&function).map_or(0, |slot| **slot),
+        (None, _) => runtime.invocations[function].code,
+        (Some(captures), _) => runtime.jit.closure_entries.get(&(function, captures)).map_or(0, |slot| **slot),
+    };
+    if published != 0 {
+        return Ok(Emitted::Published(published));
     }
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
     let closure_reference = runtime.closure_bridge_reference;
+    let general_code = (version == Version::Small).then(|| &*runtime.jit.general[&function] as *const u64 as u64);
     // #1129: the polling of this runtime's code, as the interpreter reads it.
     let polled = runtime.polled();
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
@@ -596,17 +871,36 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     if source.is_async && (source.native.is_some() || source.intrinsic.is_some()) {
         return Err(Error(format!("{}: async natives and intrinsics are driven, not compiled", source.symbol)));
     }
-    // An async body takes its frame (see `tasks`).
-    let params = if source.is_async { 1 } else { source.params.len() };
-    let id = match jit.ids.get(&function) {
-        Some(id) => *id,
+    // An async body takes its frame (see `tasks`); a closure entry the arguments after its captures, then the
+    // closure (#1110).
+    let params = match captures {
+        Some(captures) => source.params.len() - captures + 1,
+        None if source.is_async => 1,
+        None => source.params.len(),
+    };
+    let known = match (captures, version) {
+        (_, Version::General) => jit.general_ids.get(&function).copied(),
+        (None, _) => jit.ids.get(&function).copied(),
+        (Some(captures), _) => jit.closure_ids.get(&(function, captures)).copied(),
+    };
+    let id = match known {
+        Some(id) => id,
         None => {
             let signature = jit.signature(params);
+            let name = match (captures, version) {
+                (_, Version::General) => format!("f{function}g"),
+                (None, _) => format!("f{function}"),
+                (Some(captures), _) => format!("f{function}c{captures}"),
+            };
             let id = jit
                 .module
-                .declare_function(&format!("f{function}"), Linkage::Local, &signature)
+                .declare_function(&name, Linkage::Local, &signature)
                 .map_err(|e| Error(format!("JIT declare: {e}")))?;
-            jit.ids.insert(function, id);
+            match (captures, version) {
+                (_, Version::General) => jit.general_ids.insert(function, id),
+                (None, _) => jit.ids.insert(function, id),
+                (Some(captures), _) => jit.closure_ids.insert((function, captures), id),
+            };
             id
         }
     };
@@ -645,6 +939,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     context.func.signature = jit.signature(params);
     let mut frontend = FunctionBuilderContext::new();
     let call_sites;
+    let lazy;
     {
         let mut builder = FunctionBuilder::new(&mut context.func, &mut frontend);
         let mut emit = Emitter {
@@ -681,10 +976,29 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             inline: None,
             inlined: 0,
             no_inline,
+            exits: BTreeMap::new(),
+            fail_return: None,
+            lazy: Vec::new(),
+            closure_captures: captures,
+            small: general_code,
+            entry_args: Vec::new(),
+            restart: None,
         };
         emit.body()?;
         call_sites = emit.call_sites;
+        lazy = std::mem::take(&mut emit.lazy);
         mark!();
+        // #1151 (Fable): a synchronous function with a loop does not reload values live across safepoints from their
+        // stack slots (the collector never moves objects, so slot and value agree): its loop amortizes keeping them in
+        // callee-saved registers. Without a loop, reloading stays cheaper (recursion, closures, role methods).
+        // `SPARROW_CORE_RELOADS=always` (every function reloads) or `never` (no synchronous one does) for comparison.
+        let no_reloads = !source.is_async
+            && match reload_policy() {
+                ReloadPolicy::Always => false,
+                ReloadPolicy::NotInLoops => has_loop(source),
+                ReloadPolicy::Never => true,
+            };
+        builder.set_stack_map_reloads(!no_reloads);
         builder.seal_all_blocks();
         builder.finalize(config);
     }
@@ -696,7 +1010,9 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         (context.func.layout.blocks().count(), context.func.dfg.num_insts())
     });
     #[cfg(test)]
-    jit.emitted.insert(function, context.func.clone());
+    if captures.is_none() && version != Version::General {
+        jit.emitted.insert(function, context.func.clone());
+    }
     let dump = jit.dump.has(symbol);
     if dump {
         // Callees by their CLIF names: the runtime's helpers and the program's functions.
@@ -718,19 +1034,36 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         eprintln!("; CLIF of {symbol} (f{function}), before Cranelift's passes\n{callees}{}", context.func.display());
         context.set_disasm(true);
     }
-    match &jit.unoptimized_isa {
-        Some(isa) if jit.unoptimized.has(symbol) => {
-            // What `define_function` does, with the unoptimizing target.
-            context.compile(&**isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: {:?}", e.inner)))?;
-            let compiled = context.compiled_code().expect("compiled function");
-            let alignment = u64::from(compiled.buffer.min_alignment);
-            let relocs: Vec<ModuleReloc> =
-                compiled.buffer.relocs().iter().map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, id)).collect();
-            jit.module
-                .define_function_bytes(id, alignment, compiled.code_buffer(), &relocs)
-                .map_err(|e| Error(format!("{symbol}: {e:?}")))?;
-        }
-        _ => jit.module.define_function(id, &mut context).map_err(|e| Error(format!("{symbol}: {e:?}")))?,
+    let unoptimized = jit.unoptimized_isa.is_some() && jit.unoptimized.has(symbol);
+    let symbol = symbol.to_string();
+    Ok(Emitted::Unit(Unit { function, captures, version, id, context, call_sites, clif, started, marks, dump, unoptimized, symbol, lazy }))
+}
+
+/// #1147: the second half of a compile: the compiled unit's code defined, finalized, registered and published.
+fn install(runtime: &mut Runtime, unit: Unit) -> Result<u64, Error> {
+    let Unit { function, captures, version, id, context, call_sites, clif, started, mut marks, dump, .. } = unit;
+    let Runtime { loaded, jit, invocations, stats, .. } = runtime;
+    let profiling = jit.profile.is_some();
+    macro_rules! mark {
+        () => {
+            if profiling {
+                marks.push(std::time::Instant::now());
+            }
+        };
+    }
+    let source = &loaded.program.functions[function];
+    let symbol = source.symbol.as_str();
+    {
+        let compiled = context.compiled_code().expect("compiled function");
+        let isa = jit.module.isa();
+        let alignment = u64::from(compiled.buffer.min_alignment)
+            .max(u64::from(isa.function_alignment().minimum))
+            .max(isa.symbol_alignment());
+        let relocs: Vec<ModuleReloc> =
+            compiled.buffer.relocs().iter().map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, id)).collect();
+        jit.module
+            .define_function_bytes(id, alignment, compiled.code_buffer(), &relocs)
+            .map_err(|e| Error(format!("{symbol}: {e:?}")))?;
     }
     mark!();
     let compiled = context.compiled_code().expect("compiled function");
@@ -774,15 +1107,14 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     }
     let address = jit.module.get_finalized_function(id) as u64;
     okkama_devtrace::event!("jit", "code placed", fn = symbol, address = format!("{address:#x}"), bytes = size);
-    for (ret, slots) in maps {
-        jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
-    }
-    jit.maps.sort_by_key(|(address, _, _)| *address);
-    jit.ranges.push((address, address + u64::from(size)));
-    jit.ranges.sort_unstable();
+    register_code(&mut jit.maps, &mut jit.ranges, address, size, fp_to_sp, maps);
     // Publish only after finalization and registration of maps/ranges. All
-    // static/role/async/closure users read this same stable record.
-    invocations[function].code = address;
+    // static/role/async/closure users read this same stable record; a closure entry its own slot (#1110).
+    match (captures, version) {
+        (_, Version::General) => **jit.general.entry(function).or_insert_with(|| Box::new(0)) = address,
+        (None, _) => invocations[function].code = address,
+        (Some(captures), _) => **jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0)) = address,
+    }
     mark!();
     if let Some(passes) = jit.profile.as_mut() {
         let clif = clif.expect("profiling sampled CLIF before codegen");
@@ -820,6 +1152,29 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         }
     }
     Ok(address)
+}
+
+/// Register a compiled function's stack maps and code range (#1108). A function's code is one range that no other
+/// function's overlaps, so its maps go in as one sorted batch at their place in the address order (a binary search
+/// and a splice), without sorting every map of the runtime again; code addresses need not grow from one function
+/// to the next.
+fn register_code(
+    maps: &mut Vec<(u64, u32, Vec<u32>)>,
+    ranges: &mut Vec<(u64, u64)>,
+    address: u64,
+    size: u32,
+    fp_to_sp: u32,
+    batch: Vec<(u32, Vec<u32>)>,
+) {
+    let end = address + u64::from(size);
+    let mut batch: Vec<(u64, u32, Vec<u32>)> =
+        batch.into_iter().map(|(ret, slots)| (address + u64::from(ret), fp_to_sp, slots)).collect();
+    batch.sort_unstable_by_key(|(at, _, _)| *at);
+    let at = maps.partition_point(|(entry, _, _)| *entry < address);
+    debug_assert!(maps.get(at).is_none_or(|(entry, _, _)| *entry >= end), "code ranges overlap");
+    maps.splice(at..at, batch);
+    let at = ranges.partition_point(|range| range.0 < address);
+    ranges.insert(at, (address, end));
 }
 
 fn report_compile(report: std::fmt::Arguments<'_>) {
@@ -886,6 +1241,23 @@ struct Emitter<'a, 'b> {
     inlined: usize,
     /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
     no_inline: bool,
+    /// #1108: the shared failure exit of each (function, inlined activation, handler), entered with the pc. #1147:
+    /// handlers with the same target and failure register share one (the first of them stands for all), and under
+    /// polling so do only sites on the same side of the target (its backward edge polls).
+    exits: BTreeMap<(usize, Option<Block>, Option<usize>, bool), Block>,
+    /// #1147: the static callees whose calls stay lazy here (not compiled yet), for background compilation.
+    lazy: Vec<usize>,
+    /// #1147: the cold `return 0` the second and later failure and stop exits of this function share (`None`: no
+    /// exit yet; `Some(None)`: one, which returned in place).
+    fail_return: Option<Option<Block>>,
+    /// #1110: compiling the closure entry for this many captures: they come from the trailing closure argument.
+    closure_captures: Option<usize>,
+    /// #1113: compiling the small-int version: the slot of the general version's code, which its restart calls
+    /// (compiling it the first time).
+    small: Option<u64>,
+    /// The entry's argument values, which a restart passes on unchanged.
+    entry_args: Vec<Value>,
+    restart: Option<Block>,
 }
 
 /// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
@@ -895,6 +1267,23 @@ struct Inline {
     ok: Block,
     fail: Block,
     depth: u32,
+}
+
+/// #1151: when synchronous functions reload values live across safepoints (`SPARROW_CORE_RELOADS`).
+#[derive(Clone, Copy)]
+enum ReloadPolicy {
+    Always,
+    NotInLoops,
+    Never,
+}
+
+fn reload_policy() -> ReloadPolicy {
+    static POLICY: std::sync::OnceLock<ReloadPolicy> = std::sync::OnceLock::new();
+    *POLICY.get_or_init(|| match std::env::var("SPARROW_CORE_RELOADS").as_deref() {
+        Ok("always") => ReloadPolicy::Always,
+        Ok("never") => ReloadPolicy::Never,
+        _ => ReloadPolicy::NotInLoops,
+    })
 }
 
 /// Does `source` jump backwards (a loop)? Such a callee is not inlined: its loop amortizes the call, and moved into
@@ -912,6 +1301,24 @@ fn has_loop(source: &okkama_sparrow::Function) -> bool {
         });
     }
     backwards
+}
+
+/// The user trap after the float slow path's `check` (#1105): that helper always fails, so reaching the trap is a
+/// broken invariant of `scalar::float_binary`, never a program's failure.
+const FLOAT_SLOW_PATH_RETURNED: u8 = 1;
+
+/// The user trap after a shared slow path that always fails on the inputs that reach it (#1106: a byte shift
+/// count outside 0..7, sqrt of a negative float).
+const GENERIC_SLOW_PATH_RETURNED: u8 = 2;
+
+/// Array literals of at most this many elements are allocated inline (#1167); longer ones keep the helper.
+const INLINE_ARRAY_LITERAL: usize = 16;
+
+/// A shift or rotation count checked inline (#1106).
+#[derive(Clone, Copy)]
+struct Count {
+    valid: Value,
+    value: Value,
 }
 
 /// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
@@ -951,6 +1358,8 @@ const MEMORY: MemFlagsData = MemFlagsData::trusted();
 enum CallTarget {
     Static(usize),
     Dynamic(Value),
+    /// #1110: compiled code already known (a closure's entry word).
+    Code(Value),
 }
 
 impl Emitter<'_, '_> {
@@ -1099,6 +1508,45 @@ impl Emitter<'_, '_> {
     /// After anything that can fail: on a pending failure go to the handler
     /// covering `pc`, otherwise record this activation and return.
     fn check(&mut self, pc: usize) {
+        // #1108: one shared exit per function, inlined activation and handler, entered with the pc from a two-
+        // instruction cold trampoline; the hot path is the same load and branch. An async body with explicit roots
+        // reports different words at each call, so it keeps an exit per call.
+        if self.roots.is_none() {
+            let handlers = &self.loaded.program.functions[self.function].handlers;
+            let handler = handlers.iter().position(|h| (h.start as usize..h.end as usize).contains(&pc)).map(|index| {
+                let (target, failure) = (&handlers[index].target, handlers[index].failure);
+                handlers.iter().position(|h| h.target == *target && h.failure == failure).unwrap_or(index)
+            });
+            let backward = self.polled && handler.is_some_and(|index| handlers[index].target.pc as usize <= pc);
+            let ctx = self.ctx();
+            let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
+            let trampoline = self.builder.create_block();
+            let next = self.builder.create_block();
+            self.builder.set_cold_block(trampoline);
+            self.builder.ins().brif(status, trampoline, &[], next, &[]);
+            self.builder.switch_to_block(trampoline);
+            let key = (self.function, self.inline.map(|inline| inline.fail), handler, backward);
+            let (exit, fresh) = match self.exits.get(&key) {
+                Some(exit) => (*exit, false),
+                None => {
+                    let exit = self.builder.create_block();
+                    self.builder.append_block_param(exit, types::I64);
+                    self.builder.set_cold_block(exit);
+                    self.exits.insert(key, exit);
+                    (exit, true)
+                }
+            };
+            let at = self.iconst(pc as i64);
+            self.builder.ins().jump(exit, &[at.into()]);
+            if fresh {
+                self.builder.switch_to_block(exit);
+                let at = self.builder.block_params(exit)[0];
+                let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
+                self.failure_exit(status, at, handler);
+            }
+            self.builder.switch_to_block(next);
+            return;
+        }
         let ctx = self.ctx();
         let status = self.builder.ins().load(types::I64, MEMORY, ctx, Self::status_offset());
         let failed = self.builder.create_block();
@@ -1108,12 +1556,43 @@ impl Emitter<'_, '_> {
         let is_failure = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
         let recorded = self.builder.create_block();
         let fatal = self.builder.create_block();
+        // #1107: a failure is rare; its blocks leave the hot layout.
+        for block in [failed, recorded, fatal] {
+            self.builder.set_cold_block(block);
+        }
         self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
         self.builder.switch_to_block(fatal);
         self.exit_fail();
         self.builder.switch_to_block(recorded);
-        let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
+        let handler = self.loaded.program.functions[self.function]
+            .handlers
+            .iter()
+            .position(|h| (h.start as usize..h.end as usize).contains(&pc));
+        self.record_and_handle(at, handler);
+        self.builder.switch_to_block(next);
+    }
+
+    /// A pending status at `at` (#1108's shared exit): a failure is recorded and goes to `handler` or out of this
+    /// activation; a fatal status or a stop leaves at once.
+    fn failure_exit(&mut self, status: Value, at: Value, handler: Option<usize>) {
+        let is_failure = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+        let recorded = self.builder.create_block();
+        let fatal = self.builder.create_block();
+        self.builder.set_cold_block(recorded);
+        self.builder.set_cold_block(fatal);
+        self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
+        self.builder.switch_to_block(fatal);
+        self.exit_fail();
+        self.builder.switch_to_block(recorded);
+        self.record_and_handle(at, handler);
+    }
+
+    /// Record this activation of the failure at `at`, then go to `handler` (its index in the function's handlers)
+    /// with the failure, or out of this activation.
+    fn record_and_handle(&mut self, at: Value, handler: Option<usize>) {
+        let ctx = self.ctx();
+        let function = self.iconst(self.function as i64);
         // #1122 (design #1079 §6.4): an async body is keyed by its heap frame, which stays where it is while the
         // body suspends and resumes on another stack depth; its machine frame pointer does not, and a failure that
         // unwound through a suspended settle recorded the body twice.
@@ -1128,11 +1607,7 @@ impl Emitter<'_, '_> {
             frame = self.builder.ins().iadd_imm_s(frame, -i64::from(depth));
         }
         self.helper(|h| h.trace, &[ctx, function, at, frame]);
-        let handler = self.loaded.program.functions[self.function]
-            .handlers
-            .iter()
-            .find(|h| (h.start as usize..h.end as usize).contains(&pc))
-            .cloned();
+        let handler = handler.map(|index| self.loaded.program.functions[self.function].handlers[index].clone());
         match handler {
             Some(handler) => {
                 let failure = self.builder.ins().load(
@@ -1150,7 +1625,6 @@ impl Emitter<'_, '_> {
                 self.exit_fail();
             }
         }
-        self.builder.switch_to_block(next);
     }
 
     /// One budget step (`budget`): below zero fuel calls `rt_poll`, and a
@@ -1217,8 +1691,28 @@ impl Emitter<'_, '_> {
                 self.builder.ins().jump(inline.fail, &[]);
             }
             None => {
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                // #1147: every failure and stop of this function leaves through one cold block.
+                // The block that jumps here is filled first; callers switch to their next block after this. A
+                // function with one exit keeps it in place.
+                match self.fail_return {
+                    None => {
+                        let zero = self.iconst(0);
+                        self.builder.ins().return_(&[zero]);
+                        self.fail_return = Some(None);
+                    }
+                    Some(Some(exit)) => {
+                        self.builder.ins().jump(exit, &[]);
+                    }
+                    Some(None) => {
+                        let exit = self.builder.create_block();
+                        self.builder.set_cold_block(exit);
+                        self.builder.ins().jump(exit, &[]);
+                        self.builder.switch_to_block(exit);
+                        let zero = self.iconst(0);
+                        self.builder.ins().return_(&[zero]);
+                        self.fail_return = Some(Some(exit));
+                    }
+                }
             }
         }
     }
@@ -1336,6 +1830,7 @@ impl Emitter<'_, '_> {
         let cell = self.builder.ins().load(types::I64, MEMORY, head, 0);
         let fast = self.builder.create_block();
         let slow = self.builder.create_block();
+        self.builder.set_cold_block(slow);
         let done = self.builder.create_block();
         self.builder.append_block_param(done, types::I64);
         self.builder.ins().brif(cell, fast, &[], slow, &[]);
@@ -1438,19 +1933,25 @@ impl Emitter<'_, '_> {
         let ctx = self.ctx();
         let address = match target {
             CallTarget::Static(function) => self.ready_static(function, args.len()),
-            CallTarget::Dynamic(_) => None,
+            CallTarget::Dynamic(_) | CallTarget::Code(_) => None,
         };
         let kind = match target {
             CallTarget::Static(_) => usize::from(address.is_none()),
-            CallTarget::Dynamic(_) => 2,
+            CallTarget::Dynamic(_) | CallTarget::Code(_) => 2,
         };
         self.call_sites[kind] += 1;
+        if let (CallTarget::Static(function), None) = (&target, address) {
+            self.lazy.push(*function);
+        }
         let code = if let Some(address) = address {
             self.iconst(address as i64)
+        } else if let CallTarget::Code(code) = target {
+            code
         } else {
             let function = match target {
                 CallTarget::Static(function) => self.iconst(function as i64),
                 CallTarget::Dynamic(function) => function,
+                CallTarget::Code(_) => unreachable!("handled above"),
             };
             let base = self.iconst(self.invocations.as_ptr() as i64);
             let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
@@ -1458,6 +1959,7 @@ impl Emitter<'_, '_> {
             let code = self.builder.ins().load(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, code) as i32);
             let ready = self.builder.create_block();
             let compile = self.builder.create_block();
+            self.builder.set_cold_block(compile);
             self.builder.append_block_param(ready, types::I64);
             self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
             self.builder.switch_to_block(compile);
@@ -1497,17 +1999,28 @@ impl Emitter<'_, '_> {
     fn closure_call(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
         const CLOSURE_DIRECT_CAPTURES: usize = 2;
         let closure = self.get(callee);
+        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        // #1110: a closure with an entry is called straight through it, the closure last (code compiled for the
+        // arguments alone ignores a trailing argument under the C calling conventions).
+        let entry = self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_ENTRY);
+        let (direct, resolve) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(entry, direct, &[], resolve, &[]);
+        self.builder.switch_to_block(direct);
+        let mut values = words.clone();
+        values.push(closure);
+        let result = self.call(pc, CallTarget::Code(entry), &values);
+        self.builder.ins().jump(merge, &[result.into()]);
+        self.builder.switch_to_block(resolve);
         let header = self.builder.ins().load(types::I64, MEMORY, closure, 0);
         let function = self.builder.ins().ushr_imm_u(header, 32);
         let base = self.iconst(self.invocations.as_ptr() as i64);
         let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
-        let entry = self.builder.ins().iadd(base, offset);
+        let invocation = self.builder.ins().iadd(base, offset);
         // uload32/uload8 zero-extend into an i64 themselves.
-        let params = self.builder.ins().uload32(MEMORY, entry, std::mem::offset_of!(runtime::Invocation, params) as i32);
-        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
-        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
-        let merge = self.builder.create_block();
-        self.builder.append_block_param(merge, types::I64);
+        let params = self.builder.ins().uload32(MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, params) as i32);
+        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
         for captured in 0..=CLOSURE_DIRECT_CAPTURES {
             let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
             let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
@@ -1518,7 +2031,13 @@ impl Emitter<'_, '_> {
             self.builder.switch_to_block(call);
             let mut values = Vec::with_capacity(captured + words.len());
             for index in 0..captured {
-                values.push(self.builder.ins().load(types::I64, MEMORY, closure, (8 + index * 8) as i32));
+                values.push(self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_CAPTURES + (index * 8) as i32));
+            }
+            if captured == 0 {
+                // #1110: a synchronous function that takes the arguments alone is its own closure entry: once it is
+                // compiled, record its code in the closure for the next call.
+                let code = self.builder.ins().load(types::I64, MEMORY, invocation, std::mem::offset_of!(runtime::Invocation, code) as i32);
+                self.builder.ins().store(MEMORY, code, closure, heap::CLOSURE_ENTRY);
             }
             values.extend_from_slice(&words);
             let result = self.call(pc, CallTarget::Dynamic(function), &values);
@@ -1573,7 +2092,10 @@ impl Emitter<'_, '_> {
         let mut next = 0u32;
         for (register, kind) in self.kinds.iter().enumerate() {
             let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
-            let traced = kind.traced() && !self.loaded.functions[self.function].pointer_free[register];
+            // #1113: a small-int version's ints are never pointers.
+            let traced = kind.traced()
+                && !self.loaded.functions[self.function].pointer_free[register]
+                && !(self.small.is_some() && *kind == Kind::Int);
             if traced && explicit {
                 words.push(Some(next));
                 next += 1;
@@ -1650,9 +2172,47 @@ impl Emitter<'_, '_> {
             self.builder.def_var(frame, value);
             self.frame = Some(frame);
         } else {
+            let captured = self.closure_captures.unwrap_or(0);
+            let closure = self.closure_captures.map(|_| self.builder.block_params(entry)[1 + source.params.len() - captured]);
             for (i, register) in source.params.iter().enumerate() {
-                let value = self.builder.block_params(entry)[i + 1];
+                // #1110: a closure entry reads its captures from the closure, the remaining parameters as arguments.
+                let value = match closure {
+                    Some(closure) if i < captured => {
+                        self.builder.ins().load(types::I64, MEMORY, closure, heap::CLOSURE_CAPTURES + (i * 8) as i32)
+                    }
+                    _ => self.builder.block_params(entry)[i + 1 - captured],
+                };
                 self.set_word(register, value);
+            }
+            if self.small.is_some() {
+                // #1113: the general version takes the same arguments on a restart; a big int parameter restarts
+                // at once.
+                self.entry_args = self.builder.block_params(entry).to_vec();
+                let mut words: Option<Value> = None;
+                for register in &source.params {
+                    if self.kinds[register.0 as usize] == Kind::Int {
+                        let value = self.word(register);
+                        words = Some(match words {
+                            Some(all) => self.builder.ins().band(all, value),
+                            None => value,
+                        });
+                    }
+                }
+                if let Some(all) = words {
+                    let small = self.builder.ins().band_imm_u(all, 1);
+                    let next = self.builder.create_block();
+                    let restart = self.restart();
+                    self.builder.ins().brif(small, next, &[], restart, &[]);
+                    self.builder.switch_to_block(next);
+                    // Inside, ints are untagged.
+                    for register in &source.params {
+                        if self.kinds[register.0 as usize] == Kind::Int {
+                            let word = self.word(register);
+                            let raw = self.builder.ins().sshr_imm_u(word, 1);
+                            self.set_word(register, raw);
+                        }
+                    }
+                }
             }
             // The prologue's calls find the parameters.
             if let Some(roots) = &mut self.roots {
@@ -1689,7 +2249,44 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(overflow);
         self.helper(|h| h.stack_overflow, &[ctx]);
         self.exit_fail();
-        self.emit_code()
+        self.emit_code()?;
+        if let (Some(slot), Some(restart)) = (self.small, self.restart) {
+            // #1113: the general version from the entry, with the entry's arguments; its result and status are
+            // this call's (a failure there records its own frame, as this one would have).
+            self.builder.switch_to_block(restart);
+            let slot = self.iconst(slot as i64);
+            let code = self.builder.ins().load(types::I64, MEMORY, slot, 0);
+            let ready = self.builder.create_block();
+            self.builder.append_block_param(ready, types::I64);
+            let compile = self.builder.create_block();
+            self.builder.set_cold_block(compile);
+            self.builder.ins().brif(code, ready, &[code.into()], compile, &[]);
+            self.builder.switch_to_block(compile);
+            let ctx = self.ctx();
+            let request = self.iconst((GENERAL_VERSION | self.function as u64) as i64);
+            let compiled = self.helper(|h| h.compile, &[ctx, request]).expect("result");
+            let compiled_ok = self.builder.create_block();
+            self.return_unless_ok(compiled_ok);
+            self.builder.ins().jump(ready, &[compiled.into()]);
+            self.builder.switch_to_block(ready);
+            let code = self.builder.block_params(ready)[0];
+            let signature = self.jit.signature(self.entry_args.len() - 1);
+            let signature = self.builder.import_signature(signature);
+            let args = self.entry_args.clone();
+            let call = self.builder.ins().call_indirect(signature, code, &args);
+            let result = self.builder.inst_results(call)[0];
+            self.builder.ins().return_(&[result]);
+        }
+        Ok(())
+    }
+
+    /// #1113: the small-int version's restart in the general version (cold, made once).
+    fn restart(&mut self) -> Block {
+        *self.restart.get_or_insert_with(|| {
+            let block = self.builder.create_block();
+            self.builder.set_cold_block(block);
+            block
+        })
     }
 
     /// Emit the instructions of the current function (the compiled one, or an inlined callee).
@@ -1834,6 +2431,12 @@ impl Emitter<'_, '_> {
             return Ok(false);
         }
         match instruction {
+            I::Const { dst, value: Constant::Int(text) } if self.small.is_some() => {
+                // #1113: the small-int version's ints are untagged (eligibility saw that it fits).
+                let n: i64 = text.parse().map_err(|_| Error("invalid integer constant".into()))?;
+                let value = self.iconst(n);
+                self.set(&dst.0, value);
+            }
             I::Const { dst, value } => {
                 let value = match value {
                     Constant::Int(text) => {
@@ -1860,12 +2463,53 @@ impl Emitter<'_, '_> {
             I::IntAdd { dst, left, right }
             | I::IntSub { dst, left, right }
             | I::IntMul { dst, left, right }
+            | I::IntMod { dst, left, right }
+                if self.small.is_some() =>
+            {
+                // #1113: the small-int version's ints are untagged machine words in −2^62..2^62−1; a result
+                // outside it, a divisor 0 or −1, restarts the call in the general version.
+                let (l, r) = (self.get(left), self.get(right));
+                let restart = self.restart();
+                let value = match instruction {
+                    I::IntAdd { .. } => self.builder.ins().iadd(l, r),
+                    I::IntSub { .. } => self.builder.ins().isub(l, r),
+                    I::IntMul { .. } => {
+                        let (product, overflow) = self.builder.ins().smul_overflow(l, r);
+                        let next = self.builder.create_block();
+                        self.builder.ins().brif(overflow, restart, &[], next, &[]);
+                        self.builder.switch_to_block(next);
+                        product
+                    }
+                    _ => {
+                        let shifted = self.builder.ins().iadd_imm_s(r, 1);
+                        let special = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThanOrEqual, shifted, 1);
+                        let next = self.builder.create_block();
+                        self.builder.ins().brif(special, restart, &[], next, &[]);
+                        self.builder.switch_to_block(next);
+                        self.builder.ins().srem(l, r)
+                    }
+                };
+                if !matches!(instruction, I::IntMod { .. }) {
+                    // In range when dropping the top bit keeps the value.
+                    let doubled = self.builder.ins().ishl_imm_u(value, 1);
+                    let back = self.builder.ins().sshr_imm_u(doubled, 1);
+                    let outside = self.builder.ins().icmp(IntCC::NotEqual, back, value);
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(outside, restart, &[], next, &[]);
+                    self.builder.switch_to_block(next);
+                }
+                self.set(&dst.0, value);
+            }
+            I::IntAdd { dst, left, right }
+            | I::IntSub { dst, left, right }
+            | I::IntMul { dst, left, right }
             | I::IntMod { dst, left, right } => {
                 let (l, r) = (self.get(left), self.get(right));
                 let both = self.builder.ins().band(l, r);
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let fast = self.builder.create_block();
                 let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
                 let done = self.builder.create_block();
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
@@ -1906,13 +2550,24 @@ impl Emitter<'_, '_> {
                     self.builder.ins().jump(done, &[value.into()]);
                 }
                 self.builder.switch_to_block(slow);
+                let fails = op == runtime::INT_MOD || self.refusable || self.polled;
                 let op = self.iconst(op as i64);
                 let result = self.helper(|h| h.int, &[ctx, op, l, r]).expect("result");
-                self.check(pc);
+                // #1147 (A4): add, subtract and multiply fail only by a memory budget or a stop.
+                if fails {
+                    self.check(pc);
+                }
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(done);
                 let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
+            }
+            I::IntCmp { op, dst, left, right } if self.small.is_some() => {
+                // #1113: untagged small ints order as machine words.
+                let (l, r) = (self.get(left), self.get(right));
+                let flag = self.builder.ins().icmp(int_condition(*op), l, r);
+                let flag = self.builder.ins().uextend(types::I64, flag);
+                self.set(&dst.0, flag);
             }
             I::IntCmp { op, dst, left, right } => {
                 let (l, r) = (self.get(left), self.get(right));
@@ -1920,6 +2575,7 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let fast = self.builder.create_block();
                 let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
                 let done = self.builder.create_block();
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
@@ -1961,23 +2617,26 @@ impl Emitter<'_, '_> {
                     I::FloatMul { .. } => (self.builder.ins().fmul(l, r), crate::scalar::FLOAT_MUL),
                     _ => (self.builder.ins().fdiv(l, r), crate::scalar::FLOAT_DIV),
                 };
-                let magnitude = self.builder.ins().fabs(value);
-                let maximum = self.builder.ins().f64const(f64::MAX);
-                let finite = self.builder.ins().fcmp(FloatCC::LessThanOrEqual, magnitude, maximum);
+                // #1105: `x - x` is 0 for a finite x and NaN for an infinity or NaN, so one subtraction and an
+                // ordered self-comparison check finiteness (no `fabs`, no constant load). `Ordered` is one
+                // condition on x86-64, where `Equal` is two (Z and NP).
+                let difference = self.builder.ins().fsub(value, value);
+                let finite = self.builder.ins().fcmp(FloatCC::Ordered, difference, difference);
                 let slow = self.builder.create_block();
                 let done = self.builder.create_block();
-                self.builder.append_block_param(done, types::F64);
-                self.builder.ins().brif(finite, done, &[value.into()], slow, &[]);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(finite, done, &[], slow, &[]);
+                // The operands are finite floats, so a non-finite result of + - * / always fails
+                // (`scalar::float_binary`): the slow path never comes back, and `done` has the fast path as its only
+                // predecessor, so the result stays in a float register.
                 self.builder.switch_to_block(slow);
                 let op = self.iconst(op as i64);
                 let lw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), l);
                 let rw = self.builder.ins().bitcast(types::I64, MemFlagsData::new(), r);
-                let bits = self.helper(|h| h.float, &[ctx, op, lw, rw]).expect("result");
+                self.helper(|h| h.float, &[ctx, op, lw, rw]).expect("result");
                 self.check(pc);
-                let value = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), bits);
-                self.builder.ins().jump(done, &[value.into()]);
+                self.builder.ins().trap(TrapCode::unwrap_user(FLOAT_SLOW_PATH_RETURNED));
                 self.builder.switch_to_block(done);
-                let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
             }
             I::FloatNeg { dst, operand } | I::FloatAbs { dst, operand } => {
@@ -2009,17 +2668,46 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.set(&dst.0, text);
             }
+            I::StrConcatN { dst, parts } => {
+                let address = self.spill(parts);
+                let count = self.iconst(parts.len() as i64);
+                let text = self.helper(|h| h.concat_n, &[ctx, address, count]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, text);
+            }
             I::ArrayNew { dst, elements } => {
                 let repr = match self.register_type(&dst.0) {
                     Some(Type::Array(element)) if Kind::of(program, *element) == Kind::Byte => runtime::ARRAY_BYTES,
                     Some(Type::Array(element)) => Kind::of(program, *element).repr() as u64,
                     _ => return Err(unsupported()),
                 };
+                if elements.is_empty() {
+                    // #1168: one shared empty array per representation, a constant of the code.
+                    let shared = self.heap.empty_array(repr);
+                    let shared = self.iconst(shared as i64);
+                    self.set(&dst.0, shared);
+                    return Ok(false);
+                }
+                if elements.len() <= INLINE_ARRAY_LITERAL {
+                    let array = self.array_literal(repr, elements);
+                    self.set(&dst.0, array);
+                    return Ok(false);
+                }
                 let address = self.spill(elements);
                 let repr = self.iconst(repr as i64);
                 let count = self.iconst(elements.len() as i64);
                 let array = self.helper(|h| h.array, &[ctx, repr, address, count]).expect("result");
                 self.set(&dst.0, array);
+            }
+            I::MapNew { dst, entries } if entries.is_empty() && !self.plain => {
+                // #1168: one shared empty map per key and value representation, a constant of the code.
+                let (key, value) = match self.register_type(&dst.0) {
+                    Some(Type::Map(key, value)) => (Kind::of(program, *key).repr(), Kind::of(program, *value).repr()),
+                    _ => return Err(unsupported()),
+                };
+                let shared = self.heap.empty_map(key, value);
+                let shared = self.iconst(shared as i64);
+                self.set(&dst.0, shared);
             }
             I::ArrayLen { dst, array } => {
                 let array = self.get(array);
@@ -2042,6 +2730,7 @@ impl Emitter<'_, '_> {
                 let valid = self.builder.ins().band(small, inside);
                 let load = self.builder.create_block();
                 let outside = self.builder.create_block();
+                self.builder.set_cold_block(outside);
                 self.builder.ins().brif(valid, load, &[], outside, &[]);
                 self.builder.switch_to_block(outside);
                 let message = self.constant_text(crate::texts::ARRAY_INDEX);
@@ -2051,6 +2740,12 @@ impl Emitter<'_, '_> {
                 self.builder.switch_to_block(load);
                 let value = self.element(array, header, position, self.bytes_array(array_register));
                 self.set_word(&dst.0, value);
+            }
+            // #1168: a fieldless value of a shareable type is its one shared instance, a constant of the code.
+            I::ObjNew { dst, object, fields } if fields.is_empty() && self.heap.shared_object(object.0).is_some() => {
+                let shared = self.heap.shared_object(object.0).expect("shareable");
+                let shared = self.iconst(shared as i64);
+                self.set(&dst.0, shared);
             }
             I::ObjNew { dst, object, fields } => {
                 let pointer = {
@@ -2111,6 +2806,13 @@ impl Emitter<'_, '_> {
             // номер случая — разность дескрипторов.
             I::VariantNew { dst, variant, case, fields } => {
                 let object = program.variants[variant.0 as usize].cases[*case as usize].1;
+                if fields.is_empty()
+                    && let Some(shared) = self.heap.shared_object(object.0)
+                {
+                    let shared = self.iconst(shared as i64);
+                    self.set(&dst.0, shared);
+                    return Ok(false);
+                }
                 let pointer = {
                     let words = self.object_words(object.0 as usize, fields.len());
                     let pointer = self.allocate(words);
@@ -2308,6 +3010,12 @@ impl Emitter<'_, '_> {
             }
             I::Return { value } => {
                 let value = match value {
+                    // #1113: the small-int version tags its int result.
+                    Some(register) if self.small.is_some() && self.kinds[register.0 as usize] == Kind::Int => {
+                        let raw = self.word(register);
+                        let doubled = self.builder.ins().ishl_imm_u(raw, 1);
+                        self.builder.ins().bor_imm_u(doubled, 1)
+                    }
                     Some(register) => self.word(register),
                     None => self.iconst(0),
                 };
@@ -2418,12 +3126,29 @@ impl Emitter<'_, '_> {
                 return Ok(true);
             }
             I::Closure { dst, function, captures } => {
-                let address = self.spill(captures);
-                let index = self.iconst(i64::from(function.0));
-                let count = self.iconst(captures.len() as i64);
-                let closure = self.helper(|h| h.closure, &[ctx, index, address, count]).expect("result");
-                self.check(pc);
-                self.set(&dst.0, closure);
+                // #1167: the layout `Heap::closure_new` writes, allocated inline: the header, the captures, then
+                // unbound words up to the function's layout. rt_closure's checks are static facts of verified code,
+                // so the JIT has no helper call for a closure (the interpreter keeps rt_closure).
+                let words = self.heap.closure_words(function.0);
+                if words < captures.len() || captures.len() > self.loaded.program.functions[function.0 as usize].params.len() {
+                    return Err(Error(format!("{}:{pc}: closure capture count exceeds parameter count", source.symbol)));
+                }
+                let pointer = self.allocate(words + 2);
+                let header = self.iconst(heap::header(heap::CLOSURE, Repr::Raw, function.0) as i64);
+                self.builder.ins().store(MEMORY, header, pointer, 0);
+                // #1110: the closure's entry: its function's code when it takes the arguments alone, its closure entry
+                // for this many captures otherwise (compiled after this function), or 0 (the general path).
+                let unbound = self.iconst(0);
+                let entry = self.closure_entry(function.0 as usize, captures.len());
+                self.builder.ins().store(MEMORY, entry, pointer, heap::CLOSURE_ENTRY);
+                for (i, capture) in captures.iter().enumerate() {
+                    let value = self.word(capture);
+                    self.builder.ins().store(MEMORY, value, pointer, heap::CLOSURE_CAPTURES + (i * 8) as i32);
+                }
+                for i in captures.len()..words {
+                    self.builder.ins().store(MEMORY, unbound, pointer, heap::CLOSURE_CAPTURES + (i * 8) as i32);
+                }
+                self.set(&dst.0, pointer);
             }
             I::CallFn { dst, callee, args } => {
                 let result = if self.plain || self.count_helpers || self.closure_reference {
@@ -2617,6 +3342,7 @@ impl Emitter<'_, '_> {
                 let both = self.builder.ins().band(l, r);
                 let small = self.builder.ins().band_imm_u(both, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
@@ -2676,6 +3402,7 @@ impl Emitter<'_, '_> {
                 let v = self.get(operand);
                 let small = self.builder.ins().band_imm_u(v, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
                 self.builder.append_block_param(done, types::I64);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
@@ -2699,6 +3426,140 @@ impl Emitter<'_, '_> {
                 self.builder.switch_to_block(done);
                 let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
+            }
+            // #1106: byte bit operations inline. A byte is a raw u8 word, so `& | ^ ~` need no check; a shift's
+            // count is an int that must be in 0..7, and any other count fails on the shared path.
+            I::ByteAnd { dst, left, right } | I::ByteOr { dst, left, right } | I::ByteXor { dst, left, right } => {
+                let (l, r) = (self.get(left), self.get(right));
+                let value = match instruction {
+                    I::ByteAnd { .. } => self.builder.ins().band(l, r),
+                    I::ByteOr { .. } => self.builder.ins().bor(l, r),
+                    _ => self.builder.ins().bxor(l, r),
+                };
+                self.set(&dst.0, value);
+            }
+            I::ByteNot { dst, operand } => {
+                let value = self.get(operand);
+                let value = self.builder.ins().bxor_imm_u(value, 0xFF);
+                self.set(&dst.0, value);
+            }
+            I::ByteShl { dst, left, right } | I::ByteShr { dst, left, right } | I::ByteUshr { dst, left, right } => {
+                let (l, r) = (self.get(left), self.get(right));
+                let count = self.small_count(r, 8);
+                let fast = self.builder.create_block();
+                let slow = self.builder.create_block();
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(count.valid, fast, &[], slow, &[]);
+                self.fail_generic(slow, pc, instruction);
+                self.builder.switch_to_block(fast);
+                let value = if matches!(instruction, I::ByteShl { .. }) {
+                    let shifted = self.builder.ins().ishl(l, count.value);
+                    self.builder.ins().band_imm_u(shifted, 0xFF)
+                } else {
+                    // A byte has no sign: `>>>` shifts as `>>` does.
+                    self.builder.ins().ushr(l, count.value)
+                };
+                self.set(&dst.0, value);
+            }
+            I::IntUshr { dst, left, right } => {
+                // Inline for tagged-small operands, a count in 0..63 and a result that is tagged-small again; the
+                // rest (BigInt operands, large results, bad counts) goes the exact way.
+                let (l, r) = (self.get(left), self.get(right));
+                let both = self.builder.ins().band(l, r);
+                let small = self.builder.ins().band_imm_u(both, 1);
+                let (fast, commit, slow, done) = (
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                );
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let v = self.builder.ins().sshr_imm_u(l, 1);
+                let n = self.builder.ins().sshr_imm_u(r, 1);
+                let in_range = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, n, 64);
+                self.builder.ins().brif(in_range, commit, &[], slow, &[]);
+                self.builder.switch_to_block(commit);
+                let shifted = self.builder.ins().ushr(v, n);
+                self.tag_if_small(shifted, done, slow);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::IntAbs { dst, operand } => {
+                // |2v+1| for v < 0 is 2 - (2v+1); only SMALL_MIN overflows (its absolute value needs a BigInt).
+                let v = self.get(operand);
+                let small = self.builder.ins().band_imm_u(v, 1);
+                let (fast, negative, slow, done) = (
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                    self.builder.create_block(),
+                );
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let below = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                self.builder.ins().brif(below, negative, &[], done, &[v.into()]);
+                self.builder.switch_to_block(negative);
+                let two = self.iconst(2);
+                let (value, overflow) = self.builder.ins().ssub_overflow(two, v);
+                let commit = self.builder.create_block();
+                self.builder.ins().brif(overflow, slow, &[], commit, &[]);
+                self.builder.switch_to_block(commit);
+                self.builder.ins().jump(done, &[value.into()]);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::Sign { dst, operand } if matches!(self.register_type(operand), Some(Type::Int)) => {
+                // A tagged-small w = 2v+1: v > 0 iff w > 1, v < 0 iff w < 0. BigInts go the exact way.
+                let v = self.get(operand);
+                let small = self.builder.ins().band_imm_u(v, 1);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(small, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let above = self.builder.ins().icmp_imm_s(IntCC::SignedGreaterThan, v, 1);
+                let below = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, v, 0);
+                let tagged = self.tagged_sign(above, below);
+                self.builder.ins().jump(done, &[tagged.into()]);
+                self.slow_generic(slow, done, pc, instruction);
+                self.builder.switch_to_block(done);
+                let value = self.builder.block_params(done)[0];
+                self.set(&dst.0, value);
+            }
+            I::Sign { dst, operand } if matches!(self.register_type(operand), Some(Type::Float)) => {
+                // Both zeros have sign 0; a float is never NaN.
+                let x = self.get(operand);
+                let zero = self.builder.ins().f64const(0.0);
+                let above = self.builder.ins().fcmp(FloatCC::GreaterThan, x, zero);
+                let below = self.builder.ins().fcmp(FloatCC::LessThan, x, zero);
+                let tagged = self.tagged_sign(above, below);
+                self.set(&dst.0, tagged);
+            }
+            I::FloatSqrt { dst, operand } => {
+                // A negative operand fails (its slow path never returns); sqrt of a finite x >= 0, -0 included, is
+                // finite and exact in hardware.
+                let x = self.get(operand);
+                let zero = self.builder.ins().f64const(0.0);
+                let negative = self.builder.ins().fcmp(FloatCC::LessThan, x, zero);
+                let (fast, slow) = (self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(negative, slow, &[], fast, &[]);
+                self.fail_generic(slow, pc, instruction);
+                self.builder.switch_to_block(fast);
+                let value = self.builder.ins().sqrt(x);
+                self.set(&dst.0, value);
+            }
+            I::Bits { op, byte, dst, value: source, count } => {
+                self.bits(pc, instruction, *op, *byte, &dst.0, source, count.as_ref())?;
             }
             I::StrCmp { op: op @ (Cmp::Eq | Cmp::Ne), dst, left, right } => {
                 // The same string, or strings of different byte lengths, decide
@@ -2780,6 +3641,18 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.set(&dst.0, result);
             }
+            I::BuilderSized { dst, count } => {
+                let Some(Type::Builder(element)) = self.register_type(&dst.0) else {
+                    self.generic_instruction(pc, instruction);
+                    return Ok(false);
+                };
+                let repr = Kind::of(program, *element).repr();
+                let repr = self.iconst(repr as i64);
+                let count = self.word(count);
+                let result = self.helper(|h| h.builder_sized, &[ctx, repr, count]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, result);
+            }
             I::BuilderFinish { dst, builder } => {
                 let Some(Type::Array(element)) = self.register_type(&dst.0) else {
                     self.generic_instruction(pc, instruction);
@@ -2805,9 +3678,28 @@ impl Emitter<'_, '_> {
                 self.set(&dst.0, result);
             }
             I::BuilderPush { dst, builder, value } => {
+                // #1171: below the capacity, a push stores into the buffer and bumps the length; a full buffer goes
+                // to the helper, which moves the elements to one twice as big.
                 let (builder, value) = (self.get(builder), self.word(value));
-                let result = self.helper(|h| h.builder_push, &[ctx, builder, value]).expect("result");
-                self.set(&dst.0, result);
+                let length = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_LENGTH);
+                let capacity = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_CAPACITY);
+                let room = self.builder.ins().icmp(IntCC::UnsignedLessThan, length, capacity);
+                let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.set_cold_block(slow);
+                self.builder.ins().brif(room, fast, &[], slow, &[]);
+                self.builder.switch_to_block(fast);
+                let buffer = self.builder.ins().load(types::I64, MEMORY, builder, heap::BUILDER_BUFFER);
+                let offset = self.builder.ins().ishl_imm_u(length, 3);
+                let slot = self.builder.ins().iadd(buffer, offset);
+                self.builder.ins().store(MEMORY, value, slot, 8);
+                let longer = self.builder.ins().iadd_imm_s(length, 1);
+                self.builder.ins().store(MEMORY, longer, builder, heap::BUILDER_LENGTH);
+                self.builder.ins().jump(done, &[]);
+                self.builder.switch_to_block(slow);
+                self.helper(|h| h.builder_push, &[ctx, builder, value]).expect("result");
+                self.builder.ins().jump(done, &[]);
+                self.builder.switch_to_block(done);
+                self.set(&dst.0, builder);
             }
             I::Convert { dst, source }
                 if matches!(self.register_type(source), Some(Type::Int)) && matches!(self.register_type(&dst.0), Some(Type::Float)) =>
@@ -2816,12 +3708,14 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band_imm_u(value, 1);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
                 self.builder.append_block_param(done, types::F64);
+                // #1105: no safepoint on the fast conversions (#537 had kept rt_exec's opportunity). A conversion adds
+                // nothing to the collection counter, so its safepoint only ever collected for its neighbours' work;
+                // the same code without a conversion never had that safepoint either.
+                self.builder.set_cold_block(slow);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
                 let integer = self.builder.ins().sshr_imm_u(value, 1);
                 let result = self.builder.ins().fcvt_from_sint(types::F64, integer);
-                let conversion = self.iconst(0);
-                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
                 let bits = self.exec_generic(pc, instruction);
@@ -2846,15 +3740,15 @@ impl Emitter<'_, '_> {
                 let small = self.builder.ins().band(above, below);
                 let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
                 self.builder.append_block_param(done, types::I64);
+                self.builder.set_cold_block(slow);
                 self.builder.ins().brif(small, fast, &[], slow, &[]);
                 self.builder.switch_to_block(fast);
-                // The trapping conversion is reached only after the range
-                // proof; tagging cannot overflow the tagged-small domain.
-                let integer = self.builder.ins().fcvt_to_sint(types::I64, truncated);
+                // The conversion is reached only after the range proof, so the
+                // saturating form (a bare `fcvtzs` on aarch64, no trap checks)
+                // converts exactly; tagging cannot overflow the tagged-small domain.
+                let integer = self.builder.ins().fcvt_to_sint_sat(types::I64, truncated);
                 let doubled = self.builder.ins().ishl_imm_u(integer, 1);
                 let result = self.builder.ins().bor_imm_u(doubled, 1);
-                let conversion = self.iconst(1);
-                self.helper(|h| h.scalar_safepoint, &[ctx, conversion]);
                 self.builder.ins().jump(done, &[result.into()]);
                 self.builder.switch_to_block(slow);
                 let result = self.exec_generic(pc, instruction);
@@ -3036,6 +3930,213 @@ impl Emitter<'_, '_> {
     }
 
 
+    /// The entry word of a new closure of `function` with `captures` captures (#1110), read when the closure is made:
+    /// the ordinary code for none, the closure entry's slot otherwise (requested for compilation after this
+    /// function); 0 for an async function, or one too large for a second compilation.
+    fn closure_entry(&mut self, function: usize, captures: usize) -> Value {
+        let source = &self.loaded.program.functions[function];
+        if source.is_async {
+            return self.iconst(0);
+        }
+        let cell = if captures == 0 {
+            let entry = &self.invocations[function] as *const runtime::Invocation as i64;
+            entry + std::mem::offset_of!(runtime::Invocation, code) as i64
+        } else {
+            if source.native.is_some() || source.intrinsic.is_some() || source.code.len() > CLOSURE_ENTRY_INSTRUCTIONS {
+                return self.iconst(0);
+            }
+            let slot = self.jit.closure_entries.entry((function, captures)).or_insert_with(|| Box::new(0));
+            if **slot != 0 {
+                let code = **slot;
+                return self.iconst(code as i64);
+            }
+            let cell = &**slot as *const u64 as i64;
+            self.jit.closure_requests.push((function, captures));
+            cell
+        };
+        let cell = self.iconst(cell);
+        self.builder.ins().load(types::I64, MEMORY, cell, 0)
+    }
+
+    /// An array literal of at most [`INLINE_ARRAY_LITERAL`] elements, allocated inline in the layouts the
+    /// `array` helper writes (#1167): a header and one word per element, or for a byte array the PACKED header and
+    /// its bytes packed eight to a word. Every word is written before the array is published.
+    fn array_literal(&mut self, repr: u64, elements: &[okkama_sparrow::Register]) -> Value {
+        if repr == runtime::ARRAY_BYTES {
+            let words = elements.len().div_ceil(8);
+            let pointer = self.allocate(1 + words);
+            let header = heap::header(heap::ARRAY, Repr::Raw, heap::length(elements.len())) | heap::PACKED;
+            let header = self.iconst(header as i64);
+            self.builder.ins().store(MEMORY, header, pointer, 0);
+            for (index, chunk) in elements.chunks(8).enumerate() {
+                let mut packed = self.iconst(0);
+                for (position, element) in chunk.iter().enumerate() {
+                    let byte = self.get(element);
+                    let byte = self.builder.ins().band_imm_u(byte, 0xFF);
+                    let byte = self.builder.ins().ishl_imm_u(byte, (position * 8) as i64);
+                    packed = self.builder.ins().bor(packed, byte);
+                }
+                self.builder.ins().store(MEMORY, packed, pointer, ((index + 1) * 8) as i32);
+            }
+            return pointer;
+        }
+        let pointer = self.allocate(elements.len() + 1);
+        let header = heap::header(heap::ARRAY, Repr::from_bits(repr), heap::length(elements.len()));
+        let header = self.iconst(header as i64);
+        self.builder.ins().store(MEMORY, header, pointer, 0);
+        for (i, element) in elements.iter().enumerate() {
+            let value = self.word(element);
+            self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
+        }
+        pointer
+    }
+
+    /// A shift or rotation count (#1106): `valid` when the int word is tagged-small and in 0..limit, `value` the
+    /// untagged count (meaningful only when valid).
+    fn small_count(&mut self, word: Value, limit: i64) -> Count {
+        let small = self.builder.ins().band_imm_u(word, 1);
+        let value = self.builder.ins().sshr_imm_u(word, 1);
+        let inside = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, value, limit);
+        let inside = self.builder.ins().uextend(types::I64, inside);
+        let valid = self.builder.ins().band(small, inside);
+        Count { valid, value }
+    }
+
+    /// Jump to `done` with `value` tagged when it is tagged-small, otherwise to `slow` (#1106).
+    fn tag_if_small(&mut self, value: Value, done: Block, slow: Block) {
+        let doubled = self.builder.ins().ishl_imm_u(value, 1);
+        let back = self.builder.ins().sshr_imm_u(doubled, 1);
+        let fits = self.builder.ins().icmp(IntCC::Equal, back, value);
+        let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+        self.builder.ins().brif(fits, done, &[tagged.into()], slow, &[]);
+    }
+
+    /// The tagged int -1, 0 or 1 from the two comparison flags of a sign (#1106).
+    fn tagged_sign(&mut self, above: Value, below: Value) -> Value {
+        let above = self.builder.ins().uextend(types::I64, above);
+        let below = self.builder.ins().uextend(types::I64, below);
+        let sign = self.builder.ins().isub(above, below);
+        let doubled = self.builder.ins().ishl_imm_u(sign, 1);
+        self.builder.ins().bor_imm_u(doubled, 1)
+    }
+
+    /// In the cold block `slow`: the shared path of `instruction`, whose result joins `done` (#1106).
+    fn slow_generic(&mut self, slow: Block, done: Block, pc: usize, instruction: &I) {
+        self.builder.switch_to_block(slow);
+        let result = self.exec_generic(pc, instruction);
+        self.builder.ins().jump(done, &[result.into()]);
+    }
+
+    /// In the cold block `slow`: the shared path of `instruction` on inputs it always refuses, so it never returns
+    /// (#1106; the trap is a broken invariant, as after the float slow path of #1105).
+    fn fail_generic(&mut self, slow: Block, pc: usize, instruction: &I) {
+        self.builder.switch_to_block(slow);
+        self.exec_generic(pc, instruction);
+        self.builder.ins().trap(TrapCode::unwrap_user(GENERIC_SLOW_PATH_RETURNED));
+    }
+
+    /// `bits` actions inline (#1106): counts, rotations, bit reversal and byte swap of a byte or a tagged-small
+    /// int; a BigInt operand, a bad rotation count or an int result outside tagged-small goes the exact way.
+    #[allow(clippy::too_many_arguments)]
+    fn bits(
+        &mut self,
+        pc: usize,
+        instruction: &I,
+        op: okkama_sparrow::BitOp,
+        byte: bool,
+        dst: &okkama_sparrow::Register,
+        source: &okkama_sparrow::Register,
+        count: Option<&okkama_sparrow::Register>,
+    ) -> Result<(), Error> {
+        use okkama_sparrow::BitOp;
+        let word = self.get(source);
+        let rotates = matches!(op, BitOp::RotateLeft | BitOp::RotateRight);
+        let width: i64 = if byte { 8 } else { 64 };
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.set_cold_block(slow);
+        let mut valid = if byte { self.iconst(1) } else { self.builder.ins().band_imm_u(word, 1) };
+        let mut amount = None;
+        if rotates {
+            let Some(count) = count else { return Err(Error(format!("bits {op:?} without a count"))) };
+            let count = self.get(count);
+            let count = self.small_count(count, width);
+            valid = self.builder.ins().band(valid, count.valid);
+            amount = Some(count.value);
+        }
+        self.builder.ins().brif(valid, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        let tag = |emit: &mut Self, value: Value| {
+            let doubled = emit.builder.ins().ishl_imm_u(value, 1);
+            emit.builder.ins().bor_imm_u(doubled, 1)
+        };
+        if byte {
+            let w = word;
+            let value = match op {
+                BitOp::BitCount => {
+                    let n = self.builder.ins().popcnt(w);
+                    tag(self, n)
+                }
+                BitOp::LeadingZeros => {
+                    let n = self.builder.ins().clz(w);
+                    let n = self.builder.ins().iadd_imm_s(n, -56);
+                    tag(self, n)
+                }
+                BitOp::TrailingZeros => {
+                    // A zero byte has eight trailing zeros: bit 8 stops the count there.
+                    let guarded = self.builder.ins().bor_imm_u(w, 0x100);
+                    let n = self.builder.ins().ctz(guarded);
+                    tag(self, n)
+                }
+                BitOp::RotateLeft | BitOp::RotateRight => {
+                    let n = amount.expect("count");
+                    let eight = self.iconst(8);
+                    let back = self.builder.ins().isub(eight, n);
+                    let (first, second) = if op == BitOp::RotateLeft {
+                        (self.builder.ins().ishl(w, n), self.builder.ins().ushr(w, back))
+                    } else {
+                        (self.builder.ins().ushr(w, n), self.builder.ins().ishl(w, back))
+                    };
+                    let both = self.builder.ins().bor(first, second);
+                    self.builder.ins().band_imm_u(both, 0xFF)
+                }
+                BitOp::ReverseBits => {
+                    let reversed = self.builder.ins().bitrev(w);
+                    self.builder.ins().ushr_imm_u(reversed, 56)
+                }
+                BitOp::SwapBytes => w,
+            };
+            self.builder.ins().jump(done, &[value.into()]);
+        } else {
+            let v = self.builder.ins().sshr_imm_u(word, 1);
+            match op {
+                BitOp::BitCount | BitOp::LeadingZeros | BitOp::TrailingZeros => {
+                    let n = match op {
+                        BitOp::BitCount => self.builder.ins().popcnt(v),
+                        BitOp::LeadingZeros => self.builder.ins().clz(v),
+                        _ => self.builder.ins().ctz(v),
+                    };
+                    let tagged = tag(self, n);
+                    self.builder.ins().jump(done, &[tagged.into()]);
+                }
+                _ => {
+                    let value = match op {
+                        BitOp::RotateLeft => self.builder.ins().rotl(v, amount.expect("count")),
+                        BitOp::RotateRight => self.builder.ins().rotr(v, amount.expect("count")),
+                        BitOp::ReverseBits => self.builder.ins().bitrev(v),
+                        _ => self.builder.ins().bswap(v),
+                    };
+                    self.tag_if_small(value, done, slow);
+                }
+            }
+        }
+        self.slow_generic(slow, done, pc, instruction);
+        self.builder.switch_to_block(done);
+        let value = self.builder.block_params(done)[0];
+        self.set(dst, value);
+        Ok(())
+    }
+
     /// Compile `instruction` as a call of the shared slow path, defining its result.
     fn generic_instruction(&mut self, pc: usize, instruction: &I) {
         let mut def = None;
@@ -3140,7 +4241,7 @@ impl Emitter<'_, '_> {
             self.builder.ins().brif(summarized, never, &[], open, &[]);
             self.builder.switch_to_block(open);
         }
-        // A reference array (not packed) or a closure, payload or frame may reach one; nothing else can.
+        // A reference array (not packed) or a closure, payload, builder or frame may reach one; nothing else can.
         let is_array = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::ARRAY as i64);
         let (array, other) = (self.builder.create_block(), self.builder.create_block());
         self.builder.ins().brif(is_array, array, &[], other, &[]);
@@ -3153,8 +4254,11 @@ impl Emitter<'_, '_> {
         let closure = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::CLOSURE as i64);
         let payload = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::PAYLOAD as i64);
         let frame = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::FRAME as i64);
+        // #1171: a builder, as the payload it replaced.
+        let building = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::BUILDER as i64);
         let either = self.builder.ins().bor(closure, payload);
-        let any = self.builder.ins().bor(either, frame);
+        let some = self.builder.ins().bor(either, building);
+        let any = self.builder.ins().bor(some, frame);
         self.builder.ins().brif(any, maybe, &[], never, &[]);
     }
 
@@ -3337,6 +4441,9 @@ mod pointer_free_tests;
 #[cfg(test)]
 #[path = "dispatch_537_tests.rs"]
 mod dispatch_537_tests;
+#[cfg(test)]
+#[path = "scalar_inline_tests.rs"]
+mod scalar_inline_tests;
 
 #[cfg(test)]
 mod profile_tests {
@@ -3357,7 +4464,7 @@ mod profile_tests {
         ]);
         crate::on_vm_thread(|| {
             let program = okkama_sparrow::assemble(
-                "sparrow 18\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
+                "sparrow 19\nmodule \"profile\" \"v1.0.0\"\ntype t0 int\n\
                  function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
                  0: const r0, int 7\n 1: ret r0\n}\nentry f0\n"
             ).unwrap();
@@ -3411,3 +4518,37 @@ mod stub_field_tests;
 
 #[cfg(test)]
 mod placement_tests;
+
+/// #1108: registering functions' maps by splicing gives what the old full sort gave, whatever the order in which
+/// code addresses come, and the code ranges stay ordered for `in_code`.
+#[cfg(test)]
+mod register_code_tests {
+    use super::register_code;
+
+    #[test]
+    fn spliced_maps_equal_a_full_sort_for_any_address_order() {
+        // (address, size, return offsets in the order the compiler reports them)
+        let functions: [(u64, u32, &[u32]); 6] = [
+            (0x5000, 0x100, &[0x10, 0x40, 0x80]),
+            (0x1000, 0x80, &[0x8, 0x20]),
+            (0x9000, 0x40, &[]),
+            (0x3000, 0x200, &[0x1f0, 0x30, 0x100]),
+            (0x2000, 0x10, &[0x4]),
+            (0x7000, 0x300, &[0x2, 0x2fe]),
+        ];
+        let (mut maps, mut ranges) = (Vec::new(), Vec::new());
+        let (mut reference, mut reference_ranges) = (Vec::new(), Vec::new());
+        for (index, (address, size, rets)) in functions.iter().enumerate() {
+            let batch: Vec<(u32, Vec<u32>)> = rets.iter().map(|&ret| (ret, vec![index as u32, ret])).collect();
+            for (ret, slots) in &batch {
+                reference.push((address + u64::from(*ret), index as u32, slots.clone()));
+            }
+            reference.sort_by_key(|(at, _, _)| *at);
+            reference_ranges.push((*address, address + u64::from(*size)));
+            reference_ranges.sort_unstable();
+            register_code(&mut maps, &mut ranges, *address, *size, index as u32, batch);
+            assert_eq!(maps, reference, "after function {index}");
+            assert_eq!(ranges, reference_ranges, "after function {index}");
+        }
+    }
+}

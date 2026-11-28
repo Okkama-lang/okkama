@@ -18,7 +18,7 @@ fn program(captures: usize) -> String {
     let caps: Vec<String> = (0..captures).map(|i| format!("r{i}")).collect();
     let consts: String = (0..captures).map(|i| format!(" {i}: const r{i}, int {}\n", 10 * (i + 1))).collect();
     format!(
-        "sparrow 18\nmodule \"closures\" \"1.0.0\"\ntype t0 int\ntype t1 fn [t0] -> t0\n\
+        "sparrow 19\nmodule \"closures\" \"1.0.0\"\ntype t0 int\ntype t1 fn [t0] -> t0\n\
          function f0 \"body\" {{\n registers [{}]\n params [{}]\n result t0\n{body} {}: ret r{acc}\n}}\n\
          function f1 \"run\" {{\n registers [{}, t1, t0]\n params [r{captures}]\n result t0\n{consts} {c}: fn.closure r{f}, f0, [{}]\n {d}: call.fn r{g}, r{f}, [r{captures}]\n {e}: ret r{g}\n}}\n",
         body_regs.join(", "), params.join(", "), captures,
@@ -54,8 +54,9 @@ fn closures_with_up_to_two_captures_are_called_directly_and_answer_the_same() {
             let expected = 5 + (1..=captures as i64).map(|i| 10 * i).sum::<i64>();
             assert_eq!(result, word::small(expected).unwrap(), "{captures} captures, plain {plain}");
             assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.call_closure), 1, "the helper is always the fallback");
-            // one direct call per capture count 0..=2 the site can take; none when plain
-            assert_eq!(indirect_calls(&runtime, 1), if plain { 0 } else { 3 }, "{captures} captures, plain {plain}");
+            // one direct call per capture count 0..=2 the site can take, and one through the closure's entry
+            // word (#1110); none when plain
+            assert_eq!(indirect_calls(&runtime, 1), if plain { 0 } else { 4 }, "{captures} captures, plain {plain}");
         }
     }
 }

@@ -794,7 +794,8 @@ every declaration is open (#1005, owner decision).
   `{definition: {path, range} | null}`, signature → `{signature: {label, parameters, active} | null}`,
   complete → `{items: [{label, kind, detail, documentation, insert, snippet}]}` (kind: method, field,
   variable, object, role, enum, enumMember, function, keyword, module, argument, folder), in the order to show
-  them. The IDE calls answer from the last inspection of the file that parsed, as the language server does
+  them. The IDE calls answer from the last inspection of the file that parsed (since #1128: the last analysed one,
+  `ide::Answering`), as the language server does
   (recorded by each IDE call; the server records one per change). `version()` → `{version, stdModules,
   stdBytes, passes}`, `passes` the IR passes in order (`lowering::PASSES`, #1118). `lastPanic()` → `{panic:
   {message, location: "file:line:column" | null} | null}`: the last call's panic (each call clears it; the
@@ -1182,3 +1183,264 @@ every declaration is open (#1005, owner decision).
   from both neighbours.
 - `docs/OkkamaBible/build.py --check` no longer rewrites `examples/` out of the output: since #1119 the CLI names
   imported files relative to the current directory (249 examples, unchanged).
+
+## Float fast paths without safepoints (#1105, 2026-11-27; owner approved lifting #537's caution for these conversions; audit Fable)
+
+- The inline int→float and float→int conversions call no safepoint. A conversion adds nothing to the collection
+  counter (`Heap::needs_collection`), so its safepoint only collected for its neighbours' work, and the same code
+  without a conversion never had one (Fable's review: not every allocation path is a safepoint, e.g.
+  `charge_external`, map-node growth and `[Allocates]`-only helpers, so "the allocation slow path is a safepoint"
+  is not the argument). #537's "do not remove required safepoints" stays for anything that allocates or polls.
+- `check`'s failure blocks are cold everywhere since #1107 stage 2 (first only inside slow paths, `Emit::cold`,
+  removed then): cold is not inherited, and they sat in the hot layout between the fast path and its continuation. After the range proof float→int uses `fcvt_to_sint_sat` (a bare `fcvtzs`).
+- Float `+ − × ÷` on finite operands: a non-finite result always fails (`scalar::float_binary`), so the JIT's slow
+  path never returns. After its `check` the continuation is `trap(user 1)` (`FLOAT_SLOW_PATH_RETURNED`): reaching it
+  is a broken invariant, not a program failure. Finiteness is `fcmp ord (x − x), (x − x)` (`Ordered`: one condition on x86-64).
+
+## Scalar operations inline, shared path as the oracle (#1166 / #1106 stage 1, 2026-11-27; lead)
+
+- Byte `& | ^ ~` are always inline (a byte is a raw u8 word). Byte shifts inline when the int count is
+  tagged-small in 0..7; any other count goes to a cold slow path that always fails (`fail_generic`, trap 2 after it).
+- `int.ushr`, `int.abs`, int `bits` rotations, reversal and swap are inline for tagged-small operands whose result is
+  tagged-small again (`tag_if_small`); otherwise the shared path, so BigInt results and failure texts stay exact.
+  `sign` of an int or float and `sqrt` of x ≥ 0 are inline; rat `sign` stays generic.
+- Tests compare the inline build with `jit.plain` (every such instruction through rt_exec) on edge values, and
+  assert the fast inputs never reach rt_exec (`exec <mnemonic>` stats).
+
+## Shared empty and fieldless values (#1168 / #1106 stage 3, 2026-11-27; owner approved sharing; rules from Fable's review)
+
+- One instance per runtime of: the empty array of each representation (and the packed byte array), the empty map
+  of each (key Repr, value Repr), and the fieldless value of each shareable object type. The heap keeps them as
+  roots (`Canonical`), made on first use; the JIT bakes their addresses as constants.
+- Substitute only at the construction instructions (`obj.new`/`variant.new` with no fields, `arr.new []`,
+  `map.new []`); never a map builder (`mbuilder.put` changes it) and never inside `allocate_payload`.
+- Shareable type = no fields, no destroy, not builtin, not `held` (Atomic/Event cells are written in place and
+  keyed by address), no traced layout slot, and not throwable: a rethrow is recognised by the thrown value's
+  address (`failure_link`), so `throw Oops{}` inside a handler must be a fresh value.
+- A session extension that turns a published descriptor unshareable is refused (`held` is recomputed on extend).
+- `map.len` stays a checked helper (#537); the remaining cost of map-empty is that call.
+
+## Cold blocks: rare paths only (#1107 stage 2, 2026-11-27; lead, from the audit's item B)
+
+- Cold: `check`'s failure blocks, the allocation's free-list refill, compile on first call, array index outside,
+  the BigInt paths of int arithmetic, comparison, bit operations and not/neg, the atomic intrinsics' closed path,
+  and the failing slow paths of #1105/#1106. int-big did not move (+0.1%), so BigInt paths may stay cold.
+- Not cold, because real data takes them often: equal-length string comparison, `StrLen` of non-ASCII text,
+  structural `val.cmp` of objects.
+
+## Explicit roots for synchronous functions: rejected (#1107 stage 1, 2026-11-27; lead, by the owner's rule on #1107)
+
+- Fable's reconstruction: the audit's proxy numbers were `SPARROW_X_NORELOAD` + `SPARROW_X_COLD`. The cold half is in
+  (stage 2: recursion −11.9%, method-call −8.1%).
+- Prototype (Fable's scheme, first step): sync functions on `Roots` with words spilled before every call and
+  reloaded after it, nothing stored at definitions, inlining off (`SPARROW_CORE_SYNC_ROOTS`, A/B in one binary,
+  two layout seeds): baseline 2.13 → 2.00 ns (−6%), compare +12%, closure-call +17%, constructor +19%, role-call
+  +50%, method-call +54%, recursion +65%; geomean +16% over 12 cells.
+- The remaining gain on scalar loops (−6%) does not pay for the losses on calls, and the full scheme (store
+  skipping, inlining with per-callee word maps, a live-across set per call) is a large change. By the owner's rule
+  ("if explicit roots create excessive complexity or regressions, retain the existing stack-map mechanism"),
+  synchronous functions keep Cranelift's stack maps. The patch is kept in
+  okkama-docs/runtime/perf-audit-2026-11-27/1107-sync-roots-prototype.patch.
+
+## Shared failure exits; stack maps spliced, not sorted (#1108, 2026-11-27; lead, owner approved the direction)
+
+- `check` keeps its hot path (status load and branch); a failure goes through a two-instruction cold trampoline that
+  passes the pc to one exit per (function, inlined activation, handler). The exit reloads the status, records the
+  activation at that pc (`trace`), then goes to the handler or out. Handlers are chosen at compile time by pc, so
+  pcs share an exit only when their handler (or its absence) is the same.
+- Async bodies with explicit roots keep an exit per call: their stack maps report different words at each call.
+- A function's code range overlaps no other's, so its maps are one sorted batch spliced in at their place; code
+  addresses need not grow from function to function (`register_code`, tested with addresses in random order).
+
+## An internal compiler error has one kind in check and build (#1143, 2026-11-27; lead — the ticket left it to the owner, no owner comment)
+
+- `okkama check` and `okkama build` both say `internal compiler error: <text>` for a lowering invariant failure
+  (`SemanticError::internal`, `Finding::semantic`): it is a compiler bug, not a semantic error of the program.
+  Other kinds still differ between the two commands ("analysis limitation" vs "lowering error"); left as they are.
+
+## Oracle tooling (#1144, 2026-11-27; an Opus agent's choices, accepted by the lead)
+
+- The fuzz differential target embeds `okkama-rs/tools/engines/interp-exceptions.txt` (`include_str!`) and applies
+  its `jit:`, `both:` and `either:` selectors as `differ.py` does; `path:` never applies to a fuzz input.
+- The dead refusal text is gone everywhere; a run without the JIT is explained only by `path:` lines, and a
+  `refusal:` line is rejected as an unknown selector.
+- `differ.py run` exits 1 when a program differs and when nothing built; some programs unbuilt still pass.
+- The interpreter test harness turns on emulated workers, so workers.spa's spawns run in-process.
+
+## Playground positions (#1139, 2026-11-27; agent, accepted)
+
+- Hover and definition take zero-based line/character in UTF-16 units against the text of the inspection that
+  answers (the last analysed), as `okkama lsp` does; completion and signature help against the current source.
+
+## Block parameters in the linearity check (#1138, 2026-11-27; agent, accepted by the lead)
+
+- A branch moves every argument's ownership state into its parameter reading the state before the branch (all
+  sources cleared, then all destinations set, so swaps keep their resources). A destination that may hold a FREE
+  resource the branch does not pass on is refused: "%P takes a new value at the branch from block X to block Y
+  while the one it holds may be in no region". One shape stays refused as on release/065 (a dominating value
+  passed to the same parameter twice); lowering does not produce it.
+
+## Worker failures (#1141, 2026-11-27; agent, accepted)
+
+- A worker's run error crosses without its "RuntimeError: " prefix (`worker_wire::failure_text`), so the parent's
+  report has it once; other report names (a panic's "Panic: …") are kept.
+
+## Closure entries (#1110, 2026-11-27; design Fable, owner approved the direction)
+
+- A closure's first word after the header is its entry (0: the general path); captures follow from offset 16. The
+  layout declares the entry Raw, so tracing and the ownership walks skip it.
+- Entry ABI `(ctx, a1..aA, closure)`: code of a function taking the arguments alone ignores the trailing closure
+  (C calling conventions, caller cleanup), so its ordinary code is its entry; for c ≥ 1 captures a second
+  compilation of the body reads them from the closure in its prologue. Its frames are the function's (traces,
+  stack maps registered as any code).
+- The entries a compiled function's `fn.closure` names are compiled right after it (`compile` drains
+  `closure_requests`); the closure reads its slot when it is made, so no helper patches closures. Closures made
+  by the interpreter, `rt_closure` or `closure_copy` keep 0. Not for async functions, natives or bodies over 400
+  instructions.
+
+## First-run compile (#1147, 2026-11-28; design Fable)
+
+- Mixed mode (interpret first, JIT later) rejected: most compile time is in once-called functions with long loops,
+  which need OSR. Cheap Cranelift settings rejected (single_pass, opt_level none: steady losses).
+- Step 1 hygiene kept where measured: no-std frontend, exits by handler target, no status check after int
+  add/sub/mul without budget/polling. Not kept: dropping the check after rt_compile (regalloc loss on a hot closure),
+  direct branch edges (07-objects +32%: block layout), compile-context reuse (no gain). Lesson: measure the whole
+  ladder, not only the programs a change aims at.
+- Step 2 (done): background codegen with demand-driven speculation of static callees: emission stays on the VM
+  thread, workers only run Context::compile, installation (definition order) only at a demand; a unit is stale when
+  a lazy callee was published after its emission (then recompiled synchronously, keeping the synchronous code).
+  Default on with 1 worker (2 measured no faster, +3 MB more peak footprint each); synchronous under stats, profile,
+  dump, memory budget, polling, sessions.
+
+## Safepoint fast path (#1175, 2026-11-28; owner put it in 0.6.7)
+
+- The not-due check is inline at every allocating helper; the collection is a cold out-of-line function.
+- The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
+  thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
+
+## Floats in small-int versions (#1178, 2026-11-28; owner returned the ticket to 0.6.7)
+
+- #1113's small-int versions now admit float registers and float arithmetic/comparisons/constants. Float arithmetic
+  has no effect, so the restart from the entry stays unobservable; a float failure fails the small version at the same
+  instruction as the general one (no handlers in such functions). `Convert` stays out (its fast path tests an int tag,
+  untagged in the small version).
+- Why it mattered: the general version kept a cold helper call in the hot loop (the int counter's slow path), and
+  register allocation spilled every float across it on every iteration.
+
+## GC roots across calls in synchronous functions (#1151, 2026-11-28; design Fable)
+
+- Synchronous functions keep Cranelift's frontend stack maps (not `Roots`): the naive move to explicit roots lost
+  inlining, stored every definition and cleared every written register (02-calls +122%).
+- The frontend's reloads after safepoints are needless for a non-moving collector. Vendored `cranelift-frontend`
+  0.137.0 adds `set_stack_map_reloads(false)`: the slot is written at the definition and listed in stack maps as
+  before; uses keep the SSA value. Policy: off in synchronous functions with a loop (it amortizes the callee-saved
+  registers); functions without a loop keep reloading (02 ±0). A per-value rule (cold safepoints, live-count limits,
+  closure bodies) was tried: counts and "not a closure" did not separate the 09 loser from the winners.
+- Vendoring follows num-bigint's pattern: `[patch.crates-io]`, OKKAMA.md with the removal condition; re-apply at each
+  Cranelift bump.
+
+## Structure index known at birth (#1152, 2026-11-28; design Fable)
+
+- No new ownership rule: the #906 index of a container is inherited when it can be derived instead of being built
+  by the first walk. An array's index keeps child positions (ascending u32); a copied slice takes the part inside its
+  range, rebased. The parent's index is complete for its elements, so the restriction is complete for the slice.
+- Views (shared slices) do not inherit yet; planned next: an INERT header bit for "index empty" (no table entry, no
+  watch), map.new/merge/concat inheritance, one `interesting(header)` predicate, and the JIT region-add test.
+
+## Bounded string slices (#1176, 2026-11-28; Fable's review of #1149)
+
+- A string version's storage is either a text buffer (BUFFER, grows) or a flat string (never written). `+` treats
+  a SHARED string as a chain only when its storage is a buffer (`Heap::text_chain`); `text_buffer_write` asserts it.
+- `substring` shares at ≥ 64 bytes when the piece keeps at most twice what it holds (flat length, or the buffer's
+  room), the array rule (#249). Views point at the storage, never at another view. A piece of a buffer is just
+  another version of it (it may continue the chain where it ends, as a branch may).
+
+## One instruction for a chain of string `+` (#1177, 2026-11-28; owner: in the compiler, not the JIT)
+
+- The ticket's JIT fusion of consecutive `str.concat` does nothing: the parts are computed between the concats
+  (const, int→text, calls), 1 consecutive pair in ~20 per program. Fusing across them needs the parts kept as GC
+  roots, which the SSA values of a lowering give for free: `a + b + c …` lowers to its parts, then one
+  `str.concat_n` (two parts stay `str.concat`). Right-nested chains flatten too (associative; order kept).
+- `concat_parts`: any part ≥ `TEXT_CHAIN_MIN` or in a text-buffer chain → the pairwise `concat_text` sequence
+  (amortized appends unchanged); otherwise one flat allocation, APPENDED when all but the last part reach 256 B.
+- Past 4 GiB the failure (pairwise text) comes after every part is evaluated, not between them: accepted.
+- Opcode 164 shares SPB 19 with `builder.sized`: 19 is unreleased, so no second bump.
+
+## Builders in the heap (#1171, 2026-11-28; owner: back into 0.6.7; design Fable on #1111)
+
+- A builder is `heap::BUILDER` `[header|repr][length][capacity][buffer]`; the buffer is an ARRAY cell whose header
+  says length 0 (a leaf: marked, not traced); the builder traces slots below its length. Builders stay linear in
+  the IR, but the cell keeps one identity anyway: a push never changes the builder word.
+- Not a BUFFER array (#246) as the builder itself: the header has no room for an exact capacity (6 bits, powers of
+  two), and an exact capacity is what lets `builder.sized` finish in place.
+- `finish` in place when `class_of(length + 1) == class_of(capacity + 1)`, or for large cells when at most an eighth
+  is left; otherwise copy (memory of retained arrays stays exact). Spare buffers (≤ 16, ≤ 512 elements) live until
+  the next collection, which clears the list before marking: they are no roots.
+- `builder.sized` is a capacity hint, not a contract: a non-small or negative count is no hint, at most 4M
+  elements up front. Only `map` uses it; `filter` sized by its source cost 10-app +5% (filters that keep little).
+- Walkers treat BUILDER as they treated the Builder payload (may reach; no children; never summarized).
+- #1150 follow-up: a large buffer (past the small classes) is a raw global allocation in `Heap::builder_large`,
+  grown by realloc (only the growth counts toward a collection; no garbage per doubling) and shrunk at `finish` to
+  its length, then owned by `large` as a boxed slice of exactly that layout. A small result of a large buffer is
+  copied and the buffer freed at once; a dead builder's large buffer is freed by the sweep.
+
+## 0.6.7 scope after the mid-release showcase (2026-11-28; owner)
+
+- Showcase mid-0.6.7 against v0.6.6: cold −23%, steady −32% (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7-mid).
+- Background codegen keeps one worker by default; its ~3 MB of peak footprint is accepted (owner: a little memory
+  for this speed-up is fine, the JVM takes far more).
+- Back into 0.6.7: #1171 (builders as a heap kind; the rest of #1150 and part of #1153), #1151 (own root slots in
+  the JIT instead of the frontend's spills), #1152 (steady ≤ 4 ms through a walk of the ownership graph on a move
+  into a region; after #1151), #1176 and #1177 (from Hotfixes TBD). Designs by Fable, full-ladder A/B per step.
+- 03-float (steady 2.7× Go and HotSpot) goes to #1178 in POSTPONED; not started.
+
+## Vendored num-bigint (#1148, 2026-11-28; owner: vendor + upstream PR)
+
+- num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with a Rust-native change (`|` carries, 4-digit add
+  step), not inline assembly, so it can go upstream as is; not a workspace member. Drop it when upstream has it.
+
+## Sweep by page (#1114, 2026-11-28; owner: measured prototype; design Fable)
+
+- Payloads and big integers live on owner pages; general pages never hold Rust state. Owner pages are swept
+  eagerly (cleanup timing unchanged); only general pages may be taken back unread.
+- Page liveness is a byte per 4 KiB granule over the pages' span, set by `mark_and_queue` (the only writer of
+  MARK). Pages are not aligned: a granule shared with a neighbour or a large object only makes a page look live.
+- Lazy sweep rejected (unmarking and counting live is the walk; owner pages must stay eager); a per-cell side
+  bitmap deferred with the marking follow-up.
+- Owner (2026-11-28): a little more memory for this speed is acceptable, unless something is plainly wrong.
+- Bump lanes (step 3) rejected with numbers: allocating from a bump region before the free cells of partly live
+  pages cost cycles (10-app +5.6%, 05-strings up to +6%) for +0.8% instructions; the free-list pop stays.
+
+## Keys from outside the process take a keyed hash (#1103, 2026-11-28; owner: research first)
+
+- Text or bytes that come from outside (DB column names, JSON members, headers) key std's RandomState
+  (SipHash-1-3); FastHasher (unkeyed multiplicative) is for engine-assigned integers only and asserts so in debug.
+- foldhash was 2–5× faster but claims no HashDoS resistance; ahash is not in the lock file; a seeded FastHasher
+  keeps seed-independent collisions (zero padding, a bit-63/bit-4 differential). Security wins: the cost is
+  nanoseconds once per result set.
+
+## Small-int function versions (#1113, 2026-11-28; owner: a guarded prototype; #1107's spill prerequisite rejected)
+
+- Only functions without effects get one: the instructions are int add/sub/mul/mod/cmp, bool not/cmp, moves,
+  constants that fit small, jump/branch/return; registers are ints, raw words and references only passed on.
+- The fallback restarts the whole call in the general version with the entry's original (tagged) arguments,
+  instead of a transfer at the same pc: no state to reconstruct, and nothing observable repeats.
+- The general version is compiled at the first restart (a slot per function), so a function that stays small
+  costs one compilation, smaller than before.
+- Inside, ints are untagged; add/sub check the range by `(v << 1) >> 1 == v`, mul also the i64 overflow, mod
+  restarts on divisors 0 and −1. Tagged small ints (the first variant) gave baseline −46%, untagged −60%.
+- Off while the runtime polls (budgets): a restart would count the entry and loop steps again.
+
+## OIR inlining and scalar replacement (#1112, 2026-11-27; owner revisited "inlining lives in the JIT"; design Fable)
+
+- `inline` takes direct callees that cannot fail: no loop in their blocks, no unwind, terminators br/cond/ret,
+  instructions from a fixed set (const, int add/sub/mul/neg, comparisons, bool not, obj.new/obj.next of plain
+  objects, obj.get, succ.take), at most 24 instructions in one block or 64 over several; callers stop past 400.
+  Failure traces stay identical (only FAILED records an activation). The JIT inliner stays.
+- Owner, 2026-11-27: `--max-steps` may count differently (an inlined callee's entry step is gone); no step opcode.
+- The verifier grants an inlined callee's rights (`obj.new` of a constructor, `obj.next` of a successor, `obj.get`
+  of its object) through `Attr::Inlined` on the caller; source encapsulation was checked by the analyser.
+- `scalars` replaces plain objects whose uses are field reads, receivers of candidate successors and branch
+  arguments of candidate block parameters; a parameter an edge fills itself, or of an unwind target, is never
+  split. No in-place reuse (a missed alias would corrupt silently; Fable: no gain after scalar replacement).
+

@@ -25,7 +25,23 @@ pub const ARRAY: u8 = 3;
 pub const BIGINT: u8 = 4;
 pub const PAYLOAD: u8 = 5;
 pub const CLOSURE: u8 = 6;
+/// #1110: the byte offset of a closure's entry word (the code a call jumps to with the closure last, or 0) and of
+/// its first capture.
+pub const CLOSURE_ENTRY: i32 = 8;
+pub const CLOSURE_CAPTURES: i32 = 16;
 pub const FRAME: u8 = 7;
+/// #1171: an array under construction, `[header|repr] [length] [capacity] [buffer]`. The buffer is an array cell
+/// with room for `capacity` elements whose header says length 0 (a leaf the collector marks and does not trace);
+/// the builder traces its first `length` slots. `finish` turns the buffer into the array in place when its cell
+/// fits the length, so the elements are written once. Machine code pushes while the length is below the capacity.
+pub const BUILDER: u8 = 8;
+/// #1171: the byte offsets of a builder's length, capacity and buffer.
+pub const BUILDER_LENGTH: i32 = 8;
+pub const BUILDER_CAPACITY: i32 = 16;
+pub const BUILDER_BUFFER: i32 = 24;
+const BUILDER_WORDS: usize = 4;
+/// #1171: the capacity of a builder's first buffer.
+const BUILDER_FIRST: usize = 4;
 
 const MARK: u64 = 1 << 8;
 /// An array of bytes stored one per byte (`@byte`), not one per word.
@@ -60,6 +76,8 @@ pub const CHAIN_MIN: usize = 32;
 /// whose next `+` gets a text buffer. A string version in a text buffer is
 /// [`SHARED`]: word 1 the address of its first byte, word 2 the buffer.
 pub const TEXT_CHAIN_MIN: usize = 256;
+/// #1176: string slices shorter than this, in bytes, are copied: three words of view cost more than the bytes.
+pub const SLICE_MIN: usize = 64;
 /// An array version kept as a 32-way trie (#250): word 1 is the root branch,
 /// word 2 the tail (the last 1–32 elements), word 3 the root's shift; the
 /// payload is the length. Its nodes are ordinary arrays — branches of node
@@ -118,6 +136,25 @@ const CLASS_BY_WORDS: [u8; SMALL_CLASS_LIMIT + 1] = {
     table
 };
 
+/// #1114: the page classes of cells that own Rust memory, after the general ones: big integers (header and box)
+/// and payloads. A general page then never holds Rust state, so its dead cells need no visit to release any;
+/// owner pages are swept eagerly, so each box drops in the collection that finds it dead. Only the heap makes
+/// these cells (machine code allocates general classes only).
+const OWNER_BIG: usize = CLASSES.len();
+const OWNER_PAYLOAD: usize = CLASSES.len() + 1;
+/// Cell words of every page class: the general classes, then the owner classes.
+const CELL_WORDS: [usize; CLASSES.len() + 2] = {
+    let mut words = [0; CLASSES.len() + 2];
+    let mut class = 0;
+    while class < CLASSES.len() {
+        words[class] = CLASSES[class];
+        class += 1;
+    }
+    words[OWNER_BIG] = 2;
+    words[OWNER_PAYLOAD] = PAYLOAD_WORDS;
+    words
+};
+
 /// The words of a reclaimed cell under collector stress.
 const POISON: u64 = 0xdead_dead_dead_dead;
 /// The ephemeron pass of a collection (#503): given which objects are marked,
@@ -132,6 +169,8 @@ const COLLECTION_FLOOR: usize = 4 << 20;
 /// [`SPARE_CAPACITY`] words.
 const SPARE_PAYLOADS: usize = 64;
 pub const SPARE_CAPACITY: usize = 512;
+/// #1171: spare builder buffers kept at most between collections.
+const SPARE_BUFFERS: usize = 16;
 /// Empty pages kept beyond what the next cycle needs (#435).
 const EMPTY_PAGES_SLACK: usize = 16;
 
@@ -147,6 +186,15 @@ pub fn header(kind: u8, repr: Repr, payload: u32) -> u64 {
 #[inline]
 pub(crate) fn length(len: usize) -> u32 {
     u32::try_from(len).unwrap_or_else(|_| too_long(len))
+}
+
+/// #1171: the capacity of a builder buffer for at least `at_least` elements: a small cell's whole room (its class
+/// less the header), or exactly that many in a large cell.
+fn builder_room(at_least: usize) -> usize {
+    match Heap::class_of(at_least + 1) {
+        Some(class) => CLASSES[class] - 1,
+        None => at_least,
+    }
 }
 
 /// Would a string, byte array or array of `len` bytes or elements pass what its header holds? The
@@ -266,15 +314,104 @@ impl TraceLayouts {
     }
 }
 
+/// The free cells of a page that a sweep left (#522, #1114): a chain from `head`, or, when the page held no
+/// live cell by the liveness map, the whole page unthreaded from `head` (its base), threaded when the
+/// allocator takes it.
+#[derive(Debug, Clone, Copy)]
+struct Reserved {
+    head: Word,
+    bytes: usize,
+    page: u32,
+    threaded: bool,
+}
+
+/// #1114: which 4 KiB granules of the pages' address span hold a marked cell, set by marking. A general page
+/// whose granules are all clear held no live cell: the sweep takes it back whole without reading a cell. A
+/// granule shared with a neighbouring page or a large object only makes a page look live (it is walked).
+#[derive(Debug, Default)]
+struct Liveness {
+    lo: Word,
+    map: Vec<u8>,
+    /// Off when the span is larger than the cap: the sweep walks every page.
+    on: bool,
+}
+const GRANULE_SHIFT: u32 = 12;
+/// The largest map, in granules (4 GiB of span); past it the collection walks every page.
+const LIVENESS_GRANULES: usize = 1 << 20;
+
+impl Liveness {
+    /// Clear for a collection over `pages`.
+    fn reset(&mut self, pages: &[Page]) {
+        self.map.clear();
+        self.on = false;
+        let Some(lo) = pages.iter().map(|page| page.memory.as_ptr() as Word).min() else { return };
+        let hi = pages.iter().map(|page| page.memory.as_ptr() as Word + (page.memory.len() * 8) as Word).max().unwrap_or(lo);
+        let lo = lo >> GRANULE_SHIFT << GRANULE_SHIFT;
+        let granules = ((hi - lo) >> GRANULE_SHIFT) as usize + 1;
+        if granules > LIVENESS_GRANULES {
+            return;
+        }
+        self.lo = lo;
+        self.map.resize(granules, 0);
+        self.on = true;
+        okkama_devtrace::count!("gc", "liveness map granules", granules);
+        okkama_devtrace::count!("gc", "liveness map page granules", (pages.len() * PAGE_BYTES) >> GRANULE_SHIFT);
+    }
+
+    /// No marked cell in `bytes` from `base`?
+    fn clear(&self, base: Word, bytes: usize) -> bool {
+        let first = ((base - self.lo) >> GRANULE_SHIFT) as usize;
+        let last = ((base + bytes as Word - 1 - self.lo) >> GRANULE_SHIFT) as usize;
+        self.on && self.map[first..=last].iter().all(|&granule| granule == 0)
+    }
+}
+
+/// What marking writes to: the worklist and the liveness map.
+struct Marker<'a> {
+    worklist: &'a mut Vec<Word>,
+    lo: Word,
+    map: &'a mut [u8],
+}
+
 #[derive(Debug)]
 struct Page {
     class: usize,
     memory: Box<[u64]>,
     /// Stable identity (indices shift when empty pages are freed).
     id: u32,
-    /// #538: the page held no live cell at the last sweep, which left this free chain (head, bytes). While no
-    /// allocation takes the chain, the next sweep keeps it without walking the page.
-    idle: Option<(Word, usize)>,
+    /// #538: the page held no live cell at the last sweep, which left these free cells. While no allocation
+    /// takes them, the next sweep keeps them without looking at the page.
+    idle: Option<Reserved>,
+}
+
+/// #1149: copy `source` to `to`; a short piece by two overlapping word or half-word moves instead of a call to
+/// memcpy (most pieces of split, replace and `+` are a few bytes).
+///
+/// SAFETY: `to` has room for `source.len()` bytes and does not overlap `source`.
+#[inline(always)]
+pub(crate) unsafe fn copy_text(source: &[u8], to: *mut u8) {
+    let (from, length) = (source.as_ptr(), source.len());
+    unsafe {
+        match length {
+            0 => {}
+            1..=3 => {
+                *to = *from;
+                *to.add(length / 2) = *from.add(length / 2);
+                *to.add(length - 1) = *from.add(length - 1);
+            }
+            4..=7 => {
+                let (head, tail) = (from.cast::<u32>().read_unaligned(), from.add(length - 4).cast::<u32>().read_unaligned());
+                to.cast::<u32>().write_unaligned(head);
+                to.add(length - 4).cast::<u32>().write_unaligned(tail);
+            }
+            8..=16 => {
+                let (head, tail) = (from.cast::<u64>().read_unaligned(), from.add(length - 8).cast::<u64>().read_unaligned());
+                to.cast::<u64>().write_unaligned(head);
+                to.add(length - 8).cast::<u64>().write_unaligned(tail);
+            }
+            _ => std::ptr::copy_nonoverlapping(from, to, length),
+        }
+    }
 }
 
 /// An integer read from a word.
@@ -310,9 +447,11 @@ pub struct Heap {
     trace_layouts: TraceLayouts,
     /// Per object descriptor (#528): two hidden words (serial, owner) after the fields hold its resource identity.
     identity_words: Vec<bool>,
+    /// #1168: the shared empty and fieldless values.
+    canonical: Canonical,
     pages: Vec<Page>,
     /// Free list heads per class; a free cell's second word links the next.
-    free: [Word; CLASSES.len()],
+    free: [Word; CELL_WORDS.len()],
     /// The free cells of the last sweep, per class: one chain per page and
     /// its bytes (#522). A sweep leaves the free lists empty; when one runs
     /// dry, the next chain becomes the list and its bytes count as
@@ -320,12 +459,16 @@ pub struct Heap {
     /// uncounted, so without this a program that recycles its garbage
     /// reused every swept cell before a collection could come, then grew
     /// by new pages every cycle.
-    reserve: [Vec<(Word, usize, u32)>; CLASSES.len()],
+    reserve: [Vec<Reserved>; CELL_WORDS.len()],
+    /// #1114: set by marking, read by the sweep.
+    liveness: Liveness,
     /// Pages whose reserved chain an allocation took since the last sweep (#538).
     touched: std::collections::HashSet<u32>,
     next_page: u32,
     /// Pages the sweeps kept idle without walking them (#538), for tests and statistics.
     pub(crate) idle_pages_kept: u64,
+    /// #1114: general pages the sweeps took back whole by the liveness map, without reading a cell.
+    pub(crate) dead_pages_unread: u64,
     large: Vec<Box<[u64]>>,
     /// Bytes of the large objects, live or not yet swept.
     large_bytes: usize,
@@ -345,6 +488,13 @@ pub struct Heap {
     /// in the sweep and brings no collection closer. The owning box moves
     /// between the pool and a PAYLOAD cell without another Rust allocation.
     spare: Vec<Box<dyn Payload>>,
+    /// #1171: buffers builders left (outgrown, or copied from at `finish`), as (capacity, buffer), for the next
+    /// builders until the next collection, which drops them (nothing refers to them, so the sweep frees them).
+    spare_buffers: Vec<(usize, Word)>,
+    /// #1171: large builder buffers, as (address, words): raw allocations that grow and shrink in place (realloc)
+    /// instead of leaving a garbage buffer per doubling; `finish` hands a buffer to `large` as its array. Swept like
+    /// large objects.
+    builder_large: Vec<(Word, usize)>,
     live: usize,
     external_live: usize,
     collections: usize,
@@ -355,6 +505,8 @@ pub struct Heap {
     /// collection ended (`maps::node_memory`): their growth since is
     /// pressure, their live bytes part of `external_live`.
     nodes_at_collection: usize,
+    /// #1175: this thread's map node counters (`maps::node_memory`), read by every not-due check.
+    node_counters: *const std::cell::Cell<(usize, usize)>,
     live_sum: usize,
     worklist: Vec<Word>,
     /// Objects whose death must be reported (resource identities).
@@ -439,6 +591,7 @@ fn kind_name(kind: u8) -> &'static str {
         PAYLOAD => "payload",
         CLOSURE => "closure",
         FRAME => "frame",
+        BUILDER => "builder",
         _ => "other",
     }
 }
@@ -490,19 +643,24 @@ impl Heap {
         Self {
             trace_layouts: TraceLayouts::new(&layouts),
             identity_words: Vec::new(),
+            canonical: Canonical::default(),
             layouts,
             pages: Vec::new(),
-            free: [0; CLASSES.len()],
+            free: [0; CELL_WORDS.len()],
             reserve: std::array::from_fn(|_| Vec::new()),
+            liveness: Liveness::default(),
             touched: std::collections::HashSet::new(),
             next_page: 0,
             idle_pages_kept: 0,
+            dead_pages_unread: 0,
             large: Vec::new(),
             large_bytes: 0,
             allocated: 0,
             external: 0,
             threshold: COLLECTION_FLOOR,
             spare: Vec::new(),
+            spare_buffers: Vec::new(),
+            builder_large: Vec::new(),
             live: 0,
             external_live: 0,
             collections: 0,
@@ -510,6 +668,7 @@ impl Heap {
             allocated_before: 0,
             external_before: 0,
             nodes_at_collection: 0,
+            node_counters: crate::maps::node_memory_cell(),
             live_sum: 0,
             worklist: Vec::new(),
             watched: crate::word::FastSet::default(),
@@ -531,6 +690,7 @@ impl Heap {
     }
 
     /// Allocation-triggered collection is proportional to the live heap.
+    #[inline]
     pub fn needs_collection(&self) -> bool {
         self.allocated + self.external + self.node_growth() >= self.threshold
     }
@@ -544,8 +704,12 @@ impl Heap {
     }
 
     /// Bytes of persistent map nodes allocated since the last collection.
+    #[inline]
     fn node_growth(&self) -> usize {
-        crate::maps::node_memory().0.saturating_sub(self.nodes_at_collection)
+        // SAFETY: the counter cell of the thread that made this heap, which the heap never leaves (the pointer
+        // makes it !Send), valid while that thread runs.
+        let (allocated, _) = unsafe { (*self.node_counters).get() };
+        allocated.saturating_sub(self.nodes_at_collection)
     }
 
     /// Charge Rust memory that a heap object owns and just took on (a
@@ -586,7 +750,7 @@ impl Heap {
                 next.insert(address);
                 add(if was_old { 0 } else { 1 }, bytes);
                 let mutable = match kind(header) {
-                    FRAME | PAYLOAD => true,
+                    FRAME | PAYLOAD | BUILDER => true,
                     ARRAY => header & BUFFER != 0,
                     _ => false,
                 };
@@ -598,7 +762,11 @@ impl Heap {
             }
         };
         for page in &self.pages {
-            let step = CLASSES[page.class] * 8;
+            // #1114: an unthreaded page not taken since holds only stale headers of cells already counted dead.
+            if page.idle.is_some_and(|reserved| !reserved.threaded) && !self.touched.contains(&page.id) {
+                continue;
+            }
+            let step = CELL_WORDS[page.class] * 8;
             let base = page.memory.as_ptr() as Word;
             for cell in 0..page.memory.len() * 8 / step {
                 let address = base + (cell * step) as Word;
@@ -686,8 +854,8 @@ impl Heap {
         okkama_devtrace::count!("runtime", "heap class allocations");
         if self.free[class] == 0 {
             match self.reserve[class].pop() {
-                Some((chain, bytes, page)) => {
-                    self.free[class] = chain;
+                Some(Reserved { head, bytes, page, threaded }) => {
+                    self.free[class] = if threaded { head } else { thread(head, bytes / 8, CELL_WORDS[class]) };
                     self.allocated += bytes;
                     self.touched.insert(page);
                 }
@@ -709,35 +877,26 @@ impl Heap {
         if let Some(watch) = &mut self.watch {
             watch.grow(PAGE_BYTES, held);
         }
-        let size = CLASSES[class];
+        let size = CELL_WORDS[class];
         let mut memory = vec![0u64; PAGE_WORDS - PAGE_WORDS % size].into_boxed_slice();
         let base = memory.as_mut_ptr() as Word;
-        let cells = memory.len() / size;
-        for cell in (0..cells).rev() {
-            let address = base + (cell * size * 8) as Word;
-            // SAFETY: inside the page just allocated.
-            unsafe {
-                *(address as *mut u64) = header(FREE, Repr::Raw, 0);
-                *((address + 8) as *mut u64) = self.free[class];
-            }
-            self.free[class] = address;
-        }
+        debug_assert_eq!(self.free[class], 0, "a page is added when the list is empty");
+        self.free[class] = thread(base, memory.len(), size);
         self.next_page = self.next_page.wrapping_add(1);
         self.pages.push(Page { class, memory, id: self.next_page, idle: None });
     }
 
     // ---- objects ----
 
-    /// Declare which object descriptors carry their identity inline (#528).
-    /// #588: a session runtime's extension appends layouts; the existing ones are unchanged (checked by
-    /// `Runtime::extend`), so the trace descriptors are rebuilt for the longer tables.
     /// #1122: other layouts for the same descriptors, before any frame of the old ones exists (a runtime choosing
-    /// its engine).
+    /// its engine: the interpreter's frames trace every register).
     pub(crate) fn relayout(&mut self, layouts: Layouts) {
         self.trace_layouts = TraceLayouts::new(&layouts);
         self.layouts = layouts;
     }
 
+    /// #588: a session runtime's extension appends layouts; the existing ones are unchanged (checked by
+    /// `Runtime::extend`), so the trace descriptors are rebuilt for the longer tables.
     pub(crate) fn extend_layouts(&mut self, layouts: Layouts) {
         debug_assert!(layouts.objects.starts_with(&self.layouts.objects));
         debug_assert!(layouts.closures.starts_with(&self.layouts.closures));
@@ -746,6 +905,57 @@ impl Heap {
         self.layouts = layouts;
     }
 
+    /// #1168: which object types may share one instance of a fieldless value (`shareable_objects`).
+    pub(crate) fn set_shareable(&mut self, shareable: Vec<bool>) {
+        self.canonical.objects.resize(shareable.len(), None);
+        self.canonical.shareable = shareable;
+    }
+
+    /// The one empty array of `repr` (an element `Repr`'s bits, or `runtime::ARRAY_BYTES` for a packed byte
+    /// array), made on first use (#1168). No path writes a zero-length array in place.
+    pub(crate) fn empty_array(&mut self, repr: u64) -> Word {
+        if let Some(&(_, word)) = self.canonical.arrays.iter().find(|(r, _)| *r == repr) {
+            return word;
+        }
+        let word = if repr == crate::runtime::ARRAY_BYTES { self.allocate_bytes(&[]) } else { self.allocate_array(Repr::from_bits(repr), &[]) };
+        self.canonical.arrays.push((repr, word));
+        word
+    }
+
+    /// The one empty map of a key and value representation, made on first use (#1168): `map.new` without entries.
+    /// A map builder is never this value (`mbuilder.put` changes its builder).
+    pub(crate) fn empty_map(&mut self, key: Repr, value: Repr) -> Word {
+        if let Some(&(_, word)) = self.canonical.maps.iter().find(|(kinds, _)| *kinds == (key, value)) {
+            return word;
+        }
+        let map = crate::ops::MapValue { key, value, entries: Default::default(), owned: std::cell::Cell::new(Some(0)) };
+        let word = self.allocate_payload(Box::new(map));
+        self.canonical.maps.push(((key, value), word));
+        word
+    }
+
+    /// The one instance of a fieldless object of `descriptor`, when its type is shareable (#1168), made on first
+    /// use; `None` for any other type, which is built as before.
+    pub(crate) fn shared_object(&mut self, descriptor: u32) -> Option<Word> {
+        let index = descriptor as usize;
+        if !self.canonical.shareable.get(index).copied().unwrap_or(false) {
+            return None;
+        }
+        if let Some(word) = self.canonical.objects[index] {
+            return Some(word);
+        }
+        let words = self.object_words(descriptor, 0);
+        let object = self.allocate(words);
+        // SAFETY: a fresh cell of `words` words: the header, then words no layout traces, zeroed.
+        unsafe {
+            *(object as *mut u64) = header(OBJECT, Repr::Raw, descriptor);
+            std::ptr::write_bytes((object + 8) as *mut u64, 0, words - 1);
+        }
+        self.canonical.objects[index] = Some(object);
+        Some(object)
+    }
+
+    /// Declare which object descriptors carry their identity inline (#528).
     pub fn set_identity_words(&mut self, descriptors: Vec<bool>) {
         self.identity_words = descriptors;
     }
@@ -828,6 +1038,22 @@ impl Heap {
         unsafe { *(object as *const u64) }
     }
 
+    /// Did a collection reclaim the cell at `address`: free (or poison, under stress), or on a page the sweep
+    /// took back whole by the liveness map and nothing has taken since (#1114: its cells keep stale headers until
+    /// the allocator threads it)? For tests and diagnostics.
+    pub fn is_reclaimed(&self, address: Word) -> bool {
+        let header = self.header_of(address);
+        if kind(header) == FREE || header == POISON {
+            return true;
+        }
+        self.pages.iter().any(|page| {
+            let base = page.memory.as_ptr() as Word;
+            (base..base + (page.memory.len() * 8) as Word).contains(&address)
+                && page.idle.is_some_and(|reserved| !reserved.threaded)
+                && !self.touched.contains(&page.id)
+        })
+    }
+
     // ---- strings ----
 
     pub fn allocate_text(&mut self, text: &str) -> Word {
@@ -836,19 +1062,38 @@ impl Heap {
 
     /// A flat string of `parts` in order, copied once.
     pub fn allocate_text_of(&mut self, parts: &[&str]) -> Word {
+        self.allocate_text_with(parts, false)
+    }
+
+    /// [`Heap::allocate_text_of`] when the caller knows the parts are ASCII (`known_ascii`, from their flags):
+    /// no byte is looked at twice (#1149).
+    pub(crate) fn allocate_text_with(&mut self, parts: &[&str], known_ascii: bool) -> Word {
         let bytes: usize = parts.iter().map(|part| part.len()).sum();
         let words = 1 + bytes.div_ceil(8).max(1);
         self.counted("string", 0, words);
         let string = self.allocate(words);
-        let ascii = parts.iter().all(|part| part.is_ascii());
+        let ascii = known_ascii || parts.iter().all(|part| part.is_ascii());
         // SAFETY: room for the header and `bytes` bytes.
         unsafe {
             *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
             let mut at = (string + 8) as *mut u8;
             for part in parts {
-                std::ptr::copy_nonoverlapping(part.as_ptr(), at, part.len());
+                copy_text(part.as_bytes(), at);
                 at = at.add(part.len());
             }
+        }
+        string
+    }
+
+    /// #1149: a flat string of `bytes` bytes that `fill` writes (all of them), flagged ASCII when `ascii`.
+    pub(crate) fn allocate_text_filled(&mut self, bytes: usize, ascii: bool, fill: impl FnOnce(&mut [u8])) -> Word {
+        let words = 1 + bytes.div_ceil(8).max(1);
+        self.counted("string", 0, words);
+        let string = self.allocate(words);
+        // SAFETY: room for the header and `bytes` bytes, written by `fill` before anything reads them.
+        unsafe {
+            *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
+            fill(std::slice::from_raw_parts_mut((string + 8) as *mut u8, bytes));
         }
         string
     }
@@ -968,10 +1213,54 @@ impl Heap {
         self.header_of(string) & SHARED != 0
     }
 
+    /// #1176: is `string` a version in a growable text buffer (`+` may write next to it)? A slice shares a flat
+    /// string's bytes too ([`Heap::allocate_text_slice`]): SHARED alone does not make a chain.
+    pub fn text_chain(&self, string: Word) -> bool {
+        // SAFETY: a shared string has three words; word 2 is its storage.
+        self.header_of(string) & SHARED != 0 && self.header_of(unsafe { *((string + 16) as *const u64) }) & BUFFER != 0
+    }
+
+    /// #1176: a string of `length` bytes of `source` from byte `start`, sharing its storage (the flat string, or the
+    /// text buffer of a version): word 1 the first byte, word 2 the storage, which keeps it alive. Never a view of a
+    /// view.
+    pub fn allocate_text_slice(&mut self, source: Word, start: usize, length: usize, ascii: bool) -> Word {
+        let source_header = self.header_of(source);
+        // SAFETY: a shared string has three words.
+        let storage = if source_header & SHARED != 0 { unsafe { *((source + 16) as *const u64) } } else { source };
+        let first = self.text_bytes(source).0 as u64 + start as u64;
+        self.counted("string slice", 0, 3);
+        let view = self.allocate(3);
+        // SAFETY: three words.
+        unsafe {
+            *(view as *mut u64) = header(STRING, Repr::Raw, self::length(length)) | SHARED | if ascii { ASCII } else { 0 };
+            *((view + 8) as *mut u64) = first;
+            *((view + 16) as *mut u64) = storage;
+        }
+        view
+    }
+
+    /// #1176: the bytes a slice of `source` would keep alive: its flat string's length, or its text buffer's room.
+    fn text_storage_bytes(&self, source: Word) -> usize {
+        let header = self.header_of(source);
+        if header & SHARED == 0 {
+            return payload(header) as usize;
+        }
+        // SAFETY: a shared string has three words.
+        let storage = unsafe { *((source + 16) as *const u64) };
+        let storage_header = self.header_of(storage);
+        if storage_header & BUFFER != 0 {
+            1 << ((storage_header >> CAPACITY_SHIFT) & 63)
+        } else {
+            payload(storage_header) as usize
+        }
+    }
+
     /// Write `text` at the high end of `buffer`, or right before its low end
     /// (the caller checked the room). `text` may be part of a version of the
     /// same buffer: it lies between the marks, the write outside them.
     pub fn text_buffer_write(&mut self, buffer: Word, text: &str, at_front: bool) {
+        // #1176: only a text buffer grows; a slice's storage may be a flat string, never written again.
+        assert!(self.header_of(buffer) & BUFFER != 0, "a write into a string that is no text buffer");
         let (low, high, capacity) = self.text_buffer_room(buffer);
         let at = if at_front { low.checked_sub(text.len()).expect("text buffer underflow") } else { high };
         assert!(at + text.len() <= capacity, "text buffer overflow");
@@ -1012,7 +1301,15 @@ impl Heap {
         // SAFETY: the source string stays where it is while the copy is
         // allocated (allocation neither moves nor collects).
         let part = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(pointer, length)) };
-        self.allocate_text(part)
+        // #1149: a piece of an ASCII string is ASCII.
+        let ascii = self.is_ascii_text(string);
+        // #1176: a piece of SLICE_MIN bytes or more shares its source's storage when it keeps at most twice what it
+        // holds (the rule of array slices, #249): `rest = rest.slice(k, n)` shares until half is left, copies that
+        // half once, and so on.
+        if length >= SLICE_MIN && 2 * length >= self.text_storage_bytes(string) {
+            return self.allocate_text_slice(string, start, length, ascii);
+        }
+        self.allocate_text_with(&[part], ascii)
     }
 
     /// The number of code points of `string`.
@@ -1158,6 +1455,270 @@ impl Heap {
         unsafe {
             std::ptr::copy_nonoverlapping(items.as_ptr(), (buffer + 8 + (start - items.len()) as Word * 8) as *mut u64, items.len());
         }
+    }
+
+    // ---- builders (#1171) ----
+
+    /// An empty builder of `repr` elements with room for `capacity` of them (0: the first push makes the buffer).
+    pub fn allocate_builder(&mut self, repr: Repr, capacity: usize) -> Word {
+        let capacity = if capacity == 0 { 0 } else { builder_room(capacity) };
+        let buffer = if capacity == 0 { 0 } else { self.allocate_builder_buffer(capacity) };
+        self.counted("builder", 0, BUILDER_WORDS);
+        let builder = self.allocate(BUILDER_WORDS);
+        // SAFETY: four words.
+        unsafe {
+            *(builder as *mut u64) = header(BUILDER, repr, 0);
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = 0;
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = capacity as u64;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = buffer;
+        }
+        builder
+    }
+
+    /// A buffer cell with room for `capacity` elements: length 0, so the collector marks it without tracing it.
+    fn allocate_builder_buffer(&mut self, capacity: usize) -> Word {
+        self.counted("builder buffer", 0, capacity + 1);
+        let buffer = if Self::class_of(capacity + 1).is_some() { self.allocate(capacity + 1) } else { self.allocate_large_buffer(capacity + 1) };
+        // SAFETY: room for the header.
+        unsafe { *(buffer as *mut u64) = header(ARRAY, Repr::Raw, 0) };
+        buffer
+    }
+
+    /// The length, capacity and buffer of a builder.
+    #[inline]
+    fn builder_parts(builder: Word) -> (usize, usize, Word) {
+        // SAFETY: a builder word is a live builder of four words (its type says so; machine code passes no other).
+        unsafe {
+            (
+                *((builder + BUILDER_LENGTH as Word) as *const u64) as usize,
+                *((builder + BUILDER_CAPACITY as Word) as *const u64) as usize,
+                *((builder + BUILDER_BUFFER as Word) as *const u64),
+            )
+        }
+    }
+
+    /// The elements pushed so far.
+    pub fn builder_items(&self, builder: Word) -> &[Word] {
+        let (length, _, buffer) = Self::builder_parts(builder);
+        if length == 0 {
+            return &[];
+        }
+        // SAFETY: the first `length` slots of the buffer are written.
+        unsafe { std::slice::from_raw_parts((buffer + 8) as *const u64, length) }
+    }
+
+    /// Room for `extra` more elements: a new buffer of at least twice the capacity, the elements copied over.
+    /// The old buffer is garbage (nothing else refers to it).
+    pub fn builder_reserve(&mut self, builder: Word, extra: usize) {
+        let (length, capacity, buffer) = Self::builder_parts(builder);
+        let old_capacity = capacity;
+        let needed = length.checked_add(extra).expect("builder length");
+        if needed <= capacity {
+            return;
+        }
+        let wanted = needed.max(capacity.saturating_mul(2)).max(BUILDER_FIRST);
+        let room = builder_room(wanted);
+        if buffer != 0 && Self::class_of(capacity + 1).is_none() {
+            // A large buffer grows in place (or moves once): no garbage, and only the growth counts.
+            let grown = self.resize_large_buffer(buffer, capacity + 1, room + 1);
+            // SAFETY: four words.
+            unsafe {
+                *((builder + BUILDER_CAPACITY as Word) as *mut u64) = room as u64;
+                *((builder + BUILDER_BUFFER as Word) as *mut u64) = grown;
+            }
+            return;
+        }
+        let (capacity, grown) = match self.take_spare_buffer(wanted) {
+            Some(spare) => spare,
+            None => (room, self.allocate_builder_buffer(room)),
+        };
+        // SAFETY: both buffers have room for `length` elements; distinct cells.
+        unsafe {
+            if length > 0 {
+                std::ptr::copy_nonoverlapping((buffer + 8) as *const u64, (grown + 8) as *mut u64, length);
+            }
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = capacity as u64;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = grown;
+        }
+        if buffer != 0 {
+            self.keep_spare_buffer(old_capacity, buffer);
+        }
+    }
+
+    /// The most recent spare buffer with room for `wanted` elements.
+    fn take_spare_buffer(&mut self, wanted: usize) -> Option<(usize, Word)> {
+        let position = self.spare_buffers.iter().rposition(|&(capacity, _)| capacity >= wanted)?;
+        Some(self.spare_buffers.swap_remove(position))
+    }
+
+    /// A large builder buffer of `words` words: header `ARRAY` raw, length 0 (a leaf), the rest uninitialized.
+    fn allocate_large_buffer(&mut self, words: usize) -> Word {
+        let layout = std::alloc::Layout::array::<u64>(words).expect("buffer size");
+        // SAFETY: a non-zero layout (a large buffer has more than SMALL_CLASS_LIMIT words).
+        let buffer = unsafe { std::alloc::alloc(layout) } as Word;
+        if buffer == 0 {
+            std::alloc::handle_alloc_error(layout);
+        }
+        // SAFETY: room for the header.
+        unsafe { *(buffer as *mut u64) = header(ARRAY, Repr::Raw, 0) };
+        self.builder_large.push((buffer, words));
+        self.grow_large_bytes(words * 8);
+        buffer
+    }
+
+    /// Resize a large builder buffer from `old` to `new` words; its contents up to the smaller size are kept.
+    fn resize_large_buffer(&mut self, buffer: Word, old: usize, new: usize) -> Word {
+        let position = self.builder_large.iter().position(|&(address, _)| address == buffer).expect("a large builder buffer");
+        debug_assert_eq!(self.builder_large[position].1, old);
+        let layout = std::alloc::Layout::array::<u64>(old).expect("buffer size");
+        let size = std::alloc::Layout::array::<u64>(new).expect("buffer size").size();
+        // SAFETY: allocated with `layout` by `allocate_large_buffer` or an earlier resize; `size` is non-zero.
+        let moved = unsafe { std::alloc::realloc(buffer as *mut u8, layout, size) } as Word;
+        if moved == 0 {
+            std::alloc::handle_alloc_error(std::alloc::Layout::array::<u64>(new).expect("buffer size"));
+        }
+        self.builder_large[position] = (moved, new);
+        if new > old {
+            self.grow_large_bytes((new - old) * 8);
+        } else {
+            // Room given back at once never becomes garbage: it no longer counts toward the next collection.
+            self.large_bytes -= (old - new) * 8;
+            self.allocated = self.allocated.saturating_sub((old - new) * 8);
+        }
+        moved
+    }
+
+    /// A finished large buffer, shrunk to `words` words, handed to the large objects as its array.
+    fn take_large_buffer(&mut self, buffer: Word, old: usize, words: usize) -> Word {
+        let array = self.resize_large_buffer(buffer, old, words);
+        let position = self.builder_large.iter().position(|&(address, _)| address == array).expect("a large builder buffer");
+        self.builder_large.swap_remove(position);
+        // SAFETY: a global allocation of exactly `words` u64s with `Layout::array::<u64>(words)`, the layout a boxed
+        // slice of that length frees with; the header and the array's elements are written.
+        let memory = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(array as *mut u64, words)) };
+        self.large.push(memory);
+        array
+    }
+
+    /// Free a large builder buffer at once (its elements were copied out).
+    fn free_large_buffer(&mut self, buffer: Word, words: usize) {
+        let position = self.builder_large.iter().position(|&(address, _)| address == buffer).expect("a large builder buffer");
+        self.builder_large.swap_remove(position);
+        // SAFETY: allocated with this layout; nothing refers to it any more (the builder is reset by its caller).
+        unsafe { std::alloc::dealloc(buffer as *mut u8, std::alloc::Layout::array::<u64>(words).expect("buffer size")) };
+        self.large_bytes -= words * 8;
+        self.allocated = self.allocated.saturating_sub(words * 8);
+    }
+
+    /// Count `bytes` of new large memory, as `allocate` counts a large object.
+    fn grow_large_bytes(&mut self, bytes: usize) {
+        self.allocated += bytes;
+        self.large_bytes += bytes;
+        let held = self.held_bytes();
+        if let Some(watch) = &mut self.watch {
+            watch.grow(bytes, held);
+        }
+    }
+
+    /// Keep a buffer no builder uses any more for the next ones, when it is small and there is room.
+    fn keep_spare_buffer(&mut self, capacity: usize, buffer: Word) {
+        if capacity <= SPARE_CAPACITY && self.spare_buffers.len() < SPARE_BUFFERS {
+            self.spare_buffers.push((capacity, buffer));
+        }
+    }
+
+    /// Append `items` to a builder.
+    pub fn builder_extend(&mut self, builder: Word, items: &[Word]) {
+        if items.is_empty() {
+            return;
+        }
+        self.builder_reserve(builder, items.len());
+        let (length, _, buffer) = Self::builder_parts(builder);
+        // SAFETY: room reserved; `items` is not in this buffer (a builder's elements never alias its own buffer:
+        // a builder is no array value).
+        unsafe {
+            std::ptr::copy_nonoverlapping(items.as_ptr(), (buffer + 8 + length as Word * 8) as *mut u64, items.len());
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + items.len()) as u64;
+        }
+    }
+
+    /// Append `count` elements, the `n`th being `item(n)`, written straight into the buffer.
+    pub fn builder_fill(&mut self, builder: Word, count: usize, mut item: impl FnMut(usize) -> Word) {
+        self.builder_reserve(builder, count);
+        let (length, _, buffer) = Self::builder_parts(builder);
+        for n in 0..count {
+            // SAFETY: room reserved.
+            unsafe { *((buffer + 8 + (length + n) as Word * 8) as *mut u64) = item(n) };
+        }
+        // SAFETY: four words.
+        unsafe { *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + count) as u64 };
+    }
+
+    /// Append one element.
+    #[inline]
+    pub fn builder_push(&mut self, builder: Word, item: Word) {
+        self.builder_reserve(builder, 1);
+        let (length, _, buffer) = Self::builder_parts(builder);
+        // SAFETY: room reserved.
+        unsafe {
+            *((buffer + 8 + length as Word * 8) as *mut u64) = item;
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = (length + 1) as u64;
+        }
+    }
+
+    /// The array of a builder's elements (at least one; the caller checked the length limit), as `repr`
+    /// elements, or bytes when `packed`. The buffer becomes the array in place when its cell fits the length
+    /// (the same size class, or a large cell at most an eighth bigger); otherwise the elements are copied into an
+    /// array of their own. The builder is left empty, without a buffer.
+    pub fn builder_finish(&mut self, builder: Word, packed: bool) -> Word {
+        let (count, capacity, buffer) = Self::builder_parts(builder);
+        debug_assert!(count > 0, "an empty builder finishes as the shared empty array");
+        let repr = element_repr(self.header_of(builder));
+        let large = Self::class_of(capacity + 1).is_none();
+        let in_place = !packed
+            && match (Self::class_of(count + 1), Self::class_of(capacity + 1)) {
+                (Some(used), Some(room)) => used == room,
+                _ => false,
+            };
+        let array = if large && !packed && Self::class_of(count + 1).is_none() {
+            // A large buffer shrinks to its length in place (or moves once) and becomes a large array.
+            self.counted("builder finished in place", 0, 0);
+            // SAFETY: the buffer's first `count` slots are written; its header becomes an array's.
+            unsafe { *(buffer as *mut u64) = header(ARRAY, repr, length(count)) };
+            self.take_large_buffer(buffer, capacity + 1, count + 1)
+        } else if in_place {
+            self.counted("builder finished in place", 0, 0);
+            // SAFETY: the buffer's first `count` slots are written; its header becomes an array's.
+            unsafe { *(buffer as *mut u64) = header(ARRAY, repr, length(count)) };
+            buffer
+        } else {
+            // SAFETY: the first `count` slots are written; allocation neither moves nor frees the buffer.
+            let items = unsafe { std::slice::from_raw_parts((buffer + 8) as *const u64, count) };
+            let array = if packed {
+                let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
+                self.allocate_bytes(&bytes)
+            } else {
+                self.allocate_array(repr, items)
+            };
+            if large {
+                self.free_large_buffer(buffer, capacity + 1);
+            } else {
+                self.keep_spare_buffer(capacity, buffer);
+            }
+            array
+        };
+        // SAFETY: four words.
+        unsafe {
+            *((builder + BUILDER_LENGTH as Word) as *mut u64) = 0;
+            *((builder + BUILDER_CAPACITY as Word) as *mut u64) = 0;
+            *((builder + BUILDER_BUFFER as Word) as *mut u64) = 0;
+        }
+        array
+    }
+
+    /// The elements of a builder (`length`), for checks before `finish`.
+    pub fn builder_length(&self, builder: Word) -> usize {
+        Self::builder_parts(builder).0
     }
 
     /// Is `array` a buffer of shared arrays ([`BUFFER`])?
@@ -1454,7 +2015,8 @@ impl Heap {
         // big integers trigger collections by their real size.
         self.external += big_bytes(&n);
         self.counted("bigint", 0, 2);
-        let object = self.allocate(2);
+        okkama_devtrace::count!("runtime", "heap words allocated", 2);
+        let object = self.allocate_class(OWNER_BIG);
         // SAFETY: two fresh words; the box is dropped by the sweep.
         unsafe {
             *(object as *mut u64) = header(BIGINT, Repr::Raw, 0);
@@ -1493,7 +2055,8 @@ impl Heap {
     /// collects, so no safepoint can see the uninitialized cell.
     fn store_payload(&mut self, payload: Box<dyn Payload>) -> Word {
         self.counted("payload", 0, PAYLOAD_WORDS);
-        let object = self.allocate(PAYLOAD_WORDS);
+        okkama_devtrace::count!("runtime", "heap words allocated", PAYLOAD_WORDS);
+        let object = self.allocate_class(OWNER_PAYLOAD);
         // SAFETY: fresh storage sized and aligned for PayloadCell. Write the
         // whole typed value without dropping the free-list/poison bytes.
         unsafe {
@@ -1549,20 +2112,31 @@ impl Heap {
 
     // ---- closures and async frames ----
 
-    /// A closure has one word per parameter of its function (its layout);
-    /// captures fill a prefix and the remaining words are unbound.
+    /// A closure has its entry word (#1110), then one word per parameter of its function (its layout); captures
+    /// fill a prefix of those and the remaining words are unbound.
+    /// The parameter words of a closure of `function` (#1167: the JIT allocates closures inline).
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn closure_words(&self, function: u32) -> usize {
+        self.layouts.closures[function as usize].len() - 1
+    }
+
+    /// Capture `index` of a closure (#1110: after its entry word).
+    pub fn capture(&self, closure: Word, index: usize) -> Word {
+        self.field(closure, index + 1)
+    }
+
     pub fn closure_new(&mut self, function: u32, captures: &[Word]) -> Word {
         let words = self.layouts.closures[function as usize].len();
-        debug_assert!(captures.len() <= words);
-        self.counted("closure", 0, words.max(1) + 1);
-        let closure = self.allocate(words.max(1) + 1);
-        // SAFETY: room for the header and `words` words.
+        debug_assert!(captures.len() < words);
+        self.counted("closure", 0, words + 1);
+        let closure = self.allocate(words + 1);
+        // SAFETY: room for the header and `words` words: the entry word (0: no entry yet), then the parameters.
         unsafe {
             *(closure as *mut u64) = header(CLOSURE, Repr::Raw, function);
-            std::ptr::write_bytes((closure + 8) as *mut u64, 0, words.max(1));
+            std::ptr::write_bytes((closure + 8) as *mut u64, 0, words);
             std::ptr::copy_nonoverlapping(
                 captures.as_ptr(),
-                (closure + 8) as *mut u64,
+                (closure + CLOSURE_CAPTURES as Word) as *mut u64,
                 captures.len(),
             );
         }
@@ -1591,6 +2165,8 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "collect");
         // A freed string's address may be reused for another one.
         self.positions = Positions::default();
+        // #1171: spare builder buffers are no roots; the sweep frees them.
+        self.spare_buffers.clear();
         let started = self.allocations.is_some().then(crate::clock::Instant::now);
         self.collect_inner(roots, &mut ephemerons);
         if let (Some(allocations), Some(started)) = (&mut self.allocations, started) {
@@ -1606,19 +2182,27 @@ impl Heap {
         crate::maps::begin_pass();
         let marking = self.allocations.is_some().then(crate::clock::Instant::now);
         let mut worklist = std::mem::take(&mut self.worklist);
+        let mut liveness = std::mem::take(&mut self.liveness);
+        liveness.reset(&self.pages);
+        let mut marker = Marker { worklist: &mut worklist, lo: liveness.lo, map: &mut liveness.map };
         // An object is marked when it is queued, not when it is traced
         // (#438): one shared by many edges enters the worklist once.
         let roots_span = okkama_devtrace::span!("gc", "mark roots");
         roots(&mut |word, repr| {
             if let Some(pointer) = repr.pointer(word) {
                 // SAFETY: a root is a live object pointer.
-                unsafe { mark_and_queue(pointer, &mut worklist) };
+                unsafe { mark_and_queue(pointer, &mut marker) };
             }
         });
+        // #1168: the shared instances are roots of every collection of a running heap.
+        for word in self.canonical.words() {
+            // SAFETY: each is a live object the heap made and never frees while it runs.
+            unsafe { mark_and_queue(word, &mut marker) };
+        }
         drop(roots_span);
         loop {
             let trace_span = okkama_devtrace::span!("gc", "mark trace");
-            self.mark_reachable(&mut worklist);
+            self.mark_reachable(&mut marker);
             drop(trace_span);
             // SAFETY: keys are live object pointers; their headers are read.
             let marked = |object: Word| unsafe { *(object as *const u64) } & MARK != 0;
@@ -1628,7 +2212,7 @@ impl Heap {
                     && unsafe { *(pointer as *const u64) } & MARK == 0
                 {
                     // SAFETY: an ephemeron value is a live object pointer.
-                    unsafe { mark_and_queue(pointer, &mut worklist) };
+                    unsafe { mark_and_queue(pointer, &mut marker) };
                     found = true;
                 }
             });
@@ -1639,6 +2223,7 @@ impl Heap {
         if let (Some(allocations), Some(marking)) = (&mut self.allocations, marking) {
             allocations.mark_nanos += marking.elapsed().as_nanos() as u64;
         }
+        self.liveness = liveness;
         self.worklist = worklist;
         // Watched objects that died, found by their marks before the sweep:
         // a pass over the watched few, instead of a set lookup for every dead
@@ -1668,12 +2253,12 @@ impl Heap {
     }
 
     /// Mark everything reachable from the worklist.
-    fn mark_reachable(&self, worklist: &mut Vec<Word>) {
-        while let Some(object) = worklist.pop() {
+    fn mark_reachable(&self, marker: &mut Marker<'_>) {
+        while let Some(object) = marker.worklist.pop() {
             let mut push = |word: Word, repr: Repr| {
                 if let Some(pointer) = repr.pointer(word) {
                     // SAFETY: a traced field holds a live object pointer.
-                    unsafe { mark_and_queue(pointer, worklist) };
+                    unsafe { mark_and_queue(pointer, marker) };
                 }
             };
             self.trace_object(object, &mut push);
@@ -1740,12 +2325,14 @@ impl Heap {
     }
 
     /// The traced fields of one live object, as the collector reads them.
-    fn trace_object(&self, object: Word, push: &mut dyn FnMut(Word, Repr)) {
+    /// #1174: generic over the visitor, so marking's visitor is inlined into the field loops; only a payload's own
+    /// `trace` takes it as `dyn`.
+    #[inline]
+    fn trace_object<P: FnMut(Word, Repr) + ?Sized>(&self, object: Word, push: &mut P) {
         {
             // SAFETY: `object` is a live object pointer; the mark bit is masked out.
             let header = unsafe { *(object as *const u64) } & !MARK;
-            let mut push = |word: Word, repr: Repr| push(word, repr);
-            let fields = |layout: &[TraceSlot], push: &mut dyn FnMut(Word, Repr)| {
+            let fields = |layout: &[TraceSlot], push: &mut P| {
                 for &TraceSlot { index, repr } in layout {
                     push(
                         // SAFETY: the index comes from this object's full layout.
@@ -1755,9 +2342,9 @@ impl Heap {
                 }
             };
             match kind(header) {
-                OBJECT => fields(&self.trace_layouts.objects[payload(header) as usize], &mut push),
-                CLOSURE => fields(&self.trace_layouts.closures[payload(header) as usize], &mut push),
-                FRAME => fields(&self.trace_layouts.frames[payload(header) as usize], &mut push),
+                OBJECT => fields(&self.trace_layouts.objects[payload(header) as usize], push),
+                CLOSURE => fields(&self.trace_layouts.closures[payload(header) as usize], push),
+                FRAME => fields(&self.trace_layouts.frames[payload(header) as usize], push),
                 // A shared version keeps its buffer alive; the buffer traces
                 // the slots below its frontier like any array.
                 ARRAY if header & SHARED != 0 => push(unsafe { *((object + 16) as *const u64) }, Repr::Ref),
@@ -1779,10 +2366,26 @@ impl Heap {
                         }
                     }
                 }
+                // #1171: the buffer is marked as a leaf; the builder traces the slots below its length.
+                BUILDER => {
+                    // SAFETY: a builder has four words; its buffer, when it has one, `capacity` slots.
+                    let (length, buffer) = unsafe {
+                        (*((object + BUILDER_LENGTH as Word) as *const u64), *((object + BUILDER_BUFFER as Word) as *const u64))
+                    };
+                    if buffer != 0 {
+                        push(buffer, Repr::Ref);
+                        let repr = element_repr(header);
+                        if repr != Repr::Raw {
+                            for index in 0..length as Word {
+                                push(unsafe { *((buffer + 8 + index * 8) as *const u64) }, repr);
+                            }
+                        }
+                    }
+                }
                 PAYLOAD => {
                     // SAFETY: every marked PAYLOAD has an initialized owner.
                     if let Some(payload) = unsafe { &(*(object as *const PayloadCell)).owner } {
-                        payload.trace(&mut push);
+                        payload.trace(&mut |word, repr| push(word, repr));
                     }
                 }
                 _ => {}
@@ -1795,13 +2398,12 @@ impl Heap {
     /// heap shrinks back instead of keeping, and sweeping, its high-water
     /// pages for the life of the program. Kept pages offer their cells like
     /// any other; the allocator returns freed ones to the system.
-    fn release_empty_pages(&mut self, empty: Vec<(usize, Word, usize)>) {
+    fn release_empty_pages(&mut self, empty: Vec<(usize, Reserved)>) {
         let keep = self.threshold / PAGE_BYTES + EMPTY_PAGES_SLACK;
         let mut freed = Vec::new();
-        for (count, (index, chain, bytes)) in empty.into_iter().enumerate() {
+        for (count, (index, reserved)) in empty.into_iter().enumerate() {
             if count < keep || self.stress {
-                let page = &self.pages[index];
-                self.reserve[page.class].push((chain, bytes, page.id));
+                self.reserve[self.pages[index].class].push(reserved);
             } else {
                 freed.push(index);
             }
@@ -1822,9 +2424,19 @@ impl Heap {
     }
 
     /// Overwrite every free cell past its link (collector stress).
-    fn poison(&mut self) {
-        for (class, &size) in CLASSES.iter().enumerate() {
-            let chains = self.reserve[class].iter().map(|&(chain, _, _)| chain);
+    /// `idle`: pages the sweep kept idle without a look; nothing on them changed since an earlier sweep poisoned
+    /// them, so they are not poisoned again (#1114: every stress collection repoisoned every empty page).
+    fn poison(&mut self, idle: &std::collections::HashSet<u32>) {
+        for (class, &size) in CELL_WORDS.iter().enumerate() {
+            let fresh = |reserved: &&Reserved| !idle.contains(&reserved.page);
+            // #1114: an unthreaded page is poisoned whole, headers included (POISON is no kind).
+            for reserved in self.reserve[class].iter().filter(fresh).filter(|reserved| !reserved.threaded) {
+                for word in 0..reserved.bytes / 8 {
+                    // SAFETY: the words of a live page none of whose cells is live.
+                    unsafe { *((reserved.head + word as Word * 8) as *mut u64) = POISON };
+                }
+            }
+            let chains = self.reserve[class].iter().filter(fresh).filter(|reserved| reserved.threaded).map(|reserved| reserved.head);
             for mut cell in std::iter::once(self.free[class]).chain(chains) {
                 while cell != 0 {
                     for word in 2..size {
@@ -1841,8 +2453,8 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "sweep");
         // Development counters (#538), per page, reported once per sweep. Nothing is counted per cell: the
         // cell loop stays the shape it had in 0.5.8, which #922 measured ~5% faster on allocation-heavy runs.
-        let (mut full_cells, mut empty_cells, mut visited, mut idle_pages) = (0, 0, 0, 0u64);
-        self.free = [0; CLASSES.len()];
+        let (mut full_cells, mut empty_cells, mut visited, mut idle_pages, mut dead_pages) = (0, 0, 0, 0u64, 0u64);
+        self.free = [0; CELL_WORDS.len()];
         for chains in &mut self.reserve {
             chains.clear();
         }
@@ -1853,23 +2465,37 @@ impl Heap {
         let mut external_live = 0;
         // Pages with no live cell (#435): their chains wait until the end of
         // the sweep decides how many empty pages the next cycle needs.
-        let mut empty: Vec<(usize, Word, usize)> = Vec::new();
+        let mut empty: Vec<(usize, Reserved)> = Vec::new();
+        let mut idle_ids = std::collections::HashSet::new();
         let touched = std::mem::take(&mut self.touched);
         for (index, page) in self.pages.iter_mut().enumerate() {
-            let size = CLASSES[page.class];
+            let size = CELL_WORDS[page.class];
             let cells = page.memory.len() / size;
             // #538: empty at the last sweep and no allocation took its chain since: nothing on it can be marked,
             // and its free chain is intact, so it is empty again without a walk.
-            if let Some((chain, bytes)) = page.idle
+            if let Some(reserved) = page.idle
                 && !touched.contains(&page.id)
             {
+                if self.stress {
+                    idle_ids.insert(page.id);
+                }
                 visited += cells;
                 empty_cells += cells;
                 idle_pages += 1;
-                empty.push((index, chain, bytes));
+                empty.push((index, reserved));
                 continue;
             }
             let base = page.memory.as_mut_ptr() as Word;
+            // #1114: a general page with no marked cell by the liveness map goes back whole, unread; it is
+            // threaded when the allocator takes it. (An owner page is always walked: its dead cells drop now.)
+            if page.class < CLASSES.len() && self.liveness.clear(base, cells * size * 8) {
+                empty_cells += cells;
+                dead_pages += 1;
+                let reserved = Reserved { head: base, bytes: cells * size * 8, page: page.id, threaded: false };
+                page.idle = Some(reserved);
+                empty.push((index, reserved));
+                continue;
+            }
             let mut kept = 0;
             let mut chain = 0;
             let step = size * 8;
@@ -1902,16 +2528,33 @@ impl Heap {
                 empty_cells += cells;
             }
             if kept == 0 {
-                page.idle = Some((chain, cells * size * 8));
-                empty.push((index, chain, cells * size * 8));
+                let reserved = Reserved { head: chain, bytes: cells * size * 8, page: page.id, threaded: true };
+                page.idle = Some(reserved);
+                empty.push((index, reserved));
             } else {
                 page.idle = None;
                 if chain != 0 {
-                    self.reserve[page.class].push((chain, (cells - kept) * size * 8, page.id));
+                    let bytes = (cells - kept) * size * 8;
+                    self.reserve[page.class].push(Reserved { head: chain, bytes, page: page.id, threaded: true });
                 }
             }
         }
         let mut large_bytes = 0;
+        // #1171: large builder buffers: a marked one lives on, a dead one (its builder unreachable) is freed.
+        self.builder_large.retain(|&(address, words)| {
+            // SAFETY: a live raw allocation of `words` words starting with a header.
+            let header = unsafe { *(address as *const u64) };
+            if header & MARK != 0 {
+                unsafe { *(address as *mut u64) = header & !MARK };
+                live += words * 8;
+                large_bytes += words * 8;
+                true
+            } else {
+                // SAFETY: allocated with this layout; unreachable, so nothing refers to it.
+                unsafe { std::alloc::dealloc(address as *mut u8, std::alloc::Layout::array::<u64>(words).expect("buffer size")) };
+                false
+            }
+        });
         self.large.retain_mut(|memory| {
             let address = memory.as_mut_ptr() as Word;
             let header = memory[0];
@@ -1929,9 +2572,6 @@ impl Heap {
                 false
             }
         });
-        if self.stress {
-            self.poison();
-        }
         self.large_bytes = large_bytes;
         if let Some(allocations) = &mut self.allocations {
             let Allocations { live_dense, live, .. } = &mut **allocations;
@@ -1954,11 +2594,17 @@ impl Heap {
         self.external_live = external_live;
         self.threshold = if self.stress { 0 } else { (live + external_live).max(COLLECTION_FLOOR) };
         self.release_empty_pages(empty);
+        // After the empty pages join the reserve (#1114: before, their cells escaped the poison).
+        if self.stress {
+            self.poison(&idle_ids);
+        }
         self.collections += 1;
         okkama_devtrace::count!("gc", "sweep cells visited", visited);
         okkama_devtrace::count!("gc", "sweep cells in full pages", full_cells);
         okkama_devtrace::count!("gc", "sweep cells in empty pages", empty_cells);
         okkama_devtrace::count!("gc", "sweep pages kept idle without a walk", idle_pages);
+        okkama_devtrace::count!("gc", "sweep pages dead by the liveness map", dead_pages);
+        self.dead_pages_unread += dead_pages;
         self.idle_pages_kept += idle_pages;
     }
 }
@@ -2002,12 +2648,41 @@ unsafe fn owned_bytes(address: Word, header: u64) -> usize {
 ///
 /// SAFETY: `object` is a live object pointer.
 #[inline(always)]
-unsafe fn mark_and_queue(object: Word, worklist: &mut Vec<Word>) {
+unsafe fn mark_and_queue(object: Word, marker: &mut Marker<'_>) {
     let header = unsafe { *(object as *const u64) };
     if header & MARK == 0 {
         unsafe { *(object as *mut u64) = header | MARK };
-        worklist.push(object);
+        // #1174: an object with nothing to trace is marked and not queued.
+        let leaf = match kind(header) {
+            STRING => header & SHARED == 0,
+            BIGINT => true,
+            ARRAY => header & (SHARED | TRIE) == 0 && element_repr(header) == Repr::Raw,
+            _ => false,
+        };
+        // #1114: its granule holds a live cell (an address outside the span, a large object, sets nothing).
+        if let Some(granule) = marker.map.get_mut((object.wrapping_sub(marker.lo) >> GRANULE_SHIFT) as usize) {
+            *granule = 1;
+        }
+        if !leaf {
+            marker.worklist.push(object);
+        }
     }
+}
+
+/// Thread `words` words of cells of `size` words from `base` into a free list (each cell FREE, its second word
+/// the next); the head is the first cell.
+fn thread(base: Word, words: usize, size: usize) -> Word {
+    let mut head = 0;
+    for cell in (0..words / size).rev() {
+        let address = base + (cell * size * 8) as Word;
+        // SAFETY: cells of a live page.
+        unsafe {
+            *(address as *mut u64) = header(FREE, Repr::Raw, 0);
+            *((address + 8) as *mut u64) = head;
+        }
+        head = address;
+    }
+    head
 }
 
 /// Drop Rust data owned by a dead object.
@@ -2025,11 +2700,31 @@ unsafe fn release(address: Word, header: u64) {
     }
 }
 
+/// #1168: the one shared instance of each empty array representation, each empty map's key and value
+/// representation and each shareable fieldless object type, made on first use and kept as roots by the heap.
+/// Sharing is invisible: these values have no fields to differ in, no identity, no destroy and no in-place writer.
+#[derive(Debug, Default)]
+pub(crate) struct Canonical {
+    arrays: Vec<(u64, Word)>,
+    maps: Vec<((Repr, Repr), Word)>,
+    objects: Vec<Option<Word>>,
+    shareable: Vec<bool>,
+}
+
+impl Canonical {
+    fn words(&self) -> impl Iterator<Item = Word> + '_ {
+        self.arrays.iter().map(|(_, word)| *word)
+            .chain(self.maps.iter().map(|(_, word)| *word))
+            .chain(self.objects.iter().flatten().copied())
+    }
+}
+
 impl Drop for Heap {
     fn drop(&mut self) {
         // Terminal teardown (including STOP/host drop) does not promise language cleanup.
         // Only collection of a running heap checks lost ownership roots.
-        // Release Rust data of every remaining object.
+        // Release Rust data of every remaining object, the shared instances' too (#1168).
+        self.canonical = Canonical::default();
         self.collect(|_| {});
     }
 }
@@ -2101,7 +2796,8 @@ mod tests {
         Layouts {
             // 0: Node { next: ref, value: int }   1: Pair { left, right: ref }
             objects: vec![vec![Repr::Ref, Repr::Int], vec![Repr::Ref, Repr::Ref]],
-            closures: vec![vec![Repr::Ref, Repr::Int]],
+            // A closure: its entry word (#1110), then a ref and an int parameter.
+            closures: vec![vec![Repr::Raw, Repr::Ref, Repr::Int]],
             frames: vec![],
         }
     }
@@ -2748,6 +3444,222 @@ mod tests {
         }
     }
 
+    /// #1114: a page whose one live cell is its first, a middle or its last keeps it, unmarked and intact, cycle
+    /// after cycle, while the allocator hands out every other cell of the page exactly once.
+    #[test]
+    fn a_survivor_anywhere_in_a_page_keeps_it_1114() {
+        let cells = PAGE_WORDS / 2;
+        for keep in [0, cells / 2, cells - 1] {
+            let mut heap = Heap::new(layouts());
+            let objects: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64])).collect();
+            assert_eq!(heap.pages.len(), 1);
+            let survivor = objects[keep];
+            for _ in 0..3 {
+                heap.collect(|visit| visit(survivor, Repr::Ref));
+                assert_eq!(heap.dead_pages_unread, 0, "a page with a live cell is walked");
+                assert_eq!(&*heap.elements(survivor), &[keep as u64]);
+                // SAFETY: a live object's header.
+                assert_eq!(unsafe { *(survivor as *const u64) } & MARK, 0);
+                let mut again: Vec<Word> = (0..cells - 1).map(|_| heap.allocate_array(Repr::Raw, &[7])).collect();
+                assert_eq!(heap.pages.len(), 1, "the page's free cells are reused");
+                assert!(!again.contains(&survivor));
+                again.sort_unstable();
+                again.dedup();
+                assert_eq!(again.len(), cells - 1, "each cell handed out once");
+            }
+        }
+    }
+
+    /// #1114: a general page with no live cell comes back whole without a read, and the allocator, taking it,
+    /// hands out each of its cells once; under collector stress its dead cells are poison until then.
+    #[test]
+    fn a_dead_page_comes_back_whole_1114() {
+        let cells = PAGE_WORDS / 2;
+        for stress in [false, true] {
+            let mut heap = Heap::new(layouts());
+            heap.set_stress(stress);
+            let objects: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64])).collect();
+            heap.collect(|_| {});
+            assert_eq!(heap.dead_pages_unread, 1);
+            assert_eq!(heap.stats().live_bytes, 0);
+            if stress {
+                for &object in &objects {
+                    // SAFETY: the words of a dead cell of a live page.
+                    assert_eq!(unsafe { *((object + 8) as *const u64) }, POISON);
+                }
+            }
+            // An idle dead page stays as it is.
+            heap.collect(|_| {});
+            assert_eq!(heap.dead_pages_unread, 1);
+            let mut again: Vec<Word> = (0..cells).map(|n| heap.allocate_array(Repr::Raw, &[n as u64 + 1])).collect();
+            assert_eq!(heap.pages.len(), 1);
+            for (n, &object) in again.iter().enumerate() {
+                assert_eq!(&*heap.elements(object), &[n as u64 + 1]);
+            }
+            again.sort_unstable();
+            let mut before = objects.clone();
+            before.sort_unstable();
+            assert_eq!(again, before, "the same cells, each once");
+        }
+    }
+
+    /// #1174: objects with nothing to trace (a plain string, a big integer, an array of raw words) are marked
+    /// without being queued and survive; an array of references is still traced, so what it holds survives too.
+    #[test]
+    fn leaves_are_marked_without_tracing_and_containers_still_trace_1174() {
+        let mut heap = Heap::new(layouts());
+        let text = heap.allocate_text("a leaf");
+        let big = heap.big(BigInt::from(1) << 200);
+        let raw = heap.allocate_array(Repr::Raw, &[1, 2, 3]);
+        let held = heap.allocate_text("held by a reference array");
+        let refs = heap.allocate_array(Repr::Ref, &[held, text]);
+        let root = heap.allocate_array(Repr::Ref, &[refs, big, raw]);
+        heap.collect(|visit| visit(root, Repr::Ref));
+        for object in [text, big, raw, held, refs, root] {
+            assert!(!heap.is_reclaimed(object), "{object:#x} was reclaimed");
+            // SAFETY: a live object's header.
+            assert_eq!(unsafe { *(object as *const u64) } & MARK, 0);
+        }
+        assert_eq!(heap.text(held), "held by a reference array");
+        heap.collect(|_| {});
+        for object in [text, big, raw, held, refs, root] {
+            assert!(heap.is_reclaimed(object));
+        }
+    }
+
+    /// #1175: the not-due check counts the map nodes this heap's thread made since the last collection (read
+    /// through the cached counter cell): nodes alone bring a collection due, a collection resets the count, and
+    /// nodes another thread makes do not count.
+    #[test]
+    fn map_nodes_of_this_thread_bring_a_collection_due_1175() {
+        use crate::maps::Entries;
+        use crate::ops::Key;
+        const DUE: usize = 64 << 10;
+        let mut heap = Heap::new(layouts());
+        heap.threshold = DUE;
+        assert!(!heap.needs_collection());
+        let grow = |entries: &mut Entries, from: i64| {
+            let before = crate::maps::node_memory().0;
+            let mut n = from;
+            while crate::maps::node_memory().0 - before < DUE + 4096 {
+                entries.insert(Key::Small(n), (0, 0));
+                // Past a few entries the map turns persistent: its nodes are counted from then on.
+                entries.make_persistent();
+                n += 1;
+                assert!(n - from < 1 << 20, "map nodes are not counted");
+            }
+            n
+        };
+        // Another thread's nodes are its own.
+        std::thread::spawn(move || grow(&mut Entries::default(), 0)).join().unwrap();
+        assert!(!heap.needs_collection(), "another thread's nodes counted");
+        let mut entries = Entries::default();
+        let next = grow(&mut entries, 0);
+        assert!(heap.needs_collection(), "this thread's nodes not counted");
+        heap.collect(|_| {});
+        heap.threshold = DUE;
+        assert!(!heap.needs_collection(), "a collection resets the count");
+        grow(&mut entries, next);
+        assert!(heap.needs_collection());
+    }
+
+    /// #1148: the vendored num-bigint's addition (an ADCS chain on aarch64) gives the sums a digit-by-digit
+    /// reference gives: every length up to 41 digits (whole steps of four and remainders), carries that run
+    /// through all-ones digits, and both signs.
+    #[test]
+    fn bigint_addition_matches_a_reference_1148() {
+        use num_bigint::{BigInt, BigUint, Sign};
+        fn reference(a: &[u64], b: &[u64]) -> Vec<u64> {
+            let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+            let mut out = Vec::with_capacity(long.len() + 1);
+            let mut carry = 0u128;
+            for (i, &x) in long.iter().enumerate() {
+                let sum = x as u128 + *short.get(i).unwrap_or(&0) as u128 + carry;
+                out.push(sum as u64);
+                carry = sum >> 64;
+            }
+            out.push(carry as u64);
+            out
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for la in 0..=41usize {
+            for lb in 0..=la {
+                for pattern in 0..3 {
+                    let digit = |i: usize, next: &mut dyn FnMut() -> u64| match pattern {
+                        0 => u64::MAX,
+                        1 => if i % 5 == 4 { 0 } else { u64::MAX },
+                        _ => next(),
+                    };
+                    let a: Vec<u64> = (0..la).map(|i| digit(i, &mut next)).collect();
+                    let b: Vec<u64> = (0..lb).map(|i| if pattern == 0 { 1 } else { digit(i, &mut next) }).collect();
+                    let to_big = |digits: &[u64]| {
+                        BigUint::from_slice(&digits.iter().flat_map(|&d| [d as u32, (d >> 32) as u32]).collect::<Vec<_>>())
+                    };
+                    let expected = to_big(&reference(&a, &b));
+                    let (x, y) = (to_big(&a), to_big(&b));
+                    assert_eq!(&x + &y, expected, "{la} + {lb} digits, pattern {pattern}");
+                    assert_eq!(&y + &x, expected);
+                    let mut z = x.clone();
+                    z += &y;
+                    assert_eq!(z, expected);
+                    // Signed: -x + -y == -(x + y), and (x + y) - y == x.
+                    let (sx, sy) = (BigInt::from_biguint(Sign::Minus, x.clone()), BigInt::from_biguint(Sign::Minus, y.clone()));
+                    assert_eq!(sx + sy, BigInt::from_biguint(Sign::Minus, expected.clone()));
+                    assert_eq!(&expected - &y, x);
+                }
+            }
+        }
+    }
+
+    /// #1114: big integers and payloads live only on owner pages, other cells only on general pages, so a dead
+    /// general cell never owns Rust memory; every owner still drops in the collection that finds it dead.
+    #[test]
+    fn owners_live_only_on_owner_pages_1114() {
+        let mut heap = Heap::new(layouts());
+        let alive = Rc::new(());
+        let mut roots = Vec::new();
+        for n in 0..600 {
+            roots.push(heap.allocate_array(Repr::Raw, &[n]));
+            roots.push(heap.big(BigInt::from(n) << 80));
+            roots.push(heap.allocate_payload(Box::new(Counted { _alive: alive.clone(), words: vec![] })));
+        }
+        let owner = |kind: u8| kind == BIGINT || kind == PAYLOAD;
+        let check = |heap: &Heap| {
+            for page in &heap.pages {
+                let step = CELL_WORDS[page.class] * 8;
+                let base = page.memory.as_ptr() as Word;
+                for cell in 0..page.memory.len() * 8 / step {
+                    // SAFETY: every cell of a page starts with a header.
+                    let kind = kind(unsafe { *((base + (cell * step) as Word) as *const u64) });
+                    if kind == FREE {
+                        continue;
+                    }
+                    match page.class {
+                        OWNER_BIG => assert_eq!(kind, BIGINT),
+                        OWNER_PAYLOAD => assert_eq!(kind, PAYLOAD),
+                        _ => assert!(!owner(kind), "an owner on a general page"),
+                    }
+                }
+            }
+        };
+        check(&heap);
+        assert!(heap.pages.iter().any(|page| page.class == OWNER_BIG));
+        assert!(heap.pages.iter().any(|page| page.class == OWNER_PAYLOAD));
+        // Keep every third payload: the others drop in this very collection.
+        let kept: Vec<Word> = roots.iter().copied().skip(2).step_by(9).collect();
+        heap.collect(|visit| kept.iter().for_each(|&root| visit(root, Repr::Ref)));
+        assert_eq!(Rc::strong_count(&alive), 1 + kept.len());
+        check(&heap);
+        heap.collect(|_| {});
+        assert_eq!(Rc::strong_count(&alive), 1);
+    }
+
     #[derive(Debug)]
     struct PanickingPayload(Counted);
     impl Payload for PanickingPayload {
@@ -2793,7 +3705,7 @@ mod tests {
             visit(closure, Repr::Ref);
             visit(raw, Repr::Ref);
         });
-        let array = heap.field(closure, 0);
+        let array = heap.capture(closure, 0);
         assert_eq!(heap.text(heap.elements(array)[999]), "999");
         assert_eq!(heap.integer(heap.elements(raw)[500]), Integer::Small(500));
         assert_eq!(heap.stats().large, 2);
@@ -3026,3 +3938,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "builders_1171_tests.rs"]
+mod builders_1171_tests;

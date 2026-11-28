@@ -9,11 +9,13 @@
 SPARROW_CORE_INTERPRET=1, and compares standard output, standard error and the exit status byte for byte. PATH
 is a file or a directory of .ok files; the default is examples/ without its archive. A difference is a defect
 unless a line of interp-exceptions.txt (next to this file) explains it; the summary names each exception used.
-`ocs` reads the results of a conformance run on the interpreter (`--adapter-env SPARROW_CORE_INTERPRET=1`): a
-case that did not pass is explained only by a refusal the exceptions list. `check` validates the exceptions
-file. Exit status 0 when nothing is unexplained.
+`ocs` reads the results of a conformance run on the interpreter (`--adapter-env SPARROW_CORE_INTERPRET=1`): the
+interpreter runs every program (#1122), so a case that did not pass is unexplained. `check` validates the
+exceptions file. Exit status 0 when nothing is unexplained; `run` also fails when no program built (#1144), so a
+broken build cannot pass.
 
-The same exceptions serve tools/t/run.py's interpreter configurations (`load`, `excepted`).
+The same exceptions serve tools/t/run.py's interpreter configurations (`load`, `excepted`) and the fuzz exec
+target's differential mode (okkama-rs/fuzz/fuzz_targets/support/linking.rs reads the file at build time, #1144).
 """
 import argparse
 import concurrent.futures
@@ -30,9 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 EXCEPTIONS = os.path.join(HERE, "interp-exceptions.txt")
 OKKAMA = os.path.join(ROOT, "okkama-rs", "target", "release", "okkama")
 CAGE = os.path.join(ROOT, "okkama-rs", "tools", "new-runtime", "caged.py")
-# The interpreter's refusal of what it does not run yet (sparrow-core/src/interp.rs).
-REFUSAL = "is not supported by the interpreter yet"
-KINDS = ("refusal", "both", "either", "jit", "path")
+KINDS = ("both", "either", "jit", "path")
 
 
 def load(path=EXCEPTIONS):
@@ -57,12 +57,10 @@ def load(path=EXCEPTIONS):
 
 def excepted(rules, path, jit, interp):
     """The reason a difference between two runs is allowed, or None. `jit` and `interp` are
-    (exit status, output); `jit` may be None when only the interpreter ran (a refusal still explains)."""
+    (exit status, output); `jit` may be None when only the interpreter ran (then only a path explains)."""
     relative = os.path.relpath(os.path.abspath(path), ROOT) if path else ""
     for kind, text, reason in rules:
         if kind == "path" and fnmatch.fnmatch(relative, text):
-            return reason
-        if kind == "refusal" and REFUSAL in interp[1] and text in interp[1]:
             return reason
         if jit is None:
             continue
@@ -147,7 +145,18 @@ def run(args):
     for reason, names in reasons.items():
         print(f"excepted {len(names):4}  {reason}\n         {', '.join(names[:4])}{', ...' if len(names) > 4 else ''}")
     print(f"Programs={len(paths)}, " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
-    return 1 if differing else 0
+    return status(counts)
+
+
+def status(counts):
+    """`run`'s exit status from its verdict counts: 1 when a program differs, or when none built (an empty or
+    broken build compares nothing and must not pass, #1144)."""
+    if counts.get("DIFFERS"):
+        return 1
+    if not any(count for verdict, count in counts.items() if verdict != "unbuilt"):
+        print("no program built: nothing was compared", file=sys.stderr)
+        return 1
+    return 0
 
 
 def ocs(args):

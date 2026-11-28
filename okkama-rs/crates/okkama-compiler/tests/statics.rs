@@ -360,6 +360,73 @@ fn the_linearity_check_moves_a_resource_into_a_block_parameter() {
     assert!(error.contains(&format!("in P.make: {param} may be in no region")), "{error}");
 }
 
+/// #1138: a loop that passes each round's fresh resource to its header's block parameter loses the one the
+/// parameter held unless a region owns it first: the branch refuses it, as the check did before #1093 moved
+/// resources into block parameters. With a region tracking the parameter before the branch, the loop is linear.
+/// Lowering does not build this shape; the module is rewritten by hand.
+#[test]
+fn the_linearity_check_refuses_a_block_parameter_overwritten_while_free() {
+    let module = lowered(&format!("{RES} object P {{ P(); make() is Res {{ Res(n: 2); }} }} \
+        main() is int {{ P().make().read(); }}"), "none");
+    let index = symbol(&module, "P.make");
+    let looping = |owned: bool| {
+        let mut module = module.clone();
+        let function = &mut module.functions[index];
+        let (value, func, span) = function.blocks.iter().flat_map(|block| &block.insts).find_map(|inst| match &inst.kind {
+            ir::InstKind::Call { func, .. } if inst.result.is_some_and(|value| matches!(function.values[value.0], ir::Type::Object(_))) => {
+                Some((inst.result?, *func, inst.span))
+            }
+            _ => None,
+        }).expect("P.make calls the constructor");
+        let ty = function.values[value.0].clone();
+        // The body is replaced whole: only the parameters' values stay.
+        assert!(function.params.iter().enumerate().all(|(at, param)| param.0 == at), "{:?}", function.params);
+        function.values.truncate(function.params.len());
+        let mut new_value = |ty: ir::Type| {
+            function.values.push(ty);
+            ir::ValueId(function.values.len() - 1)
+        };
+        let (one, first, param, flag, two, next) =
+            (new_value(ir::Type::Int), new_value(ty.clone()), new_value(ty.clone()), new_value(ir::Type::Bool), new_value(ir::Type::Int), new_value(ty));
+        // The owned loop's region; the leaking one has none.
+        let region = owned.then(|| new_value(ir::Type::Region));
+        let inst = |result: ir::ValueId, kind: ir::InstKind| ir::Inst { result: Some(result), kind, span };
+        let effect = |kind: ir::InstKind| ir::Inst { result: None, kind, span };
+        let term = |kind: ir::TermKind| ir::Terminator { kind, span };
+        let target = |block: usize, args: Vec<ir::ValueId>| ir::Target { block: ir::BlockId(block), args };
+        let mut round = vec![
+            inst(two, ir::InstKind::Const(ir::Constant::Int(ir::IntValue::from_i64(2)))),
+            inst(next, ir::InstKind::Call { func, args: vec![two] }),
+        ];
+        let mut entry = vec![
+            inst(one, ir::InstKind::Const(ir::Constant::Int(ir::IntValue::from_i64(1)))),
+            inst(first, ir::InstKind::Call { func, args: vec![one] }),
+        ];
+        let mut exit = Vec::new();
+        if let Some(region) = region {
+            entry.insert(0, inst(region, ir::InstKind::RegionEnter));
+            round.push(effect(ir::InstKind::RegionTrack { region, value: param }));
+            exit.push(effect(ir::InstKind::RegionLeave { region, keep: Some(param) }));
+        }
+        function.blocks = vec![
+            ir::Block { params: Vec::new(), unwind: None, insts: entry, term: term(ir::TermKind::Br(target(1, vec![first]))) },
+            ir::Block { params: vec![param], unwind: None,
+                insts: vec![inst(flag, ir::InstKind::Const(ir::Constant::Bool(true)))],
+                term: term(ir::TermKind::Cond { condition: flag, then_target: target(2, Vec::new()), else_target: target(3, Vec::new()) }) },
+            ir::Block { params: Vec::new(), unwind: None, insts: round, term: term(ir::TermKind::Br(target(1, vec![next]))) },
+            ir::Block { params: Vec::new(), unwind: None, insts: exit, term: term(ir::TermKind::Ret(Some(param))) },
+        ];
+        ir::verify(&module).expect("valid IR");
+        (module, param)
+    };
+    let (leaking, param) = looping(false);
+    let error = ir::linearity::check(&leaking).expect_err("the previous round's resource is lost");
+    assert!(error.contains(&format!("in P.make: {param} takes a new value at the branch from block 2 to block 1")) &&
+        error.contains("while the one it holds may be in no region"), "{error}");
+    let (owned, _) = looping(true);
+    ir::linearity::check(&owned).expect("the region owns each round's resource before the next replaces it");
+}
+
 /// #1093: the `statics` pass alone leaves no region open. It removes a region it emptied, so a failing
 /// `resource.leave` before that region's `region.leave` does not leave it open on the failure path.
 #[test]

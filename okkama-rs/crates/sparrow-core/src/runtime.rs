@@ -121,6 +121,10 @@ pub struct Runtime {
     pub loaded: Loaded,
     #[cfg(feature = "jit")]
     pub jit: crate::jit::Jit,
+    /// #1149: vectors `split` and `replace` keep across calls (cleared before each use).
+    pub(crate) scratch_offsets: Vec<usize>,
+    pub(crate) scratch_ranges: Vec<(usize, usize)>,
+    pub(crate) scratch_words: Vec<Word>,
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
     /// #588: the capacities of a session runtime (`Runtime::session`), which `extend` grows within.
@@ -275,8 +279,8 @@ impl Runtime {
     /// A new closure of `closure`'s function over the same captures (`worker.bind`).
     pub(crate) fn closure_copy(&mut self, closure: Word) -> Word {
         let function = heap::payload(self.heap.header_of(closure));
-        let words = self.heap.layouts().closures[function as usize].len();
-        let captures: Vec<Word> = (0..words).map(|i| self.heap.field(closure, i)).collect();
+        let words = self.heap.layouts().closures[function as usize].len() - 1;
+        let captures: Vec<Word> = (0..words).map(|i| self.heap.capture(closure, i)).collect();
         self.heap.closure_new(function, &captures)
     }
 
@@ -380,6 +384,12 @@ impl Runtime {
         prefix("object layouts", layouts.objects.starts_with(&published.objects))?;
         prefix("closure layouts", layouts.closures.starts_with(&published.closures))?;
         prefix("frame layouts", layouts.frames.starts_with(&published.frames))?;
+        // #1168: a published type keeps its sharing; an extension that makes it held (or otherwise unshareable)
+        // would leave its shared instance where a fresh one is required.
+        let held = held_objects(new);
+        let shareable = shareable_objects(new, &held, &layouts);
+        let published = shareable_objects(old, &self.held, self.heap.layouts());
+        prefix("object sharing", shareable.starts_with(&published))?;
         let (functions, objects) = (new.functions.len(), new.objects.len());
         if functions > capacities.functions {
             return Err(Error(format!("the session holds at most {} functions", capacities.functions)));
@@ -408,7 +418,8 @@ impl Runtime {
         self.invocations[from..functions].copy_from_slice(&records);
         self.natives.extend(natives);
         self.intrinsics.extend(intrinsics);
-        self.held = held_objects(&loaded.program);
+        self.heap.set_shareable(shareable);
+        self.held = held;
         self.globals.resize(globals, None);
         #[cfg(feature = "jit")]
         self.jit.extend_dispatch(&loaded.program, objects_before);
@@ -445,6 +456,7 @@ impl Runtime {
         }).collect::<Result<Box<[_]>, Error>>()?;
         let resources = crate::failures::Resources::new(&loaded.program);
         heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
+        heap.set_shareable(shareable_objects(&loaded.program, &held_objects(&loaded.program), &loaded.layouts()));
         let intrinsics = loaded
             .program
             .functions
@@ -452,6 +464,9 @@ impl Runtime {
             .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name)))
             .collect();
         Ok(Self {
+            scratch_offsets: Vec::new(),
+            scratch_ranges: Vec::new(),
+            scratch_words: Vec::new(),
             resources,
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),
@@ -495,10 +510,18 @@ impl Runtime {
     /// Collect when the heap asks for it. `frame` is the frame pointer of a
     /// runtime helper called directly from machine code; `extra` are words
     /// the helper still holds.
+    #[inline(always)]
     pub fn safepoint(&mut self, frame: u64, ctx: &Ctx, extra: &[(Word, Repr)]) {
-        if !self.heap.needs_collection() {
-            return;
+        // #1175: the check is inline in every allocating helper; the collection is out of line, so a safepoint
+        // that is not due pays for neither its frame nor its prologue.
+        if self.heap.needs_collection() {
+            self.collect_at_safepoint(frame, ctx, extra);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn collect_at_safepoint(&mut self, frame: u64, ctx: &Ctx, extra: &[(Word, Repr)]) {
         self.count(|_| "gc collection".into());
         let started = self.heap.allocations.is_some().then(crate::clock::Instant::now);
         self.prune_spawned();
@@ -902,6 +925,11 @@ pub extern "C" fn rt_int(ctx: *mut Ctx, op: u64, left: Word, right: Word) -> Wor
     if runtime.heap.needs_collection() {
         runtime.safepoint(frame, ctx, &[(word, Repr::Int)]);
     }
+    // #1147 (A4): machine code checks no status after add, subtract or multiply without a memory budget or polling.
+    debug_assert!(
+        op == INT_MOD || ctx.status == OK || runtime.limits.memory.is_some() || runtime.polled(),
+        "an int operation failed where machine code does not check"
+    );
     word
 }
 
@@ -933,6 +961,21 @@ pub extern "C" fn rt_concat(ctx: *mut Ctx, left: Word, right: Word) -> Word {
     word
 }
 
+/// #1177: `str.concat_n`, the `count` parts at `parts` (a stack slot of the caller) in one string.
+#[inline(never)]
+pub extern "C" fn rt_concat_n(ctx: *mut Ctx, parts: *const Word, count: u64) -> Word {
+    let frame = frame_pointer!();
+    let (ctx, runtime) = unsafe { runtime(ctx) };
+    let parts = unsafe { std::slice::from_raw_parts(parts, count as usize) };
+    let word = match crate::ops::concat_parts(runtime, parts, |runtime, bytes| !runtime.would_exceed(bytes as u64)) {
+        Err(message) => return fail(ctx, runtime, FailureKind::Program(message)),
+        Ok(None) => return runtime.exhaust(ctx, Exhausted::Memory),
+        Ok(Some(word)) => word,
+    };
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
+}
+
 /// `rt_array` representation argument for a packed byte array.
 pub const ARRAY_BYTES: u64 = 3;
 
@@ -942,7 +985,10 @@ pub extern "C" fn rt_array(ctx: *mut Ctx, repr: u64, elements: *const Word, coun
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
     let elements = unsafe { std::slice::from_raw_parts(elements, count as usize) };
-    let word = if repr == ARRAY_BYTES {
+    let word = if elements.is_empty() {
+        // #1168: one shared empty array per representation.
+        runtime.heap.empty_array(repr)
+    } else if repr == ARRAY_BYTES {
         let bytes: Vec<u8> = elements.iter().map(|&w| w as u8).collect();
         runtime.heap.allocate_bytes(&bytes)
     } else {
@@ -1024,8 +1070,9 @@ fn ordered_sites(trace: &[(u32, u32)], omitted: u64, tail: usize) -> Vec<crate::
 }
 
 /// Record that the pending failure reaches `function` at `pc` in the
-/// activation with frame pointer `frame`; each activation is recorded once, at
-/// the pc where the failure first reached it (a rethrow does not add it again).
+/// activation `frame` names (the JIT's frame pointer, the interpreter's
+/// register base); each activation is recorded once, at the pc where the
+/// failure first reached it (a rethrow does not add it again).
 #[inline(never)]
 pub extern "C" fn rt_trace(ctx: *mut Ctx, function: u64, pc: u64, frame: u64) {
     let (ctx, runtime) = unsafe { runtime(ctx) };
@@ -1121,6 +1168,10 @@ impl Runtime {
         // A memory budget also bounds the machine stack.
         self.budget.stack_capped = self.limits.memory.is_some_and(|memory| memory.max(2 << 20) < stack);
         let stack = self.limits.memory.map_or(stack, |memory| stack.min(memory.max(2 << 20)));
+        if let Some(interp) = &mut self.interp {
+            // #1120, #1141: the register stack is bounded as the machine stack is, for a sync and an async entry.
+            interp.limit(stack);
+        }
         let marker = 0u8;
         let mut ctx = Ctx {
             status: OK,
@@ -1172,10 +1223,6 @@ impl Runtime {
             self.drop_root(root);
             result
         } else {
-            if let Some(interp) = &mut self.interp {
-                // #1120: the register stack is bounded as the machine stack is.
-                interp.limit(stack);
-            }
             match self.invoke(&mut ctx, entry, arguments) {
                 Ok(result) => result,
                 Err(error) => {
@@ -1340,7 +1387,7 @@ pub extern "C" fn rt_call_closure(ctx: *mut Ctx, closure: Word, arguments: *cons
         &mut long
     };
     for (i, word) in words.iter_mut().enumerate().take(captured) {
-        *word = runtime.heap.field(closure, i);
+        *word = runtime.heap.capture(closure, i);
     }
     if runtime.closure_bridge_reference || params > 8 {
         words[captured..params].copy_from_slice(unsafe { std::slice::from_raw_parts(arguments, count as usize) });
@@ -1395,6 +1442,20 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// (`new…`) and the first parameter of an action. A constructor's parameters are
 /// values, not the object. Two of them are equal only when they are the same
 /// object.
+/// #1168: the object types whose fieldless values may share one instance: no fields, no destroy, not a runtime
+/// object, not held by the runtime (Atomic, Event, …: keyed by address or written in place), no traced slot, and
+/// not throwable (a rethrow is recognised by the thrown value's address, so a fresh `throw` must be a fresh value).
+pub(crate) fn shareable_objects(program: &okkama_sparrow::Program, held: &[bool], layouts: &crate::heap::Layouts) -> Vec<bool> {
+    program.objects.iter().enumerate().map(|(descriptor, object)| {
+        object.fields.is_empty()
+            && object.destroy.is_none()
+            && !object.builtin
+            && !held.get(descriptor).copied().unwrap_or(true)
+            && layouts.objects.get(descriptor).is_some_and(Vec::is_empty)
+            && !object.does.iter().any(|witness| program.roles[witness.role.0 as usize].is_error())
+    }).collect()
+}
+
 pub(crate) fn held_objects(program: &okkama_sparrow::Program) -> Vec<bool> {
     let mut held = vec![false; program.objects.len()];
     for function in &program.functions {
@@ -1450,7 +1511,7 @@ mod embedding_tests {
     /// refused before any analysis indexes it.
     #[test]
     fn public_runtimes_verify_their_program() {
-        let source = "sparrow 18\nmodule \"bad\" \"1.0.0\"\ntype t0 int\n\
+        let source = "sparrow 19\nmodule \"bad\" \"1.0.0\"\ntype t0 int\n\
             function f0 \"f\" {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n";
         let good = okkama_sparrow::assemble(source).unwrap();
         assert!(Runtime::new(Loaded::verified(good.clone()).unwrap()).is_ok());
@@ -1460,7 +1521,7 @@ mod embedding_tests {
     }
 
     fn bridge_runtime() -> Box<Runtime> {
-        let source = "sparrow 18\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\n\
+        let source = "sparrow 19\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\n\
             function f0 \"sync\" {\n registers [t0, t0]\n params [r0, r1]\n result t0\n 0: ret r0\n}\n\
             function f1 \"async\" async {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n";
         Box::new(Runtime::new(Loaded::new(okkama_sparrow::assemble(source).unwrap())).unwrap())

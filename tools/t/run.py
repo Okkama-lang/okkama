@@ -10,8 +10,8 @@ Every file under t/ (or the ones given) runs on every configuration:
     sparrow-gc-stress  Sparrow with SPARROW_CORE_GC_STRESS=1 (a collection
                     at every safepoint, freed cells poisoned)
     sparrow-interp     Sparrow's interpreter (SPARROW_CORE_INTERPRET=1, #1123)
-    sparrow-interp-gc-stress  the interpreter under GC stress (ten times the
-                    timeout: it collects far more often)
+    sparrow-interp-gc-stress  the interpreter under GC stress (twenty times
+                    the timeout: it collects far more often)
 
 A run of an interpreter configuration that okkama-rs/tools/engines/interp-exceptions.txt
 explains (a known divergence of the design, each line with its ticket) is

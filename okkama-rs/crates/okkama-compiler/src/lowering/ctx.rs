@@ -1017,13 +1017,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             }
             Ty::Test => return Err(unsupported_type(span, "test mode")),
             Ty::Param(_) | Ty::Error => {
-                return Err(LoweringError::invalid(
-                    span,
-                    format!(
-                        "internal compiler error: type {} reached lowering",
-                        self.reg.plain_type_name(ty)
-                    ),
-                ));
+                return Err(unlowerable_type(span, &self.reg.plain_type_name(ty)));
             }
         })
     }
@@ -1740,6 +1734,12 @@ fn unsupported_type(span: Span, what: &str) -> LoweringError {
     )
 }
 
+/// A type analysis should have resolved (a type parameter, an error type) reached lowering: a compiler invariant,
+/// not the program's error. The text is bare: the kind comes from `LoweringError::Internal` (#1093, #1143).
+fn unlowerable_type(span: Span, name: &str) -> LoweringError {
+    LoweringError::internal(span, format!("type {name} reached lowering"))
+}
+
 /// Plainness of a whole lowered program (#520): see
 /// `Ctx::settled_plain_types`.
 pub struct SettledPlain {
@@ -1858,5 +1858,19 @@ fn decl_plain_roles(reg: &Registry<'_>) -> Vec<bool> {
         if !changed {
             return roles;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1143: an unresolved type in lowering is an internal error that names its kind once.
+    #[test]
+    fn an_unlowerable_type_is_an_internal_error() {
+        let error = unlowerable_type(Span::default(), "T");
+        assert!(matches!(error, LoweringError::Internal { .. }), "{error:?}");
+        assert_eq!(error.message(), "type T reached lowering");
+        assert_eq!(error.to_string(), "internal compiler error: type T reached lowering");
     }
 }

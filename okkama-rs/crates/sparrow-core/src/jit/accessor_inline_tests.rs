@@ -4,7 +4,7 @@ use super::*;
 use cranelift_codegen::ir::Opcode;
 
 const PROGRAM: &str = r#"
-sparrow 18
+sparrow 19
 module "accessors" "1.0.0"
 type t0 int
 type t1 object obj0

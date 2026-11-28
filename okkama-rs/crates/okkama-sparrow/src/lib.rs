@@ -432,6 +432,13 @@ instructions! {
     ResourceSettle = 161, "resource.settle" { value: Register }
     /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
     ResourceSettleUnwind = 162, "resource.settle_unwind" { dst: Dst, value: Register, failure: Register }
+    /// `builder.new` с местом под `count` элементов (#1171): подсказка ёмкости, когда длина
+    /// результата известна заранее (`map` над диапазоном, массивом или словарём). Отрицательное
+    /// или большое `count` рантайм ограничивает.
+    BuilderSized = 163, "builder.sized" { dst: Dst, count: Register }
+    /// `a + b + c …` над строками одной инструкцией (#1177): каждая часть копируется один раз.
+    /// Части вычислены слева направо до неё; длинная или цепочечная часть — попарно, как `str.concat`.
+    StrConcatN = 164, "str.concat_n" { dst: Dst, parts: Vec<Register> }
 
     Jump = 140, "jmp" { target: Target }
     Branch = 141, "br" { condition: Register, then_target: Target, else_target: Target }

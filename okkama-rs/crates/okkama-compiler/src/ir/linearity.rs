@@ -23,7 +23,9 @@
 //! convention, #555: the callee's root region owns a fresh argument from its entry, on its failure path too; a
 //! worker entry hands the receiver it rebuilds to the action this way). `region.leave`/`region.settle` with
 //! `keep` of it frees it again. A branch that passes it to a block parameter moves its state to the parameter
-//! (#1093): the parameter is the resource from then on, so returning the parameter hands it out. A fresh value
+//! (#1093): the parameter is the resource from then on, so returning the parameter hands it out; a branch that
+//! gives a new value to a parameter that may still hold a free one, and does not pass that one on, loses it, and
+//! the check refuses it (#1138). A fresh value
 //! may leave the function free only as the value it returns or throws (the caller or the handler takes it); free
 //! at any other exit, or made again by a loop while the one before is free, it has no owner that would destroy
 //! it, and the check refuses it.
@@ -311,19 +313,44 @@ fn check_function(module: &Module, calls: &Calls, function_index: usize, functio
         }
         let block = &function.blocks[block_index];
         let mut state = entry[block_index].clone().expect("reached");
-        let flow = |target: &Target, state: &State, entry: &mut Vec<Option<State>>, pending: &mut Vec<usize>| {
-            // The block parameters take the ownership state of their arguments, which pass it on (#1093).
-            let mut moved = None;
-            for (argument, param) in target.args.iter().zip(&function.blocks[target.block.0].params) {
-                if let Some(&to) = owners.index.get(param) {
-                    let next = moved.get_or_insert_with(|| state.clone());
-                    let bits = owners.index.get(argument).map_or(0, |&from| state.0[base + from]);
-                    if let Some(&from) = owners.index.get(argument) {
+        let flow = |target: &Target,
+                    state: &State,
+                    entry: &mut Vec<Option<State>>,
+                    pending: &mut Vec<usize>,
+                    errors: &mut Vec<((usize, usize), String)>,
+                    at: (usize, usize)| {
+            // The block parameters take the ownership state of their arguments, which pass it on (#1093). The
+            // moves read the state from before the branch, so a parameter passed on to another one keeps its
+            // resource.
+            let params = &function.blocks[target.block.0].params;
+            let moves: Vec<(Option<usize>, usize, ValueId)> = target.args.iter().zip(params)
+                .filter_map(|(argument, param)| {
+                    owners.index.get(param).map(|&to| (owners.index.get(argument).copied(), to, *param))
+                })
+                .collect();
+            let moved = (!moves.is_empty()).then(|| {
+                let mut next = state.clone();
+                for &(from, _, _) in &moves {
+                    if let Some(from) = from {
                         next.0[base + from] = 0;
                     }
-                    next.0[base + to] = bits;
                 }
-            }
+                for &(from, to, param) in &moves {
+                    // The parameter's value ends here unless the branch passes it on: one that may still be in
+                    // no region would be lost with nothing to destroy it (#1138).
+                    if state.0[base + to] & FREE != 0 && !moves.iter().any(|&(source, _, _)| source == Some(to)) {
+                        errors.push((
+                            at,
+                            format!(
+                                "{param} takes a new value at the branch from block {} to block {} while the one it holds may be in no region",
+                                at.0, target.block.0
+                            ),
+                        ));
+                    }
+                    next.0[base + to] = from.map_or(0, |from| state.0[base + from]);
+                }
+                next
+            });
             let state = moved.as_ref().unwrap_or(state);
             let target = target.block.0;
             let changed = match &mut entry[target] {
@@ -351,9 +378,9 @@ fn check_function(module: &Module, calls: &Calls, function_index: usize, functio
                     Some(value) => {
                         let mut after = state.clone();
                         after.insert(&keys, value, CLOSED);
-                        flow(unwind, &after, &mut entry, &mut pending);
+                        flow(unwind, &after, &mut entry, &mut pending, &mut errors, (block_index, index));
                     }
-                    None => flow(unwind, &state, &mut entry, &mut pending),
+                    None => flow(unwind, &state, &mut entry, &mut pending, &mut errors, (block_index, index)),
                 }
             }
             let at = || format!("block {block_index}, instruction {index}");
@@ -447,7 +474,7 @@ fn check_function(module: &Module, calls: &Calls, function_index: usize, functio
             // when it has none.
             TermKind::Raise(_) | TermKind::Throw(_) if block.unwind.is_some() => {
                 let unwind = block.unwind.as_ref().expect("checked");
-                flow(unwind, &state, &mut entry, &mut pending);
+                flow(unwind, &state, &mut entry, &mut pending, &mut errors, (block_index, usize::MAX));
             }
             TermKind::Ret(_) | TermKind::Raise(_) | TermKind::Throw(_) => {
                 for (value, &bits) in keys.values.iter().zip(&state.0) {
@@ -472,7 +499,7 @@ fn check_function(module: &Module, calls: &Calls, function_index: usize, functio
             }
             kind => {
                 for target in kind.targets() {
-                    flow(target, &state, &mut entry, &mut pending);
+                    flow(target, &state, &mut entry, &mut pending, &mut errors, (block_index, usize::MAX));
                 }
             }
         }

@@ -51,7 +51,12 @@ pub(crate) struct Capture {
 pub(crate) enum DbHandle {
     Cell(Cell),
     Capture(Capture),
-    Schema(HashMap<Rc<str>, i64, HandleBuild>),
+    /// Position of each column name, `-2` for a name several columns share.
+    /// The names come from the database server, so the map takes std's keyed
+    /// hash, never `FastHasher` (#1103).
+    /// Boxed: a keyed map is 48 bytes, past a handle's six words (#439).
+    #[allow(clippy::box_collection, reason = "keeps every arena slot within six words (#439)")]
+    Schema(Box<HashMap<Rc<str>, i64>>),
 }
 pub(crate) fn handles(native: Native) -> bool {
     native.symbol().starts_with("runtime/db@1::")
@@ -236,8 +241,7 @@ impl Heap {
             if names.len() > 1024 {
                 return Err(invalid(n));
             }
-            let mut positions =
-                HashMap::with_capacity_and_hasher(names.len(), HandleBuild::default());
+            let mut positions = HashMap::with_capacity(names.len());
             for (i, name) in names.iter().enumerate() {
                 let name = self.db_string(*name)?;
                 if name.len() > 4096 {
@@ -248,7 +252,7 @@ impl Heap {
                     .and_modify(|p| *p = -2)
                     .or_insert(i as i64);
             }
-            return Ok(self.db_new(DbHandle::Schema(positions))?);
+            return Ok(self.db_new(DbHandle::Schema(Box::new(positions)))?);
         }
         if n == DbPosition {
             let DbHandle::Schema(schema) = self.db_handle(a[0])? else {
@@ -295,3 +299,106 @@ impl Heap {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::word::FastHasher;
+    use std::hash::{BuildHasher, Hasher};
+
+    /// `count` distinct printable names of 16 bytes that a database server
+    /// could send, all with one hash under the unkeyed `FastHasher`: its state
+    /// after the first word is known, so a second word cancelling it sends
+    /// every name to the same state (#1103).
+    fn colliding_names(count: usize) -> Vec<String> {
+        const K: u64 = 0x517c_c1b7_2722_0a95;
+        let printable = |w: u64| w.to_le_bytes().iter().all(|b| (0x20..0x7f).contains(b));
+        let mut names = Vec::new();
+        let mut x: u64 = 0;
+        while names.len() < count {
+            x += 1;
+            let first = u64::from_le_bytes(x.wrapping_mul(0x9e37_79b9_7f4a_7c15).to_le_bytes().map(|b| 0x20 + b % 95));
+            let second = (first.wrapping_mul(K)).rotate_left(5) ^ 0x4141_4141_4141_4141;
+            if printable(second) {
+                let bytes = [first.to_le_bytes(), second.to_le_bytes()].concat();
+                names.push(String::from_utf8(bytes).unwrap());
+            }
+        }
+        names
+    }
+
+    /// The unkeyed hash of a name as `str` hashing feeds it: its 8-byte
+    /// little-endian words, then the 0xff terminator.
+    fn unkeyed(name: &str) -> u64 {
+        let mut h = FastHasher::default();
+        for chunk in name.as_bytes().chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            h.write_u64(u64::from_le_bytes(word));
+        }
+        h.write_u8(0xff);
+        h.finish()
+    }
+
+    fn with_db<T>(body: impl FnOnce(&mut Heap) -> T) -> T {
+        let program = okkama_sparrow::Program::default();
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        with_host(&mut runtime, false, body)
+    }
+
+    fn schema(heap: &mut Heap, names: &[String]) -> Result<Slot, ProviderError> {
+        let names = names.iter().map(|n| heap.allocate_text(n.clone()).unwrap()).collect();
+        let names = heap.allocate_array(names).unwrap();
+        heap.db_execute(Native::DbSchema, &[names])
+    }
+
+    fn refused(result: Result<Slot, ProviderError>) -> bool {
+        matches!(result, Err(ProviderError::Native(failure)) if failure.code == "invalid_input")
+    }
+
+    fn position(heap: &mut Heap, schema: Slot, name: &str) -> i64 {
+        let name = heap.allocate_text(name.into()).unwrap();
+        let Outcome::Value(at) = heap.native_db(Native::DbPosition, &[schema, name]).unwrap() else {
+            panic!("db_position failed");
+        };
+        heap.int64(at).unwrap().unwrap()
+    }
+
+    /// Column names chosen to collide under a predictable hash resolve as any
+    /// others do (each to its position, a shared name to -2, an absent one to
+    /// -1), and the schema's hash tells them apart, so a server sending them
+    /// gets no quadratic table.
+    #[test]
+    fn column_names_colliding_under_an_unkeyed_hash_get_distinct_hashes_1103() {
+        let mut names = colliding_names(64);
+        let first = unkeyed(&names[0]);
+        assert!(names.iter().all(|n| unkeyed(n) == first), "the names must collide under FastHasher");
+        names.push(names[3].clone());
+        with_db(|heap| {
+            let Ok(state) = schema(heap, &names) else { panic!("db_schema failed") };
+            for (i, name) in names[..64].iter().enumerate() {
+                assert_eq!(position(heap, state, name), if i == 3 { -2 } else { i as i64 }, "{name:?}");
+            }
+            assert_eq!(position(heap, state, "absent"), -1);
+            assert_eq!(position(heap, state, &names[0][..15]), -1);
+            let Ok(DbHandle::Schema(map)) = heap.db_handle(state) else { panic!("not a schema") };
+            let hashes: std::collections::HashSet<u64> =
+                names[..64].iter().map(|n| map.hasher().hash_one(n.as_str())).collect();
+            assert_eq!(hashes.len(), 64, "the schema's hash must separate names an attacker can collide");
+        });
+    }
+
+    /// A schema keeps its input limits: at most 1024 columns, names of at
+    /// most 4096 bytes; anything larger is refused as invalid input.
+    #[test]
+    fn a_schema_refuses_more_than_1024_columns_or_names_over_4096_bytes_1103() {
+        with_db(|heap| {
+            let wide: Vec<String> = (0..1024).map(|i| format!("c{i}")).collect();
+            assert!(schema(heap, &wide).is_ok());
+            let wider: Vec<String> = (0..1025).map(|i| format!("c{i}")).collect();
+            assert!(refused(schema(heap, &wider)));
+            assert!(schema(heap, &["n".repeat(4096)]).is_ok());
+            assert!(refused(schema(heap, &["n".repeat(4097)])));
+        });
+    }
+}

@@ -191,6 +191,14 @@
     "targets": [],
     "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   },
+  "int-big-add": {
+    "path": "lang/int-big-add.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
   "int-small": {
     "path": "lang/int-small.ok",
     "unit": "iteration",
@@ -457,6 +465,14 @@
   },
   "string-length": {
     "path": "lang/string-length.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "string-rest": {
+    "path": "lang/string-rest.ok",
     "unit": "iteration",
     "scale": 1,
     "allocation_sensitive": false,

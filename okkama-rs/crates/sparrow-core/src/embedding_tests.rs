@@ -4,7 +4,7 @@ use crate::budget::{Limits, PLAYGROUND};
 use crate::stdout::Stream;
 use crate::{Embedding, Piece, refused_natives, run_embedded};
 
-const HEAD: &str = r#"sparrow 18
+const HEAD: &str = r#"sparrow 19
 module "embedding" "1.0.0"
 type t0 int
 type t1 str
@@ -286,11 +286,57 @@ fn workers_are_emulated_in_the_same_instance() {
     assert!(report.contains("Execution budget exhausted: steps"), "{report}");
 }
 
+/// #1141: a worker's runtime emulates workers as its parent's does, so a worker that spawns a worker (`nests`
+/// spawns `twice`, then returns its argument plus one) spawns it in this instance too, not as a process (which an
+/// embedding without a worker command refuses).
+#[test]
+fn a_worker_spawned_by_a_worker_is_emulated_too() {
+    let source = format!(
+        "{HEAD}{WORKERS}function f8 \"main\" async {{\n    registers [t0, t4, t5, t0]\n    params []\n    result t0\n    \
+         0: const r0, int 5\n    1: fn.closure r1, f9, []\n    2: worker.spawn r2, r1, [r0], true\n    3: await r3, r2\n    \
+         4: ret r3\n}}\nfunction f9 \"nests\" {{\n    registers [t0, t4, t5, t0]\n    params [r0]\n    result t0\n    \
+         0: fn.closure r1, f4, []\n    1: worker.spawn r2, r1, [r0], true\n    2: const r3, int 1\n    \
+         3: int.add r3, r0, r3\n    4: ret r3\n}}\nentry f8\n"
+    );
+    let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+    let bytes = okkama_sparrow::encode(&program).unwrap();
+    let run = run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap();
+    assert_eq!(run.result, Ok(6));
+}
+
+/// #1141: a worker's runtime failure is the awaiting parent's runtime failure with one prefix, the text the parent
+/// reports for the same failure of its own ("RuntimeError: confirm failed", not "RuntimeError: RuntimeError: …").
+#[test]
+#[allow(clippy::result_large_err)] // the closure returns run_embedded's outcome as it is
+fn a_worker_failure_is_reported_with_one_prefix() {
+    let confirms = "function f9 \"confirms\" {\n    registers [t0]\n    params [r0]\n    result t0\n    \
+                    0: trap confirm, \"confirm failed\"\n}\n";
+    let run = |main: &str| {
+        let source = format!(
+            "{HEAD}{WORKERS}function f8 \"main\" async {{\n    registers [t0, t4, t5, t0]\n    params []\n    \
+             result t0\n{main}}}\n{confirms}entry f8\n"
+        );
+        let program = okkama_sparrow::assemble(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        let bytes = okkama_sparrow::encode(&program).unwrap();
+        run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap().result
+    };
+    let (own, own_uncaught) = run("    0: const r0, int 1\n    1: call r3, f9, [r0]\n    2: ret r3\n").unwrap_err();
+    assert_eq!(own, "RuntimeError: confirm failed");
+    let (worker, uncaught) = run(
+        "    0: const r0, int 1\n    1: fn.closure r1, f9, []\n    2: worker.spawn r2, r1, [r0], true\n    \
+         3: await r3, r2\n    4: ret r3\n",
+    )
+    .unwrap_err();
+    assert_eq!(worker, own);
+    let message = |uncaught: Option<crate::Uncaught>| uncaught.map(|uncaught| (uncaught.category, uncaught.message));
+    assert_eq!(message(uncaught), message(own_uncaught));
+}
+
 /// #1127: without the host one processor runs everything, emulated workers too.
 #[cfg(not(feature = "host"))]
 #[test]
 fn one_processor_without_the_host() {
-    let source = "sparrow 18\nmodule \"cpus\" \"1.0.0\"\ntype t0 int\nfunction f0 \"cpus\" native \"runtime/system@1::system_cpu_count/0\" {\n    registers []\n    params []\n    result t0\n}\nfunction f1 \"main\" {\n    registers [t0]\n    params []\n    result t0\n    0: call r0, f0, []\n    1: ret r0\n}\nentry f1\n";
+    let source = "sparrow 19\nmodule \"cpus\" \"1.0.0\"\ntype t0 int\nfunction f0 \"cpus\" native \"runtime/system@1::system_cpu_count/0\" {\n    registers []\n    params []\n    result t0\n}\nfunction f1 \"main\" {\n    registers [t0]\n    params []\n    result t0\n    0: call r0, f0, []\n    1: ret r0\n}\nentry f1\n";
     let bytes = okkama_sparrow::encode(&okkama_sparrow::assemble(source).unwrap()).unwrap();
     let run = run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap();
     assert_eq!(run.result, Ok(1));

@@ -21,10 +21,13 @@ object C {
 }
 ";
 
+/// The passes without inlining and scalar replacement (#1112): these tests look at the calls lowering makes
+/// (inlining has its own tests in scalar_replacement.rs).
+const NO_INLINE: &str = "statics,regions,tail-calls,fold,hoist,dce,undef,jumps";
 fn lower(text: &str) -> Result<ir::Module, LoweringError> {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    okkama_compiler::lowering::with_passes("all", || lower_program(&program))
+    okkama_compiler::lowering::with_passes(NO_INLINE, || lower_program(&program))
 }
 
 fn module(main: &str) -> ir::Module {

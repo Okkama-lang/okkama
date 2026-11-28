@@ -42,6 +42,8 @@ fn run(source: &str, engine: Engine, stress: bool, limits: Limits) -> Outcome {
             }
             runtime.heap.set_stress(stress);
             runtime.limits = limits;
+            // Workers run in this instance (#1127), as without the host: no process starts (#1144).
+            runtime.emulated_workers = true;
             let (result, output) = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
             if engine == Engine::Interpreter {
                 // One engine per runtime: every entry from Rust went through the seam to the interpreter.
@@ -81,7 +83,7 @@ fn engines(source: &str) -> Outcome {
 /// functions (from t5 and f4).
 fn program(types: &str, declarations: &str, functions: &str) -> String {
     format!(
-        r#"sparrow 18
+        r#"sparrow 19
 module "interp" "1.0.0"
 type t0 int
 type t1 str
@@ -804,6 +806,48 @@ entry f5
     assert_eq!(message(&interpreted), message(&jit));
 }
 
+/// #1141: a memory budget caps the stack of a run, so a recursion deeper than the budget exhausts it, under a
+/// synchronous `main` and under an async one alike: the register stack is capped by it as the machine stack is.
+/// Without a budget the same recursion (half a million frames) returns.
+#[test]
+fn a_memory_budget_caps_the_stack_of_a_sync_and_of_an_async_main() {
+    let down = r#"
+function f4 "down" {
+    registers [t0, t0, t4, t0]
+    params [r0]
+    result t0
+    0: const r1, int 0
+    1: int.cmp eq, r2, r0, r1
+    2: br r2, @3, @4
+    3: ret r0
+    4: const r1, int 1
+    5: int.sub r3, r0, r1
+    6: call r3, f4, [r3]
+    7: ret r3
+}
+"#;
+    let budget = Limits { memory: Some(2 << 20), memory_scope: crate::budget::MemoryScope::Runtime, ..Limits::default() };
+    for asynchronous in ["", " async"] {
+        let source = program("", "", &format!(r#"{down}
+function f5 "main"{asynchronous} {{
+    registers [t0, t0]
+    params []
+    result t0
+    0: const r0, int 500000
+    1: call r1, f4, [r0]
+    2: ret r1
+}}
+entry f5
+"#));
+        assert_eq!(engines(&source).result, Ok(0), "main{asynchronous} without a budget");
+        let outcome = engines_with(&source, budget.clone());
+        assert!(
+            outcome.result.as_ref().is_err_and(|error| error.contains("Execution budget exhausted: memory")),
+            "main{asynchronous} under a budget of 2 MiB: {outcome:?}"
+        );
+    }
+}
+
 /// #1121: a failure at an instruction a handler covers goes to the handler, with the failure in its register;
 /// one outside every range leaves the function.
 #[test]
@@ -1034,6 +1078,7 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
             let program = okkama_sparrow::assemble(&source).unwrap();
             let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
             runtime.use_engine(crate::Engine::Interpreter);
+            runtime.emulated_workers = true;
             EXECUTED.with(|executed| executed.borrow_mut().clear());
             let _ = okkama_runtime_core::stdout::capture(|| runtime.run_entry(STACK));
             EXECUTED.with(|executed| executed.take())
@@ -1041,6 +1086,16 @@ fn run_covering(source: &str) -> std::collections::BTreeSet<&'static str> {
         .unwrap()
         .join()
         .unwrap()
+}
+
+/// #1144: workers on both engines, emulated in the instance (`tests/mnemonics/workers.spa`): a bound action's spawn
+/// passes its field ahead of the argument (20 + 22), a direct spawn doubles 20, a failing worker's failure is
+/// caught at the await, and the panic at the end is the uncaught report; every `worker.spawn` succeeds.
+#[test]
+fn workers_spawn_and_report_alike() {
+    let outcome = engines(include_str!("../tests/mnemonics/workers.spa"));
+    assert_eq!(outcome.output, lines(&["42", "40", "worker failed"]));
+    assert!(outcome.result.as_ref().unwrap_err().contains("the end"), "{outcome:?}");
 }
 
 /// #1122: async bodies on both engines (`tests/mnemonics/async.spa`): awaits, a spawned task, async destroys
@@ -1283,7 +1338,7 @@ entry f5
 /// a traced kind (design #1079 §2.4: the oracle does not rest on the analysis it checks); the JIT's keeps the proofs.
 #[test]
 fn the_interpreter_loads_without_pointer_free_proofs() {
-    let source = "sparrow 18\nmodule \"ranges\" \"1\"\ntype t0 int\nfunction f0 \"rest\" async {\n registers [t0, t0, t0]\n \
+    let source = "sparrow 19\nmodule \"ranges\" \"1\"\ntype t0 int\nfunction f0 \"rest\" async {\n registers [t0, t0, t0]\n \
         params [r0]\n result t0\n 0: const r1, int 3\n 1: int.mod r2, r0, r1\n 2: ret r2\n}\n";
     let program = okkama_sparrow::assemble(source).unwrap();
     let mut runtime = Box::new(Runtime::new(Loaded::verified(program).unwrap()).unwrap());
@@ -1295,4 +1350,408 @@ fn the_interpreter_loads_without_pointer_free_proofs() {
     // The frame's registers follow the header's seven fixed words; every int register is traced.
     let frame = &runtime.heap.layouts().frames[0];
     assert!(frame[crate::tasks::FIXED_WORDS..crate::tasks::FIXED_WORDS + 3].iter().all(|repr| *repr == Repr::Int), "{frame:?}");
+}
+
+/// #1167: array literals up to 16 elements are allocated inline by the JIT, longer ones by the helper; both must
+/// give what the interpreter's heap builds, for int (a BigInt among them), string and byte elements, sizes around
+/// the packing and inline limits, with and without GC stress on the JIT too.
+#[test]
+fn inline_array_literals_match_the_interpreter() {
+    for (element, ty) in [("int", "t0"), ("str", "t1"), ("byte", "t2")] {
+        for size in [0usize, 1, 7, 8, 9, 15, 16, 17] {
+            let array_type = if element == "byte" { "t3".to_string() } else { "t5".to_string() };
+            let types = if element == "byte" { String::new() } else { format!("type t5 array {ty}") };
+            // Registers: elements r0..size-1, the array, its length, an index, an element, a scratch int.
+            let mut registers: Vec<String> = (0..size).map(|_| ty.to_string()).collect();
+            let (array, length, index, item, scratch) = (size, size + 1, size + 2, size + 3, size + 4);
+            registers.extend([array_type.clone(), "t0".into(), "t0".into(), ty.into(), "t0".into()]);
+            let mut code = Vec::new();
+            for i in 0..size {
+                code.push(match element {
+                    "int" if i == 3 => format!("const r{i}, int 1234567890123456789012345"),
+                    "int" => format!("const r{i}, int {}", i as i64 * 7 - 20),
+                    "str" => format!("const r{i}, str \"s{i}\""),
+                    _ => format!("const r{scratch}, int {}\n    byte.from r{i}, r{scratch}, _", (i * 37 + 5) % 256),
+                });
+            }
+            let list: Vec<String> = (0..size).map(|i| format!("r{i}")).collect();
+            code.push(format!("arr.new r{array}, [{}]", list.join(", ")));
+            code.push(format!("arr.len r{length}, r{array}"));
+            code.push(format!("call _, f1, [r{length}]"));
+            for i in 0..size {
+                code.push(format!("const r{index}, int {i}"));
+                code.push(format!("arr.get r{item}, r{array}, r{index}"));
+                code.push(match element {
+                    "int" => format!("call _, f1, [r{item}]"),
+                    "str" => format!("call _, f2, [r{item}]"),
+                    _ => format!("cvt r{scratch}, r{item}\n    call _, f1, [r{scratch}]"),
+                });
+            }
+            code.push(format!("ret r{length}"));
+            let body: String = code.join("\n").lines().enumerate().map(|(pc, line)| format!("    {pc}: {}\n", line.trim())).collect();
+            let source = program(&types, "", &format!(
+                "function f4 \"main\" {{\n    registers [{}]\n    params []\n    result t0\n{body}}}\nentry f4\n",
+                registers.join(", ")
+            ));
+            let outcome = engines(&source);
+            assert_eq!(outcome.result, Ok(size as i64), "{element} × {size}: {outcome:?}");
+            assert_eq!(outcome.output.lines().count(), size + 1, "{element} × {size}");
+            #[cfg(feature = "jit")]
+            assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome, "{element} × {size} under GC stress");
+        }
+    }
+}
+
+/// #1167: closures are allocated inline by the JIT: captures fill a prefix of the function's layout and the rest
+/// stays unbound until the call supplies it; a closure built while collections run keeps its captures.
+#[test]
+fn inline_closures_keep_their_captures_under_collection() {
+    let source = program("type t5 fn [t0, t1] -> t0\ntype t6 fn [t1] -> t0\ntype t7 fn [] -> t0\ntype t8 array t1", "", r#"
+function f4 "mix" {
+    registers [t0, t0, t0, t1, t0]
+    params [r0, r1, r2, r3]
+    result t0
+    0: int.mul r4, r0, r1
+    1: int.add r4, r4, r2
+    2: str.len r0, r3
+    3: int.add r4, r4, r0
+    4: ret r4
+}
+function f5 "main" {
+    registers [t0, t0, t0, t1, t5, t6, t7, t0, t8, t0]
+    params []
+    result t0
+    0: const r0, int 1000000000000000000000
+    1: const r1, int 3
+    2: const r3, str "four"
+    3: fn.closure r4, f4, [r0, r1]
+    4: fn.closure r5, f4, [r1, r1, r0]
+    5: fn.closure r6, f4, [r1, r0, r1, r3]
+    6: arr.new r8, [r3, r3, r3]
+    7: const r2, int 5
+    8: call.fn r7, r4, [r2, r3]
+    9: call _, f1, [r7]
+    10: call.fn r7, r5, [r3]
+    11: call _, f1, [r7]
+    12: call.fn r7, r6, []
+    13: call _, f1, [r7]
+    14: ret r1
+}
+entry f5
+"#);
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&["3000000000000000000009", "1000000000000000000013", "3000000000000000000007"]));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}
+
+/// #1168: the declarations of the sharing tests: a fieldless object, one with a field, one with a destroy, a
+/// fieldless error and a variant with two fieldless cases.
+const SHARING: &str = r#"
+role role0 "Error" builtin {
+    method "text" [] -> t1
+}
+object obj0 "Marker" {
+}
+object obj1 "Point" {
+    field "x" t0
+}
+object obj2 "Handle" {
+    destroy f4
+}
+object obj3 "Oops" {
+    does role0 [f5]
+}
+object obj4 "Light.on" {
+}
+object obj5 "Light.off" {
+}
+variant variant0 "Light" { case "on" obj4 case "off" obj5 }
+"#;
+const SHARING_TYPES: &str = "type t5 object obj0\ntype t6 object obj1\ntype t7 object obj2\ntype t8 object obj3\ntype t9 variant variant0\ntype t10 array t0\ntype t11 map t0 t0\ntype t12 map t1 t0";
+const SHARING_HELPERS: &str = r#"
+function f4 "Handle.destroy" {
+    registers [t7]
+    params [r0]
+    result void
+    0: ret _
+}
+function f5 "Oops.text" {
+    registers [t8, t1]
+    params [r0]
+    result t1
+    0: const r1, str "oops"
+    1: ret r1
+}
+"#;
+
+/// #1168: only fieldless, destroy-free, non-error types share one instance; each engine hands out the same word
+/// for each of them, for the empty array of a representation and the empty map of a key and value representation,
+/// and fresh words for everything else.
+#[test]
+fn shareable_types_and_shared_instances() {
+    let program_text = program(SHARING_TYPES, SHARING, &format!(r#"{SHARING_HELPERS}
+function f6 "marker" {{
+    registers [t5]
+    params []
+    result t5
+    0: obj.new r0, obj0, []
+    1: ret r0
+}}
+function f7 "point" {{
+    registers [t0, t6]
+    params []
+    result t6
+    0: const r0, int 1
+    1: obj.new r1, obj1, [r0]
+    2: ret r1
+}}
+function f8 "oops" {{
+    registers [t8]
+    params []
+    result t8
+    0: obj.new r0, obj3, []
+    1: ret r0
+}}
+function f9 "off" {{
+    registers [t9]
+    params []
+    result t9
+    0: variant.new r0, variant0, 1, []
+    1: ret r0
+}}
+function f10 "empty" {{
+    registers [t10]
+    params []
+    result t10
+    0: arr.new r0, []
+    1: ret r0
+}}
+function f11 "map" {{
+    registers [t11]
+    params []
+    result t11
+    0: map.new r0, []
+    1: ret r0
+}}
+function f12 "text map" {{
+    registers [t12]
+    params []
+    result t12
+    0: map.new r0, []
+    1: ret r0
+}}
+function f13 "main" {{
+    registers [t0]
+    params []
+    result t0
+    0: const r0, int 0
+    1: ret r0
+}}
+entry f13
+"#));
+    let program = okkama_sparrow::assemble(&program_text).unwrap_or_else(|error| panic!("{error}\n{program_text}"));
+    let loaded = Loaded::verified(program).unwrap();
+    let shareable = crate::runtime::shareable_objects(&loaded.program, &crate::runtime::held_objects(&loaded.program), &loaded.layouts());
+    assert_eq!(shareable, vec![true, false, false, false, true, true], "Marker, Point, Handle, Oops, Light.on, Light.off");
+    let engines_list: &[Engine] = if cfg!(feature = "jit") { &[Engine::Jit, Engine::Interpreter] } else { &[Engine::Interpreter] };
+    for &engine in engines_list {
+        let mut runtime = Box::new(Runtime::new(Loaded::verified(okkama_sparrow::assemble(&program_text).unwrap()).unwrap()).unwrap());
+        match engine {
+            Engine::Interpreter => runtime.use_engine(crate::Engine::Interpreter),
+            #[cfg(feature = "jit")]
+            Engine::Jit => runtime.use_engine(crate::Engine::Jit),
+            #[cfg(not(feature = "jit"))]
+            Engine::Jit => unreachable!(),
+        }
+        // Two values while the first is still live; for a shared one, a third after a collection without roots
+        // (the heap keeps its shared instances itself).
+        fn twice(runtime: &mut Box<Runtime>, function: usize) -> (u64, u64) {
+            let first = runtime.run_function_with(function, &[], STACK).unwrap();
+            let second = runtime.run_function_with(function, &[], STACK).unwrap();
+            (first, second)
+        }
+        for (function, shared) in [(6, true), (7, false), (8, false), (9, true), (10, true), (11, true), (12, true)] {
+            let (first, second) = twice(&mut runtime, function);
+            assert_eq!(first == second, shared, "f{function} on {engine:?}");
+            if shared {
+                let header = runtime.heap.header_of(first);
+                runtime.heap.collect(|_| {});
+                // Fresh values of the small size classes after the collection must not take the shared cell.
+                for _ in 0..64 {
+                    runtime.run_function_with(7, &[], STACK).unwrap();
+                    runtime.run_function_with(8, &[], STACK).unwrap();
+                }
+                assert_eq!(runtime.heap.header_of(first), header, "f{function} on {engine:?}: the shared cell was reused");
+                let third = runtime.run_function_with(function, &[], STACK).unwrap();
+                assert_eq!(third, first, "f{function} on {engine:?} after a collection");
+            }
+        }
+        // Different representations get different instances.
+        let (int_map, _) = twice(&mut runtime, 11);
+        let (text_map, _) = twice(&mut runtime, 12);
+        assert_ne!(int_map, text_map, "{engine:?}");
+    }
+}
+
+/// #1168: a shared empty array or map is never changed by what is built from it, fieldless values compare equal,
+/// and all of it survives collections; the interpreter and the JIT agree, with GC stress on both.
+#[test]
+fn shared_empty_values_stay_empty() {
+    let source = program(SHARING_TYPES, SHARING, &format!(r#"{SHARING_HELPERS}
+function f6 "main" {{
+    registers [t10, t10, t10, t0, t0, t11, t11, t11, t5, t5, t4, t9, t9, t0, t10]
+    params []
+    result t0
+    0: arr.new r0, []
+    1: const r3, int 1
+    2: arr.new r1, [r3]
+    3: arr.concat r2, [r0, r1]
+    4: arr.concat r14, [r0, r0]
+    5: arr.len r4, r2
+    6: call _, f1, [r4]
+    7: arr.len r4, r0
+    8: call _, f1, [r4]
+    9: arr.len r4, r14
+    10: call _, f1, [r4]
+    11: const r4, int 2
+    12: map.new r5, []
+    13: map.new r6, [r3: r4]
+    14: map.merge r7, [r5, r6]
+    15: map.len r13, r7
+    16: call _, f1, [r13]
+    17: map.len r13, r5
+    18: call _, f1, [r13]
+    19: obj.new r8, obj0, []
+    20: obj.new r9, obj0, []
+    21: val.cmp eq, r10, r8, r9
+    22: call _, f3, [r10]
+    23: variant.new r11, variant0, 0, []
+    24: variant.new r12, variant0, 1, []
+    25: val.cmp eq, r10, r11, r12
+    26: call _, f3, [r10]
+    27: arr.new r0, []
+    28: arr.len r4, r0
+    29: ret r4
+}}
+entry f6
+"#));
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&["1", "0", "0", "1", "0", "1", "0"]));
+    assert_eq!(outcome.result, Ok(0));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}
+
+/// #1110: a closure without captures records its function's code as its entry and is then called through it with
+/// itself as a trailing argument; ten parameters put arguments on the stack on both arm64 and x86-64, and the
+/// trailing closure must not disturb them. Called three times (resolve, record, direct), with GC stress on the JIT.
+#[test]
+fn closure_entries_call_with_a_trailing_closure_past_the_register_arguments() {
+    let params: Vec<String> = (0..10).map(|i| format!("r{i}")).collect();
+    let mut body = Vec::new();
+    // r10 = r0*1 + r1*2 + … + r9*10
+    body.push("const r10, int 0".to_string());
+    for i in 0..10 {
+        body.push(format!("const r11, int {}", i + 1));
+        body.push(format!("int.mul r11, r{i}, r11"));
+        body.push("int.add r10, r10, r11".to_string());
+    }
+    body.push("ret r10".to_string());
+    let weigh: String = body.iter().enumerate().map(|(pc, line)| format!("    {pc}: {line}\n")).collect();
+    let mut main = vec!["fn.closure r0, f4, []".to_string()];
+    for i in 0..10 {
+        main.push(format!("const r{}, int {}", i + 1, (i as i64 + 1) * 1000));
+    }
+    let args: Vec<String> = (1..=10).map(|i| format!("r{i}")).collect();
+    for _ in 0..3 {
+        main.push(format!("call.fn r11, r0, [{}]", args.join(", ")));
+        main.push("call _, f1, [r11]".to_string());
+    }
+    main.push("const r11, int 0".to_string());
+    main.push("ret r11".to_string());
+    let main_body: String = main.iter().enumerate().map(|(pc, line)| format!("    {pc}: {line}\n")).collect();
+    let source = program("type t5 fn [t0, t0, t0, t0, t0, t0, t0, t0, t0, t0] -> t0", "", &format!(
+        "function f4 \"weigh\" {{\n    registers [{}]\n    params [{}]\n    result t0\n{weigh}}}\nfunction f5 \"main\" {{\n    registers [t5, {}]\n    params []\n    result t0\n{main_body}}}\nentry f5\n",
+        ["t0"; 12].join(", "), params.join(", "), ["t0"; 11].join(", ")
+    ));
+    let expected: i64 = (1..=10).map(|i| i * i * 1000).sum();
+    let outcome = engines(&source);
+    assert_eq!(outcome.output, lines(&[&expected.to_string(), &expected.to_string(), &expected.to_string()]));
+    #[cfg(feature = "jit")]
+    assert_eq!(run(&source, Engine::Jit, true, Limits::default()), outcome);
+}
+
+/// #1111: an empty builder finishes as the shared empty array of its representation, the same one `[]` is
+/// (#1168), on both engines, for an int array and a byte array; a builder that got items still makes a fresh array.
+#[test]
+fn an_empty_builder_finishes_as_the_shared_empty_array() {
+    let source = program("type t5 array t0\ntype t6 builder t0\ntype t7 builder t2", "", r#"
+function f4 "built" {
+    registers [t6, t5]
+    params []
+    result t5
+    0: builder.new r0
+    1: builder.finish r1, r0
+    2: ret r1
+}
+function f5 "literal" {
+    registers [t5]
+    params []
+    result t5
+    0: arr.new r0, []
+    1: ret r0
+}
+function f6 "bytes built" {
+    registers [t7, t3]
+    params []
+    result t3
+    0: builder.new r0
+    1: builder.finish r1, r0
+    2: ret r1
+}
+function f7 "bytes literal" {
+    registers [t3]
+    params []
+    result t3
+    0: arr.new r0, []
+    1: ret r0
+}
+function f8 "one" {
+    registers [t6, t0, t6, t5]
+    params []
+    result t5
+    0: builder.new r0
+    1: const r1, int 7
+    2: builder.push r2, r0, r1
+    3: builder.finish r3, r2
+    4: ret r3
+}
+function f9 "main" {
+    registers [t0]
+    params []
+    result t0
+    0: const r0, int 0
+    1: ret r0
+}
+entry f9
+"#);
+    let engines_list: &[Engine] = if cfg!(feature = "jit") { &[Engine::Jit, Engine::Interpreter] } else { &[Engine::Interpreter] };
+    for &engine in engines_list {
+        let mut runtime = Box::new(Runtime::new(Loaded::verified(okkama_sparrow::assemble(&source).unwrap()).unwrap()).unwrap());
+        match engine {
+            Engine::Interpreter => runtime.use_engine(crate::Engine::Interpreter),
+            #[cfg(feature = "jit")]
+            Engine::Jit => runtime.use_engine(crate::Engine::Jit),
+            #[cfg(not(feature = "jit"))]
+            Engine::Jit => unreachable!(),
+        }
+        let mut call = |function: usize| runtime.run_function_with(function, &[], STACK).unwrap();
+        let (built, literal) = (call(4), call(5));
+        assert_eq!(built, literal, "{engine:?}: an empty int builder is the shared []");
+        let (bytes, byte_literal) = (call(6), call(7));
+        assert_eq!(bytes, byte_literal, "{engine:?}: an empty byte builder is the shared packed []");
+        assert_ne!(bytes, built, "{engine:?}: representations keep their own empty array");
+        assert_ne!(call(8), call(8), "{engine:?}: a builder with items makes a fresh array");
+    }
 }

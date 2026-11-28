@@ -381,6 +381,17 @@ pub fn check_linked_tests(files: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     check_roots(&roots(files), loader, true)
 }
 
+/// A lowering error as `okkama check` reports it. An internal error keeps the kind `okkama build` gives it,
+/// "internal compiler error", and its bare text (#1143).
+pub(crate) fn checked_lowering_error(module: usize, error: &LoweringError) -> crate::analysis::SemanticError {
+    use crate::analysis::SemanticError;
+    match error {
+        LoweringError::Unsupported { .. } => SemanticError::unsupported(module, error.span(), error.message()),
+        LoweringError::Invalid { .. } => SemanticError::invalid(module, error.span(), error.message()),
+        LoweringError::Internal { .. } => SemanticError::internal(module, error.span(), error.message()),
+    }
+}
+
 fn check_roots(
     roots: &[modules::Root<'_>],
     loader: &mut dyn ModuleLoader,
@@ -416,13 +427,7 @@ fn check_roots(
     // too: lowering finds the specialization limit, infinite recursion and
     // what IR lowering does not support yet (#317).
     if let Err((module, error)) = lower_analyzed(&analysis, roots[0].0, Vec::new(), test_mode, false) {
-        let error = match &error {
-            LoweringError::Unsupported { .. } => {
-                crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
-            }
-            LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
-            LoweringError::Internal { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.to_string()),
-        };
+        let error = checked_lowering_error(module, &error);
         return Err(Ok(vec![CheckError {
             source: source_of(&graph, roots, module),
             error,
@@ -530,8 +535,8 @@ fn lower_analyzed(
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
     dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
-    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); their emptied
-    // regions go with the next pass.
+    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); the pass removes
+    // the regions it empties itself (#1093).
     if passes.on("statics") {
         let _span = okkama_devtrace::span!("lower", "pass statics");
         ir::statics::make_static(&mut module, census.take());
@@ -547,6 +552,17 @@ fn lower_analyzed(
     if passes.on("tail-calls") {
         let _span = okkama_devtrace::span!("lower", "pass tail-calls");
         ir::recursion::eliminate_tail_calls(&mut module);
+    }
+    // #1112: small leaf callees that cannot fail are inlined, so that constructors, successors and accessors meet
+    // in one function (after tail-calls: self-recursion is a loop already, and regions are elided).
+    if passes.on("inline") {
+        let _span = okkama_devtrace::span!("lower", "pass inline");
+        ir::inline::inline_leaves(&mut module);
+    }
+    // #1112: plain objects that never leave the function are their fields: no allocation.
+    if passes.on("scalars") {
+        let _span = okkama_devtrace::span!("lower", "pass scalars");
+        ir::scalars::replace_scalars(&mut module);
     }
     // Constant arithmetic is computed once, exactly, at build time.
     if passes.on("fold") {
@@ -881,7 +897,7 @@ struct Passes {
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 8] = ["statics", "regions", "tail-calls", "fold", "hoist", "dce", "undef", "jumps"];
+pub const PASSES: [&str; 10] = ["statics", "regions", "tail-calls", "inline", "scalars", "fold", "hoist", "dce", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
@@ -1068,7 +1084,7 @@ mod pass_list_tests {
         assert!(unknown_passes("").is_empty());
         assert!(unknown_passes(&PASSES.join(",")).is_empty());
         assert_eq!(unknown_passes_warning("fold,hoistt", "OKKAMA_IR_PASSES").as_deref(),
-            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, fold, hoist, dce, undef, jumps)"));
+            Some("OKKAMA_IR_PASSES: unknown pass hoistt (known: all, none, statics, regions, tail-calls, inline, scalars, fold, hoist, dce, undef, jumps)"));
         assert!(unknown_passes_warning("fold,hoistt", "lowering::select_passes").unwrap().starts_with("lowering::select_passes: unknown pass hoistt "));
         assert_eq!(unknown_passes_warning("all", "OKKAMA_IR_PASSES"), None);
     }

@@ -26,7 +26,7 @@ fn sum(params: usize, captures: usize) -> String {
     main.push(format!("ret r{}", params + 1));
     let numbered = |lines: Vec<String>| lines.iter().enumerate().map(|(pc, line)| format!(" {pc}: {line}\n")).collect::<String>();
     format!(
-        "sparrow 18\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\ntype t1 fn [{}] -> t0\n\
+        "sparrow 19\nmodule \"bridge\" \"1.0.0\"\ntype t0 int\ntype t1 fn [{}] -> t0\n\
          function f0 \"sum\" {{\n registers [{types}]\n params [{}]\n result t0\n{}}}\n\
          function f1 \"main\" {{\n registers [{}]\n params []\n result t0\n{}}}\nentry f1\n",
         vec!["t0"; params - captures].join(", "), registers.join(", "), numbered(body),
@@ -67,7 +67,7 @@ fn closure_bridge_invalid_counts_are_rejected_by_verification() {
 fn closure_bridge_mixed_roots_survive_allocating_callee() {
     // Both captured and passed bigint/string values are read AFTER allocations.
     // main does not read them after call.fn: call-site roots must keep inputs.
-    let source = r#"sparrow 18
+    let source = r#"sparrow 19
 module "mixed" "1.0.0"
 type t0 int
 type t1 str
@@ -107,7 +107,7 @@ entry f1
 
 #[test]
 fn closure_bridge_native_and_role_entries_share_publication() {
-    let source = r#"sparrow 18
+    let source = r#"sparrow 19
 module "entries" "1.0.0"
 type t0 int
 type t1 str
@@ -151,7 +151,7 @@ entry f2
 
 #[test]
 fn closure_bridge_async_builds_a_cold_future() {
-    let source = r#"sparrow 18
+    let source = r#"sparrow 19
 module "cold" "1.0.0"
 type t0 int
 type t1 future t0
@@ -187,7 +187,7 @@ fn closure_bridge_failure_keeps_the_callee_and_call_site_trace() {
 
 #[test]
 fn closure_bridge_one_function_supports_static_and_different_capture_prefixes() {
-    let source = r#"sparrow 18
+    let source = r#"sparrow 19
 module "prefixes" "1.0.0"
 type t0 int
 type t1 fn [t0, t0] -> t0
@@ -221,7 +221,7 @@ entry f1
 
 #[test]
 fn closure_bridge_recursive_calls_reenter_the_published_entry() {
-    let source = r#"sparrow 18
+    let source = r#"sparrow 19
 module "recursion" "1.0.0"
 type t0 int
 type t1 bool

@@ -18,8 +18,9 @@ pub const MAX_DECODED_BYTES: usize = 512 * 1024 * 1024;
 /// Версия формата; меняется с каждым несовместимым изменением кодировки или набора инструкций,
 /// в том числе с каждой новой инструкцией или новым кодом операции в `op_enum!`: рантайм,
 /// который файл исполнить не может, отказывает ему по версии (#1061). 17 — SPB Champ
-/// (снят в #911) и пропущена; 18 — `resource.settle`, `resource.settle_unwind` (161, 162).
-pub const VERSION: u16 = 18;
+/// (снят в #911) и пропущена; 18 — `resource.settle`, `resource.settle_unwind` (161, 162);
+/// 19 — `builder.sized` (163, #1171), `str.concat_n` (164, #1177).
+pub const VERSION: u16 = 19;
 const MAGIC: &[u8; 4] = b"SPRW";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -674,7 +675,7 @@ mod tests {
     /// record the new pair here.
     #[test]
     fn the_instruction_set_is_pinned_to_the_version() {
-        assert_eq!((VERSION, instruction_set_fingerprint()), (18, 4657022355763437310), "the instruction set changed: bump VERSION");
+        assert_eq!((VERSION, instruction_set_fingerprint()), (19, 12981115679014131677), "the instruction set changed: bump VERSION");
     }
 
     fn reader(bytes: &[u8]) -> Reader<'_> {

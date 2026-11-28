@@ -44,6 +44,9 @@ pub struct SemanticError {
     pub unsupported: bool,
     /// Предупреждение: программа корректна, но, возможно, не то, что задумано.
     pub warning: bool,
+    /// A compiler invariant failed while checking the program (lowering's internal error, #1143): the message is
+    /// the bare text, and the kind is "internal compiler error", as `okkama build` names it.
+    pub internal: bool,
 }
 
 impl SemanticError {
@@ -54,6 +57,7 @@ impl SemanticError {
             message: message.into(),
             unsupported: false,
             warning: false,
+            internal: false,
         }
     }
 
@@ -64,6 +68,18 @@ impl SemanticError {
             message: message.into(),
             unsupported: false,
             warning: true,
+            internal: false,
+        }
+    }
+
+    pub fn internal(module: usize, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            module,
+            span,
+            message: message.into(),
+            unsupported: false,
+            warning: false,
+            internal: true,
         }
     }
 
@@ -74,6 +90,7 @@ impl SemanticError {
             message: message.into(),
             unsupported: true,
             warning: false,
+            internal: false,
         }
     }
 }

@@ -13,9 +13,11 @@
 pub mod cfg;
 pub mod fold;
 pub mod hoist;
+pub mod inline;
 pub mod ownership;
 pub mod param_adopts;
 pub mod regions;
+pub mod scalars;
 pub mod statics;
 pub mod linearity;
 pub mod print;
@@ -577,6 +579,9 @@ pub enum Attr {
     Extern(String),
     /// `hidden` (#365): вызов разрешён только функциям того же владельца.
     Hidden,
+    /// #1112: the body of this function was inlined here; the verifier grants its rights (`obj.new` of a
+    /// constructor, `obj.next` of a successor, `obj.get` of its object) to the instructions it brought.
+    Inlined(FuncId),
     /// Intrinsic (§14.2): тела нет, его даёт рантайм. `objects` — объекты
     /// модуля, которые рантайм создаёт (результаты, Error std); `helpers` —
     /// функции программы, которые рантайм вызывает (действия значений
@@ -636,6 +641,7 @@ impl Function {
             Attr::Lambda { owner, .. } => *owner,
             Attr::Entry
             | Attr::Hidden
+            | Attr::Inlined(_)
             | Attr::Extern(_)
             | Attr::Async
             | Attr::Intrinsic { .. } => None,
@@ -1046,6 +1052,9 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
+    /// `a + b + c …` над строками (#1177): части вычислены слева направо, результат
+    /// выделяется один раз. Не меньше трёх частей (две — `StrConcat`).
+    StrConcatN(Vec<ValueId>),
     /// String equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`.
     StrCompare {
         op: CompareOp,
@@ -1240,6 +1249,9 @@ pub enum InstKind {
     Retag(ValueId),
     /// Пустой сборщик; тип элемента — из типа результата.
     BuilderNew,
+    /// Пустой сборщик с местом под `count` элементов (#1171): подсказка, когда длина результата
+    /// известна заранее (`map`); рантайм ограничивает её.
+    BuilderSized(ValueId),
     BuilderPush {
         builder: ValueId,
         value: ValueId,
@@ -1591,12 +1603,15 @@ macro_rules! instruction_operands {
                 InstKind::ArrayReplace { array, index, value } => vec![$m!(array), $m!(index), $m!(value)],
                 InstKind::ArrayRemove { array, index } => vec![$m!(array), $m!(index)],
                 InstKind::ArrayJoin { array, separator } => vec![$m!(array), $m!(separator)],
-                InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) | InstKind::StrConcatN(parts) => {
+                    parts.$iter().map(|v| $m!(v)).collect()
+                }
                 InstKind::ArrayDifference { array: base, removed }
                 | InstKind::MapDifference { map: base, removed } => {
                     std::iter::once($m!(base)).chain(removed.$iter().map(|v| $m!(v))).collect()
                 }
                 InstKind::BuilderNew => Vec::new(),
+                InstKind::BuilderSized(count) => vec![$m!(count)],
                 InstKind::BuilderPush { builder, value } => vec![$m!(builder), $m!(value)],
                 InstKind::BuilderAppend { builder, array } => vec![$m!(builder), $m!(array)],
                 InstKind::BuilderAppendRange {

@@ -1,6 +1,7 @@
-; Process workers in a synchronous body on both engines (#1121): an action bound to its fields and its spawn,
-; which fails without a worker command; a panic at the end.
-sparrow 18
+; Workers on both engines, emulated in the same instance (#1121, #1127, #1144): an action bound to a field and its
+; spawn, a direct spawn, a worker that fails (its failure caught at the await), and a panic at the end. Its test
+; (interp_tests.rs) runs it with emulated workers, so every spawn here succeeds and needs no host.
+sparrow 19
 module "mnemonics-workers" "1.0.0"
 type t0 int
 type t1 str
@@ -10,6 +11,7 @@ type t4 bool
 type t5 fn [t0] -> t0
 type t6 future t0
 type t7 failure
+type t8 fn [t0, t0] -> t0
 function f0 "write" native "runtime/stdio@1::stdout_write/1" {
     registers [t3]
     params [r0]
@@ -48,20 +50,31 @@ function f3 "flag" {
     5: ret _
 }
 
-function f4 "main" {
-    registers [t0, t5, t5, t6, t7, t1]
+function f4 "main" async {
+    registers [t0, t5, t5, t6, t7, t1, t0, t8, t0]
     params []
     result t0
-    handler 3 4 @5 r4
+    handler 13 14 @16 r4
     0: const r0, int 20
     1: fn.closure r1, f5, []
-    2: worker.bind r2, r1, r1, [r0]
-    3: worker.spawn r3, r2, [r0], false
-    4: jmp @7
-    5: const r5, str "spawn failed"
-    6: call _, f2, [r5]
-    7: const r5, str "the end"
-    8: panic r5
+    2: fn.closure r7, f6, []
+    3: worker.bind r2, r1, r7, [r0]
+    4: const r6, int 22
+    5: worker.spawn r3, r2, [r6], false
+    6: await r8, r3
+    7: call _, f1, [r8]
+    8: worker.spawn r3, r1, [r0], true
+    9: await r8, r3
+    10: call _, f1, [r8]
+    11: fn.closure r1, f7, []
+    12: worker.spawn r3, r1, [r0], true
+    13: await r8, r3
+    14: call _, f1, [r8]
+    15: jmp @18
+    16: const r5, str "worker failed"
+    17: call _, f2, [r5]
+    18: const r5, str "the end"
+    19: panic r5
 }
 function f5 "twice" {
     registers [t0, t0]
@@ -69,5 +82,19 @@ function f5 "twice" {
     result t0
     0: int.add r1, r0, r0
     1: ret r1
+}
+function f6 "add" {
+    registers [t0, t0, t0]
+    params [r0, r1]
+    result t0
+    0: int.add r2, r0, r1
+    1: ret r2
+}
+function f7 "fails" {
+    registers [t0, t1]
+    params [r0]
+    result t0
+    0: const r1, str "worker gave up"
+    1: panic r1
 }
 entry f4

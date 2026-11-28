@@ -14,7 +14,7 @@ use crate::primitives::State;
 use crate::runtime::{Ctx, FailureKind, Runtime};
 use crate::word::{Repr, Word};
 use crate::worker_process::{Failure, Output, Request};
-use crate::worker_wire::{Reader, count, encode, text};
+use crate::worker_wire::{Reader, count, encode, failure_text, text};
 use okkama_sparrow::TypeRef;
 use std::io::Write;
 use std::rc::Rc;
@@ -305,7 +305,7 @@ pub fn respond(runtime: &mut Box<Runtime>, request: &[u8], stack: u64) -> Vec<u8
             return Err("worker working directory is not a directory".into());
         }
         okkama_runtime_core::host::set_cwd(path);
-        let value = runtime.run_function_with(entry, &arguments, stack).map_err(|e| e.0)?;
+        let value = runtime.run_function_with(entry, &arguments, stack).map_err(|e| failure_text(e.0))?;
         let mut bytes = Vec::new();
         match result {
             Some(ty) => encode(runtime, &mut bytes, value, ty)?,
@@ -338,7 +338,7 @@ mod wire_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"wire\" \"1.0.0\"\n\
+            "sparrow 19\nmodule \"wire\" \"1.0.0\"\n\
              type t0 int\ntype t1 str\ntype t2 map t1 t0\ntype t3 array t2\ntype t4 array t3\ntype t5 bool\n\
              function f0 \"main\" {\nregisters [t5]\nparams [r0]\nresult t5\n0: ret r0\n}\n",
         )
@@ -391,9 +391,35 @@ mod wire_tests {
         encode(&runtime, &mut again, value, TypeRef(4)).unwrap();
         assert_eq!(again, wire);
     }
+
+    /// #1141: the child's response carries its failure as the text the parent reports as its own runtime failure,
+    /// so the parent prints one prefix ("RuntimeError: confirm failed"), not the child's report under a second one.
+    #[test]
+    fn a_worker_failure_reaches_the_parent_as_its_message() {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                let program = okkama_sparrow::assemble(
+                    "sparrow 19\nmodule \"failing\" \"1.0.0\"\ntype t0 int\n\
+                     function f0 \"confirms\" {\nregisters [t0]\nparams []\nresult t0\n0: trap confirm, \"confirm failed\"\n}\n",
+                )
+                .unwrap();
+                let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
+                let mut request = Vec::new();
+                text(&mut request, &std::env::current_dir().unwrap().to_string_lossy()).unwrap();
+                text(&mut request, "confirms").unwrap();
+                count(&mut request, 0).unwrap();
+                let response = respond(&mut runtime, &request, 32 << 20);
+                let output = Output { stdout: response, stderr: Vec::new(), success: true, code: Some(0) };
+                assert_eq!(settle(&mut runtime, &output, None), Err("confirm failed".to_owned()));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
     #[test]
     fn pool_binding_is_run_local_and_preserves_the_original_executor_and_action() {
-        let program = okkama_sparrow::assemble(r#"sparrow 18
+        let program = okkama_sparrow::assemble(r#"sparrow 19
 module "pool-binding" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0
@@ -444,7 +470,7 @@ function f0 "entry" {
             ("t1", "t3", "t1", false),
             ("t1", "t0", "t3", false),
         ] {
-            let source = format!(r#"sparrow 18
+            let source = format!(r#"sparrow 19
 module "pool-contract" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0

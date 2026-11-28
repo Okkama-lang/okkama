@@ -1,6 +1,6 @@
 ; Scalar instructions on both engines (#1121): integers past the inline range, bit actions, bytes, floats,
 ; rationals and conversions, each result printed.
-sparrow 18
+sparrow 19
 module "mnemonics-scalars" "1.0.0"
 type t0 int
 type t1 str

@@ -9,7 +9,8 @@
 #     tools/package.sh --installer                      # ещё .pkg (macOS) или .deb и .rpm (Linux)
 #
 # Версия по умолчанию — из okkama-rs/Cargo.toml. Результат —
-# dist/okkama-<версия>-<платформа>.tar.gz (+ .pkg или .deb и .rpm) и .sha256 к
+# dist/okkama-<версия>-<платформа>.tar.gz (+ .pkg или .deb и .rpm, + -symbols.tar.gz
+# с бинарниками до strip, #1109) и .sha256 к
 # каждому. `.pkg` ставит в /usr/local, `.deb` и `.rpm` — в /usr; `.rpm`
 # собирается, если есть `rpmbuild` (#313). Архив
 # раскладывается как установка, поэтому распакованный `bin/okkama` сразу
@@ -76,8 +77,19 @@ trap 'rm -rf "$STAGE"' EXIT
 DEST="$STAGE/$NAME"
 
 mkdir -p "$DEST/bin" "$DEST/lib/okkama"
+# #1109: the binaries ship without their symbol tables; the unstripped ones go into
+# dist/okkama-<version>-<platform>-symbols.tar.gz, which resolves a crash address
+# (`atos -o okkama -l <load address> <address>` on macOS, `addr2line -f -e okkama <address>` on Linux).
+SYMBOLS="$STAGE/$NAME-symbols"
+mkdir -p "$SYMBOLS"
 for tool in okkama sparrow blade; do
     install -m 755 "$RELEASE/$tool" "$DEST/bin/$tool"
+    cp "$RELEASE/$tool" "$SYMBOLS/$tool"
+    case "$PLATFORM" in
+        # Stripping invalidates the linker's ad-hoc signature, which Apple silicon requires.
+        macos-*) strip "$DEST/bin/$tool" && codesign --force --sign - "$DEST/bin/$tool" ;;
+        linux-*) strip --strip-all "$DEST/bin/$tool" ;;
+    esac
 done
 cp -R "$ROOT/std" "$DEST/lib/okkama/std"
 if [[ $MAN_PAGES -eq 1 ]]; then
@@ -149,6 +161,8 @@ mkdir -p "$OUT"
 ARCHIVE="$OUT/$NAME.tar.gz"
 tar -C "$STAGE" -czf "$ARCHIVE" "$NAME"
 echo "$ARCHIVE"
+tar -C "$STAGE" -czf "$OUT/$NAME-symbols.tar.gz" "$NAME-symbols"
+echo "$OUT/$NAME-symbols.tar.gz"
 
 # Установщик системы: раскладка установки, но в системном префиксе.
 # `okkama` находит std и native относительно себя (<prefix>/lib/okkama).
@@ -249,6 +263,6 @@ SPEC
     esac
 fi
 
-(cd "$OUT" && for file in "$NAME".tar.gz "$NAME".pkg "$NAME".deb "$NAME".rpm; do
+(cd "$OUT" && for file in "$NAME".tar.gz "$NAME"-symbols.tar.gz "$NAME".pkg "$NAME".deb "$NAME".rpm; do
     [[ -f "$file" ]] && shasum -a 256 "$file" > "$file.sha256"
 done; true)

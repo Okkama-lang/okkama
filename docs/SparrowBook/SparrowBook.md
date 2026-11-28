@@ -5,7 +5,7 @@ Sparrow is the bytecode of Okkama: `okkama build` writes it,
 the Sparrow runtime (`sparrow`, `okkama exec`; its current version is Tomato) verifies it
 and runs it as machine code. This book teaches its text form, Sparrow assembly
 (`.spa`), well enough to read what the compiler produces and to write programs
-by hand. It describes SPB version 18, the format of Okkama 0.6.5.
+by hand. It describes SPB version 19, the format of Okkama 0.6.7.
 
 Every example lives in [examples/](examples/) and is assembled, checked and
 run as part of writing this book; the result shown after each one is what
@@ -55,7 +55,7 @@ uncaught failure is printed on stderr and the exit status is 1.
 
 ```text
 ; Hello from Sparrow assembly: a native writes the UTF-8 bytes of a string.
-sparrow 18
+sparrow 19
 module "hello" "1.0.0"
 type t0 int
 type t1 str
@@ -97,7 +97,7 @@ result. Comments start with `;`.
 ## 3. The shape of a file
 
 ```text
-sparrow 18                      ; format version
+sparrow 19                      ; format version
 module "name" "version"         ; the module's name and version (may be "")
 type t0 …                       ; the type table, in order
 enum enum0 "Name" ["a", "b"]    ; enums with their cases
@@ -181,7 +181,7 @@ Integer operations never overflow: results that leave 64 bits become BigInt.
 
 ```text
 ; 30! with a loop: exact integers grow into BigInt transparently.
-sparrow 18
+sparrow 19
 module "factorial" "1.0.0"
 type t0 int
 type t1 bool
@@ -240,7 +240,7 @@ taken, all at once — every source is read before any destination is written.
 
 ```text
 ; Fibonacci with edge moves: the jump back writes both loop registers at once.
-sparrow 18
+sparrow 19
 module "fibonacci" "1.0.0"
 type t0 int
 type t1 bool
@@ -289,7 +289,7 @@ scalar values. String constants use `\n`, `\t`, `\"`, `\\` and `\u{…}`.
 ```text
 ; Objects, a role with two implementations, dispatch through role slots and
 ; a successor (a changed copy of an immutable object).
-sparrow 18
+sparrow 19
 module "shapes" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -379,7 +379,7 @@ $ sparrow run shapes.spb; echo $?
 ```text
 ; Arrays are built through a linear builder; `arr.lookup` and `map.lookup`
 ; branch on whether the element exists.
-sparrow 18
+sparrow 19
 module "collections" "1.0.0"
 type t0 int
 type t1 array t0
@@ -454,7 +454,7 @@ version 14).
 ```text
 ; A closure value: `fn.closure` fills the leading parameters of its function
 ; with captures; `call.fn` passes the rest.
-sparrow 18
+sparrow 19
 module "closures" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0
@@ -500,7 +500,7 @@ $ sparrow run closures.spb; echo $?
 ```text
 ; Throwing and catching: an object that does the builtin Error role is
 ; thrown; a handler range sends failures to a `catch`, which matches the type.
-sparrow 18
+sparrow 19
 module "errors" "1.0.0"
 type t0 int
 type t1 str
@@ -587,7 +587,7 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: register r2 may b
 ; Ownership regions: an object with `destroy` is tracked and adopted by the
 ; region of its scope; leaving the region runs `destroy`, on the failure path
 ; too (`region.unwind`).
-sparrow 18
+sparrow 19
 module "resources" "1.0.0"
 type t0 int
 type t1 str
@@ -661,7 +661,7 @@ keeps what is reachable from `rK` (a value being returned).
 ```text
 ; Async functions: a call makes a cold future, `await` runs it to its value,
 ; `fut.spawn` starts one now so it runs while the caller goes on.
-sparrow 18
+sparrow 19
 module "tasks" "1.0.0"
 type t0 int
 type t1 future t0
@@ -708,7 +708,7 @@ or observes one. An async function is compiled as a resumable state machine;
 ```text
 ; A test profile: `tests` lists parameterless functions; `sparrow test` runs
 ; each on a fresh runtime and reports it. A failure fails the test.
-sparrow 18
+sparrow 19
 module "testing" "1.0.0"
 type t0 int
 type t1 bool
@@ -929,6 +929,8 @@ edge moves; `[…]` a list.
 | 160 | `resource.unwind rD, rX, rX` | `resource.leave` on a failure path; the failure with the destroy's failure as secondary |
 | 161 | `resource.settle rX` | `resource.leave` of a resource with an async destroy: a suspension point, the destroy awaited shielded |
 | 162 | `resource.settle_unwind rD, rX, rX` | `resource.settle` on a failure path; the failure with the destroy's failure as secondary |
+| 163 | `builder.sized rD, rX` | an empty builder with room for `count` elements (#1171): a hint when the length is known up front (`map` over a range, an array or a dictionary); the runtime caps it |
+| 164 | `str.concat_n rD, [rX, …]` | `a + b + c …` of strings in one instruction (#1177): each part copied once; a long or chained part goes pairwise, as `str.concat` |
 | 140 | `jmp @T` | jump, with edge moves |
 | 141 | `br rX, @T, @T` | branch on a bool |
 | 142 | `ret rX/_` | return (`_` from a void function) |

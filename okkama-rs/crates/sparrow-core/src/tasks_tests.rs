@@ -11,7 +11,7 @@ fn passes(source: &str) -> bool {
 /// #663: W awaits child C; C settles and queues main, then W; main cancels W
 /// before W runs. W keeps C's outcome (stores it, sets `done`), and the
 /// cancellation is delivered at its next await (`never.wait()`).
-const CANCEL_AFTER_SETTLE: &str = r#"sparrow 18
+const CANCEL_AFTER_SETTLE: &str = r#"sparrow 19
 module "cancel-after-settle" "1.0.0"
 type t0 int
 type t1 bool
@@ -368,7 +368,7 @@ mod complete_action {
 
     fn runtime() -> Box<Runtime> {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"complete\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+            "sparrow 19\nmodule \"complete\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
              object obj0 \"Lease\" {\n destroy f2\n}\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
              function f1 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
@@ -422,7 +422,7 @@ mod complete_action {
         runtime.heap.collect(|visit| visit(frame, Repr::Ref));
         assert_eq!(runtime.heap.array_length(runtime.held(frame, Held::Owned)), 5, "the collector traces the region");
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"plain\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 19\nmodule \"plain\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n",
         ).unwrap();
         let mut plain = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());

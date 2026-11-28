@@ -607,7 +607,6 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
                 Codec::Compress(codec) => codec.write(&input),
                 Codec::Decompress(codec) => codec.write(&input),
                 #[cfg(any(feature = "zstd", feature = "brotli"))]
-                #[cfg(any(feature = "zstd", feature = "brotli"))]
             Codec::Other(codec) => codec.write(&input),
             }
             .map_err(|fail| failure(native, fail))?;
@@ -617,7 +616,6 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
             let out = match &mut *state(&args[0])?.borrow_mut() {
                 Codec::Compress(codec) => codec.finish(),
                 Codec::Decompress(codec) => codec.finish(),
-                #[cfg(any(feature = "zstd", feature = "brotli"))]
                 #[cfg(any(feature = "zstd", feature = "brotli"))]
             Codec::Other(codec) => codec.finish(),
             }
@@ -634,7 +632,6 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
             let out = match &*state(&args[0])?.borrow() {
                 Codec::Compress(_) => Vec::new(),
                 Codec::Decompress(codec) => codec.remainder.clone(),
-                #[cfg(any(feature = "zstd", feature = "brotli"))]
                 #[cfg(any(feature = "zstd", feature = "brotli"))]
             Codec::Other(codec) => codec.remainder(),
             };

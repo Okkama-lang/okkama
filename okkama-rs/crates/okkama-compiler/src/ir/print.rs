@@ -580,6 +580,11 @@ fn write_inst(
         }
         InstKind::ArrayRemove { array, index } => write!(f, "array.remove {array}, {index}"),
         InstKind::ArrayJoin { array, separator } => write!(f, "array.join {array}, {separator}"),
+        InstKind::StrConcatN(parts) => {
+            f.write_str("str.concat_n [")?;
+            write_list(f, parts)?;
+            f.write_char(']')
+        }
         InstKind::ArrayConcat(parts) => {
             f.write_str("array.concat [")?;
             write_list(f, parts)?;
@@ -602,6 +607,7 @@ fn write_inst(
         }
         InstKind::Retag(value) => write!(f, "array.retag {value}"),
         InstKind::BuilderNew => f.write_str("builder.new"),
+        InstKind::BuilderSized(count) => write!(f, "builder.sized {count}"),
         InstKind::BuilderPush { builder, value } => write!(f, "builder.push {builder}, {value}"),
         InstKind::BuilderAppend { builder, array } => {
             write!(f, "builder.append {builder}, {array}")
@@ -787,6 +793,7 @@ fn write_function(f: &mut Formatter<'_>, module: &Module, function: &Function) -
             match attr {
                 Attr::Entry => f.write_str("entry")?,
                 Attr::Hidden => f.write_str("hidden")?,
+                Attr::Inlined(func) => write!(f, "inlined #{}", func.0)?,
                 Attr::Async => f.write_str("async")?,
                 Attr::Intrinsic {
                     name,

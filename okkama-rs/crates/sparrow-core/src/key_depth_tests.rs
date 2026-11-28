@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 /// `Node` keys by its one field, typed `Node`; a `Leaf` (an int field) ends a chain. The walks follow each
 /// object's own declaration, so a chain of nodes ending in a leaf keys like nested value objects.
-const PROGRAM: &str = r#"sparrow 18
+const PROGRAM: &str = r#"sparrow 19
 module "keys" "1.0.0"
 type t0 int
 type t1 object obj0

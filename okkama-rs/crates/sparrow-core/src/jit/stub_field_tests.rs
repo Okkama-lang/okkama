@@ -7,7 +7,7 @@
 use super::*;
 
 const PROGRAM: &str = r#"
-sparrow 18
+sparrow 19
 module "stub-fields" "1.0.0"
 type t0 int
 type t1 str

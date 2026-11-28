@@ -124,32 +124,60 @@ fn spb(data: &[u8]) -> Option<Vec<u8>> {
 
 /// The exec target's differential mode (#1123, `OKKAMA_FUZZ_DIFFERENTIAL=1`): the program runs on Sparrow's JIT
 /// and on its interpreter under the same budgets, and the two must show the same result or uncaught report (as a
-/// structure) and the same output, or the input crashes the target. The design's known divergences
-/// (`okkama-rs/tools/engines/interp-exceptions.txt`) pass:
-/// a stack overflow reached on both (its depth is each engine's), a memory budget run out on either (its moment is
-/// each engine's: the interpreter's register stack is allocated memory), and the JIT's compile limits. Returns what was compared, `None` when the input is not a program.
+/// structure) and the same output, or the input crashes the target. The design's known divergences pass: those of
+/// [`EXCEPTIONS`], the one list `differ.py` reads too (#1144), matched against each engine's report and output.
+/// Returns what was compared, `None` when the input is not a program.
 pub fn differ(data: &[u8]) -> Option<Difference> {
     use sparrow_core::{Engine, observe};
     let bytes = spb(data)?;
     let jit = observe(Engine::Jit, bytes.clone(), Vec::new(), limits()).expect("generated SPB loads");
     let interpreted = observe(Engine::Interpreter, bytes, Vec::new(), limits()).expect("generated SPB loads");
-    let report = |observed: &sparrow_core::Observed| match &observed.result {
-        Err((report, _)) => report.clone(),
-        Ok(_) => String::new(),
-    };
-    let (jit_report, interpreted_report) = (report(&jit), report(&interpreted));
-    if ["compiling it would take more than", "too large to compile", "KiB limit"].iter().any(|text| jit_report.contains(text)) {
-        return Some(Difference::Excepted("the JIT's compile limits (design 6.3)"));
-    }
-    if jit_report.contains("Stack overflow") && interpreted_report.contains("Stack overflow") {
-        return Some(Difference::Excepted("a stack overflow reached on both, at each engine's depth (design 6.3)"));
-    }
-    let memory = "Execution budget exhausted: memory";
-    if jit_report.contains(memory) || interpreted_report.contains(memory) {
-        return Some(Difference::Excepted("the memory budget, run out at each engine's moment (design 6.3)"));
+    if let Some(reason) = excepted(&jit, &interpreted) {
+        return Some(Difference::Excepted(reason));
     }
     assert_eq!(interpreted, jit, "the interpreter differs from the JIT");
     Some(Difference::Same)
+}
+
+/// Where Sparrow's interpreter may differ from the JIT: `okkama-rs/tools/engines/interp-exceptions.txt`, whose
+/// header gives the format (#1123). One list serves `differ.py`, `tools/t/run.py` and this target (#1144).
+const EXCEPTIONS: &str = include_str!("../../../tools/engines/interp-exceptions.txt");
+
+/// The exceptions as (kind, text, reason), in file order. `differ.py check` validates the file (the Wave runs it);
+/// a line this cannot split is a broken file and panics.
+fn exceptions() -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
+    EXCEPTIONS.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(|line| {
+        // The selector ends at the first tab or run of two spaces, as `differ.py load` splits it.
+        let end = [line.find('\t'), line.find("  ")].into_iter().flatten().min();
+        let Some((selector, reason)) = end.map(|end| line.split_at(end)) else {
+            panic!("interp-exceptions.txt: `{line}` has no reason");
+        };
+        let (kind, text) = selector.split_once(':').unwrap_or_else(|| panic!("interp-exceptions.txt: `{selector}` is no selector"));
+        (kind, text, reason.trim())
+    })
+}
+
+/// The reason an exception gives for a difference between the two runs, or `None`. A run's text is its report and
+/// both output streams; a run's status is whether it failed. `path:` exceptions name files, and an input has none.
+fn excepted(jit: &sparrow_core::Observed, interpreted: &sparrow_core::Observed) -> Option<&'static str> {
+    let text = |observed: &sparrow_core::Observed| {
+        let report = match &observed.result {
+            Err((report, _)) => report.as_str(),
+            Ok(_) => "",
+        };
+        format!("{report}\n{}{}", String::from_utf8_lossy(&observed.stdout), String::from_utf8_lossy(&observed.stderr))
+    };
+    let (jit_text, interpreted_text) = (text(jit), text(interpreted));
+    exceptions().find_map(|(kind, needle, reason)| {
+        let (in_jit, in_interpreted) = (jit_text.contains(needle), interpreted_text.contains(needle));
+        let applies = match kind {
+            "jit" => in_jit,
+            "both" => in_jit && in_interpreted && jit.result.is_err() == interpreted.result.is_err(),
+            "either" => in_jit || in_interpreted,
+            _ => false,
+        };
+        applies.then_some(reason)
+    })
 }
 
 /// What [`differ`] found.

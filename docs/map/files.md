@@ -2,10 +2,10 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 36 files, 22403 lines
+## front — 36 files, 22417 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 1019 — Проверки потока по THIR (после типизации).
-- `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
+- `okkama-compiler/src/analysis/mod.rs` 109 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 119 — `once let` (#491): a kept value must not depend on effects. A value that
 - `okkama-compiler/src/analysis/registry.rs` 3096 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
 - `okkama-compiler/src/analysis/thir.rs` 963 — THIR — типизированное дерево тел после семантического анализа.
@@ -41,50 +41,52 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 15 files, 12165 lines
+## lower — 15 files, 12238 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 247 — Построение тела функции OIR.
-- `okkama-compiler/src/lowering/ctx.rs` 1588 — Контекст lowering из THIR: специализации, функции, объявления OIR.
+- `okkama-compiler/src/lowering/ctx.rs` 1596 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 204 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 446 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 971 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
+- `okkama-compiler/src/lowering/mod.rs` 981 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
 - `okkama-compiler/src/lowering/modules.rs` 294 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/natives.rs` 87 — A native declaration against the runtime's native table (#1098): a
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
 - `okkama-compiler/src/lowering/body/builtins.rs` 199 — Builtins built from existing instructions (#210, #211, #231): searches and
 - `okkama-compiler/src/lowering/body/calls.rs` 882 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
-- `okkama-compiler/src/lowering/body/collections.rs` 1636 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
-- `okkama-compiler/src/lowering/body/matching.rs` 803 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
-- `okkama-compiler/src/lowering/body/mod.rs` 3115 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
+- `okkama-compiler/src/lowering/body/collections.rs` 1665 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
+- `okkama-compiler/src/lowering/body/matching.rs` 823 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
+- `okkama-compiler/src/lowering/body/mod.rs` 3121 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 387 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7627 lines
+## ir — 14 files, 8252 lines
 
-- `okkama-compiler/src/ir/cfg.rs` 524 — Граф управления функции: преемники, доминаторы, места определений.
+- `okkama-compiler/src/ir/cfg.rs` 527 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
-- `okkama-compiler/src/ir/linearity.rs` 402 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
-- `okkama-compiler/src/ir/mod.rs` 1456 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
+- `okkama-compiler/src/ir/inline.rs` 320 — #1112 (stage 1): direct calls of small leaf callees that cannot fail are replaced by the callee's body, so tha
+- `okkama-compiler/src/ir/linearity.rs` 423 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
+- `okkama-compiler/src/ir/mod.rs` 1465 — OIR-2 — промежуточное представление программы (стадии конвейера: `docs/map/pipeline.md`).
 - `okkama-compiler/src/ir/ownership.rs` 948 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 304 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
-- `okkama-compiler/src/ir/print.rs` 916 — Канонический текст OIR-2 (форма — §18 спецификации OIR-1).
-- `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
+- `okkama-compiler/src/ir/print.rs` 923 — Канонический текст OIR-2 (форма — §18 спецификации OIR-1).
+- `okkama-compiler/src/ir/recursion.rs` 259 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 263 — Регионы, которые никогда не владеют идентичностями, — убираются.
+- `okkama-compiler/src/ir/scalars.rs` 234 — #1112 (stage 2): scalar replacement. A plain object made in a function (`obj.new`, or `obj.next` of another su
 - `okkama-compiler/src/ir/statics.rs` 434 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
-- `okkama-compiler/src/ir/verify.rs` 1984 — Верификатор OIR-2 (основа — §17 спецификации OIR-1).
+- `okkama-compiler/src/ir/verify.rs` 2013 — Верификатор OIR-2 (основа — §17 спецификации OIR-1).
 
-## codegen — 4 files, 1421 lines
+## codegen — 4 files, 1423 lines
 
 - `okkama-compiler/src/codegen/mod.rs` 106 — Выбор backend и генерация выходного артефакта из IR.
 - `okkama-compiler/src/codegen/sparrow/check.rs` 302 — Независимая проверка распределения регистров (H-10): `registers` красит
-- `okkama-compiler/src/codegen/sparrow/mod.rs` 734 — Проверенный IR → программа Sparrow (SPB).
+- `okkama-compiler/src/codegen/sparrow/mod.rs` 736 — Проверенный IR → программа Sparrow (SPB).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 279 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 20 files, 6880 lines
+## compiler — 20 files, 6918 lines
 
-- `okkama-compiler/src/commands.rs` 329 — What the read-only commands report, as values (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir` and
-- `okkama-compiler/src/host.rs` 104 — What the compiler asks of the machine it runs on besides the sources and the loader its caller hands it
+- `okkama-compiler/src/commands.rs` 346 — What the read-only commands report, as values (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir` and
+- `okkama-compiler/src/host.rs` 125 — What the compiler asks of the machine it runs on besides the sources and the loader its caller hands it
 - `okkama-compiler/src/lib.rs` 21 — Okkama compiler library: source text to verified Sparrow bytecode (SPB).
 - `okkama-compiler/src/commands/trace.rs` 77 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
@@ -104,61 +106,61 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
 - `okkama-compiler/src/source/mod.rs` 219 — Source text, byte spans and human-facing positions.
 
-## spb — 9 files, 5413 lines
+## spb — 9 files, 5431 lines
 
 - `okkama-sparrow/src/asm.rs` 839 — Текстовая форма Sparrow (ассемблер): [`disassemble`] печатает программу,
 - `okkama-sparrow/src/codec.rs` 654 — SPB (версия формата — [`VERSION`]): магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
 - `okkama-sparrow/src/layout.rs` 30 — Word representations shared by the code generator and the runtime: how a word of a static type is traced
-- `okkama-sparrow/src/lib.rs` 511 — Программа Sparrow — регистровый байткод Okkama (SPB, [`VERSION`]), независимый от
+- `okkama-sparrow/src/lib.rs` 513 — Программа Sparrow — регистровый байткод Okkama (SPB, [`VERSION`]), независимый от
 - `okkama-sparrow/src/liveness.rs` 523 — Registers live before each instruction of a function.
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
 - `okkama-sparrow/src/session.rs` 300 — #588 phase B: the program of a REPL session, append-only.
-- `okkama-sparrow/src/typing.rs` 1210 — Instruction operand and result types for bytecode lowered from OIR-2
+- `okkama-sparrow/src/typing.rs` 1226 — Instruction operand and result types for bytecode lowered from OIR-2
 - `okkama-sparrow/src/verify.rs` 828 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 3136 lines
+## ownership-runtime — 2 files, 3198 lines
 
-- `sparrow-core/src/failures.rs` 2351 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 70 files, 37641 lines
+## sparrow — 71 files, 39752 lines
 
 - `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/heap.rs` 2327 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/interp.rs` 1103 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
-- `sparrow-core/src/intrinsics.rs` 1118 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/heap.rs` 3025 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/interp.rs` 1120 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
+- `sparrow-core/src/intrinsics.rs` 1155 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2952 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 848 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
-- `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
+- `sparrow-core/src/jit.rs` 3891 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/lib.rs` 849 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/maps.rs` 466 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
-- `sparrow-core/src/ops.rs` 1953 — Exact semantics of value instructions, where machine code has no inline
+- `sparrow-core/src/ops.rs` 2119 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 400 — State of the async primitives (Atomic, Event and Cancellation, Lock and
-- `sparrow-core/src/program.rs` 403 — Static facts about a loaded SPB program: the machine representation of every
+- `sparrow-core/src/program.rs` 406 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/reach.rs` 276 — The functions a run of an SPB program can reach (#1135): what the playground warns about is what a run can cal
-- `sparrow-core/src/runtime.rs` 1289 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1335 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/texts.rs` 9 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
-- `sparrow-core/src/word.rs` 75 — One machine word per value. The representation is chosen by the static SPB
-- `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-- `sparrow-core/src/worker_emulated.rs` 141 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
+- `sparrow-core/src/word.rs` 119 — One machine word per value. The representation is chosen by the static SPB
+- `sparrow-core/src/worker.rs` 443 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
+- `sparrow-core/src/worker_emulated.rs` 142 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
 - `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
-- `sparrow-core/src/worker_wire.rs` 247 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
+- `sparrow-core/src/worker_wire.rs` 253 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 148 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 926 — Native provider host. The providers (`native_*`) see a [`Heap`] and
+- `sparrow-core/src/host/mod.rs` 925 — Native provider host. The providers (`native_*`) see a [`Heap`] and
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
-- `sparrow-core/src/host/native_data.rs` 76 — Runtime tables (`okkama-runtime-core/data/*.dat`): gzip-compressed text,
-- `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
+- `sparrow-core/src/host/native_data.rs` 1 — Runtime tables (`okkama-runtime-core/data/*.dat`): the core's providers read the same tables as
+- `sparrow-core/src/host/native_db.rs` 372 — Shared immutable database cells. Driver results own Rust data directly;
 - `sparrow-core/src/host/native_debug.rs` 299 — `any` values for the bridged origin natives, and the parts of a value for
 - `sparrow-core/src/host/native_directory.rs` 224 — Host paths and directory snapshots, scoped to each VM's working directory.
 - `sparrow-core/src/host/native_dns.rs` 326 — System resolution on Tokio's blocking pool with shared admission. A started
@@ -173,7 +175,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_io.rs` 265 — Heap-free Rust futures polled by Tokio. Publishing a completed result is a
 - `sparrow-core/src/host/native_multicast.rs` 251 — Memberships use socket2's safe platform wrappers. The UDP owner retains
 - `sparrow-core/src/host/native_net.rs` 137 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
-- `sparrow-core/src/host/native_network.rs` 795 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
+- `sparrow-core/src/host/native_network.rs` 811 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
 - `sparrow-core/src/host/native_numbers.rs` 171 — Decimal text (validity, canonical form, coefficient, exponent, order) and the
 - `sparrow-core/src/host/native_origin.rs` 227 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
@@ -193,6 +195,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/process_host.rs` 428 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
 - `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
+- `sparrow-core/src/jit/background.rs` 105 — #1147 (step 2): Cranelift's codegen of emitted units on worker threads.
 
 ## devtrace — 2 files, 413 lines
 
@@ -211,18 +214,18 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 73 files, 23917 lines
+## other — 73 files, 24296 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
 - `blade/src/lock.rs` 131 — `blade.lock` — the exact versions a project was installed with.
 - `blade/src/manifest.rs` 300 — `blade.toml` — the manifest of a Blade project or package, and the project
 - `blade/src/project.rs` 400 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
-- `blade/src/toolchain.rs` 514 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
+- `blade/src/toolchain.rs` 561 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 7
 - `okkama-native/src/lib.rs` 7 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc
-- `okkama-native/src/ops.rs` 901 — Операции хостовой криптографии над байтами (без unsafe; исключение — один
+- `okkama-native/src/ops.rs` 1099 — Операции хостовой криптографии над байтами (без unsafe; исключение — один
 - `okkama-native/src/rsa_public.rs` 84 — Открытые операции RSA через низкоуровневый API aws-lc: проверка подписей
 - `okkama-native/src/secure.rs` 31 — Криптостойкие случайные байты от генератора платформы (#195).
 - `okkama-native/src/x509.rs` 326 — Подписи сертификатов X.509: проверка `signatureValue` над `tbsCertificate`
@@ -231,7 +234,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/examples/pbench.rs` 185 — Native cost of the candidate array representations (#246, phase 1).
 - `okkama-persistent/examples/sbench.rs` 142 — Chains of string concatenation (#255): today's flat copy, a shared byte
 - `okkama-persistent/src/lib.rs` 5 — Persistent collections (#246, #252).
-- `okkama-persistent/src/pmap.rs` 779 — A persistent ordered map (#252–#254): a B+ tree whose nodes versions share.
+- `okkama-persistent/src/pmap.rs` 782 — A persistent ordered map (#252–#254): a B+ tree whose nodes versions share.
 - `okkama-persistent/src/slots.rs` 133 — A vector of at most `N` items stored inline, so that a map node is one
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
@@ -259,7 +262,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/application.rs` 1205 — `runtime/application` (POSIX terminal) and `runtime/account`, which Sparrow
 - `okkama-runtime-core/src/native/cldr.rs` 185 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 - `okkama-runtime-core/src/native/collation.rs` 286 — `runtime/collation` и `runtime/locale` — перенос `CollationNatives` и
-- `okkama-runtime-core/src/native/compression.rs` 819 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
+- `okkama-runtime-core/src/native/compression.rs` 816 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
 - `okkama-runtime-core/src/native/formats.rs` 352 — Data format natives Sparrow routes here (`host/native_origin.rs`):
 - `okkama-runtime-core/src/native/fs.rs` 127 — File operations Sparrow's `runtime/fs` provider (`host/native_directory.rs`)
 - `okkama-runtime-core/src/native/host.rs` 163 — Host natives Sparrow routes here (`host/native_origin.rs`): `runtime/system`
@@ -283,6 +286,6 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `okkama-wasm/build.rs` 31 — Bundles the repository's std (#1078): every `std/**/*.ok`, embedded read-only, so imports resolve without a
-- `okkama-wasm/src/lib.rs` 757 — The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
-- `sparrow-cli/src/main.rs` 260 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
+- `okkama-wasm/src/lib.rs` 889 — The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
+- `sparrow-cli/src/main.rs` 262 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
 - `sparrow-wasm/src/lib.rs` 524 — Sparrow for the playground (#1125, design `okkama-docs/runtime/sparrow-interpreter-1079.md` §5, §8 item 6):

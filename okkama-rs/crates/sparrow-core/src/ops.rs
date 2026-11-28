@@ -29,11 +29,6 @@ type Outcome = Result<Word, String>;
 /// machine integers (#326).
 pub struct Rational(pub Rat);
 #[derive(Debug)]
-pub struct Builder {
-    pub repr: Repr,
-    pub items: Vec<Word>,
-}
-#[derive(Debug)]
 pub struct RangeValue {
     pub start: Word,
     pub end: Word,
@@ -78,8 +73,6 @@ macro_rules! payload {
 payload! {
     Rational => |_this, _visit| {}, owns |this| { rational_bytes(&this.0) }
     RangeValue => |this, visit| { visit(this.start, Repr::Int); visit(this.end, Repr::Int); }
-    Builder => |this, visit| { for &item in &this.items { visit(item, this.repr); } },
-        owns |this| { this.items.capacity() * 8 }
     AnyBox => |this, visit| { visit(this.value, this.repr); }
     MapValue => |this, visit| {
         this.entries.trace(|&(key, value)| {
@@ -414,6 +407,10 @@ impl Runtime {
     pub fn text_new(&mut self, text: &str) -> Word {
         self.heap.allocate_text(text)
     }
+    /// A string of `parts` in order, copied once; `ascii` when the caller knows they are (#1149).
+    pub(crate) fn text_new_of(&mut self, parts: &[&str], ascii: bool) -> Word {
+        self.heap.allocate_text_with(parts, ascii)
+    }
     fn ty(&self, function: usize, register: okkama_sparrow::Register) -> Option<&Type> {
         let source = &self.loaded.program.functions[function];
         self.loaded.program.ty(source.registers[register.0 as usize])
@@ -662,6 +659,59 @@ pub(crate) fn concat_too_long(runtime: &Runtime, left: Word, right: Word) -> Opt
     concat_passes_limit(runtime.heap.header_of(left), runtime.heap.header_of(right)).then(concat_limit)
 }
 
+/// #1177: `a + b + c …` in one string. A part of [`TEXT_CHAIN_MIN`](crate::heap::TEXT_CHAIN_MIN) bytes or more,
+/// or one in a chain of text buffers (`SHARED`, `APPENDED`, `PREPENDED`), takes the pairwise path of `str.concat`
+/// (`s = s + a + b` in a loop keeps its amortized appends); otherwise the string is allocated once and each part
+/// copied once, marked `APPENDED` when all but the last part reach `TEXT_CHAIN_MIN` (the mark the last pairwise
+/// `+` would give). Err: past the 4 GiB a string holds (the pairwise text); Ok(None): `fits` refused the size.
+/// Nothing collects in between: the parts are read before the caller's safepoint.
+pub(crate) fn concat_parts(runtime: &mut Runtime, parts: &[Word], fits: impl Fn(&Runtime, usize) -> bool) -> Result<Option<Word>, String> {
+    use crate::heap::{APPENDED, ASCII, PREPENDED, TEXT_CHAIN_MIN, payload};
+    let (mut total, mut ascii, mut chained) = (0u64, true, false);
+    for &part in parts {
+        let header = runtime.heap.header_of(part);
+        let length = payload(header);
+        total += u64::from(length);
+        ascii &= header & ASCII != 0;
+        chained |= length as usize >= TEXT_CHAIN_MIN || header & (APPENDED | PREPENDED) != 0 || runtime.heap.text_chain(part);
+    }
+    if total > u64::from(u32::MAX) {
+        return Err(concat_limit());
+    }
+    if chained {
+        let mut text = parts[0];
+        for &part in &parts[1..] {
+            match concat_text(runtime, text, part, &fits) {
+                Some(word) => text = word,
+                None => return Ok(None),
+            }
+        }
+        return Ok(Some(text));
+    }
+    let size = total as usize;
+    if !fits(runtime, size) {
+        return Ok(None);
+    }
+    let mut short: [&str; 16] = [""; 16];
+    let mut long: Vec<&str> = Vec::new();
+    // SAFETY: allocation neither moves nor collects the parts.
+    let texts: &[&str] = if parts.len() <= short.len() {
+        for (slot, &part) in short.iter_mut().zip(parts) {
+            *slot = unsafe { &*(runtime.heap.text(part) as *const str) };
+        }
+        &short[..parts.len()]
+    } else {
+        long.extend(parts.iter().map(|&part| unsafe { &*(runtime.heap.text(part) as *const str) }));
+        &long
+    };
+    let last = texts.last().map_or(0, |text| text.len());
+    let string = runtime.heap.allocate_text_with(texts, ascii);
+    if shared_strings() && 2 * size <= u32::MAX as usize && size - last >= TEXT_CHAIN_MIN {
+        runtime.heap.mark(string, APPENDED);
+    }
+    Ok(Some(string))
+}
+
 /// Would two strings with these headers make one longer than `u32::MAX` bytes?
 fn concat_passes_limit(left: u64, right: u64) -> bool {
     use crate::heap::payload;
@@ -703,19 +753,21 @@ mod concat_limit_tests {
 /// made from it (branches) copy instead of each taking a buffer twice its
 /// size (x86-64 made that +80…375%).
 pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: impl Fn(&Runtime, usize) -> bool) -> Option<Word> {
-    use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
+    use crate::heap::{APPENDED, ASCII, PREPENDED, TEXT_CHAIN_MIN, payload};
     let (lh, rh) = (runtime.heap.header_of(left), runtime.heap.header_of(right));
     let (ll, rl) = (payload(lh) as usize, payload(rh) as usize);
     let (size, ascii) = (ll + rl, lh & rh & ASCII != 0);
     let chains = shared_strings() && 2 * size <= u32::MAX as usize;
-    let chained = |header: u64| header & (APPENDED | PREPENDED | SHARED) != 0;
+    // #1176: a slice is SHARED over a flat string too; only a version in a text buffer continues a chain.
+    let (left_chain, right_chain) = (runtime.heap.text_chain(left), runtime.heap.text_chain(right));
+    let chained = |header: u64, chain: bool| header & (APPENDED | PREPENDED) != 0 || chain;
     // A new buffer for a chain that outgrew its own: the share of the room
     // it keeps in front, as a fraction.
     let mut grow = None;
     // A flat string a buffer is started from: no longer a chain's start.
     let mut spent = None;
-    if chains && chained(lh) && ll >= rl {
-        if lh & SHARED != 0 {
+    if chains && chained(lh, left_chain) && ll >= rl {
+        if left_chain {
             let (buffer, start) = runtime.heap.text_shared(left);
             let (_, high, capacity) = runtime.heap.text_buffer_room(buffer);
             if start + ll == high && high + rl <= capacity {
@@ -731,8 +783,8 @@ pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: 
             grow = Some(if lh & PREPENDED != 0 { (1, 4) } else { (0, 1) });
             spent = Some(left);
         }
-    } else if chains && chained(rh) && rl > ll {
-        if rh & SHARED != 0 {
+    } else if chains && chained(rh, right_chain) && rl > ll {
+        if right_chain {
             let (buffer, start) = runtime.heap.text_shared(right);
             let (low, _, _) = runtime.heap.text_buffer_room(buffer);
             if start == low && start >= ll {
@@ -767,7 +819,7 @@ pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: 
     if !fits(runtime, size) {
         return None;
     }
-    let string = runtime.heap.allocate_text_of(&parts);
+    let string = runtime.heap.allocate_text_with(&parts, ascii);
     if chains && ll >= TEXT_CHAIN_MIN {
         runtime.heap.mark(string, APPENDED);
     } else if chains && rl >= TEXT_CHAIN_MIN {
@@ -894,8 +946,11 @@ pub(crate) fn slice_array(runtime: &mut Runtime, array: Word, start: Word, end: 
     if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
         return Ok(view);
     }
-    let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
-    Ok(runtime.heap.allocate_array(repr, &items))
+    let items: Vec<Word> = runtime.heap.elements(array)[range.clone()].to_vec();
+    let slice = runtime.heap.allocate_array(repr, &items);
+    // #1152: the slice's structure index from its parent's, when the parent has one.
+    runtime.inherit_slice_structure(array, range, slice);
+    Ok(slice)
 }
 
 /// The position `index` inside `array`, or `array.get`'s failure.
@@ -1183,57 +1238,47 @@ pub extern "C" fn rt_map_len(ctx: *mut Ctx, map: Word) -> Word {
     word
 }
 
-/// Successful inline conversions still offer the collection opportunity that
-/// rt_exec offered. Their result is proven pointer-free (raw f64 or tagged int),
-/// so only the caller's unchanged root maps are needed here.
+/// #1171: a builder is a heap cell (`heap::BUILDER`); its first push makes its buffer.
+pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
+    runtime.heap.allocate_builder(repr, 0)
+}
+
+/// #1171: the most room `builder.sized` makes before the first push (32 MiB of words); past it the builder grows
+/// as it is filled. A larger count still works: a map over a huge range keeps failing at the length limit, without
+/// claiming its memory up front.
+const SIZED_LIMIT: i64 = 1 << 22;
+
+/// `builder.sized`: a builder with room for `count` elements (a small int between 0 and [`SIZED_LIMIT`]; anything
+/// else is no hint).
+pub(crate) fn builder_sized(runtime: &mut Runtime, repr: Repr, count: Word) -> Word {
+    let room = crate::word::small_value(count).map_or(0, |count| count.clamp(0, SIZED_LIMIT)) as usize;
+    runtime.heap.allocate_builder(repr, room)
+}
+
 #[inline(never)]
-pub extern "C" fn rt_scalar_safepoint(ctx: *mut Ctx, conversion: u64) {
+pub extern "C" fn rt_builder_sized(ctx: *mut Ctx, repr: u64, count: Word) -> Word {
     let frame = crate::runtime::frame_pointer!();
     let ctx = unsafe { &mut *ctx };
     let runtime = unsafe { &mut *ctx.runtime };
-    runtime.count(|_| if conversion == 0 { "fast cvt int.float" } else { "fast cvt float.int" }.into());
-    runtime.safepoint(frame, ctx, &[]);
-}
-
-pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
-    let spare = runtime.heap.allocate_spare(|payload| {
-        match payload.as_any_mut().downcast_mut::<Builder>() {
-            Some(builder) => {
-                builder.repr = repr;
-                builder.items.clear();
-                true
-            }
-            None => false,
-        }
-    });
-    spare.unwrap_or_else(|| runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
+    let word = builder_sized(runtime, Repr::from_bits(repr), count);
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
 }
 
 pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Outcome {
-    let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
+    let length = runtime.heap.builder_length(object);
     // An array or byte array holds at most 2^32 - 1 elements (#985): `map` or `filter` over a huge
     // range fails the program here, before the heap's length check would panic (#1033).
-    if crate::heap::passes_length_limit(builder.items.len()) {
+    if crate::heap::passes_length_limit(length) {
         return Err(array_limit());
     }
-    let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
-    let array = if packed {
-        let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
-        runtime.heap.allocate_bytes(&bytes)
-    } else {
-        runtime.heap.allocate_array(repr, &items)
-    };
-    // #503: growth was charged as it happened. Preserve the capacity limit,
-    // discharge and retirement order exactly, including the large-buffer path.
-    runtime.heap.discharge_external(items.capacity() * 8);
-    if items.capacity() <= crate::heap::SPARE_CAPACITY {
-        items.clear();
-        if let Some(builder) = runtime.heap.payload_mut::<Builder>(object) {
-            builder.items = items;
-        }
-        runtime.heap.retire_payload(object);
+    // #1111: an empty result (a filter that kept nothing, the common case in real code) is the shared empty array
+    // of its representation (#1168): no allocation and no copy.
+    if length == 0 {
+        let repr = crate::heap::element_repr(runtime.heap.header_of(object));
+        return Ok(runtime.heap.empty_array(if packed { crate::runtime::ARRAY_BYTES } else { repr as u64 }));
     }
-    Ok(array)
+    Ok(runtime.heap.builder_finish(object, packed))
 }
 
 /// The failure text of an array that would pass the 2^32 - 1 elements an array can hold (#1033).
@@ -1252,12 +1297,12 @@ fn map_len(runtime: &mut Runtime, map: Word) -> Word {
     runtime.heap.int(length as i64)
 }
 
-/// `builder.push`: append a word to a builder (no collection here: the
-/// items vector is Rust memory). Returns the builder.
+/// `builder.push`: append a word to a builder (no collection here: a full buffer is replaced by one twice as big,
+/// which the next safepoint counts). Returns the builder.
 #[inline(never)]
 pub extern "C" fn rt_builder_push(ctx: *mut Ctx, builder: Word, item: Word) -> Word {
     let runtime = unsafe { &mut *(*ctx).runtime };
-    grow_builder(&mut runtime.heap, builder, |items| items.push(item));
+    runtime.heap.builder_push(builder, item);
     builder
 }
 
@@ -1274,20 +1319,6 @@ pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word
 
 /// The most integers a range adds to a builder at once (#448).
 pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
-
-/// Grow a builder's items and charge the capacity its vector took on
-/// (#331): O(1), and nothing at all while the capacity holds.
-pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
-    let grown = {
-        let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
-        let before = items.capacity();
-        grow(items);
-        items.capacity().saturating_sub(before)
-    };
-    if grown > 0 {
-        heap.charge_external(grown * 8);
-    }
-}
 
 /// Execute instruction `pc` of `function` with its used words at `uses`.
 ///
@@ -1616,9 +1647,16 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             };
             Ok(builder_new(runtime, repr))
         }
+        I::BuilderSized { dst, count } => {
+            let repr = match runtime.ty(function, dst.0) {
+                Some(Type::Builder(element)) => runtime.kind_of(*element).repr(),
+                _ => return Err("builder.sized needs a builder type".into()),
+            };
+            Ok(builder_sized(runtime, repr, value(count)))
+        }
         I::BuilderPush { builder, value: item, .. } => {
             let (builder, item) = (value(builder), value(item));
-            grow_builder(&mut runtime.heap, builder, |items| items.push(item));
+            runtime.heap.builder_push(builder, item);
             Ok(builder)
         }
         I::BuilderAppend { builder, array, .. } => {
@@ -1631,11 +1669,12 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 std::borrow::Cow::Borrowed(slots) => (None, slots.as_ptr(), slots.len()),
             };
             match owned {
-                Some(items) => grow_builder(&mut runtime.heap, builder, |all| all.extend(items)),
+                Some(items) => runtime.heap.builder_extend(builder, &items),
                 None => {
-                    // SAFETY: see above; heap objects are neither moved nor freed here.
+                    // SAFETY: see above; heap objects are neither moved nor freed here (a new buffer is another
+                    // cell, and the source is an array value, never a builder's buffer).
                     let slots = unsafe { std::slice::from_raw_parts(first, count) };
-                    grow_builder(&mut runtime.heap, builder, |all| all.extend_from_slice(slots));
+                    runtime.heap.builder_extend(builder, slots);
                 }
             }
             Ok(builder)
@@ -1654,8 +1693,8 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 let mut from = first;
                 while from <= stop {
                     let to = stop.min(from.saturating_add(RANGE_CHUNK - 1));
-                    grow_builder(&mut runtime.heap, builder, |all| {
-                        all.extend((from..=to).map(|n| crate::word::small(n).expect("between inline endpoints")));
+                    runtime.heap.builder_fill(builder, (to - from + 1) as usize, |n| {
+                        crate::word::small(from + n as i64).expect("between inline endpoints")
                     });
                     if to == stop {
                         break;
@@ -1674,12 +1713,17 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 items.push(integer_word(runtime, n.clone()));
                 n += 1;
             }
-            grow_builder(&mut runtime.heap, builder, |all| all.extend(items));
+            runtime.heap.builder_extend(builder, &items);
             Ok(builder)
         }
         I::BuilderFinish { dst, builder } => {
             let packed = matches!(runtime.ty(function, dst.0), Some(Type::Array(element)) if runtime.kind_of(*element) == Kind::Byte);
             builder_finish(runtime, value(builder), packed)
+        }
+        I::MapNew { dst, entries } if entries.is_empty() => {
+            // #1168: one shared empty map per key and value representation.
+            let map = map_for(runtime, function, dst.0)?;
+            Ok(runtime.heap.empty_map(map.key, map.value))
         }
         I::MapNew { dst, entries } => {
             let mut map = map_for(runtime, function, dst.0)?;
@@ -1967,6 +2011,17 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
 /// Decimal text of an integer word (inline integers without a BigInt). An integer of more than
 /// 4 GiB of digits fails the program, before the heap's length check would panic (#1033).
 fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
+    // #1111: a tagged-small int is written into a stack buffer and copied once into the heap, without the Rust
+    // String `to_string` allocates and frees for every number.
+    if let crate::heap::Integer::Small(n) = runtime.heap.integer(word) {
+        let mut buffer = [0u8; 20];
+        let digits = small_decimal_text(n, &mut buffer);
+        if crate::heap::passes_length_limit(digits.len()) {
+            return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
+        }
+        // SAFETY: ASCII digits and an optional minus sign.
+        return Ok(runtime.text_new_of(&[unsafe { std::str::from_utf8_unchecked(digits) }], true));
+    }
     let text = match runtime.heap.integer(word) {
         crate::heap::Integer::Small(n) => n.to_string(),
         crate::heap::Integer::Big(n) => n.to_string(),
@@ -1975,6 +2030,55 @@ fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
         return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
     }
     Ok(runtime.text_new(&text))
+}
+
+/// The decimal text of `n` in the tail of `buffer` (#1111): two digits per step from a table, then the sign; what
+/// `i64::to_string` gives, for every i64 (a tagged-small int has at most 19 digits and a sign).
+pub(crate) fn small_decimal_text(n: i64, buffer: &mut [u8; 20]) -> &[u8] {
+    const PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819202122232425262728293031323334353637383940414243444546474849\
+5051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+    let mut value = n.unsigned_abs();
+    let mut at = buffer.len();
+    while value >= 100 {
+        let pair = (value % 100) as usize * 2;
+        value /= 100;
+        at -= 2;
+        buffer[at..at + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    }
+    if value >= 10 {
+        let pair = value as usize * 2;
+        at -= 2;
+        buffer[at..at + 2].copy_from_slice(&PAIRS[pair..pair + 2]);
+    } else {
+        at -= 1;
+        buffer[at] = b'0' + value as u8;
+    }
+    if n < 0 {
+        at -= 1;
+        buffer[at] = b'-';
+    }
+    &buffer[at..]
+}
+
+#[cfg(test)]
+mod small_decimal_text_tests {
+    /// #1111: the stack formatter gives what `to_string` gives, on edges and a spread of values.
+    #[test]
+    fn small_decimal_text_equals_to_string() {
+        let mut values = vec![0, 1, -1, 9, 10, -10, 99, 100, -100, 101, 999, 1000, i64::MAX, i64::MIN, i64::MAX - 1, i64::MIN + 1];
+        values.extend([crate::word::SMALL_MAX, crate::word::SMALL_MIN]);
+        let mut x: i64 = 0x2545_f491_4f6c_dd1d;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            values.push(x >> (x as u64 % 60));
+        }
+        for n in values {
+            let mut buffer = [0u8; 20];
+            assert_eq!(super::small_decimal_text(n, &mut buffer), n.to_string().as_bytes(), "{n}");
+        }
+    }
 }
 
 /// `cvt` of an int to a string.
@@ -2234,25 +2338,82 @@ pub(crate) fn str_slice(runtime: &mut Runtime, text: Word, start: Word, end: Wor
 }
 
 /// The parts between separators; an empty separator splits into code points.
+#[cfg(test)]
+#[path = "strings_1149_tests.rs"]
+mod strings_1149_tests;
+
+/// #1149: the byte offsets of the non-overlapping matches of a non-empty `pattern` in `source`, left to right, as
+/// `str::match_indices` gives them. A short text is searched directly (its first byte, then a compare): building
+/// std's two-way searcher costs more than the search on a line-sized text.
+fn match_starts(source: &str, pattern: &str, mut each: impl FnMut(usize) -> bool) {
+    debug_assert!(!pattern.is_empty());
+    if source.len() <= SHORT_TEXT {
+        let (haystack, needle) = (source.as_bytes(), pattern.as_bytes());
+        let mut at = 0;
+        while at + needle.len() <= haystack.len() {
+            match haystack[at..=haystack.len() - needle.len()].iter().position(|&byte| byte == needle[0]) {
+                None => return,
+                Some(offset) => {
+                    let start = at + offset;
+                    if &haystack[start..start + needle.len()] == needle {
+                        if !each(start) {
+                            return;
+                        }
+                        at = start + needle.len();
+                    } else {
+                        at = start + 1;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    for (start, _) in source.match_indices(pattern) {
+        if !each(start) {
+            return;
+        }
+    }
+}
+
+/// Texts up to this many bytes are searched directly ([`match_starts`]).
+const SHORT_TEXT: usize = 256;
+
 pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> Word {
-    // Byte ranges of the parts, then one copy per part.
-    let ranges: Vec<(usize, usize)> = {
+    // Byte ranges of the parts, then one copy per part; both vectors are the runtime's, kept across calls (#1149).
+    let mut ranges = std::mem::take(&mut runtime.scratch_ranges);
+    ranges.clear();
+    {
         let (source, separator) = (runtime.heap.text(text), runtime.heap.text(separator));
         if separator.is_empty() {
-            source.char_indices().map(|(i, c)| (i, i + c.len_utf8())).collect()
+            ranges.extend(source.char_indices().map(|(i, c)| (i, i + c.len_utf8())));
         } else {
-            let mut ranges = Vec::new();
             let mut start = 0;
-            for (at, matched) in source.match_indices(separator) {
-                ranges.push((start, at));
-                start = at + matched.len();
+            let mut chars = separator.chars();
+            match (chars.next(), chars.next()) {
+                // #1149: a one-character separator is searched as a character (memchr), not as a pattern.
+                (Some(separator), None) => {
+                    let width = separator.len_utf8();
+                    for (at, _) in source.match_indices(separator) {
+                        ranges.push((start, at));
+                        start = at + width;
+                    }
+                }
+                _ => match_starts(source, separator, |at| {
+                    ranges.push((start, at));
+                    start = at + separator.len();
+                    true
+                }),
             }
             ranges.push((start, source.len()));
-            ranges
         }
-    };
-    let words: Vec<Word> = ranges.into_iter().map(|(a, b)| runtime.heap.substring(text, a, b)).collect();
-    runtime.heap.allocate_array(Repr::Ref, &words)
+    }
+    let mut words = std::mem::take(&mut runtime.scratch_words);
+    words.clear();
+    words.extend(ranges.iter().map(|&(a, b)| runtime.heap.substring(text, a, b)));
+    let array = runtime.heap.allocate_array(Repr::Ref, &words);
+    runtime.scratch_ranges = ranges;
+    runtime.scratch_words = words;
+    array
 }
 
 /// The size of `source` with every `pattern` replaced, known before it is built (#72).
@@ -2263,10 +2424,46 @@ pub(crate) fn replace_bytes(source: &str, pattern: &str, replacement: &str) -> u
 
 /// Every (or only the first) occurrence of `pattern` replaced.
 pub(crate) fn str_replace(runtime: &mut Runtime, text: Word, pattern: Word, replacement: Word, first: bool) -> Outcome {
+    let ascii = runtime.heap.is_ascii_text(text) && runtime.heap.is_ascii_text(replacement);
     let (source, pattern, replacement) =
         (runtime.heap.text(text), runtime.heap.text(pattern), runtime.heap.text(replacement));
-    let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
-    Ok(runtime.text_new(&replaced))
+    if pattern.is_empty() {
+        let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
+        return Ok(runtime.text_new(&replaced));
+    }
+    // #1149: the match offsets (in a vector the runtime keeps across calls), then the pieces and the replacements
+    // written once into the new string.
+    let mut starts = std::mem::take(&mut runtime.scratch_offsets);
+    starts.clear();
+    match_starts(source, pattern, |at| {
+        starts.push(at);
+        !first
+    });
+    let (source, width, replacement) = (source as *const str, pattern.len(), replacement as *const str);
+    // SAFETY: the strings stay where they are while the result is allocated (allocation neither moves nor collects).
+    let (source, replacement) = unsafe { (&*source, &*replacement) };
+    let bytes = source.len() - starts.len() * width + starts.len() * replacement.len();
+    let result = runtime.heap.allocate_text_filled(bytes, ascii, |to| {
+        let (mut from, mut at) = (0, 0);
+        for &start in &starts {
+            for piece in [&source.as_bytes()[from..start], replacement.as_bytes()] {
+                // SAFETY: `to` has room for every piece and replacement, in order.
+                unsafe { crate::heap::copy_text(piece, to.as_mut_ptr().add(at)) };
+                at += piece.len();
+            }
+            from = start + width;
+        }
+        let rest = &source.as_bytes()[from..];
+        // SAFETY: as above, the last piece ends the string.
+        unsafe { crate::heap::copy_text(rest, to.as_mut_ptr().add(at)) };
+        debug_assert_eq!(at + rest.len(), to.len());
+    });
+    // A result made of non-ASCII-flagged texts may still be ASCII: look, as a flat string's allocation does.
+    if !ascii && runtime.heap.text(result).is_ascii() {
+        runtime.heap.mark(result, crate::heap::ASCII);
+    }
+    runtime.scratch_offsets = starts;
+    Ok(result)
 }
 
 /// Unicode whitespace removed from both ends.
@@ -2349,3 +2546,11 @@ pub(crate) fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: 
 #[cfg(test)]
 #[path = "key_depth_tests.rs"]
 mod key_depth_tests;
+
+#[cfg(test)]
+#[path = "strings_1177_tests.rs"]
+mod strings_1177_tests;
+
+#[cfg(test)]
+#[path = "strings_1176_tests.rs"]
+mod strings_1176_tests;

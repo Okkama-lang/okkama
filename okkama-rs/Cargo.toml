@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
+# #1148: vendored dependencies are not members (their tests and lints are their own).
+exclude = ["vendor"]
 members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace", "crates/okkama-wasm", "crates/sparrow-wasm"]
 
 [workspace.package]
-version = "0.6.6"
+version = "0.6.7"
 edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-only"
@@ -25,6 +27,24 @@ unimplemented = "warn"
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+# #1109: crates whose code size matters more than their speed: the REPL's line editor, Markdown and TOML of the CLI,
+# Brotli, regex-syntax (the parser of path patterns) and SQLite's bundled C (−0.75 MB of the −0.8 MB; its std cells
+# moved −1% to +10% in a short probe, and server databases come before SQLite's speed). Linux okkama 25.49 → 24.69 MB.
+[profile.release.package.rustyline]
+opt-level = "s"
+[profile.release.package.pulldown-cmark]
+opt-level = "s"
+[profile.release.package.toml]
+opt-level = "s"
+[profile.release.package.libsqlite3-sys]
+opt-level = "s"
+[profile.release.package.brotli]
+opt-level = "s"
+[profile.release.package.brotli-decompressor]
+opt-level = "s"
+[profile.release.package.regex-syntax]
+opt-level = "s"
 
 # Gate tests (`cargo test --profile gate`): release optimizations without
 # fat LTO, with parallel code generation to avoid full LTO for each test binary.
@@ -60,3 +80,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.regalloc2]
 opt-level = 2
+
+# #1148: num-bigint 0.4.8 with an ADCS addition path on aarch64 (vendor/num-bigint/OKKAMA.md); upstream PR pending.
+[patch.crates-io]
+num-bigint = { path = "vendor/num-bigint" }
+cranelift-frontend = { path = "vendor/cranelift-frontend" }

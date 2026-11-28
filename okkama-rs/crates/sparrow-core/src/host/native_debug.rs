@@ -215,7 +215,7 @@ mod data_dump_tests {
     use okkama_sparrow::TypeRef;
 
     fn runtime() -> Box<Runtime> {
-        let program = okkama_sparrow::assemble(r#"sparrow 18
+        let program = okkama_sparrow::assemble(r#"sparrow 19
 module "data-dump-965" "1.0.0"
 type t0 int
 type t1 str

@@ -3,7 +3,7 @@
 
 fn program(action: &str, result: &str, destroy: &str, destroy_async: bool, main: &str) -> Vec<u8> {
     let source = format!(r#"
-sparrow 18
+sparrow 19
 module "future-inputs" "1.0.0"
 type t0 int
 type t1 str

@@ -234,6 +234,25 @@ fn strings_concatenate_and_compare_and_print_escaped() {
     assert!(text.contains("str.ne %2, %3"), "{text}");
 }
 
+/// #1177: `a + b + c …` над строками — части по порядку, затем одна `str.concat_n`;
+/// вложенность справа разворачивается так же (склейка ассоциативна, порядок вычисления — слева направо).
+#[test]
+fn a_chain_of_string_plus_is_one_concat_of_its_parts_in_order() {
+    let text = main_listing("let n = \"xy\".length(); let s = \"a=\" + n.string() + \";b=\" + (n * 2).string(); s.length();");
+    assert_eq!(text.matches("str.concat_n [").count(), 1, "{text}");
+    assert!(!text.contains("str.concat %"), "{text}");
+    let line = text.lines().find(|line| line.contains("str.concat_n [")).unwrap();
+    let parts: Vec<&str> = line.split('[').nth(1).unwrap().trim_end_matches(']').split(", ").collect();
+    assert_eq!(parts.len(), 4, "{line}");
+    // The parts are defined in the order of the source: each before the next.
+    let defined = |value: &str| text.find(&format!("    {value}:")).unwrap_or_else(|| panic!("{value} in {text}"));
+    for pair in parts.windows(2) {
+        assert!(defined(pair[0]) < defined(pair[1]), "{line}\n{text}");
+    }
+    let nested = main_listing("let t = \"x\" + (\"y\" + \"z\"); t.length();");
+    assert_eq!(nested.matches("str.concat_n [").count(), 1, "{nested}");
+}
+
 #[test]
 fn every_operator_maps_to_one_instruction_family() {
     let ops = main_listing(
@@ -519,8 +538,8 @@ fn an_early_self_inside_a_loop_or_branch_is_built_once_before_its_statement() {
         let listing = module.to_string();
         let start = listing.find("func @Tree.new").expect("the constructor is printed");
         let end = listing[start..].find("\n}\n").map_or(listing.len(), |end| start + end);
-        // One object per call, never one per iteration.
-        assert_eq!(listing[start..end].matches("obj.new").count(), 1, "{body}");
+        // One Tree per call, never one per iteration (since #1112 the Leaf constructor is inlined here too).
+        assert_eq!(listing[start..end].matches("obj.new Tree").count(), 1, "{body}");
     }
 }
 

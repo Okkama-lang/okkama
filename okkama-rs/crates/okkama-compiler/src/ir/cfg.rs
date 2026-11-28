@@ -314,6 +314,12 @@ fn drop_unread(function: &mut Function, constants: bool) {
     if !removed {
         return;
     }
+    renumber_values(function);
+}
+
+/// Drop the values nothing defines any more and renumber the rest densely, keeping their order (the dead constants
+/// above, the call results #1112's inlining replaced).
+pub(crate) fn renumber_values(function: &mut Function) {
     let mut defined = vec![false; function.values.len()];
     for value in &function.params {
         defined[value.0] = true;

@@ -4,7 +4,8 @@
 //! byte for byte. The CLI runs in the repository root on paths relative to it, and the playground's workspace
 //! is the page's: the bundled std under `std/` and the files beside the checked one, named relative to its
 //! root. Neither side's paths are rewritten: an imported file's diagnostic names it as diagnostics name a found
-//! file (relative to the current directory, #1119) on both. Completion is compared with `okkama lsp`'s.
+//! file (relative to the current directory, #1119) on both. Completion, hover and definition are compared with
+//! `okkama lsp`'s.
 mod tree;
 
 use std::path::{Path, PathBuf};
@@ -399,6 +400,67 @@ fn completion_answers_as_the_language_server_does() {
         compared += expected.len();
     }
     assert!(compared > 500, "{compared} items");
+    drop(lsp);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Hover and go to definition answer as the language server's (#1139): at every word of a program the same
+/// markdown, range and definition, and, while the text being typed does not parse, the same answer at the same
+/// position, which both place in the last text that did (a line of the typed text that does not parse moves the
+/// lines below it).
+#[test]
+fn hover_and_definition_answer_as_the_language_server_does() {
+    let dir = std::env::temp_dir().join(format!("okkama-playground-hover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = canonical(&dir);
+    let file = dir.join("main.ok");
+    let program = "module play v1.0.0;\n\n// A bottle.\nobject Bottle {\n    has opened is bool = false;\n    Bottle() {}\n    // Opens it.\n    open() is ^Bottle { ^opened = true; }\n    state() is string { \"closed\"; }\n}\n\nmain() is int {\n    let bottle = Bottle();\n    let label = bottle.state();\n    label.length();\n    0;\n}\n";
+    std::fs::write(&file, program).unwrap();
+    let uri = format!("file://{}", file.display());
+    let path = file.display().to_string();
+    let workspace = Workspace::default();
+    let mut lsp = Lsp::start();
+    lsp.notify("textDocument/didOpen", json!({"textDocument": {"uri": uri, "version": 0, "languageId": "okkama", "text": program}}));
+    lsp.request("textDocument/documentSymbol", json!({"textDocument": {"uri": uri}}));
+    let typing = program.replace("main() is int {\n", "main() is int {\n    let not_yet_parsed = ;\n");
+    let (mut hovers, mut definitions) = (0, 0);
+    for (version, text) in [program.to_string(), typing].into_iter().enumerate() {
+        if version > 0 {
+            lsp.notify("textDocument/didChange", json!({"textDocument": {"uri": uri, "version": version}, "contentChanges": [{"text": text}]}));
+        }
+        // Inside every word of the program, the text both answer from.
+        for (line, row) in program.lines().enumerate() {
+            let chars: Vec<(usize, char)> = row.char_indices().collect();
+            for (at, (index, ch)) in chars.iter().enumerate() {
+                if !ch.is_alphanumeric() || (at > 0 && chars[at - 1].1.is_alphanumeric()) {
+                    continue;
+                }
+                let character = row[..*index].encode_utf16().count() + 1;
+                let position = json!({"line": line, "character": character});
+                let request = json!({"source": text, "path": path, "line": line, "character": character});
+                let found = lsp.request("textDocument/hover", json!({"textDocument": {"uri": uri}, "position": position}));
+                let expected = if found.is_null() {
+                    Value::Null
+                } else {
+                    hovers += 1;
+                    json!({"markdown": found["contents"]["value"], "range": found["range"]})
+                };
+                let answer = workspace.hover(&request);
+                assert_eq!(answer["hover"], expected, "hover {version}:{line}:{character}");
+                let found = lsp.request("textDocument/definition", json!({"textDocument": {"uri": uri}, "position": position}));
+                let expected = if found.is_null() {
+                    Value::Null
+                } else {
+                    definitions += 1;
+                    let path = found["uri"].as_str().unwrap().strip_prefix("file://").unwrap();
+                    json!({"path": path, "range": found["range"]})
+                };
+                let answer = workspace.definition(&request);
+                assert_eq!(answer["definition"], expected, "definition {version}:{line}:{character}");
+            }
+        }
+    }
+    assert!(hovers > 20 && definitions > 10, "{hovers} hovers, {definitions} definitions");
     drop(lsp);
     std::fs::remove_dir_all(dir).unwrap();
 }

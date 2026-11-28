@@ -733,6 +733,22 @@ impl<'a> Typing<'a> {
                 Type::Builder(_) => Ok(()),
                 other => Err(format!("builder.new defines a builder, not {}", self.name(other))),
             },
+            I::StrConcatN { dst, parts } => {
+                if parts.len() < 2 {
+                    return Err("str.concat_n needs at least two parts".into());
+                }
+                for part in parts {
+                    self.expect(*part, &Type::Str)?;
+                }
+                self.define(dst.0, &Type::Str, "str.concat_n")
+            }
+            I::BuilderSized { dst, count } => {
+                self.expect(*count, &Type::Int)?;
+                match self.ty(dst.0) {
+                    Type::Builder(_) => Ok(()),
+                    other => Err(format!("builder.sized defines a builder, not {}", self.name(other))),
+                }
+            }
             I::BuilderPush { dst, builder, value } => {
                 let ty = self.ty(*builder);
                 let Type::Builder(e) = ty else {

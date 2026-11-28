@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 const HELLO: &str = "module app v1.0.0;\n\nmain() is int {\n    0;\n}\n";
 
-use tree::okkama;
+use tree::{okkama, std_dir};
 
 fn run(args: &[&str]) -> Output {
     okkama().args(args).output().expect("run okkama")
@@ -2116,10 +2116,6 @@ fn man_broken_links_are_lint_warnings_with_the_original_location() {
     assert!(!stdout(&output).contains("error:"));
 }
 
-fn std_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std")
-}
-
 fn man(args: &[&str]) -> Output {
     okkama()
         .arg("man")
@@ -2791,7 +2787,9 @@ fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
         .args(["--no-build", "--man-pages", "--version", "test-515", "--out"]).arg(&out)
         .env("CARGO_TARGET_DIR", &target).output().unwrap();
     assert!(package.status.success(), "{}", stderr(&package));
-    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.to_string_lossy().ends_with(".tar.gz")).unwrap();
+    // The package, not its symbols archive (#1109).
+    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".tar.gz") && !path.to_string_lossy().ends_with("-symbols.tar.gz")).unwrap();
     let unpack = root.join("unpack"); std::fs::create_dir_all(&unpack).unwrap();
     assert!(Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&unpack).status().unwrap().success());
     let payload = std::fs::read_dir(unpack).unwrap().next().unwrap().unwrap().path();

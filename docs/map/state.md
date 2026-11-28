@@ -1,5 +1,184 @@
 # State (update at the end of every task)
 
+## Release 0.6.7 (release/067, from main 418da2b86): performance
+
+**Release 0.6.7, 2026-11-28 (owner on vacation, authorized):** every v0.6.7 ticket closed (remainders POSTPONED:
+#1182–#1186). Gate = CI + Wave green on 59acebe33 (local gate refused by the test-protocol hook). Micro A/B v0.6.6 →
+release/067: −30.2% over 66 lang cells, none slower than +3% (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7/micro.html).
+Showcase vs v0.6.6: cold −27%, steady −41% (report.html there). Version 0.6.7, CHANGELOG [0.6.7], Bible rebuilt; then PR
+release/067 → main, tag v0.6.7 on the merge commit, packages, install-pgo, /man/, playground (SPB 19), develop.
+
+**Owner on vacation 2026-11-28 → ~2026-12-12; release alone in /loop (memory vacation-release-0-6-7).** Authorized:
+merge PR release/067 → main, tag v0.6.7, GitHub Release, design decisions with Fable, close/postpone myself. Plan:
+#1177, #1176 done → #1152 (Fable's design in hand: structure index known at birth) → #1151 (Fable design pending; naive sync explicit roots measured 02 +122%, 09 +36%) → #1178 done → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
+showcase, Bible, man, CHANGELOG, version, PR, merge, tag, release, install-pgo, cleanup). Line: worktree
+okkama-work/p-1110 (feature/1110) → release/067 + wave/067-*.
+
+Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladder report
+(okkama-docs/benchmarks/reports/2026-11-27-v0.6.6/); per-ticket micro A/B against the v0.6.6 toolchains
+(okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
+(#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
+
+- [x] #1178 floats: `small_eligible` admits Kind::Float and float add/sub/mul/div/neg/abs/sqrt/cmp and float constants
+  (not `Convert`, whose fast path reads an int tag); 03-float 10.44 → 5.20 ms. Test okkama-cli small_ints
+  `float_functions_get_small_int_versions_with_the_general_versions_results` (restart with live floats, a float
+  overflow's trace, on = off). Remaining 03 gap: per-op finiteness checks (fsub/fcmp/branch after each op).
+- [x] #1176 string slices: `Heap::text_chain` (SHARED and the storage is a BUFFER) guards `concat_text`/`concat_parts`;
+  `text_buffer_write` asserts BUFFER; `substring` shares via `Heap::allocate_text_slice` when ≥ `SLICE_MIN` (64) and
+  2×piece ≥ storage (`text_storage_bytes`: flat length or buffer room), never a view of a view. Tests
+  `ops::strings_1176_tests` (5; mutations of the sharing and of the guard caught); micro cell `string-rest`.
+  Ladder ±1.4%.
+- [x] #1177 string chains: lowering `string_concat` flattens `a + b + c …` (as `collection_operator` does) into
+  `InstKind::StrConcatN` / SPB `str.concat_n` (164, SPB 19); `ops::concat_parts` (one allocation; a part ≥ 256 B or
+  SHARED/APPENDED/PREPENDED → pairwise `concat_text`; APPENDED when all but the last reach 256 B), `rt_concat_n`
+  (JIT spills the parts, interpreter gathers them). Tests `ops::strings_1177_tests` (4, mutation caught), lowering
+  `a_chain_of_string_plus_is_one_concat_of_its_parts_in_order`, mnemonics. 05-strings −16%. Owner chose the
+  compiler over the ticket's JIT-only plan: consecutive concats are rare (1 pair in ~20 per program).
+- [x] #1171 builders in the heap: `heap::BUILDER` cell (length, capacity, buffer: an ARRAY cell of length 0, a leaf
+  the builder traces up to its length), inline push in the JIT, `Heap::builder_finish` in place when the cell fits
+  (same class, large ≤ 1/8 room) else copy, spare buffers until the next collection (`Heap::spare_buffers`),
+  `builder.sized` (SPB 19, opcode 163; `map` over range/array/dictionary via `Lowerer::source_count`, capped at
+  4M); Builder payload and `payload_mut_unchecked` gone. Tests `heap::builders_1171_tests` (7, mutations caught),
+  dispatch_537, mnemonics. Steady 10-app −14%, 11 −14%, 08 −8%, 05 −3%, 06 ±0; 08 footprint 28.4 → 21.1 MB.
+  `filter` sized by its source rejected (06 −4…−6%, 10-app +5%).
+- [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`);
+  large builder buffers are raw allocations resized by realloc (`Heap::builder_large`, `allocate_large_buffer`,
+  `resize_large_buffer`, `take_large_buffer` → `large`, freed by the sweep when unreachable); 06-collections
+  10.9 → 6.67 ms (target ≤ 6), 50 collections per 20 repetitions (40 before #1171 counted builder memory, 80 after;
+  room given back by a shrink is uncounted).
+  Left: GC share (~25%) and the closures' JIT code.
+- [~] #1151 roots (Fable's design): vendored `cranelift-frontend` 0.137.0 (`vendor/cranelift-frontend`, OKKAMA.md) with
+  `FunctionBuilder::set_stack_map_reloads`; jit.rs `reload_policy` (default: no reloads in synchronous functions with a
+  loop; `SPARROW_CORE_RELOADS=always|never`). 07 −16%, 10 −7%, 06 −2.5%, 09 +4.8% (bisected: lambda#3's closure-calling
+  loop), 08 unchanged (12.6 ms; target ≤ 10 not met: Fable's next lever is sealing an instruction's blocks early, so
+  loop-invariant values stop going through loop-header parameters). Naive sync explicit roots: 02 +122%, rejected.
+  Earlier: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
+  lever is the frontend's spills around calls (#1147's deferred own root slots).
+- [~] #1152 ownership, Fable's design (structure index known at birth): step 1 done — `Resources::positions`,
+  `array_structure`, `inherit_slice_structure` (from `ops::slice_array`, copied slices), `may_hold_identity`; test
+  `structure_tests::a_copied_slice_inherits_its_parents_index_inside_its_range` (range mutation caught); 11 −7%,
+  indexes built 1002 → 2. Next: the INERT header bit (bit 30) and a table-driven array scan.
+  Earlier: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured
+  (−4%, +6…21 MB footprint), not kept; first repetition ≤ 2× steady met by #1147. Steady ≤ 4 ms needs a model design.
+- [~] #1153 memory: breakdown on the ticket (builder Vec doubling 4.2 MB on 08-roles → gone with #1171: 28.4 → 21.1 MB;
+  collection floor #920; compile worker +2.6…4.4 MB); macOS `time -l` RSS of the `sparrow` binary reads ~1 MB (odd).
+- [x] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
+  search ≤ 256 bytes), one-pass replace (`allocate_text_filled`), `Runtime.scratch_{offsets,ranges,words}`,
+  `heap::copy_text`; tests `ops::strings_1149_tests` (5, mutations caught). 05-strings 12.3 → 9.05 ms. Views for
+  split pieces rejected (Fable: −1%, retention); latent: `concat_text` treats any SHARED string as a buffer — a
+  guard (`text_chain`: backing has BUFFER) is needed before anyone builds flat-backed views.
+- [x] #1174 marking: generic `trace_object<P>`, leaf kinds unqueued in `mark_and_queue`; test
+  `heap::tests::leaves_are_marked_without_tracing_and_containers_still_trace_1174` (mutation caught); corpus under
+  GC stress unchanged (457/457).
+- [~] #1147 first-run compile: step 1 done (A5 no-std frontend, A1 exits by handler target + shared cold return
+  from the second exit, A4 no check after int add/sub/mul without budget/polling); reverted: A2 (no check after
+  rt_compile: regalloc loss on 09-closures), A3 (direct branch edges: 07-objects +32%); A6 (context reuse) no gain.
+  Step 2 done: `emit_unit`/`codegen`/`install` split (2a, same code), `jit/background.rs` Pool (queue, steal,
+  wait), `compile_ordinary`, `speculate` (depth 2, 64 pending), `take_pending` (stale rule), `background_allowed`;
+  default 1 worker (2 were no faster, +3 MB more peak footprint). Tests: background_units_install_as_a_synchronous_run_compiles_them (stale
+  mutation caught), a_runtime_with_units_in_flight_drops_cleanly; corpus identical 0/2 threads, also GC stress.
+  Tests: ready_callees_tests::handlers_with_one_target_share_one_failure_exit,
+  budgets SQUARE (mutations caught). Step 2 (background codegen, Fable's design on the ticket) next.
+- [x] #1175 safepoint not-due check: `Runtime::safepoint` inline + `collect_at_safepoint` cold; `Heap.node_counters`
+  (`pmap::memory_cell`, Heap !Send by the pointer); test `heap::tests::map_nodes_of_this_thread_bring_a_collection_due_1175`
+  (mutation: node growth ignored, caught). Steady: 10-app −6.2%, 05 −7.2%, 06 −7.1%, 11 −2.8%, 08 −2%.
+- [x] #1148 bigint add/sub: vendor/num-bigint (0.4.8 + `|` carries, 4-digit add step; OKKAMA.md), workspace
+  `exclude = ["vendor"]`, `[patch.crates-io]`; test `heap::tests::bigint_addition_matches_a_reference_1148`
+  (mutations caught); micro cell int-big-add + oracle. 04-bigint 205 → 118 ms (an ADCS asm variant: 104 ms,
+  not taken: upstream wants Rust-native, num-bigint#314). Upstream PR: owner yes.
+- [x] #1114 GC: steps 1–2 done (design Fable on the ticket): `OWNER_BIG`/`OWNER_PAYLOAD`, `CELL_WORDS`,
+  `Liveness` (granule 4 KiB, cap 2^20), `Marker`, `Reserved { head, bytes, page, threaded }`, `thread()`,
+  `dead_pages_unread`; poison after `release_empty_pages`. Tests `heap::tests::*_1114` (3, mutations: owner
+  allocation, granule shift, poison skip, threading short — all caught). Corpus under GC stress vs base: 364/364.
+  Step 3 (bump lanes) rejected by its gate: 10-app +0.8…+5.6% vs step 2 (cycles +5.6%), 05-strings +2…6%;
+  reverted (numbers on the ticket). Burst's +1.1 MB allocated with owner classes is
+  unexplained (not whole pages; a separate empty-page allowance did not change it).
+- [x] #1146 closed: no start-up regression (A/B v0.6.0/v0.6.6/now); breakdown on the ticket; pre-main → #1173.
+- [x] #1103 DB schema → std RandomState (Opus agent, feature/1103, cherry-picked): benchmarks in the ticket
+  comment (scratchpad hbench), FastHasher `write` debug_assert (no text keys), integer writes mixed directly;
+  tests `cargo test -p sparrow-core --lib 1103` (4, mutation-checked). Audit: no other FastMap with external keys.
+- [x] #1113 small-int function versions (feature/1110; toolchains micro-tc/f1113a tagged, f1113b untagged):
+  `jit::{small_eligible, Version, GENERAL_VERSION}`, `Jit::{general, general_ids, small_ints}`, Emitter
+  `small`/`entry_args`/`restart`; `compile` makes the small version as the code, `rt_compile(f | GENERAL_VERSION)`
+  the general one at the first restart. Test `okkama-cli/tests/small_ints.rs` (exact results at the boundaries,
+  `% 0` trace, on = off; mutations: no overflow check, no entry guard, no range check — all caught). Sweep
+  scratchpad sweep1113.py: 364/364. Micro baseline −60%, int-small −40%; 01-arith 10.8 ms. Not done: mid-function
+  transfer (restart from the entry instead), versions of functions with calls or allocations.
+- [x] #1112 OIR `inline` + `scalars` (feature/1110 line; design Fable; owner: accept the step-count shift):
+  `ir/inline.rs` (`inline_leaves`, `inline_branched`, `has_cycle`, `INLINE_INSTRUCTIONS` 24 /
+  `INLINE_BRANCHED` 64 / `CALLER_INSTRUCTIONS` 400, `Attr::Inlined` + verifier `grants`), `ir/scalars.rs`
+  (candidates incl. block parameters; never split parameters an edge fills itself or of unwind targets),
+  `cfg::renumber_values`; passes after tail-calls, PASSES has 10 names. Tests `tests/scalar_replacement.rs` (8,
+  mutation-checked; the unwind-target rule has no unit reproducer, the examples corpus covers it). Corpus sweep
+  script scratchpad sweep1112.py (examples+t/ with passes all vs without, verifier on): 364/364. Micro successor
+  −76%, constructor −58%, for-loop −66%; 07-objects 8.4 → 5.4 ms; 10-app unchanged. Not done: in-place reuse
+  (Fable: adds nothing after scalar replacement), materialisation of escaping candidates.
+- [x] #1111 closed with its cheap parts (owner, 2026-11-27: the full builder redesign is #1171, POSTPONED): fast
+  small-int text (fa3bd1836, ebebaf4e8 the length limit), empty builder → shared empty array (test
+  `an_empty_builder_finishes_as_the_shared_empty_array`). 10-app 53.5 → 52.5 / 53.6 → 53.6 ms (two seeds),
+  06-collections −1.5% / +0.5%: noise. Fable's design and the cost estimate are on #1111 and #1171.
+- [x] #1110 closure entries (feature/1110; worktree okkama-work/p-1110, target t-1110; toolchains micro-tc/f1110a
+  base, f1110b stage 1, f1110c both): closure layout `[Raw entry] ++ params` (`heap::CLOSURE_ENTRY` 8,
+  `CLOSURE_CAPTURES` 16, `Heap::capture`), `CallTarget::Code`, the call site's entry fast path, `compile_entry`
+  with `captures`, `Jit::{closure_ids, closure_entries, closure_requests}`, `Emit::closure_entry`,
+  `CLOSURE_ENTRY_INSTRUCTIONS` 400. Stage 1 alone (only capture-less closures) was +2% on 09-closures: captured
+  closures paid the entry test; stage 2 made it −23%. Tests `interp::tests::closure_entries_call_with_a_trailing_
+  closure_past_the_register_arguments` (10 params), the inline-closure tests under GC stress; mutations (argument
+  order, capture offset) crash. Agents merged on this line: #1139 #1141 #1142 #1144 #1138.
+- [x] #1109 binary diet, closed by the owner with its first parts ("not a top priority"; the rest in #1170,
+  POSTPONED): strip + symbols archive in tools/package.sh (771a3f470), core tables re-exported from runtime-core
+  (8b52c1f24; −16 KB only: LTO had merged the copies), opt-level "s" for rustyline, pulldown-cmark, toml,
+  libsqlite3-sys, brotli, brotli-decompressor, regex-syntax (−0.80 MB on Linux; SQLite alone −0.75 MB). The micro
+  ABBA at N=4M does not fit std cells of milliseconds per iteration (the B campaigns failed): probe with --n 4000
+  --runs 3 instead. Toolchains micro-tc/f1109{a,s,u}-s*. Slim build: no, it is #1154.
+- [x] #1169 flaky listen-backlog test (feature/1169 0ba0eef5e): macOS reads SO_LISTENQLIMIT instead of counting
+  peers (8 of 8 completed under parallel load); an Opus agent's first fix (1 s patience) failed under load.
+- [x] #1108 shared failure exits + map registration (feature/1108; worktree okkama-work/p-1108, target t-1108;
+  toolchains micro-tc/f1108m-s1 maps only, f1108x-s{1,2} both): `Emit::exits` keyed (function, inline fail block,
+  handler index), `failure_exit`, `record_and_handle`; async bodies with explicit roots keep an exit per call.
+  `register_code` (sorted splice of a function's maps, ordered insert of its range). Tests
+  `register_code_tests`, `ready_callees_tests::calls_share_one_failure_exit` (one `trace` per handler context);
+  `ready_static_target…` expects +2 branches (the compile path shares the call's exit). 10-app: code −22%, CLIF
+  −14%, compile −10% (target −25% not reached); map registration not measurable at 34 functions; micro +0.3%.
+  Compile profile script: scratchpad compile-profile.sh (SPARROW_CORE_PROFILE_COMPILE, sums of the marks).
+- [x] #1107 stage 2 cold blocks (feature/1107; worktree okkama-work/p-1107, target t-1107; toolchains
+  micro-tc/f1107c-s{1,2}): `check`'s failure blocks always cold (the `Emit::cold` flag of #1105 removed), cold
+  allocation refill, compile-on-first-call, array index outside, int arith/compare/bitwise/not-neg slow paths,
+  atomic intrinsic slow path. Not cold (frequent on real data): equal-length string compare, non-ASCII `StrLen`,
+  structural `val.cmp`. Micro recursion −11.9%, method-call −8.1%, int-big +0.1%. Stage 1 (explicit roots for
+  sync functions) prototyped on Fable's design and rejected with numbers (decisions.md); wave 067-a fixes in
+  29bc8987a (dead `closure` helper removed, helpers test array literal, clippy).
+- [x] #1168 (#1106 stage 3) shared instances (design and safety review: Fable): `heap::Canonical` (empty arrays per
+  repr incl. ARRAY_BYTES, empty maps per (key, value) Repr, fieldless objects per shareable descriptor; marked in
+  `collect_inner`, cleared in `Drop`), `Heap::{set_shareable, empty_array, empty_map, shared_object}`,
+  `runtime::shareable_objects` (no fields, no destroy, not builtin, not held, no traced slot, no Error witness),
+  `extend` refuses "the extension changes published object sharing". Substituted at construction only: JIT
+  (`ObjNew`/`VariantNew`/`arr.new []`/`map.new []` as constants), interpreter, `rt_array` count 0, ops `MapNew`
+  without entries. Tests `interp::tests::{shareable_types_and_shared_instances, shared_empty_values_stay_empty}`;
+  mutations (no rooting, no Error exclusion) caught. Micro map-empty 39.37 → 7.33 ns, match −8.7%. Also: the
+  no-JIT build's dead-code warning on `closure_words` (#1167) silenced.
+- [x] #1167 (#1106 stage 2) inline array literals ≤ 16 (`INLINE_ARRAY_LITERAL`, `Emit::array_literal`, byte arrays
+  PACKED eight to a word) and closures (`Heap::closure_words`, the `closure_new` layout; rt_closure's checks are a
+  guard, else the helper). Tests `interp::tests::inline_array_literals_match_the_interpreter` (int with a BigInt,
+  str, byte × sizes 0–17, JIT with GC stress too), `inline_closures_keep_their_captures_under_collection`;
+  mutations (byte packing, a skipped capture) caught. Micro closure-create 14.32 → 5.49 ns, array-literal 12.42 →
+  8.22 ns (the cell also pays two `%` and an index). Toolchains micro-tc/f1167-s{1,2}.
+- [x] #1166 (#1106 stage 1) scalar inlining (feature/1106; worktree okkama-work/p-1106, target t-1106; toolchains
+  micro-tc/f1166-s{1,2}): byte `& | ^ ~ << >> >>>`, `int.ushr`, `int.abs`, `sign` (int, float), `float.sqrt`,
+  `bits` actions inline (`Emit::{small_count, tag_if_small, tagged_sign, slow_generic, fail_generic, bits}`, trap
+  `GENERIC_SLOW_PATH_RETURNED` = 2). Tests `scalar_inline_tests.rs` (inline vs `jit.plain` on edge values, fast
+  inputs never reach rt_exec; mutations clz offset and abs overflow caught). Micro byte 10.18 → 2.72 ns (−73%).
+  Design of all three stages on #1106 (sub-issues #1166–#1168).
+- [x] #1105 Perf 1 float fast paths (feature/1105; worktree okkama-work/p-1105, target t-1105; toolchains
+  micro-tc/f1105-s{1,2}): `rt_scalar_safepoint` removed, float `+ − × ÷` finiteness by `x − x`, cold diverging slow
+  path with `trap(user 1)` after `check`, cold `check` blocks inside slow paths (`Emit::cold`), `fcvt_to_sint_sat`
+  after the range proof (Fable's review); test `float_arithmetic_fails_on_non_finite_results_and_handlers_take_
+  the_failure`. Micro float 9.09 → 3.40 ns (−63%); full suite before the review fixes −1.9% (56 cells), short A/B
+  after them (10 cells) within ±1.7%; 03-float steady 13.6 → 10.6 ms in Docker (−22%). Bench.run: 2016 → 1800 code
+  bytes, stack-map words 31 → 16. rat cells move ±5% between the two seeds of one binary: the rat "+5%" of the
+  0.6.6 A/B is layout. Fable's side question (a loop of caught float failures with no safepoint under
+  --max-memory) has no source form: `catch error is Error` does not catch the RuntimeError (same on 0.6.6).
+
 ## Release 0.6.6 (release/066)
 
 - [x] Release commit 0.6.6 (2026-11-27): version 0.6.6, CHANGELOG [0.6.6], fuzz/Cargo.lock brought up to the wasm
@@ -81,7 +260,7 @@
   await.take, region/resource settle and settle_unwind, `rt_complete`; `Loaded::without_pointer_free` +
   `Heap::relayout` for the interpreter; `Interp::depth`/`reentries` (`REENTRIES` 200 on wasm32); the #1122
   `#[ignore]`s of #1124 removed (26 tests; all pass on the no-default-features build); `tests/mnemonics/async.spa`,
-  coverage test now all 141 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
+  coverage test now all 142 mnemonics. §6.4 confirmed: the JIT recorded an async body twice after a suspended
   `region.settle_unwind`; fixed (`Emitter::check` passes the heap frame), ticket #1132. Also fixed: #1129 broke
   `jit::ready_callees_tests::lazy_compilation_failure…` (it dropped a memory budget between runs; now a large
   one). Tests: `interp::tests` 28, 9 mutations caught. Corpus (release, cage): t/ 142 identical on the JIT and
@@ -145,7 +324,7 @@
   the six entries of tasks.rs, intrinsics.rs, failures.rs ×2, runtime.rs ×2 go through it) and the root branch in
   `Runtime::safepoint`; `SPARROW_CORE_INTERPRET` read in `Runtime::assemble` through `env_switch`; devtrace
   category `interp`. 141 instructions: 74 `generic` → `rt_exec`, 12 `failure_or_region` → `rt_failure_op`, 48 own
-  branches, 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
+  branches (142 / 75 / 55 since #1122, #1145), 7 refused (catch, 6 async). Moved out of jit.rs: `program::{generic, failure_or_region, suspends,
   dispatch_table, role_slot_is_async}`, `texts.rs`. Tests: `interp::tests` (19, in-process JIT/interpreter/GC
   stress comparison `engines`), 21 mutations of interp.rs/runtime.rs each caught. Corpus (release build, cage):
   t/ base+op+lang+gen 135 same / 7 refused / 0 differ, under GC stress the same (persistence/06 needs 105 s vs
@@ -476,7 +655,7 @@ no full test suites, Docker, cargo fmt or clippy.
 - [x] #1057 (feature/1057): `session::place` names a changed item by (fresh position, item);
   constants by their init's symbol (`fresh_globals`); test `tests/session.rs`.
 
-- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 18` in every `.spa` and test
+- [x] #1061 (feature/1061): `codec::VERSION` = 18, `sparrow 19` in every `.spa` and test
   source (51 files); `codec::tests::the_instruction_set_is_pinned_to_the_version` hashes
   `Instruction::SIGNATURES` (test-only) and the `op_enum!` codes. SparrowBook rebuilt
   (build.py gained the six missing mnemonics 157–162). Branches still writing `sparrow 16`

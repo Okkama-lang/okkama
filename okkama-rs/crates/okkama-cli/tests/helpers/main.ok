@@ -106,10 +106,18 @@ async main() is int {
     let sizes = ["a": 1, "b": 2 + "".length()];
     let wide = 4611686018427387904.0 + "".length().float();
     confirm ratio.string() == "1/3" && sizes.size() == 2 && wide.int() > 0 && big.float() > 0.0;
+    // An array literal longer than the JIT allocates inline (#1167) goes through the `array` helper.
+    let n = "".length();
+    let long = [n, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7, n + 8, n + 9, n + 10, n + 11, n + 12, n + 13, n + 14, n + 15, n + 16];
+    confirm long.size() == 17 && long[16] == 16;
     let pair = [big, bigger, base];
     // Two replacements make a trie (#250): its elements are read by a helper.
     let tree = (0..100).map()->i{ i; }.replaced(1, 1).replaced(2, 2);
     out.writeln((pair.size() + tree[50] - 50).string());
+    // #1171: a filter starts an empty builder (`builder.new`; a map knows its length and sizes its own), and its
+    // pushes past the first buffer go to the helper that moves the elements to a bigger one.
+    let evens = (0..200).filter()->i{ i % 2 == 0; };
+    confirm evens.size() == 100 && evens[99] == 198;
     let prices is %string:int = ["apple": 120, "pear": 140];
     out.writeln((prices["apple"] else 0).string());
     let counter = Atomic(0);

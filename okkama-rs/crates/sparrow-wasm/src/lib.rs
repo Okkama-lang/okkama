@@ -60,9 +60,10 @@ fn collect(chunks: &mut Vec<Value>, chunk: Value) {
 }
 
 /// [`run`], handing each write to `emit` as a chunk `{stream, text, t}` while the program runs (#1134): the page
-/// shows output as it comes and keeps what a stopped run printed. One chunk per write (a character split between
-/// two writes of a stream goes whole with the later one); the answer's `output` is then empty. Output is bounded
-/// by the profile's budget (1 MiB), so are the chunks.
+/// shows output as it comes and keeps what a stopped run printed. A stream's writes within the request's `window`
+/// are one chunk (`batching`, #1136; `window` 0 is one chunk per write); a character split between two writes of
+/// a stream goes whole with the later one; the answer's `output` is then empty. Output is bounded by the profile's
+/// budget (1 MiB), so are the chunks.
 pub fn run_streaming(spb: &[u8], request: &str, emit: impl FnMut(Value) + Send + 'static) -> Value {
     begin();
     let request: Value = match serde_json::from_str(request) {
@@ -504,7 +505,7 @@ mod tests {
         assert_eq!(last_panic(), r#"{"panic":null}"#);
     }
 
-    const HEAD: &str = r#"sparrow 18
+    const HEAD: &str = r#"sparrow 19
 module "playground" "1.0.0"
 type t0 int
 type t1 str

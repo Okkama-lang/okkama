@@ -13,7 +13,19 @@
 //! - no preemption inside synchronous code; under execution budgets
 //!   (`budget`) function entries and loop back-edges poll a fuel cell, so
 //!   step, memory and output budgets and the host's interrupt flag stop
-//!   runaway code (async cancellation still cannot stop a synchronous loop).
+//!   runaway code (async cancellation still cannot stop a synchronous loop);
+//! - two engines execute function bodies on the same runtime, behind one seam
+//!   (`Runtime::invoke`, `Runtime::resume`): the Cranelift JIT (feature `jit`)
+//!   and an interpreter (`interp`, #1120), chosen when a runtime is made
+//!   (`SPARROW_CORE_INTERPRET=1`, or `Runtime::use_engine`); the interpreter's
+//!   roots are its registers, not stack maps;
+//! - feature `host` adds the operating system: files, sockets, processes,
+//!   process workers, Tokio's reactor and aws-lc. Without `jit` and `host`
+//!   the crate builds for wasm32-unknown-unknown (#1124): the interpreter is
+//!   the only engine, only the pure providers remain, the scheduler skips a
+//!   virtual clock to the earliest timer instead of waiting, and workers are
+//!   emulated in the same instance (#1127); the playground (`sparrow-wasm`,
+//!   #1125) runs it so.
 //!
 //! The `sparrow` binary (`sparrow-cli`) and `okkama run` drive this crate.
 
@@ -206,7 +218,8 @@ pub enum Batching {
 /// The most bytes [`Batching::Window`] joins into one piece.
 pub const BATCH_BYTES: usize = 64 << 10;
 
-/// The receiver of an embedded run's writes, one [`Piece`] per write, on the VM thread.
+/// The receiver of an embedded run's writes, on the VM thread: one [`Piece`] per write, or per batch of writes under
+/// [`Batching::Window`].
 pub type PieceSink = Box<dyn FnMut(Piece) + Send>;
 
 impl std::fmt::Debug for Embedding {
@@ -547,6 +560,9 @@ fn execute(runtime: &mut Box<runtime::Runtime>) -> Result<i64, Box<(Error, Optio
 pub use okkama_runtime_core::failure::Uncaught;
 pub use okkama_runtime_core::failure::Site;
 pub use okkama_runtime_core::stdout;
+/// `main`'s result as the process's exit status and report: one rule for `okkama run`, `sparrow` and the
+/// playground (#1125, #1143).
+pub use okkama_runtime_core::failure::main_outcome;
 
 /// The call stack of an uncaught failure in Sparrow terms: function, number
 /// and text of the instruction of each frame. Empty for an empty stack.
@@ -1097,7 +1113,7 @@ mod feature_tests {
     #[test]
     fn a_runtime_interprets_without_the_jit_or_when_chosen() {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"m\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 3\n 1: ret r0\n}\nentry f0\n",
+            "sparrow 19\nmodule \"m\" \"1.0.0\"\ntype t0 int\nfunction f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 3\n 1: ret r0\n}\nentry f0\n",
         )
         .unwrap();
         let mut runtime = Box::new(crate::runtime::Runtime::new(crate::program::Loaded::verified(program).unwrap()).unwrap());

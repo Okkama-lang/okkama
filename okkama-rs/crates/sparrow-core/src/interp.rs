@@ -906,6 +906,12 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
                 check!();
                 set!(dst.0, text);
             }
+            I::StrConcatN { dst, parts } => {
+                let words = gather(regs, parts, &mut short, &mut long);
+                let text = runtime::rt_concat_n(ctx, words.as_ptr(), words.len() as u64);
+                check!();
+                set!(dst.0, text);
+            }
             I::ArrayNew { dst, elements } => {
                 let Prep::Array(repr) = prep[pc] else { unreachable!("arr.new has its representation") };
                 let words = gather(regs, elements, &mut short, &mut long);
@@ -936,6 +942,11 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
                 }
                 set!(dst.0, element(ctx, array, header, position, matches!(prep[pc], Prep::Bytes)));
             }
+            // #1168: a fieldless value of a shareable type is its one shared instance.
+            I::ObjNew { dst, object, fields } if fields.is_empty() && rt!().heap.shared_object(object.0).is_some() => {
+                let shared = rt!().heap.shared_object(object.0).expect("shareable");
+                set!(dst.0, shared);
+            }
             I::ObjNew { dst, object, fields } => {
                 let words = rt!().heap.object_words(object.0, fields.len());
                 let pointer = allocate(ctx, rt!(), words);
@@ -952,6 +963,13 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
             }
             I::VariantNew { dst, fields, .. } => {
                 let Prep::Object(object) = prep[pc] else { unreachable!("variant.new has its case") };
+                if fields.is_empty()
+                    && let Some(shared) = rt!().heap.shared_object(object)
+                {
+                    set!(dst.0, shared);
+                    pc += 1;
+                    continue;
+                }
                 let words = rt!().heap.object_words(object, fields.len());
                 let pointer = allocate(ctx, rt!(), words);
                 if pointer == 0 {
@@ -1114,7 +1132,7 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
                     fail!();
                 };
                 long.clear();
-                long.extend((0..captured).map(|i| rt!().heap.field(closure, i)));
+                long.extend((0..captured).map(|i| rt!().heap.capture(closure, i)));
                 long.extend(args.iter().map(|arg| get!(arg)));
                 if entry.is_async {
                     // Calling an async action makes its cold Future.

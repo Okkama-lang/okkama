@@ -15,7 +15,7 @@ fn range_runtime_of(program: okkama_sparrow::Program, ranges: bool, frontend: bo
 
 fn source(registers: &str, code: &[String]) -> String {
     let code: String = code.iter().enumerate().map(|(pc, op)| format!(" {pc}: {op}\n")).collect();
-    format!("sparrow 18\nmodule \"range\" \"1\"\ntype t0 int\ntype t1 str\ntype t2 array t0\ntype t3 byte\ntype t4 char\ntype t5 map t0 t0\ntype t6 float\ntype t7 rat\ntype t8 bool\nfunction f0 \"range\" {{\n registers [{registers}]\n params []\n result t0\n{code}}}\nfunction f1 \"collect\" {{\n registers [t1, t1]\n params []\n result void\n 0: const r0, str \"gc\"\n 1: str.concat r1, r0, r0\n 2: ret _\n}}\nentry f0\n")
+    format!("sparrow 19\nmodule \"range\" \"1\"\ntype t0 int\ntype t1 str\ntype t2 array t0\ntype t3 byte\ntype t4 char\ntype t5 map t0 t0\ntype t6 float\ntype t7 rat\ntype t8 bool\nfunction f0 \"range\" {{\n registers [{registers}]\n params []\n result t0\n{code}}}\nfunction f1 \"collect\" {{\n registers [t1, t1]\n params []\n result void\n 0: const r0, str \"gc\"\n 1: str.concat r1, r0, r0\n 2: ret _\n}}\nentry f0\n")
 }
 
 #[test]

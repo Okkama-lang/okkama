@@ -9,7 +9,8 @@ fn gc_layout_empty_and_all_raw_objects_and_closures() {
     for width in [0, 8] {
         let mut heap = Heap::new(Layouts {
             objects: vec![vec![Repr::Raw; width]],
-            closures: vec![vec![Repr::Raw; width]],
+            // A closure's layout starts with its entry word (#1110).
+            closures: vec![vec![Repr::Raw; width + 1]],
             ..Layouts::default()
         });
         heap.set_stress(true);
@@ -23,7 +24,7 @@ fn gc_layout_empty_and_all_raw_objects_and_closures() {
         });
         assert_eq!(heap::kind(heap.header_of(object)), heap::OBJECT);
         assert_eq!(heap::kind(heap.header_of(closure)), heap::CLOSURE);
-        assert_eq!(heap::kind(heap.header_of(raw)), heap::FREE);
+        assert!(heap.is_reclaimed(raw), "raw bits kept the text alive");
         heap.collect(|_| {});
         assert_eq!(heap.stats().live_bytes, 0);
     }
@@ -36,7 +37,8 @@ fn gc_layout_mixed_objects_and_closures() {
         for kind in [heap::OBJECT, heap::CLOSURE] {
             let mut heap = Heap::new(Layouts {
                 objects: vec![layout.clone()],
-                closures: vec![layout.clone()],
+                // A closure's layout starts with its entry word, then its parameters (#1110).
+                closures: vec![std::iter::once(Repr::Raw).chain(layout.iter().copied()).collect()],
                 frames: vec![layout.clone()],
             });
             heap.set_stress(stress);
@@ -50,14 +52,17 @@ fn gc_layout_mixed_objects_and_closures() {
                 heap::CLOSURE => heap.closure_new(0, &fields[..5]),
                 _ => unreachable!(),
             };
+            // An object's fields and a closure's captures, by the same index (#1110: captures after the entry).
+            let slot = |heap: &Heap, index: usize| if kind == heap::CLOSURE { heap.capture(object, index) } else { heap.field(object, index) };
             for _ in 0..3 {
                 heap.collect(|visit| visit(object, Repr::Ref));
-                assert_eq!(heap.text(heap.field(object, 1)), "live through a sparse layout");
-                assert_eq!(heap.integer(heap.field(object, 2)).to_string(), i64::MAX.to_string());
-                assert_eq!(heap.integer(heap.field(object, 4)), Integer::Small(-7));
-                assert_eq!(heap.field(object, 5), UNBOUND);
-                assert_eq!(heap.field(object, 6), UNBOUND);
-                assert_eq!(heap::kind(heap.header_of(raw)), heap::FREE);
+                assert_eq!(heap.text(slot(&heap, 1)), "live through a sparse layout");
+                assert_eq!(heap.integer(slot(&heap, 2)).to_string(), i64::MAX.to_string());
+                assert_eq!(heap.integer(slot(&heap, 4)), Integer::Small(-7));
+                assert_eq!(slot(&heap, 5), UNBOUND);
+                assert_eq!(slot(&heap, 6), UNBOUND);
+                assert!(heap.is_reclaimed(raw), "raw bits kept the text alive");
+                assert!(!heap.is_reclaimed(slot(&heap, 1)), "a live text reads as reclaimed");
             }
             heap.collect(|_| {});
             assert_eq!(heap.stats().live_bytes, 0);
@@ -69,7 +74,7 @@ fn gc_layout_mixed_objects_and_closures() {
 #[test]
 fn gc_layout_retained_arguments_survive_reused_async_registers() {
     let program = okkama_sparrow::assemble(
-        "sparrow 18\nmodule \"gc-layout-frame\" \"1.0.0\"\n\
+        "sparrow 19\nmodule \"gc-layout-frame\" \"1.0.0\"\n\
          type t0 int\ntype t1 str\ntype t2 float\ntype t3 bool\ntype t4 object obj0\n\
          object obj0 \"Lease\" {\n destroy f1\n}\n\
          function f0 \"pending\" async {\n\
@@ -140,7 +145,7 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
 
     // An Atomic<int> is declared fieldless too, but its hidden value can be BigInt.
     let program = okkama_sparrow::assemble(
-        "sparrow 18\nmodule \"gc-layout-atomic\" \"1.0.0\"\n\
+        "sparrow 19\nmodule \"gc-layout-atomic\" \"1.0.0\"\n\
          type t0 int\ntype t1 object obj0\nobject obj0 \"Atomic<int>\" {}\n\
          function f0 \"new\" intrinsic \"okkama.atomic.Atomic.new_value\" [obj0] [] {\n\
          registers [t0]\nparams [r0]\nresult t1\n}\n",

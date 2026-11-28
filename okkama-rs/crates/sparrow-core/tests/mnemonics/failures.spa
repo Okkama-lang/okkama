@@ -3,7 +3,7 @@
 ; overflow taken by a handler, a handler edge that goes back (a step), cleanups on the failure path (a region's
 ; destroys, a static resource), a failed role.narrow, and at the end an uncaught failure with a cause and a
 ; secondary.
-sparrow 18
+sparrow 19
 module "mnemonics-failures" "1.0.0"
 type t0 int
 type t1 str

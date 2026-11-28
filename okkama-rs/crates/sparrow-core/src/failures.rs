@@ -111,7 +111,10 @@ pub struct Resources {
     /// Tweed #906: per immutable container (array version, closure, map, box), the children that may hold an
     /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
     /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
-    structure: HashMap<Word, Box<[(Word, Repr)]>>,
+    structure: HashMap<Word, StructureIndex>,
+    /// #1152: for an array's index, the position of each child (ascending): a copied slice takes the part of its
+    /// parent's index inside its range instead of scanning its elements (`inherit_slice_structure`).
+    positions: HashMap<Word, Box<[u32]>>,
     /// Development measurement (OKKAMA_DEV=runtime, #909): per identity, the region that first owned it and
     /// whether it ever moved to another owner. Empty unless the category is on.
     origins: HashMap<Word, (Word, bool)>,
@@ -242,9 +245,13 @@ impl Resources {
             self.summaries.remove(object);
             self.origins.remove(object);
             self.structure.remove(object);
+            self.positions.remove(object);
         }
     }
 }
+
+/// Tweed #906: the children of a container that may hold an identity, in order.
+type StructureIndex = Box<[(Word, Repr)]>;
 
 /// Closed-world reachability of destroy-bearing objects through declared
 /// types; a role reaches what the objects doing it reach.
@@ -408,7 +415,7 @@ impl Runtime {
             match heap::kind(header) {
                 heap::OBJECT => header & heap::IDENTITY != 0,
                 heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
-                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
                 _ => false,
             }
         })
@@ -750,7 +757,7 @@ impl Runtime {
             match heap::kind(header) {
                 heap::OBJECT if !self.resources.flags[heap::payload(header) as usize] => continue,
                 heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => continue,
-                heap::OBJECT | heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::FRAME => {}
+                heap::OBJECT | heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => {}
                 _ => continue,
             }
             if !self.heap.visit(object) {
@@ -1073,7 +1080,7 @@ impl Runtime {
                     found.push(object);
                     continue;
                 }
-                heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::FRAME => {}
+                heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => {}
                 _ => continue,
             }
             if header & heap::SUMMARY != 0 && self.summary_holds(object, via, &mut oldest) {
@@ -1118,10 +1125,10 @@ impl Runtime {
                     if header & heap::BUFFER != 0 {
                         pending.extend(elements.iter().rev().map(|&e| (e, repr)));
                     } else {
-                        let children = elements.iter().map(|&e| (e, repr));
-                        let index = self.structure_of(children);
+                        let (index, positions) = self.array_structure(&elements, repr);
                         pending.extend(index.iter().rev().copied());
                         self.remember_structure(object, index);
+                        self.resources.positions.insert(object, positions);
                     }
                 }
                 heap::CLOSURE => {
@@ -1190,7 +1197,7 @@ impl Runtime {
                     }
                 }
                 heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => {}
-                heap::ARRAY | heap::PAYLOAD | heap::CLOSURE | heap::FRAME => {
+                heap::ARRAY | heap::PAYLOAD | heap::BUILDER | heap::CLOSURE | heap::FRAME => {
                     if header & heap::SUMMARY == 0 {
                         return;
                     }
@@ -1200,7 +1207,7 @@ impl Runtime {
             }
         }
         let header = self.heap.header_of(result);
-        if summarized && header & heap::SUMMARY == 0 && matches!(heap::kind(header), heap::ARRAY | heap::PAYLOAD) {
+        if summarized && header & heap::SUMMARY == 0 && matches!(heap::kind(header), heap::ARRAY | heap::PAYLOAD | heap::BUILDER) {
             okkama_devtrace::count!("runtime", "summary inherited");
             self.summarize(result);
         }
@@ -1262,26 +1269,64 @@ impl Runtime {
 
     /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
     /// reports its release, so a reused address never inherits an old index.
-    fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
+    fn remember_structure(&mut self, container: Word, index: StructureIndex) {
         self.resources.structure.insert(container, index);
         self.heap.watch(container);
     }
 
     /// Tweed #906: the children of an immutable container that may hold an identity, in order. A leaf (a scalar, a
     /// string, an object that is not an identity, a container whose index is empty) is left out for good.
-    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> Box<[(Word, Repr)]> {
+    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> StructureIndex {
         okkama_devtrace::count!("runtime", "structure index built");
-        children.filter(|&(word, repr)| {
-            let Some(pointer) = repr.pointer(word) else { return false };
-            let header = self.heap.header_of(pointer);
-            match heap::kind(header) {
-                heap::OBJECT => header & heap::IDENTITY != 0,
-                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
-                    && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
-                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
-                _ => false,
-            }
-        }).collect()
+        children.filter(|&(word, repr)| self.may_hold_identity(word, repr)).collect()
+    }
+
+    /// Whether a child belongs in a structure index: it may hold an identity now or later.
+    fn may_hold_identity(&self, word: Word, repr: Repr) -> bool {
+        let Some(pointer) = repr.pointer(word) else { return false };
+        let header = self.heap.header_of(pointer);
+        match heap::kind(header) {
+            heap::OBJECT => header & heap::IDENTITY != 0,
+            heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
+                && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
+            heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
+            _ => false,
+        }
+    }
+
+    /// #1152: `structure_of` an array's elements, with the position of each child kept.
+    fn array_structure(&self, elements: &[Word], repr: Repr) -> (StructureIndex, Box<[u32]>) {
+        okkama_devtrace::count!("runtime", "structure index built");
+        let mut positions = Vec::new();
+        let index = elements
+            .iter()
+            .enumerate()
+            .filter(|&(_, &word)| self.may_hold_identity(word, repr))
+            .map(|(position, &word)| {
+                positions.push(position as u32);
+                (word, repr)
+            })
+            .collect();
+        (index, positions.into_boxed_slice())
+    }
+
+    /// #1152: a copied slice `range` of `parent` gets the part of the parent's index inside the range (positions
+    /// rebased), when the parent has one: the index is complete for the parent's elements, so its restriction is
+    /// complete for the slice. Without a parent index the slice is indexed by its first walk, as before.
+    pub(crate) fn inherit_slice_structure(&mut self, parent: Word, range: std::ops::Range<usize>, slice: Word) {
+        if !self.resources.enabled {
+            return;
+        }
+        let (Some(index), Some(positions)) = (self.resources.structure.get(&parent), self.resources.positions.get(&parent)) else {
+            return;
+        };
+        let low = positions.partition_point(|&position| (position as usize) < range.start);
+        let high = positions.partition_point(|&position| (position as usize) < range.end);
+        let children: StructureIndex = index[low..high].into();
+        let rebased: Box<[u32]> = positions[low..high].iter().map(|&position| position - range.start as u32).collect();
+        okkama_devtrace::count!("runtime", "structure index inherited");
+        self.remember_structure(slice, children);
+        self.resources.positions.insert(slice, rebased);
     }
 
     /// Can `value` reach a free identity? False is certain (the common case:
@@ -1296,7 +1341,7 @@ impl Runtime {
                 header & heap::IDENTITY != 0 && self.owner_of(value) == Some(Owner::Free)
             }
             heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
-            heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+            heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
             _ => false,
         }
     }
@@ -2465,7 +2510,7 @@ mod cause_stack_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 19\nmodule \"cause-stacks\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2573,7 +2618,7 @@ mod structure_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+            "sparrow 19\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
         ).unwrap();
@@ -2610,6 +2655,40 @@ mod structure_tests {
         // known then: the outer one keeps it (unknown at that moment), never the string.
         assert_eq!(&*runtime.resources.structure[&outer], &[(inner, Repr::Ref)]);
     }
+
+    /// #1152: a copied slice of an indexed array takes the part of the parent's index inside its range, positions
+    /// rebased; what a fresh scan of the slice finds is always in it. A slice of an array never walked waits for
+    /// its own first walk, as before.
+    #[test]
+    fn a_copied_slice_inherits_its_parents_index_inside_its_range() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("leaf");
+        let (a, b) = (runtime.heap.allocate_array(Repr::Ref, &[text]), runtime.heap.allocate_array(Repr::Ref, &[text]));
+        let filler: Vec<Word> = (0..40).map(|n| if n == 7 { a } else if n == 30 { b } else { text }).collect();
+        let parent = runtime.heap.allocate_array(Repr::Ref, &filler);
+        let lone = runtime.heap.allocate_array(Repr::Ref, &filler);
+        runtime.resource_graph(&[parent], None);
+        assert_eq!(&*runtime.resources.positions[&parent], &[7, 30]);
+        let small = |n: i64| crate::word::small(n).unwrap();
+        let cases = [(0, 8, vec![a], vec![7]), (7, 31, vec![a, b], vec![0, 23]), (8, 30, vec![], vec![]), (30, 40, vec![b], vec![0])];
+        for (start, end, children, positions) in cases {
+            let slice = crate::ops::slice_array(&mut runtime, parent, small(start), small(end)).unwrap();
+            let index: Vec<Word> = runtime.resources.structure[&slice].iter().map(|&(word, _)| word).collect();
+            assert_eq!(index, children, "{start}..{end}");
+            assert_eq!(&*runtime.resources.positions[&slice], &positions[..], "{start}..{end}");
+            let elements = runtime.heap.elements(slice).into_owned();
+            let (fresh, _) = runtime.array_structure(&elements, Repr::Ref);
+            assert!(fresh.iter().all(|child| runtime.resources.structure[&slice].contains(child)), "{start}..{end}");
+            // A slice of the slice inherits in turn.
+            if end - start > 2 {
+                let inner = crate::ops::slice_array(&mut runtime, slice, small(1), small(end - start)).unwrap();
+                let expected: Vec<u32> = positions.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect();
+                assert_eq!(&*runtime.resources.positions[&inner], &expected[..], "{start}..{end} then 1..");
+            }
+        }
+        let unknown = crate::ops::slice_array(&mut runtime, lone, small(0), small(10)).unwrap();
+        assert!(!runtime.resources.structure.contains_key(&unknown), "no parent index: indexed by its own first walk");
+    }
 }
 
 #[cfg(test)]
@@ -2618,7 +2697,7 @@ mod inline_identity_tests {
 
     fn runtime() -> Runtime {
         let program = okkama_sparrow::assemble(
-            "sparrow 18\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+            "sparrow 19\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
              object obj0 \"Vault\" {\n field \"n\" t0\n destroy f1\n}\n\
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\n\

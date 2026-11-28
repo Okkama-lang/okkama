@@ -6,6 +6,195 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-11-28
+
+0.6.7 is a performance release. Against 0.6.6 the cross-language ladder runs 27% faster cold and 41% faster after
+warm-up (geometric means over eleven programs, same machine and command), and the micro-benchmark A/B moves 30% over
+66 language constructs, none slower by more than 3%. After warm-up Go is now 1.23× ahead (2.1× at 0.6.6), Java 1.43×
+(2.5×), Kotlin 1.32× (2.3×); cold, Sparrow is 2.4× faster than Java and 2.9× faster than Kotlin. Small-int function
+versions and float code (#1113, #1178), OIR inlining and scalar replacement (#1112), the collector's sweep by page,
+marking and safepoints (#1114, #1174, #1175), background compilation (#1147), builders in the heap with
+`builder.sized` (#1171, #1150), one allocation per chain of string `+` (#1177), bounded string slices (#1176),
+vendored num-bigint and cranelift-frontend changes (#1148, #1151) and ownership indexes inherited by slices (#1152).
+The SPB format is now 19 (`builder.sized`, `str.concat_n`): programs built by 0.6.6 must be rebuilt. Nothing in the
+language or the public std changes.
+
+- **Float code gets small-int versions (#1178).** A function whose registers include floats now also gets the
+  untagged small-int version of #1113 when its instructions are float arithmetic and comparisons besides small-int
+  arithmetic (no conversions): float arithmetic is pure, so a restart in the general version repeats nothing
+  observable. In 03-float's Mandelbrot loop the int counter's slow path (a helper call) disappeared, and with it the
+  floats' trips through the stack: steady 10.44 → 5.20 ms (−50%; Go 3.8 ms), the rest of the ladder within ±2.7%.
+- **No reloads of GC roots in loops (#1151).** A synchronous function with a loop keeps values that are live across
+  a call in registers instead of reloading them from their stack-map slot after every call: the slot is still
+  written at the definition and listed in every stack map, which is exact because the collector never moves
+  objects. Cranelift's frontend is vendored with one switch for this (`set_stack_map_reloads`). Functions without a
+  loop (recursion, closures, role methods) keep reloading, which is cheaper there. Steady: 07-objects −16%, 10-app
+  −7%, 06-collections −2.5%; 09-closures +4.8% (its hot loop calls a closure every iteration), 03-float +2.8%, the
+  rest within ±2%. `SPARROW_CORE_RELOADS=always|never` compares.
+- **Slices inherit their parent's ownership index (#1152, step 1).** The structure index of an array (the
+  children that may hold a resource) keeps each child's position; a copied slice of an indexed array takes the
+  part of the parent's index inside its range instead of scanning its elements at its first walk. 11-ownership:
+  structure indexes built per repetition 1002 → 2, walk steps 13 147 → 7 747, steady −7%; programs without
+  `destroy` are untouched.
+- **Large builders grow in place (#1150).** A builder buffer past the small size classes is a raw allocation that
+  grows and shrinks by `realloc`: doubling leaves no garbage buffer behind and counts only its growth toward the
+  next collection, and `finish` shrinks it to its length and keeps it as the array, never copying a large result.
+  Room a shrink gives back no longer counts toward the next collection. 06-collections steady 7.56 → 6.67 ms
+  (−12%; 50 collections over 20 repetitions instead of 80), peak footprint 25.0 → 22.0 MB; the rest of the ladder
+  within ±1.7%.
+- **String slices share their text (#1176).** A slice or substring of 64 bytes or more shares its source's
+  storage (the flat string, or a version's text buffer) when it keeps at most twice what it holds, the rule array
+  slices follow (#249): `rest = rest.slice(1, n)` in a loop shares until half is left, copies that half once, and
+  so on, O(n) in all where every step used to copy. A version over a flat string is never taken for a growable
+  text buffer: `+` continues a chain only when the storage is a buffer, and a write into anything else is refused.
+  New micro cell `string-rest`. The ladder is unchanged (±1.4%).
+- **One allocation for a chain of string `+` (#1177).** `a + b + c …` of strings evaluates its parts left to right
+  and joins them with one new instruction, `str.concat_n` (opcode 164, SPB 19): the string is allocated once and
+  each part copied once, where pairwise `+` copied everything built so far at each step. A part of 256 bytes or
+  more, or one in a chain of text buffers, takes the pairwise path, so `s = s + a + b` in a loop keeps its
+  amortized appends; the result is marked for the next `+` as the last pairwise one would be. Past the 4 GiB a
+  string holds the failure is the pairwise one, raised once every part is evaluated. 05-strings steady −16%, the
+  rest of the ladder within ±2%.
+- **Builders in the heap (#1171).** An array under construction is a heap cell (`heap::BUILDER`: length,
+  capacity and a buffer in the heap) instead of a Rust payload with a vector: machine code pushes while the length
+  is below the capacity (a store and an increment, no helper call); a full buffer moves to one twice as big;
+  `finish` makes the buffer the array in place when its cell fits the length (same size class, or a large cell at
+  most an eighth bigger) and copies otherwise; outgrown and copied-from buffers serve the next builders until the
+  next collection. New instruction `builder.sized` (SPB 19, opcode 163; the assembly header is `sparrow 19`): a map
+  over a range, an array or a dictionary makes its builder with room for the source's length (capped at 4M
+  elements), so it never grows and its buffer becomes the array. Steady: 10-app −14%, 11-ownership −14%, 08-roles
+  −8%, 05-strings −3%, 06-collections unchanged; cold 10-app −10%, 08-roles −4%; 08-roles peak footprint
+  28.4 → 21.1 MB. Sizing `filter` by its source was measured and not done (06 −4…−6%, 10-app +5%).
+- **Faster collections (#1150).** Small ints sort by their tagged words without a comparison call when no budget
+  polls (equal ints are indistinguishable, so the unstable sort of words is the stable sort of values), and a
+  builder push reaches its items without a virtual downcast. 06-collections steady 10.9 → 7.4 ms (−32%), 10-app
+  −3%, 08-roles −4%.
+- **Faster strings (#1149).** Pieces and flat concatenations of ASCII strings are flagged ASCII without a scan;
+  split by one character searches the character; split and replace search line-sized texts directly instead of
+  building a two-way searcher per call; replace writes its result in one pass, and split and replace reuse their
+  vectors across calls; short pieces are copied by overlapping word moves instead of a memcpy call. 05-strings
+  steady 12.3 → 9.05 ms (−26%), 10-app −4%. Split pieces as views of their text were measured on paper and not
+  done (−1%, for unbounded retention).
+- **Faster marking (#1174).** The collector's object tracing is generic over its visitor, so marking's visitor is
+  inlined into the field loops, and objects with nothing to trace (plain strings, big integers, arrays of raw words)
+  are marked without being queued. bench/gc marking: burst −33%, deep −30%, payload −16%, ownership −8%; steady
+  burst −9%, 11-ownership −4%, 08-roles −2%.
+- **Compiling in the background (#1147, step 2).** A function's first compile also emits the static callees it
+  calls lazily (two levels deep, at most 64 waiting) and hands their Cranelift codegen to worker threads
+  (one where there is a second core, `SPARROW_CORE_COMPILE_THREADS` sets the number, 0 turns it off; a worker
+  costs about 3 MB of peak footprint, its heap's share of Cranelift's working set); a callee's first call
+  installs its finished code, so definitions keep the order a synchronous run gives them, and a unit whose lazy
+  callee was compiled in between is compiled again (the call is then direct). Statistics, profiles, dumps, memory
+  budgets, polling and sessions compile on the VM thread. Cold runs −3…−13% (11-ownership 24.9 → 21.8 ms), first
+  repetition 11-ownership −22%, 06-collections −10%; steady unchanged.
+- **Less to compile on the first run (#1147, step 1).** cranelift-frontend builds without std (its safepoint
+  spiller's sets in hashbrown); handlers with the same target share one failure exit and a function's later failure
+  exits one cold return; int add, subtract and multiply check no status without a memory budget or polling.
+  Compile time and machine code down on 06, 08, 10 and 11; first repetition 11-ownership −8%. Measured and not kept:
+  dropping the status check after a lazy call's compile (a register-allocation loss on 09-closures), branch edges
+  straight to their blocks (07-objects +32%), compile-context reuse (no gain).
+- **A safepoint that is not due costs almost nothing (#1175).** Every allocating helper asked the heap whether a
+  collection was due through a huge out-of-line function (its prologue ran before the check) and a thread-local
+  lookup in another crate (a call on macOS) for the map-node count. The check is now inline, the collection out
+  of line, and the heap reads its thread's node counter through a pointer it takes once. 10-app −6%, 05-strings
+  −7%, 06-collections −7%, 11-ownership −3%, 08-roles −2% (steady).
+- **Long integer addition and subtraction faster without an add-carry intrinsic (#1148).** num-bigint's fallback
+  carry (`b || d`) became a branch per digit on aarch64 (and every target but x86). Okkama now carries num-bigint
+  0.4.8 in `okkama-rs/vendor/` with `|` in its add and subtract carries and four digits per addition step, until
+  upstream takes the change (owner's decision). 04-bigint steady 205 → 118 ms with the same output; new micro
+  cell `int-big-add` (eight additions of a 4096-bit integer per iteration).
+- **The sweep skips pages with no live cell (#1114).** Big integers and payloads get page classes of their own,
+  so a general page never holds Rust memory to release. Marking sets a byte per 4 KiB of the pages' span, and a
+  general page whose bytes stay clear goes back whole without reading a cell; its free list is threaded when the
+  allocator takes it. Owner pages are still swept eagerly, so every box drops in the collection that finds it
+  dead. Under collector stress, pages that died whole are now poisoned too (before, empty pages escaped the
+  poison). bench/gc sweep: tiny −94%, deep −60%, burst −35%, ownership −31% (bigint +8%, payload +4%); steady:
+  ownership −10%, tiny −5.5%, deep and burst −2%; 10-app sweep 32.1 → 16.8 ms (steady −3.7%), 11-ownership
+  −10%, 08-roles and 05-strings unchanged. Peak footprint: burst +4%, payload +1.6%, others unchanged.
+- **Database column names take a keyed hash (#1103).** A result set's schema keyed its column names, which the
+  server chooses, by the engine's unkeyed FastHasher: 1024 colliding names of 4096 bytes made a schema take 66 ms
+  instead of 1.3 ms and every `row.get(name)` 63 µs. The schema now uses std's keyed RandomState (SipHash-1-3); a
+  100-column schema costs ~0.5 µs more, lookups are slightly faster. A per-process seed would not have helped
+  (`"id"` and `"id\0"` collide under every seed). FastHasher is documented for engine-assigned keys only and
+  refuses text and byte keys in debug builds; every other FastMap/FastSet keys engine-assigned integers.
+- **Small-int versions of pure int functions (#1113).** A synchronous function made only of int arithmetic and
+  comparisons, moves, small constants, branches and returns (a receiver only passed on) is compiled as a small-int
+  version: its ints are untagged machine words without tag checks or stack maps. A result outside −2^62..2^62−1, a
+  divisor 0 or −1, or a big int argument restarts the call from its entry in the general version, which is
+  compiled at the first restart; the function has no effects, so nothing observable repeats, and results,
+  failures and traces are the general version's. Off under `--max-steps` and other budgets (a restart would count
+  steps twice) and with `SPARROW_CORE_SMALL_INTS=0`. Micro A/B against #1112: baseline 2.14 → 0.85 ns (−60%),
+  constructor −57%, successor −53%, compare −47%, int-small −40%, the rest within ±1% (int-big, recursion,
+  method-call, for-loop, match); 01-arith steady 20.1 → 10.8 ms; Lcg.run's code 964 → 464 bytes. examples/ and
+  t/ give the same output with the versions on and off under the ownership verifier (364 programs).
+- **Objects that never leave a function are not made (#1112).** Two OIR passes: `inline` puts small callees that
+  cannot fail (constructors, successors, accessors; branched ones without loops up to 64 instructions) into their
+  callers, and `scalars` replaces plain objects (no destroy, no `once`, not in a region) that never leave the
+  function by their fields, loop-carried ones included. Failure reports are unchanged (only callees that cannot
+  fail are inlined); `--max-steps` counts an inlined callee's entry no more (owner's decision). Micro A/B against
+  the previous step: successor 10.0 → 2.46 ns (−76%), constructor −58%, for-loop 47.0 → 16.1 ns (−66%);
+  07-objects steady 8.4 → 5.4 ms (−36%); 10-app unchanged. examples/ and t/ give the same output with and without
+  the passes under the ownership verifier (364 programs).
+- **Cheaper int text and empty builders (#1111).** A small int becomes text through a stack buffer, without a Rust
+  String per number; an empty builder (a filter that kept nothing) finishes as the shared empty array. Measured:
+  10-app and 06-collections within noise (−2% to +0.5% over two seeds); the builder redesign that the audit's
+  estimate needs is #1171 (postponed by the owner).
+- **Closure calls through an entry word (#1110).** A closure carries its entry: its function's code when it takes
+  the arguments alone, otherwise a second compilation of the body whose prologue reads the captures from the
+  closure (made for each (function, captures) a compiled `fn.closure` names). A call is one load, a test and a call
+  with the closure as a trailing argument, instead of resolving the function, comparing arities and loading the
+  captures at every call site; async functions, natives and bodies over 400 instructions keep the general path.
+  09-closures steady 27.3 → 21.0 ms (−23%); micro closure-call −15%, closure-create +5% (the entry word is written).
+- **Fixes (2).** The ownership check refuses again a loop that overwrites a resource held in a block parameter
+  while it may be in no region (a regression of #1093, #1138). An async main's interpreter stack obeys the memory
+  budget, a worker spawned by an emulated worker is emulated too, and a worker's failure reads "RuntimeError:"
+  once (#1141). Without aws-lc (the playground) ECDSA verification works through RustCrypto for P-256 and P-384
+  with the same answers as aws-lc (#1142).
+- **Fixes.** The playground refuses failureText offsets outside the report instead of trapping, recovers after a
+  trapped call, places hover and definition as the language server does and completes the page's own std/
+  modules (#1139). The fuzz differential mode reads the one exceptions list, `differ.py` fails when nothing was
+  compared, and workers.spa runs its spawns (#1144). Blade's run and build no longer fail with status 2 on a symlink loop in an import or std tree: the
+  walk skips a link back to a directory it is inside (#1140). An internal compiler error reads the same in
+  `okkama check` and `okkama build`, with its prefix once; `sparrow` reports main's result outside 0..255 by the
+  one rule `okkama run` uses (#1143). The listen-backlog test reads the queue's limit on macOS instead of counting
+  peers (#1169).
+- **Smaller binaries (#1109).** Release packages ship stripped binaries (re-signed on macOS) with a separate
+  `-symbols.tar.gz` for crash addresses; the REPL's line editor, Markdown, TOML, Brotli, regex-syntax and SQLite's
+  bundled C are optimised for size; the core reads the runtime tables from one module instead of a second copy.
+  macOS okkama 22.8 → 20.1 MB stripped; Linux okkama 25.49 → 24.69 MB before stripping (stripping saves about
+  3.9 MB more). One crypto provider and fancy-regex out of the binary wait in #1170.
+- **Smaller machine code: one failure exit per function (#1108).** The calls of a function share one cold exit per
+  inlined activation and handler, entered with the instruction's position from a two-instruction trampoline,
+  instead of a copy of the trace-and-exit code after every call; failure reports are unchanged. Stack maps of a
+  newly compiled function are spliced in at their place instead of sorting every map again. On 10-app: machine
+  code 58 676 → 45 624 bytes (−22%), CLIF −14%, compile time ~14.9 → ~13.4 ms (−10%); micro A/B within noise
+  (+0.3%).
+- **Rare paths out of the hot layout (#1107, stage 2).** The failure blocks after every call, the allocation's
+  refill, the first call of a callee not yet compiled, an array index out of bounds and the BigInt paths of integer
+  operations are cold blocks now, placed after the hot code. Micro A/B against the previous step: recursion −11.9%,
+  method-call −8.1%; int-big and the other controls unchanged.
+- **One shared empty array, empty map and fieldless value (#1168, part of #1106; owner's decision).** `[]`, `[:]`
+  and a value of a fieldless type without destroy, runtime role or Error role are one instance per representation
+  or type, made once and kept by the heap; nothing observes the difference (no fields, no identity, no in-place
+  writer). An extension of a session that would make a published type unshareable is refused. Micro A/B against
+  the previous step: map-empty 39.37 → 7.33 ns (−81%; what remains is `size()` and the loop), match −9%; the rest
+  within ±1.7%.
+- **Small array literals and closures allocated inline (#1167, part of #1106).** Array literals of up to 16
+  elements (byte arrays packed) and closures are allocated by the JIT's own allocator in the layouts the runtime
+  writes, instead of a call into the runtime. Micro A/B against the previous step: closure-create 14.32 → 5.49 ns
+  (−62%), array-literal 12.42 → 8.22 ns (−34%), map-reduce −5%, filter-map −4%; controls within ±0.6%.
+- **Byte bit operations, `>>>`, `abs`, `sign`, `sqrt` and bit actions inline (#1166, part of #1106).** They ran
+  through the runtime's shared path on every use; the JIT now does them in machine code when the operands allow it
+  (bytes always, tagged-small ints, valid shift counts, a non-negative `sqrt`), and the rest keeps the exact path.
+  Micro A/B against 0.6.6: byte 10.18 → 2.72 ns (−73%); controls within ±1.5%.
+- **Float at native speed on the fast path (#1105).** The inline int→float and float→int conversions no longer
+  call a safepoint (they allocate nothing; a collection is due only after an allocation, whose slow path is a
+  safepoint). `+ − × ÷` check finiteness with one subtraction (`x − x`) instead of `fabs` and a constant, and their
+  slow path is cold and never returns (a non-finite result always fails), with its failure blocks cold too, so the
+  result stays in a float register; float→int converts with a bare saturating instruction after its range proof.
+  Micro A/B against 0.6.6 (A1 B1 B2 A2, two layout seeds): float 9.09 → 3.40 ns (−63%); over 56 cells geomean
+  −1.9% (−0.4% without float), no cell worse than +1.0%; 03-float steady 13.6 → 10.6 ms (−22%, Docker).
+
 ## [0.6.6] — 2026-11-27
 
 0.6.6 brings Okkama to the browser: a playground on okkama-lang.github.io/playground/ checks, formats, explains
@@ -100,7 +289,7 @@ public std changes.
   pointer-free proofs, so a suspended frame traces every register of a traced kind, and entries from Rust nest
   at most 200 deep on wasm32 (a stack overflow, not a trap). The tests that waited for it (tasks, async destroys,
   selection, all_futures, future inputs, timers, payloads) run on the interpreter in the build without the JIT,
-  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 141 mnemonics. The design's §6.4
+  and `tests/mnemonics/async.spa` makes the coverage test hold every one of the 142 mnemonics. The design's §6.4
   hypothesis was confirmed: the JIT recorded an async body twice in a trace when a failure unwound through a
   suspended `region.settle_unwind`, because it keyed the activation by its machine frame pointer, which differs
   after a resumption; it now keys an async body by its heap frame, as the interpreter does. With nothing left
@@ -9218,7 +9407,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4

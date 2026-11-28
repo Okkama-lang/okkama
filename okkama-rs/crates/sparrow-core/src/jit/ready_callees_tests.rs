@@ -5,7 +5,7 @@ use super::*;
 use cranelift_codegen::ir::{ExternalName, InstructionData, Opcode};
 
 const PAIR: &str = r#"
-sparrow 18
+sparrow 19
 module "ready-callees" "1.0.0"
 type t0 int
 function f0 "identity" {
@@ -71,7 +71,10 @@ fn ready_static_target_elides_dispatch_but_keeps_the_call_and_status_check() {
     // Table/status loads and frontend root reloads belong to the fallback;
     // count branches exactly, but leave reload placement to Cranelift.
     assert!(opcodes(&old, 1, Opcode::Load) >= opcodes(&fast, 1, Opcode::Load) + 2);
-    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 3);
+    // The fallback adds the table check and its compile helper's status check; since #1108 that check enters the
+    // same shared failure exit as the call's, so the exit's own branch is not repeated. (#1147 measured dropping
+    // the compile check: a register-allocation loss on 09-closures' hot closure, +17% steady; kept.)
+    assert_eq!(opcodes(&old, 1, Opcode::Brif), opcodes(&fast, 1, Opcode::Brif) + 2);
     assert!(opcodes(&fast, 1, Opcode::Brif) > 0);
     assert_eq!(fast.run_function_with(1, &[word::small(42).unwrap()], 2 << 20).unwrap(), word::small(42).unwrap());
 }
@@ -181,7 +184,7 @@ fn ordinary_signatures_keep_register_and_stack_arguments() {
             let mut init = (0..arity).map(|i| format!(" {i}: const r{i}, int {}\n", 43 - arity + i)).collect::<String>();
             init.push_str(&format!(" {arity}: call r{arity}, f0, [{params}]\n {}: ret r{arity}", arity + 1));
             let text = format!(r#"
-sparrow 18
+sparrow 19
 module "arity" "1.0.0"
 type t0 int
 function f0 "callee" {{
@@ -208,7 +211,7 @@ function f1 "caller" {{
 #[test]
 fn native_trampolines_are_not_used_as_ready_static_ordinary_entries() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "native" "1.0.0"
 type t0 int
 function f0 "clock" native "runtime/time@1::wall_clock/0" {
@@ -299,7 +302,7 @@ fn lazy_compilation_failure_propagates_and_never_publishes_a_zero_entry() {
 #[test]
 fn bounded_self_and_mutual_recursion_keep_stack_and_step_checks() {
     let recursive = r#"
-sparrow 18
+sparrow 19
 module "recursion" "1.0.0"
 type t0 int
 type t1 bool
@@ -358,7 +361,7 @@ function f1 "caller" {
 #[test]
 fn ready_async_entries_still_construct_cold_futures() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "async-entry" "1.0.0"
 type t0 int
 type t1 future t0
@@ -388,7 +391,7 @@ function f1 "caller" {
 #[test]
 fn cap_fields_prove_the_target_and_use_the_ordinary_receiver_abi() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "cap-entry" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -425,7 +428,7 @@ function f1 "caller" {
 #[test]
 fn mixed_closure_captures_keep_the_existing_bridge_and_roots() {
     let text = r#"
-sparrow 18
+sparrow 19
 module "captures" "1.0.0"
 type t0 int
 type t1 str
@@ -464,9 +467,10 @@ function f1 "caller" {
             assert_eq!(runtime.heap.integer(runtime.heap.field(result, 0)).to_string(), "123456789012345678901234567890");
             assert_eq!(runtime.heap.text(runtime.heap.field(result, 1)), "captureargument");
             // #928: the helper stays as the fallback; the direct path calls the body for 0, 1 or 2 captures
-            // (two here), one indirect call per capture count the site can take (its one argument + up to 2).
+            // (two here), one indirect call per capture count the site can take (its one argument + up to 2), and
+            // one through the closure's entry word (#1110).
             assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.call_closure), 1);
-            assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
+            assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 4);
         }
     }
 }
@@ -481,5 +485,132 @@ fn float_bits_use_the_same_word_entry_abi() {
             assert_eq!(runtime.run_function_with(1, &[value.to_bits()], 2 << 20).unwrap(), value.to_bits());
         }
         assert_eq!(compiles(&runtime, 1), usize::from(old));
+    }
+}
+/// #1108: the calls of a function share one failure exit per handler context: three calls and no handler leave
+/// one `trace` call in the caller, and a failure after each still reports its own pc (the interpreter
+/// comparison in `interp::tests` checks the sites).
+#[test]
+fn calls_share_one_failure_exit() {
+    let text = r#"
+sparrow 19
+module "shared-exit" "1.0.0"
+type t0 int
+function f0 "identity" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "caller" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: call r1, f0, [r1]
+ 2: call r1, f0, [r1]
+ 3: ret r1
+}
+"#;
+    let mut runtime = runtime(text, true);
+    compile(&mut runtime, 0).unwrap();
+    compile(&mut runtime, 1).unwrap();
+    // Late-bound calls: three call sites, each with its compile-on-first-call path, all checked.
+    assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
+    assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
+    assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
+}
+
+/// #1147 (A1): handlers with the same target and failure register share one failure exit: two ranges covering three
+/// calls leave one `trace` call (one per handler index before), and the function still runs.
+#[test]
+fn handlers_with_one_target_share_one_failure_exit() {
+    let text = r#"
+sparrow 19
+module "shared-handler-exit" "1.0.0"
+type t0 int
+type t1 failure
+function f0 "identity" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "caller" {
+ registers [t0, t0, t1]
+ params [r0]
+ result t0
+ handler 0 1 @4 r2
+ handler 1 3 @4 r2
+ 0: call r1, f0, [r0]
+ 1: call r1, f0, [r1]
+ 2: call r1, f0, [r1]
+ 3: ret r1
+ 4: ret r0
+}
+"#;
+    let mut runtime = runtime(text, true);
+    compile(&mut runtime, 0).unwrap();
+    compile(&mut runtime, 1).unwrap();
+    assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
+    assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.trace), 1);
+    assert_eq!(runtime.run_function_with(1, &[word::small(7).unwrap()], 2 << 20).unwrap(), word::small(7).unwrap());
+}
+
+/// #1147 (step 2): `p` calls `g`, then `f`, and `f` calls `g`. With background codegen, compiling `p` emits `g` and
+/// `f` ahead; `f`'s unit left its call of `g` lazy, and `g` is published before `f` is first called, so that unit
+/// is stale and `f` is compiled again with a direct call, as a synchronous run compiles it.
+const STALE: &str = r#"
+sparrow 19
+module "background" "1.0.0"
+type t0 int
+function f0 "g" {
+ registers [t0]
+ params [r0]
+ result t0
+ 0: ret r0
+}
+function f1 "f" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: ret r1
+}
+function f2 "p" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f0, [r0]
+ 1: call r1, f1, [r1]
+ 2: ret r1
+}
+"#;
+
+#[test]
+fn background_units_install_as_a_synchronous_run_compiles_them() {
+    for threads in [0, 2] {
+        let mut runtime = runtime(STALE, false);
+        runtime.jit.compile_threads = threads;
+        compile(&mut runtime, 2).unwrap();
+        if threads > 0 {
+            assert_eq!(runtime.jit.pending.keys().copied().collect::<Vec<_>>(), vec![0, 1], "g and f emitted ahead");
+        }
+        assert_eq!(runtime.run_function_with(2, &[word::small(5).unwrap()], 2 << 20).unwrap(), word::small(5).unwrap());
+        assert!(runtime.jit.pending.is_empty());
+        assert!(runtime.invocations[0].code != 0 && runtime.invocations[1].code != 0);
+        // `f` calls the published `g` directly in both modes.
+        assert_eq!(compiles(&runtime, 1), 0, "threads {threads}");
+    }
+}
+
+/// A runtime dropped while its compile workers still hold units stops them and frees everything.
+#[test]
+fn a_runtime_with_units_in_flight_drops_cleanly() {
+    for _ in 0..50 {
+        let mut runtime = runtime(STALE, false);
+        runtime.jit.compile_threads = 2;
+        compile(&mut runtime, 2).unwrap();
+        drop(runtime);
     }
 }

@@ -62,7 +62,13 @@ impl Finding {
 
     /// An analysis error of `okkama check`, in its file or in `root`.
     pub fn semantic(found: &CheckError, root: &SourceFile) -> Self {
-        let kind = if found.error.unsupported { "analysis limitation" } else { "semantic error" };
+        let kind = if found.error.unsupported {
+            "analysis limitation"
+        } else if found.error.internal {
+            "internal compiler error"
+        } else {
+            "semantic error"
+        };
         Self::at(found.source.as_ref().unwrap_or(root), found.error.span, Severity::Error, kind, &found.error.message)
     }
 
@@ -414,6 +420,20 @@ mod tests {
         assert_eq!(report.text, rendered);
         assert_eq!(report.findings[0].kind, "syntax error");
         assert!(report.text.contains("\n2 | main() is int { let x = null; }\n"), "{}", report.text);
+    }
+
+    /// #1143: `okkama check` and `okkama build` name an internal error with one kind, "internal compiler error",
+    /// once, before the bare text.
+    #[test]
+    fn check_and_build_name_an_internal_error_alike() {
+        let source = SourceFile::new("app.ok", "module app v1.0.0;\nmain() is int { 0; }\n").unwrap();
+        let error = LoweringError::internal(Span::new(19, 23), "lowering produced invalid IR: broken");
+        let found = CheckError { source: None, error: crate::lowering::checked_lowering_error(0, &error) };
+        let checked = Finding::semantic(&found, &source);
+        let built = Finding::lowering(&error, &source);
+        assert_eq!(checked, built);
+        assert_eq!(checked.kind, "internal compiler error");
+        assert_eq!(checked.text, "app.ok:2:1: internal compiler error: lowering produced invalid IR: broken\n");
     }
 
     #[test]

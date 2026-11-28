@@ -73,6 +73,7 @@ fn total(kind: &InstKind) -> bool {
         | InstKind::BoolNot(_)
         | InstKind::BoolCompare { .. }
         | InstKind::StrConcat { .. }
+        | InstKind::StrConcatN(_)
         | InstKind::StrCompare { .. }
         | InstKind::ObjNew { .. }
         | InstKind::ObjGet { .. }
@@ -85,6 +86,7 @@ fn total(kind: &InstKind) -> bool {
         | InstKind::ArrayNew(_)
         | InstKind::ArrayLen(_)
         | InstKind::BuilderNew
+        | InstKind::BuilderSized(_)
         | InstKind::IntAbs(_)
         | InstKind::IntSign(_)
         | InstKind::ByteCompare { .. }

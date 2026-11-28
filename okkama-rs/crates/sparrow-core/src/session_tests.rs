@@ -7,7 +7,7 @@ use crate::word::{Repr, Word};
 
 /// A program of `parts`: (types, objects, roles, functions) texts, joined in order.
 fn program(parts: &[(&str, &str, &str, &str)]) -> okkama_sparrow::Program {
-    let mut text = String::from("sparrow 18\nmodule \"session\" \"1.0.0\"\n");
+    let mut text = String::from("sparrow 19\nmodule \"session\" \"1.0.0\"\n");
     for section in 0..4 {
         for part in parts {
             text.push_str([part.0, part.1, part.2, part.3][section]);

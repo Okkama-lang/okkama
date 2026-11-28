@@ -7,3 +7,14 @@ publish = false
 
 [dependencies]
 mimalloc = { version = "0.1.52", default-features = false }
+
+# The workspace's lints except `unsafe_code = "forbid"`: a global allocator is unsafe code, so this table is
+# spelled out instead of `workspace = true` (Cargo 1.100 warns `missing_lints_inheritance` without it).
+[lints.rust]
+missing_debug_implementations = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(okkama_release)"] }
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
