@@ -28,6 +28,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 5b: the Rust SDK (#1083).** The crates `okkama-ext` and `okkama-ext-macros` write an
+  extension in plain Rust: `#[native] fn decode(bytes: &[u8]) -> Result<Image, Failure>`, `#[native(blocking)]` for
+  work longer than a millisecond, `#[state]` and `#[state(shared)]` for data behind a `native object`,
+  `#[native(release)]` for the function a wrapper's `destroy` calls, and `extension!` for the descriptor. Symbols and
+  signatures come from the Rust types, and a panic never crosses into the runtime. `okkama ext declare LIB` prints the
+  Okkama declarations of a library as a starting module. Rust `rat` is not supported yet.
 - **Native extensions, step 5a: loading (#1083).** `okkama run --ext PATH` (repeatable) loads a trusted native library
   and binds the program's natives that std does not provide to it; `--no-native` loads nothing. The library's
   `okkama_extension` descriptor is checked whole before any of its code runs (ABI version, signatures against the

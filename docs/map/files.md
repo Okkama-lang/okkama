@@ -123,7 +123,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 78 files, 42111 lines
+## sparrow — 78 files, 42213 lines
 
 - `sparrow-core/src/budget.rs` 481 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
@@ -131,7 +131,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1299 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/ext.rs` 228 — Trusted extension loading, descriptor validation and signature binding.
+- `sparrow-core/src/ext.rs` 305 — Trusted extension loading, descriptor validation and signature binding.
 - `sparrow-core/src/heap.rs` 3025 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1120 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1155 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/process_host.rs` 428 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
 - `sparrow-core/src/host/native_ext/asynchronous.rs` 90 — Only the owned job and atomic cancellation state cross the pool boundary.
 - `sparrow-core/src/host/native_ext/states.rs` 91 — Opaque payload ownership stays in the watched handle arena, on the VM thread.
-- `sparrow-core/src/host/native_ext/values.rs` 393 — Checked value conversion; only validated call-table entries reach the heap.
+- `sparrow-core/src/host/native_ext/values.rs` 418 — Checked value conversion; only validated call-table entries reach the heap.
 - `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 - `sparrow-core/src/jit/background.rs` 105 — #1147 (step 2): Cranelift's codegen of emitted units on worker threads.
@@ -209,20 +209,21 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 84 — The environment-switch policy, one implementation for every crate (#1095): booleans (#1067), byte counts
 - `okkama-devtrace/src/lib.rs` 329 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5245 lines
+## cli — 11 files, 5270 lines
 
 - `okkama-cli/src/agents.rs` 219 — `okkama agents` (#1190): the entry point for AI agents. Nobody but its authors knows Okkama, so the toolchain
 - `okkama-cli/src/core.rs` 98 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 326 — Compile-first documentation tests (#514), using the compiler doc model.
+- `okkama-cli/src/ext.rs` 20 — Editable declarations from a validated native extension descriptor.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 923 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1564 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1569 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 425 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 604 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 552 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 80 files, 25526 lines
+## other — 83 files, 26134 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -232,6 +233,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `blade/src/toolchain.rs` 561 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 7
+- `okkama-ext/src/__private.rs` 237 — Macro support, not an independent extension API.
+- `okkama-ext/src/lib.rs` 24 — Safe Rust functions over ABI-1 call scopes. The macros own the foreign boundary.
+- `okkama-ext-macros/src/lib.rs` 347 — ABI-1 descriptors and non-unwinding shims for ordinary Rust functions.
 - `okkama-native/src/lib.rs` 7 — Хостовая криптография Okkama: проверенные реализации RustCrypto и aws-lc
 - `okkama-native/src/ops.rs` 1099 — Операции хостовой криптографии над байтами (без unsafe; исключение — один
 - `okkama-native/src/rsa_public.rs` 84 — Открытые операции RSA через низкоуровневый API aws-lc: проверка подписей

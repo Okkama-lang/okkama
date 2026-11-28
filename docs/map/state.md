@@ -28,8 +28,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   feature/1083-load): ext::load (dlopen, cache, validation incl. null callbacks), --ext/--no-native (okkama run/exec,
   sparrow, workers, REPL), OKKAMA_EXT_CHECK views, playground lists external natives; C sample in okkama-cli
   tests/extensions/c, tests extensions.rs (okkama-cli 11, sparrow-cli 1) run by CI's nextest job. I removed an
-  unrequested `okkama test` alias. Next: 5b `1083-sdk` (okkama-ext + okkama-ext-macros, Rust sample, `okkama ext
-  declare`). Deferred to the ABI freeze (owner's call on return): SDK license
+  unrequested `okkama test` alias. Step 5b done (Codex, reviewed):
+  crates okkama-ext (+ __private shims, fake-host tests) and okkama-ext-macros; okkama-cli src/ext.rs (`ext
+  declare`, one module per library); Rust sample tests/extensions/rust (excluded from the workspace, own lock);
+  ruling: shared states release through `#[native(release)]` (always releases, also on Failure/panic), by-value
+  shared T is a compile error; Rust `rat` deferred (no num-rational in the lock). Next: step 6 `1083-blade`. Deferred to the ABI freeze (owner's call on return): SDK license
   and crates.io publication of okkama-ext/okkama-port.
 - [~] Web logging: #1179 researched (agent; design note on the ticket; decision in decisions.md), #1180 reworked
   (formatting → host non-blocking stderr buffer → StderrLogs, drain); step 1 formatting in progress (agent,
