@@ -1,0 +1,1428 @@
+module os/port v1.0.0;
+
+import "error" take InvalidArgument;
+import "async/atomic" take Atomic;
+import "async/event" take Event;
+import "async/lock" take Lock;
+import "async/timeout" take Before, TimedOut;
+import "time/clock" take SystemClock, MonotonicInstant;
+import "time/duration" take Duration;
+import "encoding/utf" take ByteOrder, Utf8Encoded;
+import "encoding/binary" take IntegerBytes, Signedness;
+import "io/input" take ByteInput;
+import "json" take Json, JsonField, ParsedJson, JsonError, JsonKind;
+import "cbor" take Cbor, CborEntry, ParsedCbor, CborError, CborKind;
+import "os/command" take Commanding, InheritedCommand;
+import "os/process" take Process, ProcessFailure, ExitKind;
+import "fs/path" take Path;
+import "fs/temp" take TemporaryDirectory;
+import "runtime/utf" take utf8_valid_prefix, utf8_decode;
+
+// Code in any language, called from Okkama through a helper process (#1081):
+// the Erlang "ports" model. A helper is a program that reads framed requests
+// on its standard input and writes framed replies on its standard output
+// (docs/port-protocol.md); okkama-port is the Rust crate that writes the
+// helper side in a few lines.
+//
+// ```okkama
+// import "os/command" take InheritedCommand;
+// import "fs/path" take Path;
+// import "json" take Json, JsonField;
+//
+// async main() is int {
+//     let images = Port(command: InheritedCommand(program: Path("bin/image-helper")));
+//     let thumb = await images.call(method: "resize", payload: Json(JsonField("width", 200)), bytes: [byte(137)]);
+//     let size = thumb.json().int("bytes");
+//     images.close();
+//     0;
+// }
+// ```
+//
+// - A helper starts with the first call, not when the port is made. One that
+//   ends, crashes, breaks the protocol or does not answer in time is stopped,
+//   the calls waiting on it fail with a PortFailure, and the next call starts
+//   a fresh one. A helper's failure never takes the program down.
+// - Calls carry ids, so many may be in flight at once on one helper, and
+//   replies may come in any order.
+// - Each call has a timeout (30 seconds unless told otherwise); it covers
+//   starting the helper when one is needed. A call that times out stops its
+//   helper, as a hung helper would hold up every call after it.
+// - instances: N keeps up to N helpers, and a call goes to the one with the
+//   fewest calls in flight.
+// - Payloads are JSON (Json) or CBOR (Cbor), chosen per call; the reply comes
+//   in the codec of its request. Raw bytes travel beside the payload in
+//   frames of their own, without base64.
+//
+// The helper's standard error is free for its logs: the port keeps its last
+// 2 KiB for the failure of a crashed helper. A helper is found by its
+// command's program path: a path with a directory runs that file, a bare name
+// is looked up in PATH. Blade does not carry helper binaries yet; a program
+// names the path of one it built or installed.
+
+// The codec of a call's payload, and of its reply.
+//
+// - `json`: JSON text, which every helper accepts.
+// - `cbor`: CBOR, for helpers that name it in their hello.
+enum PortCodec = (json, cbor);
+
+// Why a call to a helper failed.
+//
+// - `unavailable`: The helper could not be started (the command and why).
+// - `incompatible`: The helper speaks another protocol version than 1.
+// - `unsupported`: The helper does not accept this codec.
+// - `timed_out`: No answer in time; the helper was stopped.
+// - `crashed`: The helper ended or was stopped before it answered; detail
+//   says how it ended and what it last wrote on its standard error.
+// - `malformed`: The helper broke the protocol; it was stopped.
+// - `refused`: The helper answered with a failure: its code and message.
+// - `wrong_codec`: The reply was asked for in one codec and came in another.
+// - `closed`: The port is closed.
+enum PortFailure is Error = (
+    unavailable(command is string, reason is string),
+    incompatible(protocol is int),
+    unsupported(codec is PortCodec),
+    timed_out(method is string),
+    crashed(method is string, detail is string),
+    malformed(method is string, reason is string),
+    refused(method is string, code is string, message is string),
+    wrong_codec(asked is PortCodec, answered is PortCodec),
+    closed
+);
+
+// Helper processes that answer calls: started with the first call, restarted
+// after a crash or a hang.
+//
+// ```okkama
+// import "os/command" take InheritedCommand;
+// import "fs/path" take Path;
+// import "json" take Json, JsonField;
+//
+// async main() is int {
+//     let text = Port(command: InheritedCommand(program: Path("bin/text-helper")), instances: 2);
+//     let words = await text.call("words", Json(JsonField("text", "to be or not")));
+//     let count = words.json().int("count");
+//     text.close();
+//     0;
+// }
+// ```
+object Port {
+    has helpers is @PortHelper;
+    has closed is Atomic<bool>;
+
+    // Up to instances helpers run by command; a frame from a helper may be
+    // frame_limit bytes (16 MiB unless told otherwise).
+    Port(command is Commanding, instances is int = 1, frame_limit is int = 16777216) {
+        confirm instances > 0
+            else throw InvalidArgument.because("a port needs at least one helper");
+        confirm frame_limit > 0
+            else throw InvalidArgument.because("a frame limit must be positive");
+        // The helpers' own state: no process starts before the first call.
+        helpers = (0..instances).map() -> index {
+            PortHelper(command: command, frame_limit: frame_limit);
+        };
+        closed = Atomic(false);
+    }
+
+    // The helper's answer to method with a JSON payload and raw bytes;
+    // PortFailure when the helper refuses, crashes, hangs past timeout or
+    // breaks the protocol.
+    async call(
+        method is string,
+        payload is Json = Json(),
+        bytes is @byte = [],
+        timeout is Duration = Duration(seconds: 30.rat()),
+    ) is PortReply {
+        await self.ask(
+            PortRequest(
+                name: method,
+                form: PortCodec.json,
+                json: payload,
+                cbor: Cbor(),
+                bytes: bytes
+            ),
+            timeout
+        );
+    }
+
+    // The helper's answer to method with a CBOR payload and raw bytes; the
+    // helper must accept CBOR, or the call is PortFailure.unsupported.
+    async call(
+        method is string,
+        payload is Cbor,
+        bytes is @byte = [],
+        timeout is Duration = Duration(seconds: 30.rat()),
+    ) is PortReply {
+        await self.ask(
+            PortRequest(
+                name: method,
+                form: PortCodec.cbor,
+                json: Json(),
+                cbor: payload,
+                bytes: bytes
+            ),
+            timeout
+        );
+    }
+
+    // Stops every helper; calls in flight fail with PortFailure.closed, and so
+    // does every later call. Closing again does nothing.
+    close() is void {
+        closed.replace(true);
+        for helpers -> helper {
+            helper.close();
+        }
+    }
+
+    hidden async ask(request is PortRequest, timeout is Duration) is PortReply {
+        confirm !closed.value() else throw PortFailure.closed;
+        confirm timeout::Span::seconds >= 0.rat()
+            else throw InvalidArgument.because("a timeout must not be negative");
+        let deadline = SystemClock().monotonic_instant() + timeout;
+        let chosen is int = (0..helpers.size()).reduce(0) -> best, index {
+            if helpers[index].load() < helpers[best].load() {
+                index;
+            }
+            else {
+                best;
+            }
+        };
+        await helpers[chosen].call(request, deadline);
+    }
+}
+
+// What a helper answered: its payload in the codec of the request, and the
+// raw bytes it attached.
+//
+// ```okkama
+// import "os/command" take InheritedCommand;
+// import "fs/path" take Path;
+//
+// async main() is int {
+//     let hashes = Port(command: InheritedCommand(program: Path("bin/hash-helper")));
+//     let reply = await hashes.call(method: "digest", bytes: [byte(1), byte(2)]);
+//     let hex = reply.json().text("hex");
+//     let raw = reply.bytes();
+//     hashes.close();
+//     0;
+// }
+// ```
+object PortReply {
+    has codec is PortCodec;
+    has json_payload is Json;
+    has cbor_payload is Cbor;
+    has attachments is @@byte;
+
+    // Made by Port.call(); not constructed directly.
+    PortReply(codec is PortCodec, json is Json, cbor is Cbor, attachments is @@byte) {
+        self.codec = codec;
+        json_payload = json;
+        cbor_payload = cbor;
+        self.attachments = attachments;
+    }
+
+    // The payload of a reply to a JSON call (null when the helper sent none);
+    // PortFailure.wrong_codec for a CBOR call.
+    json() is Json {
+        confirm codec == PortCodec.json else throw PortFailure.wrong_codec(PortCodec.json, codec);
+        json_payload;
+    }
+
+    // The payload of a reply to a CBOR call (null when the helper sent none);
+    // PortFailure.wrong_codec for a JSON call.
+    cbor() is Cbor {
+        confirm codec == PortCodec.cbor else throw PortFailure.wrong_codec(PortCodec.cbor, codec);
+        cbor_payload;
+    }
+
+    // The raw bytes the helper attached, joined in order; [] when none.
+    bytes() is @byte {
+        attachments.reduce([]) -> joined, piece {
+            joined + piece;
+        };
+    }
+}
+
+// One call on its way to a helper: its method, its payload in the codec
+// asked for, and the bytes it carries.
+hidden object PortRequest {
+    has name is string;
+    has form is PortCodec;
+    has json is Json;
+    has cbor is Cbor;
+    has bytes is @byte;
+
+    PortRequest(:name, :form, :json, :cbor, :bytes);
+
+    // What a failure names.
+    cap Call {
+        method is string {
+            name;
+        }
+
+        codec is PortCodec {
+            form;
+        }
+    }
+
+    // The frames of the request numbered id: the message, then its
+    // attachment when it carries bytes.
+    frames(id is int) is @byte {
+        let count is int = if bytes.size() > 0 {
+            1;
+        }
+        else {
+            0;
+        };
+        let body is @byte = if form == PortCodec.json {
+            [byte(74)] + Utf8Encoded(Json(
+                JsonField("kind", "request"),
+                JsonField("id", id),
+                JsonField("method", name),
+                JsonField("payload", json),
+                JsonField("attachments", count),
+            ).string()).bytes();
+        }
+        else {
+            [byte(67)] + Cbor(
+                CborEntry("kind", "request"),
+                CborEntry("id", id),
+                CborEntry("method", name),
+                CborEntry("payload", cbor),
+                CborEntry("attachments", count),
+            ).encoding();
+        };
+        let framed = PortFrame(body).bytes();
+        if count > 0 {
+            framed + PortFrame([byte(66)] + bytes).bytes();
+        }
+        else {
+            framed;
+        }
+    }
+}
+
+// A JSON message as one frame.
+hidden object PortJsonFrame {
+    has message is Json;
+
+    PortJsonFrame(message is Json) {
+        self.message = message;
+    }
+
+    bytes() is @byte {
+        PortFrame([byte(74)] + Utf8Encoded(message.string()).bytes()).bytes();
+    }
+}
+
+// One frame: a 4-byte big-endian length, then the body.
+hidden object PortFrame {
+    has body is @byte;
+
+    PortFrame(body is @byte) {
+        self.body = body;
+    }
+
+    bytes() is @byte {
+        IntegerBytes(
+            value: body.size(),
+            size: 4,
+            signedness: Signedness.unsigned,
+            order: ByteOrder.big,
+        ).bytes() + body;
+    }
+}
+
+// Why a helper process ended, as its session records it.
+hidden enum PortEnd = (
+    crashed(detail is string),
+    malformed(reason is string),
+    incompatible(protocol is int),
+    stopped(reason is string),
+    closed
+);
+
+// What a waiting call is told.
+hidden enum PortOutcome = (
+    answered(reply is PortReply),
+    refused(code is string, message is string),
+    ended(end is PortEnd)
+);
+
+// A broken frame or message from the helper.
+hidden enum PortBreach is Error = (reason(text is string));
+
+// One call waiting for its answer.
+hidden object PortWaiter {
+    has done is Event;
+    has outcome is Atomic<@PortOutcome>;
+
+    PortWaiter() {
+        done = Event();
+        outcome = Atomic([]);
+    }
+
+    // Gives the call its outcome; only the first counts.
+    settle(given is PortOutcome) is void {
+        if outcome.compare_and_replace([], [given]) {
+            done.set();
+        }
+    }
+
+    // The outcome, once there is one, or TimedOut at the deadline.
+    async answer(deadline is MonotonicInstant) is PortOutcome {
+        let waiting is Before<Event> = Before(
+            origin: done.wait(),
+            deadline: deadline,
+            clock: SystemClock()
+        );
+        await waiting.outcome();
+        outcome.value()[0];
+    }
+}
+
+// One slot of a port: the helper process running in it now, if any, and the
+// calls in flight there.
+hidden object PortHelper {
+    has command is Commanding;
+    has frame_limit is int;
+    has current is Atomic<@PortSession>;
+    has starting is Lock;
+    has calls is Atomic<int>;
+    has shut is Atomic<bool>;
+
+    PortHelper(command is Commanding, frame_limit is int) {
+        self.command = command;
+        self.frame_limit = frame_limit;
+        current = Atomic([]);
+        starting = Lock();
+        calls = Atomic(0);
+        shut = Atomic(false);
+    }
+
+    // Calls in flight here.
+    load() is int {
+        calls.value();
+    }
+
+    async call(request is PortRequest, deadline is MonotonicInstant) is PortReply {
+        calls.replace(calls.value() + 1);
+        defer calls.replace(calls.value() - 1);
+        let method = request::Call::method;
+        let session = await self.session(method, deadline);
+        if request::Call::codec == PortCodec.cbor && !session.accepts("cbor") {
+            throw PortFailure.unsupported(PortCodec.cbor);
+        }
+        let id = session.number();
+        let waiter = PortWaiter();
+        session.expect(id, waiter);
+        // A helper that does not read its input would hold the write up: the deadline covers it too.
+        let sending is Before<int> = Before(
+            origin: session.send(request.frames(id)),
+            deadline: deadline,
+            clock: SystemClock()
+        );
+        let outcome = try {
+            await sending.outcome();
+            await waiter.answer(deadline);
+        }
+        catch error is TimedOut {
+            session.forget(id);
+            session.stop(PortEnd.stopped("a call to " + method + " timed out"));
+            throw PortFailure.timed_out(method);
+        };
+        match outcome {
+            case PortOutcome.answered(reply) {
+                reply;
+            }
+            case PortOutcome.refused(code, message) {
+                throw PortFailure.refused(method, code, message);
+            }
+            case PortOutcome.ended(end) {
+                throw PortEndFailure(end: end, method: method).failure();
+            }
+        }
+    }
+
+    // Stops the helper running here, if any, and starts no other.
+    close() is void {
+        shut.replace(true);
+        for current.value() -> session {
+            session.stop(PortEnd.closed);
+        }
+    }
+
+    // The helper running here, started now if there is none or it ended.
+    hidden async session(method is string, deadline is MonotonicInstant) is PortSession {
+        let guard = await starting.guard();
+        defer guard.close();
+        confirm !shut.value() else throw PortFailure.closed;
+        let running is @PortSession = current.value().filter() -> session {
+            session.running();
+        };
+        if running.size() > 0 {
+            running[0];
+        }
+        else {
+            let fresh = PortSession(process: Process(command: command), frame_limit: frame_limit);
+            current.replace([fresh]);
+            await fresh.open(command.string(), method, deadline);
+            fresh;
+        }
+    }
+}
+
+// A PortEnd as the failure of a call to method.
+hidden object PortEndFailure {
+    has end is PortEnd;
+    has method is string;
+
+    PortEndFailure(:end, :method);
+
+    failure() is PortFailure {
+        match end {
+            case PortEnd.crashed(detail) {
+                PortFailure.crashed(method, detail);
+            }
+            case PortEnd.malformed(reason) {
+                PortFailure.malformed(method, reason);
+            }
+            case PortEnd.incompatible(protocol) {
+                PortFailure.incompatible(protocol);
+            }
+            case PortEnd.stopped(reason) {
+                PortFailure.crashed(method, "stopped: " + reason);
+            }
+            case PortEnd.closed {
+                PortFailure.closed;
+            }
+        }
+    }
+}
+
+// One helper process: the handshake, the calls in flight, the task that reads
+// its frames and the one that keeps the tail of its standard error.
+hidden object PortSession {
+    has process is Process;
+    has frame_limit is int;
+    has ids is Atomic<int>;
+    has pending is Atomic<%int:PortWaiter>;
+    has writing is Lock;
+    has greeted is Event;
+    has codecs is Atomic<@string>;
+    has ended is Atomic<@PortEnd>;
+    has tasks is Atomic<@Future<int>>;
+    has errors is Atomic<@byte>;
+    has drained is Event;
+
+    PortSession(process is Process, frame_limit is int) {
+        self.process = process;
+        self.frame_limit = frame_limit;
+        ids = Atomic(0);
+        pending = Atomic([:]);
+        writing = Lock();
+        greeted = Event();
+        codecs = Atomic([]);
+        ended = Atomic([]);
+        tasks = Atomic([]);
+        errors = Atomic([]);
+        drained = Event();
+    }
+
+    // Whether the helper is still serving.
+    running() is bool {
+        ended.value().size() == 0;
+    }
+
+    // Whether the helper said it accepts codec.
+    accepts(codec is string) is bool {
+        codecs.value().filter() -> name {
+            name == codec;
+        }.size() > 0;
+    }
+
+    // The next request id.
+    number() is int {
+        ids.replace(ids.value() + 1);
+        ids.value();
+    }
+
+    // Starts the helper and waits for its hello.
+    async open(command is string, method is string, deadline is MonotonicInstant) is void {
+        try {
+            process.streams();
+        }
+        catch failure is ProcessFailure {
+            ended.replace([PortEnd.stopped("not started")]);
+            match failure {
+                case ProcessFailure.detailed(_code, message) {
+                    throw PortFailure.unavailable(command, message);
+                }
+            }
+        };
+        let reading is async () is int = self.read;
+        let draining is async () is int = self.drain;
+        let reader = spawn reading();
+        let drainer = spawn draining();
+        tasks.replace([reader, drainer]);
+        await self.send(
+            PortJsonFrame(Json(JsonField("kind", "hello"), JsonField("protocol", 1))).bytes()
+        );
+        let waiting is Before<Event> = Before(
+            origin: greeted.wait(),
+            deadline: deadline,
+            clock: SystemClock()
+        );
+        try {
+            await waiting.outcome();
+        }
+        catch error is TimedOut {
+            self.stop(PortEnd.stopped("no hello in time"));
+            throw PortFailure.timed_out(method);
+        };
+        for ended.value() -> end {
+            throw PortEndFailure(end: end, method: method).failure();
+        }
+    }
+
+    // Waits for the answer to id.
+    expect(id is int, waiter is PortWaiter) is void {
+        for ended.value() -> end {
+            waiter.settle(PortOutcome.ended(end));
+        }
+        pending.replace(pending.value() + [id: waiter]);
+    }
+
+    // Stops waiting for the answer to id.
+    forget(id is int) is void {
+        let now = pending.value();
+        if now.has(id) {
+            pending.replace(now - [id: now[id]]);
+        }
+    }
+
+    // Writes frames whole, answering how many bytes; a helper that cannot
+    // take them has ended.
+    async send(frames is @byte) is int {
+        let guard = await writing.guard();
+        defer guard.close();
+        try {
+            await process.streams().input().write(frames);
+        }
+        catch failure is ProcessFailure {
+            match failure {
+                case ProcessFailure.detailed(_code, message) {
+                    self.stop(PortEnd.crashed("cannot write to the helper: " + message));
+                }
+            }
+        };
+        frames.size();
+    }
+
+    // Records why the helper ended and tells every waiting call; the first
+    // reason counts.
+    end(reason is PortEnd) is void {
+        if ended.compare_and_replace([], [reason]) {
+            greeted.set();
+            let waiting = pending.value();
+            pending.replace([:]);
+            for waiting.keys() -> id {
+                waiting[id].settle(PortOutcome.ended(reason));
+            }
+        }
+    }
+
+    // Ends the session for reason and kills the helper.
+    stop(reason is PortEnd) is void {
+        self.end(reason);
+        try {
+            process.close();
+        }
+        catch failure is ProcessFailure {
+            // It is gone already.
+        };
+        for tasks.value() -> task {
+            task.cancel();
+        }
+    }
+
+    // Reads frames until the helper's output ends or breaks the protocol.
+    hidden async read() is int {
+        let input = ByteInput(process.streams().output());
+        try {
+            loop {
+                let frame is @byte = await self.frame(input);
+                last if frame.size() == 0;
+                await self.receive(frame, input);
+            }
+            await self.finish();
+        }
+        catch breach is PortBreach {
+            match breach {
+                case PortBreach.reason(text) {
+                    self.stop(PortEnd.malformed(text));
+                }
+            }
+        }
+        catch failure is ProcessFailure {
+            self.stop(PortEnd.crashed("cannot read the helper's output"));
+        };
+        0;
+    }
+
+    // The helper's output ended: record how it ended.
+    hidden async finish() is void {
+        let detail = try {
+            let exit = await process.exit();
+            if exit::Status::kind == ExitKind.exited {
+                "exited with code " + exit.code().string();
+            }
+            else {
+                "ended by a signal";
+            }
+        }
+        catch failure is ProcessFailure {
+            "its output ended";
+        };
+        // Give the error stream a moment to reach its end.
+        let draining is Before<Event> = Before(
+            origin: drained.wait(),
+            deadline: SystemClock().monotonic_instant() + Duration(seconds: rat(200, 1000)),
+            clock: SystemClock(),
+        );
+        try {
+            await draining.outcome();
+        }
+        catch error is TimedOut {
+            // The tail is what came so far.
+        };
+        let tail = PortErrorTail(errors.value()).text();
+        self.stop(PortEnd.crashed(if tail.length() > 0 {
+            detail + "; stderr: " + tail;
+        }
+        else {
+            detail;
+        }));
+    }
+
+    // The next frame's body, at least one byte; [] at the end of the output.
+    hidden async frame(input is ByteInput) is @byte {
+        if !(await input.ensure(4)) {
+            confirm input.available() == 0
+                else throw PortBreach.reason("the output ended inside a frame's length");
+            [];
+        }
+        else {
+            let size = input.range(0, 4).integer(Signedness.unsigned, ByteOrder.big);
+            confirm size > 0 else throw PortBreach.reason("an empty frame");
+            confirm size <= frame_limit
+                else throw PortBreach.reason(
+                    "a frame of " + size.string() + " bytes, over the limit of " +
+                        frame_limit.string()
+                );
+            input.skip(4);
+            confirm await input.ensure(size)
+                else throw PortBreach.reason(
+                    "the output ended inside a frame of " + size.string() + " bytes"
+                );
+            input.take(size);
+        }
+    }
+
+    // Handles one message frame and reads its attachments.
+    hidden async receive(frame is @byte, input is ByteInput) is void {
+        let message = PortMessage(frame);
+        let attached is @@byte = await self.attachments(message.attachments(), input);
+        let kind = message.kind();
+        if kind == "hello" {
+            confirm !greeted.ready() else throw PortBreach.reason("a second hello");
+            let protocol = message.protocol();
+            if protocol != 1 {
+                self.stop(PortEnd.incompatible(protocol));
+            }
+            else {
+                codecs.replace(message.codecs());
+                greeted.set();
+            }
+        }
+        else {
+            confirm greeted.ready() else throw PortBreach.reason("a " + kind + " before the hello");
+            if kind == "reply" || kind == "failure" {
+                let id = message.id();
+                let now = pending.value();
+                if now.has(id) {
+                    let waiter = now[id];
+                    pending.replace(now - [id: waiter]);
+                    waiter.settle(message.outcome(attached));
+                }
+            }
+        }
+    }
+
+    // The count attachment frames after a message.
+    hidden async attachments(count is int, input is ByteInput) is @@byte {
+        confirm count >= 0 && count <= 1024
+            else throw PortBreach.reason("a message with " + count.string() + " attachments");
+        let read is Atomic<@@byte> = Atomic([]);
+        for 0..count -> ignored {
+            let frame = await self.frame(input);
+            confirm frame.size() > 0
+                else throw PortBreach.reason("the output ended before an attachment");
+            confirm frame[0] == byte(66)
+                else throw PortBreach.reason("a message where an attachment was due");
+            read.replace(read.value() + [frame.slice(1, frame.size())]);
+        }
+        read.value();
+    }
+
+    // Keeps the last 2 KiB of the helper's standard error.
+    hidden async drain() is int {
+        let stream = process.streams().errors();
+        try {
+            loop {
+                let chunk = await stream.bytes(4096);
+                last if chunk.size() == 0;
+                let kept = errors.value() + chunk;
+                errors.replace(if kept.size() > 2048 {
+                    kept.slice(kept.size() - 2048, kept.size());
+                }
+                else {
+                    kept;
+                });
+            }
+        }
+        catch failure is ProcessFailure {
+            // The helper is gone; what was kept stays.
+        };
+        drained.set();
+        0;
+    }
+}
+
+// The last lines of a helper's standard error as text: whole UTF-8 only,
+// trimmed.
+hidden object PortErrorTail {
+    has bytes is @byte;
+
+    PortErrorTail(bytes is @byte) {
+        self.bytes = bytes;
+    }
+
+    text() is string {
+        let start is int = (0..bytes.size()).reduce(bytes.size()) -> found, index {
+            if found == bytes.size() && (bytes[index].int() < 128 || bytes[index].int() >= 192) {
+                index;
+            }
+            else {
+                found;
+            }
+        };
+        let rest = bytes.slice(start, bytes.size());
+        utf8_decode(rest.slice(0, utf8_valid_prefix(rest))).trim();
+    }
+}
+
+// A message frame from the helper, JSON or CBOR, read as the protocol says.
+hidden object PortMessage {
+    has frame is @byte;
+
+    PortMessage(frame is @byte) {
+        self.frame = frame;
+    }
+
+    kind() is string {
+        self.text("kind");
+    }
+
+    id() is int {
+        self.int("id");
+    }
+
+    protocol() is int {
+        self.int("protocol");
+    }
+
+    attachments() is int {
+        if self.has("attachments") {
+            self.int("attachments");
+        }
+        else {
+            0;
+        }
+    }
+
+    // The codecs a hello names; json when it names none.
+    codecs() is @string {
+        if !self.has("codecs") {
+            ["json"];
+        }
+        else if self.codec() == PortCodec.json {
+            try {
+                self.json().list("codecs").map() -> codec {
+                    codec.text();
+                };
+            }
+            catch error is JsonError {
+                throw PortBreach.reason("codecs is not a list of names");
+            };
+        }
+        else {
+            throw PortBreach.reason("a hello must be JSON");
+        }
+    }
+
+    // What a reply or a failure tells its call.
+    outcome(attached is @@byte) is PortOutcome {
+        if self.kind() == "failure" {
+            PortOutcome.refused(self.text("code"), if self.has("message") {
+                self.text("message");
+            }
+            else {
+                "";
+            });
+        }
+        else if self.codec() == PortCodec.json {
+            let payload = if self.has("payload") {
+                self.json().get("payload");
+            }
+            else {
+                Json();
+            };
+            PortOutcome.answered(
+                PortReply(codec: PortCodec.json, json: payload, cbor: Cbor(), attachments: attached)
+            );
+        }
+        else {
+            let payload = if self.has("payload") {
+                self.cbor().get("payload");
+            }
+            else {
+                Cbor();
+            };
+            PortOutcome.answered(
+                PortReply(codec: PortCodec.cbor, json: Json(), cbor: payload, attachments: attached)
+            );
+        }
+    }
+
+    hidden codec() is PortCodec {
+        match frame[0].int() {
+            case 74 {
+                PortCodec.json;
+            }
+            case 67 {
+                PortCodec.cbor;
+            }
+            case 66 {
+                throw PortBreach.reason("an attachment without a message");
+            }
+            else {
+                throw PortBreach.reason("a frame of unknown type " + frame[0].int().string());
+            }
+        }
+    }
+
+    hidden json() is Json {
+        once let root is Json = try {
+            let parsed = ParsedJson(frame.slice(1, frame.size())).root();
+            confirm parsed.kind() == JsonKind.object_value
+                else throw PortBreach.reason("a JSON message that is not an object");
+            parsed;
+        }
+        catch error is JsonError {
+            throw PortBreach.reason("a JSON message that does not parse");
+        };
+        root;
+    }
+
+    hidden cbor() is Cbor {
+        once let root is Cbor = try {
+            let parsed = ParsedCbor(frame.slice(1, frame.size())).root();
+            confirm parsed.kind() == CborKind.map_value
+                else throw PortBreach.reason("a CBOR message that is not a map");
+            parsed;
+        }
+        catch error is CborError {
+            throw PortBreach.reason("a CBOR message that does not decode");
+        };
+        root;
+    }
+
+    hidden has(key is string) is bool {
+        if self.codec() == PortCodec.json {
+            self.json().has(key);
+        }
+        else {
+            self.cbor().has(key);
+        }
+    }
+
+    hidden text(key is string) is string {
+        try {
+            if self.codec() == PortCodec.json {
+                self.json().text(key);
+            }
+            else {
+                self.cbor().get(key).text();
+            }
+        }
+        catch error is JsonError {
+            throw PortBreach.reason("a message whose " + key + " is missing or not text");
+        }
+        catch error is CborError {
+            throw PortBreach.reason("a message whose " + key + " is missing or not text");
+        };
+    }
+
+    hidden int(key is string) is int {
+        try {
+            if self.codec() == PortCodec.json {
+                self.json().int(key);
+            }
+            else {
+                self.cbor().get(key).int();
+            }
+        }
+        catch error is JsonError {
+            throw PortBreach.reason("a message whose " + key + " is missing or not an integer");
+        }
+        catch error is CborError {
+            throw PortBreach.reason("a message whose " + key + " is missing or not an integer");
+        };
+    }
+}
+
+// A scripted helper for the tests: sh writes frames given in advance, waits
+// for the bytes it is told to expect, and fails as it is told.
+hidden object PortScript {
+    has steps is @string;
+
+    PortScript(steps is @string = []) {
+        self.steps = steps;
+    }
+
+    // Writes the hello of protocol, naming codecs.
+    hello(protocol is int, codecs is @string) is ^PortScript {
+        ^steps = steps + [PortScriptBytes(PortJsonFrame(Json(
+            JsonField("kind", "hello"),
+            JsonField("protocol", protocol),
+            JsonField("codecs", Json(items: codecs.map() -> codec {
+                Json(codec);
+            })),
+        )).bytes()).line()];
+    }
+
+    // Writes a JSON message as a frame.
+    says(message is Json) is ^PortScript {
+        ^steps = steps + [PortScriptBytes(PortJsonFrame(message).bytes()).line()];
+    }
+
+    // Writes bytes as they are, frames or not.
+    writes(bytes is @byte) is ^PortScript {
+        ^steps = steps + [PortScriptBytes(bytes).line()];
+    }
+
+    // Waits until count bytes came on its standard input.
+    reads(count is int) is ^PortScript {
+        ^steps = steps + ["dd bs=1 count=" + count.string() + " of=/dev/null 2>/dev/null"];
+    }
+
+    // Runs a shell line as it is.
+    runs(line is string) is ^PortScript {
+        ^steps = steps + [line];
+    }
+
+    // The command that runs the script; after its last step it reads its
+    // input until the end, answering nothing.
+    command() is InheritedCommand {
+        InheritedCommand(
+            program: Path("sh"),
+            arguments: ["-c", (steps + ["exec cat >/dev/null"]).join("\n")]
+        );
+    }
+}
+
+// Bytes as a printf line of octal escapes.
+hidden object PortScriptBytes {
+    has bytes is @byte;
+
+    PortScriptBytes(bytes is @byte) {
+        self.bytes = bytes;
+    }
+
+    line() is string {
+        "printf '" + bytes.map() -> b {
+            let n = b.int();
+            "\\" + int(n / 64).string() + (int(n / 8) % 8).string() + (n % 8).string();
+        }.join("") + "'";
+    }
+}
+
+// What the port writes before a scripted helper can answer: its hello and
+// the JSON requests numbered from 1, each with the method and no payload.
+hidden object PortScriptInput {
+    has methods is @string;
+
+    PortScriptInput(methods is @string) {
+        self.methods = methods;
+    }
+
+    size() is int {
+        (0..methods.size()).reduce(
+            PortJsonFrame(Json(JsonField("kind", "hello"), JsonField("protocol", 1))).bytes().size()
+        ) -> total, index {
+            total + PortRequest(
+                name: methods[index],
+                form: PortCodec.json,
+                json: Json(),
+                cbor: Cbor(),
+                bytes: []
+            ).frames(index + 1).size();
+        };
+    }
+}
+
+// One call in a test: the reply's JSON payload as text, or the failure named.
+hidden object PortTestCall {
+    has port is Port;
+    has method is string;
+    has timeout is Duration;
+
+    PortTestCall(port is Port, method is string, timeout is Duration = Duration(seconds: 5.rat())) {
+        self.port = port;
+        self.method = method;
+        self.timeout = timeout;
+    }
+
+    async run() is string {
+        try {
+            (await port.call(method: method, timeout: timeout)).json().string();
+        }
+        catch failure is PortFailure {
+            PortTestFailure(failure).text();
+        };
+    }
+}
+
+// A codec's name for the tests.
+hidden object PortTestCodec {
+    has codec is PortCodec;
+
+    PortTestCodec(codec is PortCodec) {
+        self.codec = codec;
+    }
+
+    name() is string {
+        if codec == PortCodec.json {
+            "json";
+        }
+        else {
+            "cbor";
+        }
+    }
+}
+
+// A failure as a short line for the tests.
+hidden object PortTestFailure {
+    has failure is PortFailure;
+
+    PortTestFailure(failure is PortFailure) {
+        self.failure = failure;
+    }
+
+    text() is string {
+        match failure {
+            case PortFailure.unavailable(_command, _reason) {
+                "unavailable";
+            }
+            case PortFailure.incompatible(protocol) {
+                "incompatible " + protocol.string();
+            }
+            case PortFailure.unsupported(codec) {
+                "unsupported " + PortTestCodec(codec).name();
+            }
+            case PortFailure.timed_out(method) {
+                "timed out: " + method;
+            }
+            case PortFailure.crashed(method, detail) {
+                "crashed: " + method + ": " + detail;
+            }
+            case PortFailure.malformed(method, reason) {
+                "malformed: " + method + ": " + reason;
+            }
+            case PortFailure.refused(method, code, message) {
+                "refused: " + method + ": " + code + ": " + message;
+            }
+            case PortFailure.wrong_codec(asked, answered) {
+                "wrong codec: " + PortTestCodec(asked).name() + " from " +
+                    PortTestCodec(answered).name();
+            }
+            case PortFailure.closed {
+                "closed";
+            }
+        }
+    }
+}
+
+async test "replies reach their own calls in any order; unknown ids are ignored" {
+    let script = PortScript()
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["first", "other"]).size())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 9), JsonField("payload", "stray")))
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 2), JsonField("payload", "to 2")))
+        .says(Json(JsonField("kind", "notice"), JsonField("attachments", 1)))
+        .writes(PortFrame([byte(66), byte(7)]).bytes())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 1), JsonField("payload", "to 1")));
+    let port = Port(command: script.command());
+    defer port.close();
+    let first = spawn PortTestCall(port: port, method: "first").run();
+    let other = spawn PortTestCall(port: port, method: "other").run();
+    test.is(await first, "\"to 1\"");
+    test.is(await other, "\"to 2\"");
+}
+
+async test "bytes travel in frames of their own and CBOR comes back as Cbor" {
+    let request = PortRequest(
+        name: "digest",
+        form: PortCodec.cbor,
+        json: Json(),
+        cbor: Cbor(7),
+        bytes: [byte(0), byte(255)]
+    );
+    let script = PortScript()
+        .hello(1, ["json", "cbor"])
+        .reads(PortScriptInput([]).size() + request.frames(1).size())
+        .writes(PortFrame([byte(67)] + Cbor(
+            CborEntry("kind", "reply"),
+            CborEntry("id", 1),
+            CborEntry("payload", Cbor(CborEntry("big", Cbor(1180591620717411303424)))),
+            CborEntry("attachments", 2),
+        ).encoding()).bytes())
+        .writes(PortFrame([byte(66), byte(1), byte(2)]).bytes())
+        .writes(PortFrame([byte(66), byte(0), byte(10), byte(255)]).bytes());
+    let port = Port(command: script.command());
+    defer port.close();
+    let reply = await port.call(method: "digest", payload: Cbor(7), bytes: [byte(0), byte(255)]);
+    test.is(reply.cbor().get("big").int(), 1180591620717411303424);
+    test.is(reply.bytes(), [byte(1), byte(2), byte(0), byte(10), byte(255)]);
+    test.is(
+        try {
+            reply.json().string();
+        }
+        catch failure is PortFailure {
+            PortTestFailure(failure).text();
+        },
+        "wrong codec: json from cbor"
+    );
+    test.is(
+        try {
+            (await Port(command: PortScript().hello(1, ["json"]).command()).call("x", Cbor(1)))
+                .bytes()
+                .size()
+                .string();
+        }
+        catch failure is PortFailure {
+            PortTestFailure(failure).text();
+        },
+        "unsupported cbor"
+    );
+}
+
+async test "a refusal is a typed failure and the helper keeps serving" {
+    let script = PortScript()
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["find"]).size())
+        .says(Json(
+            JsonField("kind", "failure"),
+            JsonField("id", 1),
+            JsonField("code", "not_found"),
+            JsonField("message", "no such thing")
+        ))
+        .reads(PortScriptInput(["find", "find"]).size() - PortScriptInput(["find"]).size())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 2)));
+    let port = Port(command: script.command());
+    defer port.close();
+    test.is(
+        await PortTestCall(port: port, method: "find").run(),
+        "refused: find: not_found: no such thing"
+    );
+    test.is(await PortTestCall(port: port, method: "find").run(), "null");
+}
+
+async test "a helper of another protocol version is refused" {
+    let port = Port(command: PortScript().hello(2, ["json"]).command());
+    defer port.close();
+    test.is(await PortTestCall(port: port, method: "ping").run(), "incompatible 2");
+}
+
+async test "a helper that breaks the protocol is stopped and the call is malformed" {
+    let waited = PortScriptInput(["ping"]).size();
+    let cases = [
+        [
+            "a frame of 4096 bytes, over the limit of 1024",
+            PortScriptBytes([byte(0), byte(0), byte(16), byte(0)]).line()
+        ],
+        ["an empty frame", PortScriptBytes([byte(0), byte(0), byte(0), byte(0)]).line()],
+        [
+            "a JSON message that does not parse",
+            PortScriptBytes(PortFrame([byte(74), byte(123)]).bytes()).line()
+        ],
+        [
+            "a JSON message that is not an object",
+            PortScriptBytes(PortFrame([byte(74), byte(49)]).bytes()).line()
+        ],
+        [
+            "a frame of unknown type 88",
+            PortScriptBytes(PortFrame([byte(88), byte(1)]).bytes()).line()
+        ],
+        [
+            "an attachment without a message",
+            PortScriptBytes(PortFrame([byte(66), byte(1)]).bytes()).line()
+        ],
+        [
+            "a message whose kind is missing or not text",
+            PortScriptBytes(PortJsonFrame(Json(JsonField("id", 1))).bytes()).line()
+        ],
+        [
+            "a message whose id is missing or not an integer",
+            PortScriptBytes(
+                PortJsonFrame(Json(JsonField("kind", "reply"), JsonField("id", "one"))).bytes()
+            ).line()
+        ],
+        [
+            "a message where an attachment was due",
+            PortScriptBytes(
+                PortJsonFrame(
+                    Json(
+                        JsonField("kind", "reply"),
+                        JsonField("id", 1),
+                        JsonField("attachments", 1)
+                    )
+                ).bytes() +
+                    PortJsonFrame(Json(JsonField("kind", "reply"), JsonField("id", 1))).bytes()
+            ).line()
+        ],
+        [
+            "a second hello",
+            PortScriptBytes(
+                PortJsonFrame(Json(JsonField("kind", "hello"), JsonField("protocol", 1))).bytes()
+            ).line()
+        ],
+        [
+            "the output ended inside a frame of 10 bytes",
+            PortScriptBytes([byte(0), byte(0), byte(0), byte(10), byte(74)]).line() + "; exit 0"
+        ],
+    ];
+    for cases -> each {
+        let port = Port(
+            command: PortScript().hello(1, ["json"]).reads(waited).runs(each[1]).command(),
+            frame_limit: 1024
+        );
+        test.is(
+            await PortTestCall(port: port, method: "ping").run(),
+            "malformed: ping: " + each[0]
+        );
+        port.close();
+    }
+    let early = Port(
+        command: PortScript().says(Json(JsonField("kind", "reply"), JsonField("id", 1))).command()
+    );
+    test.is(
+        await PortTestCall(port: early, method: "ping").run(),
+        "malformed: ping: a reply before the hello"
+    );
+    early.close();
+}
+
+async test "a crash fails the call with its exit and stderr; the next call starts afresh" {
+    let scratch = TemporaryDirectory(prefix: "os-port-test-");
+    let marker = scratch.path().child("crashed").string();
+    let script = PortScript()
+        .runs("if [ -e '" + marker + "' ]; then")
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["ping"]).size())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 1), JsonField("payload", "fresh")))
+        .runs("else : > '" + marker + "'")
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["ping"]).size())
+        .runs("echo 'boom: out of luck' >&2; exit 3; fi");
+    let port = Port(command: script.command());
+    defer port.close();
+    test.is(
+        await PortTestCall(port: port, method: "ping").run(),
+        "crashed: ping: exited with code 3; stderr: boom: out of luck"
+    );
+    test.is(await PortTestCall(port: port, method: "ping").run(), "\"fresh\"");
+}
+
+async test "a hung helper times out, is stopped and replaced; calls in flight there fail" {
+    let scratch = TemporaryDirectory(prefix: "os-port-test-");
+    let marker = scratch.path().child("hung").string();
+    let script = PortScript()
+        .runs("if [ -e '" + marker + "' ]; then")
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["ping"]).size())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 1), JsonField("payload", "fresh")))
+        .runs("else : > '" + marker + "'")
+        .hello(1, ["json"])
+        .runs("fi");
+    let port = Port(command: script.command());
+    defer port.close();
+    let waiting = spawn PortTestCall(port: port, method: "slow").run();
+    test.is(
+        await PortTestCall(port: port, method: "hang", timeout: Duration(seconds: rat(200, 1000)))
+            .run(),
+        "timed out: hang"
+    );
+    test.is(await waiting, "crashed: slow: stopped: a call to hang timed out");
+    test.is(await PortTestCall(port: port, method: "ping").run(), "\"fresh\"");
+}
+
+async test "a helper that does not read its input times out on a large write" {
+    let port = Port(command: PortScript().hello(1, ["json"]).runs("exec sleep 30").command());
+    defer port.close();
+    let upload is @byte = (0..262144).map() -> n {
+        byte(n % 256);
+    };
+    test.is(
+        try {
+            (await port.call(
+                method: "upload",
+                bytes: upload,
+                timeout: Duration(seconds: rat(300, 1000))
+            ))
+                .json()
+                .string();
+        }
+        catch failure is PortFailure {
+            PortTestFailure(failure).text();
+        },
+        "timed out: upload"
+    );
+}
+
+async test "a pool sends a call to the helper with the fewest calls in flight" {
+    let script = PortScript()
+        .hello(1, ["json"])
+        .reads(PortScriptInput(["ping"]).size())
+        .says(Json(JsonField("kind", "reply"), JsonField("id", 1), JsonField("payload", "one")));
+    let pool = Port(command: script.command(), instances: 2);
+    defer pool.close();
+    let left = spawn PortTestCall(port: pool, method: "ping", timeout: Duration(seconds: 2.rat()))
+        .run();
+    let right = spawn PortTestCall(port: pool, method: "ping", timeout: Duration(seconds: 2.rat()))
+        .run();
+    test.is(await left, "\"one\"");
+    test.is(await right, "\"one\"");
+}
+
+async test "a missing helper is unavailable; a closed port refuses calls" {
+    let missing = Port(command: InheritedCommand(program: Path("/nonexistent/okkama-port-helper")));
+    test.is(await PortTestCall(port: missing, method: "ping").run(), "unavailable");
+    let port = Port(command: PortScript().hello(1, ["json"]).command());
+    port.close();
+    port.close();
+    test.is(await PortTestCall(port: port, method: "ping").run(), "closed");
+    test.throws(InvalidArgument) {
+        Port(command: PortScript().command(), instances: 0);
+    };
+}

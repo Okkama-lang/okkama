@@ -1,0 +1,16 @@
+finished in order: 20 400
+own answers: 20
+bytes back: true, payload null
+cbor: {"big": 1180591620717411303424, "raw": h'00ff'}
+wrong codec: asked json, answered cbor
+refused: fail: not_found: no such thing
+same helper after a refusal: true
+crashed: crash: exited with code 3; stderr: boom: the helper crashed on purpose
+restarted after a crash: true
+timed out: hang
+in flight: crashed: sleep: stopped: a call to hang timed out
+restarted after a hang: true
+two helpers: true
+unsupported cbor
+unavailable
+closed

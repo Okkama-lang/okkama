@@ -23,8 +23,9 @@ examples = sorted(
     os.path.join(folder, name)
     for root in roots
     for folder, _, names in os.walk(root)
-    # The Bible's examples have their own format and runner (bible/check.py).
-    if os.path.relpath(folder, HERE).split(os.sep)[0] != "bible"
+    # The Bible's examples have their own format and runner (bible/check.py); the port examples need a helper
+    # built by cargo, and okkama-rs/crates/okkama-cli/tests/port.rs builds it and runs them.
+    if os.path.relpath(folder, HERE).split(os.sep)[0] not in ("bible", "port")
     for name in names
     if name.endswith(".ok") and os.path.exists(os.path.join(folder, name[:-3] + ".expected"))
 )

@@ -1,0 +1,67 @@
+module examples/port/text v1.0.0;
+
+import "fs/path" take Path;
+import "os/command" take InheritedCommand;
+import "os/environment" take Environment;
+import "os/port" take Port, PortFailure;
+import "json" take Json, JsonField;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+// Rust code called from Okkama through a helper process (#1081). The helper is
+// okkama-rs/crates/okkama-port/examples/text_helper.rs, built by
+//
+//     cargo build -p okkama-port --example text_helper
+//
+// and named by OKKAMA_TEXT_HELPER. It starts with the first call; JSON goes
+// in and out, raw bytes travel beside it, and a refusal is a typed failure.
+
+async main() is int {
+    let out = Stdout();
+    let helper = Environment().maybe("OKKAMA_TEXT_HELPER").text() else "";
+    if helper == "" {
+        out.writeln("set OKKAMA_TEXT_HELPER to the text_helper binary");
+        return 2;
+    }
+    let text = Port(command: InheritedCommand(program: Path(helper)), instances: 2);
+    defer text.close();
+
+    let upper = await text.call("upper", Json(JsonField("text", "helpers in any language")));
+    out.writeln("upper: ", upper.json().text("text"));
+
+    let counted = await text.call("words", Json(JsonField("text", "to be or not to be")));
+    out.writeln(
+        "words: ",
+        counted.json().int("words"),
+        ", longest: ",
+        counted.json().text("longest")
+    );
+
+    let png = [byte(137), byte(80), byte(78), byte(71)];
+    let checksum = await text.call(method: "checksum", bytes: png);
+    out.writeln(
+        "crc32: ",
+        checksum.json().int("crc32"),
+        " over ",
+        checksum.json().int("size"),
+        " bytes"
+    );
+
+    let reversed = await text.call(method: "reverse", bytes: Utf8Encoded("stressed").bytes());
+    out.writeln("reverse: ", Utf8Decoded(reversed.bytes()).string());
+
+    try {
+        await text.call("translate", Json(JsonField("text", "hello")));
+    }
+    catch failure is PortFailure {
+        match failure {
+            case PortFailure.refused(method, code, _message) {
+                out.writeln("refused: ", method, " (", code, ")");
+            }
+            else {
+                out.writeln("another failure");
+            }
+        }
+    };
+    0;
+}

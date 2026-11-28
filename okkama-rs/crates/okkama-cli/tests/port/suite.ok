@@ -1,0 +1,235 @@
+module tests/port/suite v1.0.0;
+
+import "fs/path" take Path;
+import "os/command" take InheritedCommand;
+import "os/environment" take Environment;
+import "os/port" take Port, PortFailure, PortCodec;
+import "json" take Json, JsonField;
+import "cbor" take Cbor, CborEntry;
+import "async/atomic" take Atomic;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// std's os/port against a real Rust helper (#1081): okkama-port's
+// port_test_helper, named by OKKAMA_PORT_TEST_HELPER. Each check prints one
+// line; tests/port.rs compares them.
+
+// One call of a method that sleeps ms, noting when it finished.
+hidden object Sleeper {
+    has port is Port;
+    has ms is int;
+    has finished is Atomic<@int>;
+
+    Sleeper(:port, :ms, :finished);
+
+    async run() is int {
+        let reply = await port.call("sleep", Json(JsonField("ms", ms)));
+        finished.replace(finished.value() + [reply.json().int("slept")]);
+        ms;
+    }
+}
+
+// One echo call: whether the answer was its own.
+hidden object Echo {
+    has port is Port;
+    has n is int;
+
+    Echo(:port, :n);
+
+    async run() is bool {
+        let reply = await port.call("echo", Json(JsonField("n", n)));
+        reply.json().int("n") == n;
+    }
+}
+
+// A call whose failure is named, not thrown.
+hidden object Outcome {
+    has port is Port;
+    has method is string;
+    has payload is Json;
+    has timeout is Duration;
+
+    Outcome(port is Port, method is string, timeout is Duration, payload is Json = Json()) {
+        self.port = port;
+        self.method = method;
+        self.payload = payload;
+        self.timeout = timeout;
+    }
+
+    async run() is string {
+        try {
+            await port.call(method: method, payload: payload, timeout: timeout);
+            "answered";
+        }
+        catch failure is PortFailure {
+            PortFailureName(failure).text();
+        };
+    }
+}
+
+// A codec's name.
+hidden object CodecName {
+    has codec is PortCodec;
+
+    CodecName(codec is PortCodec) {
+        self.codec = codec;
+    }
+
+    text() is string {
+        match codec {
+            case PortCodec.json {
+                "json";
+            }
+            case PortCodec.cbor {
+                "cbor";
+            }
+        }
+    }
+}
+
+// A failure as a short line.
+hidden object PortFailureName {
+    has failure is PortFailure;
+
+    PortFailureName(failure is PortFailure) {
+        self.failure = failure;
+    }
+
+    text() is string {
+        match failure {
+            case PortFailure.unavailable(_command, _reason) {
+                "unavailable";
+            }
+            case PortFailure.incompatible(protocol) {
+                "incompatible " + protocol.string();
+            }
+            case PortFailure.unsupported(codec) {
+                "unsupported " + CodecName(codec).text();
+            }
+            case PortFailure.timed_out(method) {
+                "timed out: " + method;
+            }
+            case PortFailure.crashed(method, detail) {
+                "crashed: " + method + ": " + detail;
+            }
+            case PortFailure.malformed(method, reason) {
+                "malformed: " + method + ": " + reason;
+            }
+            case PortFailure.refused(method, code, message) {
+                "refused: " + method + ": " + code + ": " + message;
+            }
+            case PortFailure.wrong_codec(asked, answered) {
+                "wrong codec: asked " + CodecName(asked).text() + ", answered " + CodecName(
+                    answered
+                ).text();
+            }
+            case PortFailure.closed {
+                "closed";
+            }
+        }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let helper = Path(Environment().text("OKKAMA_PORT_TEST_HELPER"));
+    let short = Duration(seconds: rat(300, 1000));
+    let port = Port(command: InheritedCommand(program: helper));
+    defer port.close();
+
+    // Concurrent calls on one helper: each gets its own answer, the quick one first.
+    let finished is Atomic<@int> = Atomic([]);
+    let slow = spawn Sleeper(port: port, ms: 400, finished: finished).run();
+    let quick = spawn Sleeper(port: port, ms: 20, finished: finished).run();
+    await slow;
+    await quick;
+    out.writeln("finished in order: ", finished.value().map() -> ms {
+        ms.string();
+    }.join(" "));
+    let echoes is @Future<bool> = (1..21).map() -> n {
+        spawn Echo(port: port, n: n).run();
+    };
+    let own = echoes.reduce(0) -> count, echo {
+        if await echo {
+            count + 1;
+        }
+        else {
+            count;
+        }
+    };
+    out.writeln("own answers: ", own);
+
+    // Raw bytes both ways, every byte value.
+    let all is @byte = (0..256).map() -> n {
+        byte(n);
+    };
+    let echoed = await port.call(method: "echo", bytes: all);
+    out.writeln("bytes back: ", echoed.bytes() == all, ", payload ", echoed.json().string());
+
+    // CBOR in and out, with what JSON cannot carry.
+    let big = Cbor(
+        CborEntry("big", Cbor(1180591620717411303424)),
+        CborEntry("raw", Cbor([byte(0), byte(255)]))
+    );
+    let cbor = await port.call("echo", big);
+    out.writeln("cbor: ", cbor.cbor().string());
+    try {
+        cbor.json();
+    }
+    catch failure is PortFailure {
+        out.writeln(PortFailureName(failure).text());
+    };
+
+    // A refusal leaves the helper serving.
+    let before = (await port.call("pid")).json().int("pid");
+    out.writeln(await Outcome(port: port, method: "fail", timeout: short).run());
+    out.writeln(
+        "same helper after a refusal: ",
+        (await port.call("pid")).json().int("pid") == before
+    );
+
+    // A crash fails the call; the next call starts a fresh helper.
+    out.writeln(await Outcome(port: port, method: "crash", timeout: short).run());
+    let restarted = (await port.call("pid")).json().int("pid");
+    out.writeln("restarted after a crash: ", restarted != before);
+
+    // A hang times out and stops the helper; calls in flight there fail; the next call restarts it.
+    let waiting = spawn Outcome(
+        port: port,
+        method: "sleep",
+        timeout: Duration(seconds: 5.rat()),
+        payload: Json(JsonField("ms", 2000)),
+    ).run();
+    out.writeln(await Outcome(port: port, method: "hang", timeout: short).run());
+    out.writeln("in flight: ", await waiting);
+    out.writeln(
+        "restarted after a hang: ",
+        (await port.call("pid")).json().int("pid") != restarted
+    );
+
+    // A pool of two: a call goes to the helper with the fewest calls in flight.
+    let pool = Port(command: InheritedCommand(program: helper), instances: 2);
+    defer pool.close();
+    let busy = spawn Sleeper(port: pool, ms: 300, finished: finished).run();
+    let second = (await pool.call("pid")).json().int("pid");
+    await busy;
+    let first = (await pool.call("pid")).json().int("pid");
+    out.writeln("two helpers: ", first != second);
+
+    // A helper without CBOR refuses it before anything is sent.
+    let plain = Port(command: InheritedCommand(program: helper, arguments: ["--json-only"]));
+    defer plain.close();
+    try {
+        await plain.call("echo", Cbor(1));
+    }
+    catch failure is PortFailure {
+        out.writeln(PortFailureName(failure).text());
+    };
+
+    // A missing helper, and a closed port.
+    let missing = Port(command: InheritedCommand(program: Path("/nonexistent/okkama-helper")));
+    out.writeln(await Outcome(port: missing, method: "pid", timeout: short).run());
+    port.close();
+    out.writeln(await Outcome(port: port, method: "pid", timeout: short).run());
+    0;
+}

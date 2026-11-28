@@ -5269,6 +5269,21 @@
       }
     },
     {
+      "id": "STD.OS.PORT",
+      "title": "std os/port public contract (Port, PortFailure, PortReply)",
+      "family": "Standard library: os",
+      "spec_refs": [
+        "std/os/port.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.OS.PROCESS",
       "title": "std os/process public contract (Exit, ExitKind, MissingExitCode, OutputLimitExceeded, Process, ProcessErrors, ProcessFailure, ProcessInput, ProcessLines, ProcessOutput, ProcessStreamInput, ProcessStreamOutput, ProcessStreams, Signal, UnsupportedSignal)",
       "family": "Standard library: os",
