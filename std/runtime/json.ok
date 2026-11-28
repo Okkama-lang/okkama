@@ -380,6 +380,28 @@ test "JSON nodes built in code are written compact and pretty" {
         },
         "invalid_input"
     );
+    let nine is @string = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+    let nulls is @JsonNodeState = nine.map() -> name {
+        json_null_node();
+    };
+    test.is(json_member_names(json_object_node(nine, nulls)).join(""), "abcdefghi");
+    for [
+        ["a", "b", "c", "d", "e", "f", "g", "h", "a"],
+        ["a", "b", "c", "d", "e", "f", "g", "a"]
+    ] -> names {
+        test.is(
+            try {
+                json_object_node(names, names.map() -> name {
+                    json_null_node();
+                });
+                "";
+            }
+            catch failure is NativeFailure {
+                failure.code();
+            },
+            "invalid_input"
+        );
+    }
     test.is(
         try {
             json_number_node("1x");

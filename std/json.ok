@@ -128,13 +128,11 @@ object Json {
         let names is @string = fields.map() -> field {
             field::Member::name;
         };
-        let repeated = json_repeated_name(names);
-        confirm repeated == names.size() else throw JsonError.duplicate_member(names[repeated]);
         let values is @JsonNodeState = fields.map() -> field {
             let value = field::Member::value;
             value::Node::state;
         };
-        let made = json_object_node(names, values);
+        let made = JsonObjectNode(names: names, values: values).node();
         node = made;
         root = made;
     }
@@ -146,13 +144,11 @@ object Json {
         let names is @string = fields.map() -> field {
             field::Member::name;
         };
-        let repeated = json_repeated_name(names);
-        confirm repeated == names.size() else throw JsonError.duplicate_member(names[repeated]);
         let values is @JsonNodeState = fields.map() -> field {
             let value = field::Member::value;
             value::Node::state;
         };
-        let made = json_object_node(names, values);
+        let made = JsonObjectNode(names: names, values: values).node();
         node = made;
         root = made;
     }
@@ -461,6 +457,30 @@ object Json {
         }
         catch failure is NativeFailure {
             throw self.wrong(JsonKind.object_value);
+        }
+    }
+}
+
+// An object node of distinct names; a repeated one is JsonError.duplicate_member.
+// The runtime refuses repeats itself, so the names are searched for the one to
+// report only then (#1180).
+hidden object JsonObjectNode {
+    has names is @string;
+    has values is @JsonNodeState;
+
+    JsonObjectNode(names is @string, values is @JsonNodeState) {
+        self.names = names;
+        self.values = values;
+    }
+
+    node() is JsonNodeState {
+        try {
+            json_object_node(names, values);
+        }
+        catch failure is NativeFailure {
+            let repeated = json_repeated_name(names);
+            confirm repeated == names.size() else throw JsonError.duplicate_member(names[repeated]);
+            throw failure;
         }
     }
 }

@@ -729,8 +729,14 @@ impl Heap {
                 if names.len() != children.len() {
                     return Err(invalid("JSON member names and values differ in number"));
                 }
-                let mut seen = HashSet::with_capacity(names.len());
-                if !names.iter().all(|n| seen.insert(n.as_ref())) {
+                let repeated = if names.len() <= 8 {
+                    // A few names: pairs, as json_repeated_name compares them.
+                    (1..names.len()).any(|i| names[..i].contains(&names[i]))
+                } else {
+                    let mut seen = HashSet::with_capacity(names.len());
+                    !names.iter().all(|n| seen.insert(n.as_ref()))
+                };
+                if repeated {
                     return Err(invalid("duplicate JSON member name"));
                 }
                 self.json_new(Node::Object(names.into(), children))?
