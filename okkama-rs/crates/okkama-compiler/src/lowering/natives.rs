@@ -100,16 +100,16 @@ mod tests {
             native async terminal_standard(output is int) is TerminalState;").expect("an async native");
         refused("module runtime/application v1.0.0;\nnative object TerminalState;\n\
             native terminal_standard(output is int) is TerminalState;", "native terminal_standard",
-            "which is async (int) -> TerminalState");
+            "which is async (int) -> runtime.application::TerminalState");
         let version = "Native \"timezone_version\" does not match runtime/time_zone@1::timezone_version/0 of the runtime, \
             which is () -> string";
         refused(&format!("{ZONE}native timezone_version() is int;"), "native timezone_version", version);
         refused(&format!("{ZONE}native timezone_version() is void;"), "native timezone_version", version);
         refused(&format!("{ZONE}native async timezone_version() is string;"), "native async timezone_version", version);
         refused(&format!("{BUFFER}native buffer_state_size(state is Other) is int;"), "native buffer_state_size",
-            "which is (BufferState) -> int");
+            "which is (runtime.buffer::BufferState) -> int");
         refused(&format!("{BUFFER}native buffer_state_size(state is @byte) is int;"), "native buffer_state_size",
-            "which is (BufferState) -> int");
+            "which is (runtime.buffer::BufferState) -> int");
     }
 
     /// A symbol the table does not name is the runtime's to refuse (another
