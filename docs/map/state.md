@@ -36,6 +36,10 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
 - [x] #1082 CBOR (agent; feature/1082): std/cbor.ok over std/runtime/cbor.ok (39 natives, IDs 681–719),
   sparrow-core/src/cbor.rs (no recursion), host/native_cbor.rs, tests sparrow-core/tests/cbor.rs (14), std inline 12+2,
   examples/cbor/message.ok, fuzz target `cbor`. runtime/cbor is PURE (playground allowed).
+- [~] #1191 trial PASSED (fresh Opus agent, installed-like prefix, only `okkama help` → `okkama agents` → man): words.ok
+  passes check, fmt --check, lint, 8 tests; transcript on the ticket. Doc fixes 3c86ccb17 (`let none`, module
+  overview place, comparing through caps). Findings → #1196 (man for built-in types), #1197 (regex \p{L}, man of a
+  group), #1198 (fmt --check diff). Left for the release: the site's Docs page and the Bible preface line.
 - [x] #1189 style guide, draft 1 (agent; feature/1189): docs/agents/style.md (13 sections, 86 checked examples, 71 KB —
   kept: the growth is lint-clean examples with doc comments), okkama-cli tests/agents.rs checks the full guide.
   Findings: #1192 fmt and `test.case`, #1193 missing-docs on fakes, #1194 dropped futures run never (language.md
