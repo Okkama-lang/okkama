@@ -51,6 +51,11 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
     if PANIC_NEXT.with(|next| next.replace(false)) {
         panic!("provider failure");
     }
+    if let Some(binding) = runtime.external[function].clone() {
+        runtime.limits.permits_external(binding.symbol)
+            .map_err(|message| Refusal::Failure(FailureKind::Program(message)))?;
+        return crate::host::native_ext::call(runtime, &binding, arguments);
+    }
     // A missing provider is a runtime error of the call, after earlier effects
     // (conformance L06.native.missing-provider).
     let native = runtime.natives[function].ok_or_else(|| {

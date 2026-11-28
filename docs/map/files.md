@@ -123,27 +123,28 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 71 files, 39752 lines
+## sparrow — 73 files, 40184 lines
 
-- `sparrow-core/src/budget.rs` 443 — Execution budgets (hardening H-04): steps, memory, output and external
+- `sparrow-core/src/budget.rs` 453 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
-- `sparrow-core/src/drivers.rs` 1279 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/drivers.rs` 1288 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/ext.rs` 148 — Static, trusted extension registration and load-time signature binding.
 - `sparrow-core/src/heap.rs` 3025 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1120 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1155 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 3891 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 849 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 848 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 466 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
-- `sparrow-core/src/natives.rs` 300 — The natives the core serves itself, and the dispatch to the host's
+- `sparrow-core/src/natives.rs` 305 — The natives the core serves itself, and the dispatch to the host's
 - `sparrow-core/src/ops.rs` 2119 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 400 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 406 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/reach.rs` 276 — The functions a run of an SPB program can reach (#1135): what the playground warns about is what a run can cal
-- `sparrow-core/src/runtime.rs` 1335 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1350 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/texts.rs` 9 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
@@ -155,7 +156,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 148 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 925 — Native provider host. The providers (`native_*`) see a [`Heap`] and
+- `sparrow-core/src/host/mod.rs` 928 — Native provider host. The providers (`native_*`) see a [`Heap`] and
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_crypto.rs` 108 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
@@ -166,6 +167,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_dns.rs` 326 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 163 — The program's environment is the run's host session
+- `sparrow-core/src/host/native_ext.rs` 243 — Synchronous extension calls: scalar bits and call-scoped typed tokens.
 - `sparrow-core/src/host/native_file.rs` 190 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 639 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
 - `sparrow-core/src/host/native_fs.rs` 240 — Filesystem native boundary. Lexical paths are portable and independent of
@@ -215,7 +217,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 73 files, 24356 lines
+## other — 74 files, 24455 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -239,7 +241,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/slots.rs` 133 — A vector of at most `N` items stored inline, so that a map node is one
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
-- `okkama-runtime-abi/src/lib.rs` 265 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
+- `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.
+- `okkama-runtime-abi/src/lib.rs` 266 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
 - `okkama-runtime-abi/src/table.rs` 553
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 58 — Allocation accounting and memory scope shared with Sparrow.

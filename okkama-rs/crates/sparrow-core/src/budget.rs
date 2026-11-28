@@ -33,6 +33,8 @@ pub const SLICE: u64 = 1 << 16;
 /// Budgets of one run; `None` is unbounded.
 #[derive(Debug, Clone, Default)]
 pub struct Limits {
+    /// Trusted static extension descriptors, supplied only by the embedding.
+    pub extensions: Vec<crate::ext::Extension>,
     /// Function entries and loop back-edges.
     pub steps: Option<u64>,
     /// Allocator bytes beyond the start of the run, or the runtime's own
@@ -222,6 +224,17 @@ impl Reach {
 }
 
 impl Limits {
+    /// External code is unclassified, even when every std group is allowed.
+    pub(crate) fn permits_external(&self, symbol: &str) -> Result<(), String> {
+        if let Some(profile) = self.profile {
+            return Err(format!("Native {symbol} is not available in the {}", profile.name));
+        }
+        if self.natives.is_some() {
+            return Err(format!("Native {symbol} is in no native group; it is refused while the native groups are restricted"));
+        }
+        Ok(())
+    }
+
     /// Is `native` allowed? The refusal names its group.
     #[inline]
     pub fn permits(&self, native: okkama_runtime_abi::Native) -> Result<(), String> {

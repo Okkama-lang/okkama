@@ -29,6 +29,7 @@ pub(crate) mod native_directory;
 #[cfg(feature = "host")]
 pub(crate) mod native_dns;
 pub(crate) mod native_encoding;
+pub(crate) mod native_ext;
 #[cfg(feature = "host")]
 pub(crate) mod native_environment;
 #[cfg(feature = "host")]
@@ -286,7 +287,7 @@ impl Heap {
         self.shapes.len() - 1
     }
 
-    fn shape(&mut self, ty: &Abi) -> Shape {
+    pub(crate) fn shape(&mut self, ty: &Abi) -> Shape {
         match ty {
             Abi::Int => Shape::Int,
             Abi::Bool => Shape::Bool,
@@ -1049,3 +1050,6 @@ pub fn cancel(runtime: &mut Runtime, id: u64) -> bool {
         cleanup
     })
 }
+
+#[cfg(test)]
+mod ext_tests;

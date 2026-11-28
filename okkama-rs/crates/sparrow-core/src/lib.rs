@@ -60,6 +60,7 @@ mod interp;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod natives;
+pub mod ext;
 pub mod maps;
 pub mod ops;
 pub mod primitives;
@@ -531,10 +532,9 @@ fn configured_runtime(
     limits: budget::Limits,
 ) -> Result<Box<runtime::Runtime>, Error> {
     let mut runtime = match program {
-        DecodedProgram::Legacy(program) => Box::new(runtime::Runtime::new(program::Loaded::new(program))?),
+        DecodedProgram::Legacy(program) => Box::new(runtime::Runtime::with_limits(program::Loaded::new(program), limits)?),
     };
     runtime.worker_command = worker_command;
-    runtime.limits = limits;
     if stats && runtime.stats.is_none() {
         runtime.stats = Some(Box::default());
         runtime.heap.allocations = Some(Box::default());
@@ -693,9 +693,8 @@ fn test_program(
         }
         let only = plan.only.get(&names[index]).cloned();
         let filtered = only.is_some();
-        let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
+        let mut runtime = Box::new(runtime::Runtime::with_limits(program::Loaded::new(program.clone()), limits.clone())?);
         runtime.worker_command = worker_command.clone();
-        runtime.limits = limits.clone();
         if let Some(engine) = setup.engine {
             runtime.use_engine(engine);
         }

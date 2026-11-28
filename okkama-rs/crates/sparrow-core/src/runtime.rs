@@ -155,6 +155,7 @@ pub struct Runtime {
     pub states: crate::word::FastMap<Word, crate::primitives::State>,
     /// Native provider of each function, resolved once.
     pub natives: Vec<Option<okkama_runtime_abi::Native>>,
+    pub(crate) external: Vec<Option<std::rc::Rc<crate::host::native_ext::Binding>>>,
     /// Intrinsic of each function, resolved once.
     pub intrinsics: Vec<Option<crate::intrinsics::Intrinsic>>,
     /// Objects whose state the runtime holds, by descriptor (#956): `==` compares them by identity.
@@ -233,21 +234,36 @@ impl Runtime {
     /// A runtime for a loaded program. A `Loaded` is verified by construction
     /// outside the crate (`Loaded::verified`, #1009).
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
+        Self::with_limits(loaded, crate::budget::Limits::default())
+    }
+
+    /// Bind the embedding's extensions before any function can run.
+    pub fn with_limits(loaded: Loaded, limits: crate::budget::Limits) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
-        Self::assemble(loaded)
+        let mut runtime = Self::assemble(loaded)?;
+        if !limits.extensions.is_empty() {
+            runtime.external = crate::ext::bind(&runtime.loaded, &limits.extensions, runtime.host.as_mut().expect("native host"))?;
+        }
+        runtime.limits = limits;
+        Ok(runtime)
     }
 
     /// #588: a runtime that later programs may extend (`extend`), within `capacities`. Machine code embeds the
     /// invocation table's base and each role dispatch table's base, so both are allocated at their capacity now
     /// and never relocated.
-    pub fn session(mut loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
+    pub fn session(loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
+        Self::session_with_limits(loaded, capacities, crate::budget::Limits::default())
+    }
+
+    /// A session with the embedding's static extension registry.
+    pub fn session_with_limits(mut loaded: Loaded, capacities: Capacities, limits: crate::budget::Limits) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
         loaded.check_every_field();
         let functions = loaded.program.functions.len();
         if functions > capacities.functions || loaded.program.objects.len() > capacities.objects {
             return Err(Error("the program exceeds the session's capacities".into()));
         }
-        let mut runtime = Self::assemble(loaded)?;
+        let mut runtime = Self::with_limits(loaded, limits)?;
         let empty = Invocation { code: 0, params: 0, is_async: false };
         let mut invocations = vec![empty; capacities.functions];
         invocations[..functions].copy_from_slice(&runtime.invocations);
@@ -362,6 +378,7 @@ impl Runtime {
         }
         loaded.check_every_field();
         crate::contracts::check(&loaded)?;
+        let external = crate::ext::bind(&loaded, &self.limits.extensions, self.host.as_mut().expect("native host"))?;
         let (old, new) = (&self.loaded.program, &loaded.program);
         let prefix = |what: &str, same: bool| if same { Ok(()) } else {
             Err(Error(format!("the extension changes published {what}")))
@@ -417,6 +434,7 @@ impl Runtime {
         self.resources.extend_metadata(resources);
         self.invocations[from..functions].copy_from_slice(&records);
         self.natives.extend(natives);
+        self.external = external;
         self.intrinsics.extend(intrinsics);
         self.heap.set_shareable(shareable);
         self.held = held;
@@ -473,6 +491,7 @@ impl Runtime {
             running: Vec::new(),
             timers: Vec::new(),
             states: crate::word::FastMap::default(),
+            external: vec![None; loaded.program.functions.len()],
             natives: loaded
                 .program
                 .functions

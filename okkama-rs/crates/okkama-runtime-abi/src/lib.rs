@@ -1,6 +1,7 @@
 //! Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
 
 pub mod catalogue;
+pub mod ext;
 
 /// Тип ABI: тип Okkama параметра или результата provider.
 #[derive(Clone, Debug, PartialEq, Eq)]

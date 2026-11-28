@@ -104,6 +104,15 @@ fn call_failed(ctx: *mut Ctx) -> Result<Word, ()> {
 }
 
 fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, deliver: bool) -> Step {
+    if runtime.external[function].is_some() {
+        if deliver { return cancelled(runtime); }
+        let count = runtime.loaded.program.functions[function].params.len();
+        let arguments: Vec<_> = (0..count).map(|i| param(runtime, frame, function, i)).collect();
+        let word = crate::runtime::rt_native(ctx, function as u64, arguments.as_ptr(), count as u64);
+        return if unsafe { (*ctx).status } == OK { Done(word) } else {
+            match call_failed(ctx) { Ok(failure) => Failed(failure), Err(()) => Stop }
+        };
+    }
     let symbol = runtime.loaded.program.functions[function].native.clone().unwrap_or_default();
     let Some(native) = okkama_runtime_abi::Native::resolve(&symbol) else {
         return fail(runtime, FailureKind::Program(crate::natives::missing_native(&symbol)));
