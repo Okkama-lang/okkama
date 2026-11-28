@@ -118,9 +118,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1226 — Instruction operand and result types for bytecode lowered from OIR-2
 - `okkama-sparrow/src/verify.rs` 828 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 3197 lines
+## ownership-runtime — 2 files, 3198 lines
 
-- `sparrow-core/src/failures.rs` 2412 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
 ## sparrow — 71 files, 39752 lines

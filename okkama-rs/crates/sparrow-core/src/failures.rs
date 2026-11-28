@@ -111,7 +111,7 @@ pub struct Resources {
     /// Tweed #906: per immutable container (array version, closure, map, box), the children that may hold an
     /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
     /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
-    structure: HashMap<Word, Box<[(Word, Repr)]>>,
+    structure: HashMap<Word, StructureIndex>,
     /// #1152: for an array's index, the position of each child (ascending): a copied slice takes the part of its
     /// parent's index inside its range instead of scanning its elements (`inherit_slice_structure`).
     positions: HashMap<Word, Box<[u32]>>,
@@ -249,6 +249,9 @@ impl Resources {
         }
     }
 }
+
+/// Tweed #906: the children of a container that may hold an identity, in order.
+type StructureIndex = Box<[(Word, Repr)]>;
 
 /// Closed-world reachability of destroy-bearing objects through declared
 /// types; a role reaches what the objects doing it reach.
@@ -1266,14 +1269,14 @@ impl Runtime {
 
     /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
     /// reports its release, so a reused address never inherits an old index.
-    fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
+    fn remember_structure(&mut self, container: Word, index: StructureIndex) {
         self.resources.structure.insert(container, index);
         self.heap.watch(container);
     }
 
     /// Tweed #906: the children of an immutable container that may hold an identity, in order. A leaf (a scalar, a
     /// string, an object that is not an identity, a container whose index is empty) is left out for good.
-    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> Box<[(Word, Repr)]> {
+    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> StructureIndex {
         okkama_devtrace::count!("runtime", "structure index built");
         children.filter(|&(word, repr)| self.may_hold_identity(word, repr)).collect()
     }
@@ -1292,7 +1295,7 @@ impl Runtime {
     }
 
     /// #1152: `structure_of` an array's elements, with the position of each child kept.
-    fn array_structure(&self, elements: &[Word], repr: Repr) -> (Box<[(Word, Repr)]>, Box<[u32]>) {
+    fn array_structure(&self, elements: &[Word], repr: Repr) -> (StructureIndex, Box<[u32]>) {
         okkama_devtrace::count!("runtime", "structure index built");
         let mut positions = Vec::new();
         let index = elements
@@ -1319,7 +1322,7 @@ impl Runtime {
         };
         let low = positions.partition_point(|&position| (position as usize) < range.start);
         let high = positions.partition_point(|&position| (position as usize) < range.end);
-        let children: Box<[(Word, Repr)]> = index[low..high].into();
+        let children: StructureIndex = index[low..high].into();
         let rebased: Box<[u32]> = positions[low..high].iter().map(|&position| position - range.start as u32).collect();
         okkama_devtrace::count!("runtime", "structure index inherited");
         self.remember_structure(slice, children);
