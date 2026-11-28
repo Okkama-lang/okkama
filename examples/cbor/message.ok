@@ -1,0 +1,37 @@
+module examples/cbor/message v1.0.0;
+
+import "cbor" take Cbor, CborEntry, CborError, ParsedCbor;
+import "encoding/hex" take HexEncoded;
+import "io/stdout" take Stdout;
+
+// A message built in code, encoded, decoded and read back: exact integers past
+// 64 bits, a rational, raw bytes, an absent field, and the canonical form to
+// hash or sign.
+main() is int {
+    let out = Stdout();
+    let message = Cbor(
+        CborEntry("op", "resize"),
+        CborEntry("id", (2).pow(70)),
+        CborEntry("scale", 2 / 3),
+        CborEntry("image", [byte(0x89), byte(0x50), byte(0x4e), byte(0x47)]),
+        CborEntry("note", Cbor())
+    );
+    let bytes = message.encoding();
+    out.writeln(bytes.size().string(), " bytes: ", message.string());
+    let read = ParsedCbor(bytes).root();
+    out.writeln("id + 1 = ", (read.get("id").int() + 1).string());
+    out.writeln("scale * 3 = ", (read.get("scale").rat() * 3.rat()).string());
+    out.writeln("image: ", HexEncoded(read.get("image").bytes()).string());
+    out.writeln("note: ", read.maybe("note").text() else "(none)");
+    out.writeln("canonical: ", HexEncoded(read.canonical_encoding()).string());
+    let truncated = bytes.slice(0, 10);
+    out.writeln(
+        try {
+            ParsedCbor(truncated).root().string();
+        }
+        catch CborError.truncated(offset) {
+            "cut off inside the item at byte " + offset.string();
+        }
+    );
+    0;
+}

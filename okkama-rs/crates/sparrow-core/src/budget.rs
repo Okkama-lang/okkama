@@ -161,7 +161,7 @@ const SYSTEM_CONSTANTS: &[&str] = &["system_platform", "system_architecture", "s
 /// to the runtime is in no list until someone puts it in one, and the test
 /// `every_native_is_classified` fails until then.
 const PURE: &[&str] = &[
-    "runtime/bigint", "runtime/binary", "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation", "runtime/compression",
+    "runtime/bigint", "runtime/binary", "runtime/buffer", "runtime/bytes", "runtime/cbor", "runtime/checksum", "runtime/cldr", "runtime/collation", "runtime/compression",
     "runtime/collections", "runtime/crypto", "runtime/db", "runtime/debug",
     "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex", "runtime/host_crypto",
     "runtime/hpack", "runtime/idna", "runtime/input_state", "runtime/io_decorators", "runtime/json",

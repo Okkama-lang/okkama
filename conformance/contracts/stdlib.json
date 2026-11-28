@@ -19,6 +19,21 @@
       }
     },
     {
+      "id": "STD.CBOR",
+      "title": "std cbor public contract (Cbor, CborEntry, CborError, CborItems, CborKind, CborMaybeReader, ParsedCbor)",
+      "family": "Standard library: cbor",
+      "spec_refs": [
+        "std/cbor.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.CELL",
       "title": "std cell public contract (Cell)",
       "family": "Standard library: cell",
@@ -5642,6 +5657,22 @@
       "family": "Standard library: runtime",
       "spec_refs": [
         "std/runtime/bytes.ok"
+      ],
+      "status": "informative",
+      "aspects": {
+        "normal": "required",
+        "boundary": "n/a: module owns no public declarations",
+        "invalid": "n/a: module owns no public declarations",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      },
+      "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
+    },
+    {
+      "id": "STD.RUNTIME.CBOR",
+      "title": "std runtime/cbor public contract (no public declarations)",
+      "family": "Standard library: runtime",
+      "spec_refs": [
+        "std/runtime/cbor.ok"
       ],
       "status": "informative",
       "aspects": {

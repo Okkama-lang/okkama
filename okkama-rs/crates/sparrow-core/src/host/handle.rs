@@ -27,6 +27,7 @@ pub(crate) enum Handle {
     #[cfg(feature = "host")]
     SqliteReply(std::rc::Rc<crate::host::native_sqlite::Reply>),
     Json(crate::host::native_json::JsonHandle),
+    Cbor(crate::host::native_cbor::CborHandle),
     Regex(crate::host::native_regex::RegexHandle),
     Secret(crate::host::native_secret::Secret),
     Buffer(crate::host::native_buffer::Buffer),
@@ -58,6 +59,7 @@ impl Handle {
             | Self::Digest(_)
             | Self::TestState { .. }
             | Self::Origin(_)
+            | Self::Cbor(_)
             | Self::PgPage(_) => {}
             #[cfg(feature = "host")]
             Self::TemporaryDirectory(_)

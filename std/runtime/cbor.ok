@@ -1,0 +1,190 @@
+module runtime/cbor v1.0.0;
+
+// The native layer under cbor (#1082): the calls that module makes into the
+// host runtime. Programs use cbor instead; these declarations may change with
+// the runtime.
+//
+// A decoded or built CBOR value is an immutable tree held by the runtime. Kind
+// codes: 0 int, 1 float, 2 rat, 3 text, 4 bytes, 5 boolean, 6 null,
+// 7 undefined, 8 simple, 9 array, 10 map, 11 tagged. A read of another kind,
+// an index outside the node, a non-finite float read as a float or a tag
+// number outside 0..2^64-1 is native invalid_input.
+
+// A decode of CBOR bytes: its value, or why and where it failed.
+native object CborParseState;
+
+// A CBOR value, decoded or built.
+native object CborNodeState;
+
+// Decodes origin from byte start within the limits: the rest of origin is one
+// item, or with whole false the first item of a CBOR sequence (RFC 8742).
+// Offsets count from the start of origin.
+native cbor_decode(
+    origin is @byte,
+    start is int,
+    whole is bool,
+    maximum_depth is int,
+    maximum_items is int,
+    maximum_size is int
+) is CborParseState;
+
+// The failure code: "" when it decoded, else truncated, malformed,
+// invalid_utf8, duplicate_key, invalid_tag, trailing, too_deep,
+// too_many_items or too_large.
+native cbor_decode_failure(origin is CborParseState) is string;
+
+// The byte offset of the item at fault.
+native cbor_decode_offset(origin is CborParseState) is int;
+
+// Why a malformed item or an invalid tag was refused.
+native cbor_decode_reason(origin is CborParseState) is string;
+
+// The limit passed, or the tag refused.
+native cbor_decode_number(origin is CborParseState) is int;
+
+// The offset just past the decoded item.
+native cbor_decode_end(origin is CborParseState) is int;
+
+// The decoded value; native invalid_data when the decode failed.
+native cbor_decode_root(origin is CborParseState) is CborNodeState;
+
+// The kind code of a value.
+native cbor_kind(origin is CborNodeState) is int;
+
+// An integer, of any size.
+native cbor_int(origin is CborNodeState) is int;
+
+// A finite float.
+native cbor_float(origin is CborNodeState) is float;
+
+// The numerator of a rational, reduced.
+native cbor_numerator(origin is CborNodeState) is int;
+
+// The denominator of a rational, positive.
+native cbor_denominator(origin is CborNodeState) is int;
+
+// A text string.
+native cbor_text(origin is CborNodeState) is string;
+
+// A byte string.
+native cbor_bytes(origin is CborNodeState) is @byte;
+
+// A boolean.
+native cbor_boolean(origin is CborNodeState) is bool;
+
+// The number of a tag or of a simple value.
+native cbor_number(origin is CborNodeState) is int;
+
+// The content of a tag.
+native cbor_content(origin is CborNodeState) is CborNodeState;
+
+// How many items an array has, or pairs a map.
+native cbor_size(origin is CborNodeState) is int;
+
+// The item at index of an array.
+native cbor_item(origin is CborNodeState, index is int) is CborNodeState;
+
+// The items of an array, in order.
+native cbor_items(origin is CborNodeState) is @CborNodeState;
+
+// The keys of a map, in order.
+native cbor_keys(origin is CborNodeState) is @CborNodeState;
+
+// The values of a map, in the order of its keys.
+native cbor_values(origin is CborNodeState) is @CborNodeState;
+
+// The position of the text key in a map, or -1.
+native cbor_text_position(origin is CborNodeState, key is string) is int;
+
+// The position of the integer key in a map, or -1.
+native cbor_int_position(origin is CborNodeState, key is int) is int;
+
+// The position of the key equal to key (the same deterministic encoding) in a
+// map, or -1.
+native cbor_position(origin is CborNodeState, key is CborNodeState) is int;
+
+// The value at position of a map.
+native cbor_value(origin is CborNodeState, position is int) is CborNodeState;
+
+// An integer value.
+native cbor_int_node(value is int) is CborNodeState;
+
+// A float value.
+native cbor_float_node(value is float) is CborNodeState;
+
+// A rational value (tag 30) of a nonzero denominator, reduced.
+native cbor_rational_node(numerator is int, denominator is int) is CborNodeState;
+
+// A text string value.
+native cbor_text_node(value is string) is CborNodeState;
+
+// A byte string value.
+native cbor_bytes_node(value is @byte) is CborNodeState;
+
+// A boolean value.
+native cbor_boolean_node(value is bool) is CborNodeState;
+
+// null.
+native cbor_null_node() is CborNodeState;
+
+// A tag over content, read as a decode reads it: tags 2 and 3 over bytes are
+// an integer and tag 30 over a pair a rational (invalid_input for any other
+// content of those tags); other tags are kept.
+native cbor_tag_node(number is int, content is CborNodeState) is CborNodeState;
+
+// An array of items.
+native cbor_array_node(items is @CborNodeState) is CborNodeState;
+
+// The index of the first key that repeats an earlier one, or the number of
+// keys.
+native cbor_repeated_key(keys is @CborNodeState) is int;
+
+// A map of distinct keys and their values (invalid_input for differing counts
+// or a repeated key).
+native cbor_map_node(keys is @CborNodeState, values is @CborNodeState) is CborNodeState;
+
+// The encoding of a value: preferred serialization (RFC 8949 4.1), or with
+// deterministic the core deterministic encoding (4.2.1).
+native cbor_encode(origin is CborNodeState, deterministic is bool) is @byte;
+
+// Diagnostic notation (RFC 8949 8).
+native cbor_diagnostic(origin is CborNodeState) is string;
+
+test "CBOR natives decode, read and encode back" {
+    let state = cbor_decode([byte(0x82), byte(0x01), byte(0x61), byte(0x61)], 0, true, 8, 100, 100);
+    test.is(cbor_decode_failure(state), "");
+    test.is(cbor_decode_end(state), 4);
+    let root = cbor_decode_root(state);
+    test.is(cbor_kind(root), 9);
+    test.is(cbor_size(root), 2);
+    test.is(cbor_int(cbor_item(root, 0)), 1);
+    test.is(cbor_text(cbor_item(root, 1)), "a");
+    test.is(cbor_diagnostic(root), "[1, \"a\"]");
+    test.is(cbor_encode(root, false), [byte(0x82), byte(0x01), byte(0x61), byte(0x61)]);
+}
+
+test "CBOR native failures carry a code and an offset" {
+    let cut = cbor_decode([byte(0x01), byte(0x82), byte(0x01)], 1, false, 8, 100, 100);
+    test.is(cbor_decode_failure(cut), "truncated");
+    test.is(cbor_decode_offset(cut), 1);
+    test.is(
+        try {
+            cbor_decode_root(cut);
+            "";
+        }
+        catch failure is NativeFailure {
+            failure.code();
+        },
+        "invalid_data"
+    );
+    test.is(
+        try {
+            cbor_text(cbor_int_node(1));
+            "";
+        }
+        catch failure is NativeFailure {
+            failure.code();
+        },
+        "invalid_input"
+    );
+}

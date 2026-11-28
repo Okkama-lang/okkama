@@ -20,6 +20,7 @@ pub(crate) mod file_lock;
 mod handle;
 pub(crate) mod native_binary;
 pub(crate) mod native_buffer;
+pub(crate) mod native_cbor;
 pub(crate) mod native_crypto;
 pub(crate) mod native_data;
 pub(crate) mod native_db;
@@ -634,6 +635,7 @@ enum Provider {
     Sqlite,
     Db,
     Json,
+    Cbor,
     Regex,
     Idna,
     Net,
@@ -689,6 +691,8 @@ fn classify(native: Native) -> Option<Provider> {
         Provider::Db
     } else if native_json::handles(native) {
         Provider::Json
+    } else if native_cbor::handles(native) {
+        Provider::Cbor
     } else if native_regex::handles(native) {
         Provider::Regex
     } else if native_idna::handles(native) {
@@ -787,6 +791,7 @@ impl Heap {
             Some(Provider::Sqlite) => return self.native_sqlite(native, args),
             Some(Provider::Db) => return self.native_db(native, args),
             Some(Provider::Json) => return self.native_json(native, args),
+            Some(Provider::Cbor) => return self.native_cbor(native, args),
             Some(Provider::Regex) => return self.native_regex(native, args),
             Some(Provider::Idna) => return self.native_idna(native, args),
             Some(Provider::Net) => return self.native_net(native, args),

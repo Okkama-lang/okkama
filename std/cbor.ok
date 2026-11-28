@@ -1,0 +1,1449 @@
+module cbor v1.0.0;
+
+import "io/stream" take AsyncReading;
+import "async/atomic" take Atomic;
+import "encoding/hex" take HexDecoded, HexEncoded;
+import "runtime/cbor" take CborParseState, CborNodeState, cbor_decode, cbor_decode_failure,
+    cbor_decode_offset, cbor_decode_reason, cbor_decode_number, cbor_decode_end, cbor_decode_root,
+    cbor_kind, cbor_int, cbor_float, cbor_numerator, cbor_denominator, cbor_text, cbor_bytes,
+    cbor_boolean, cbor_number, cbor_content, cbor_size, cbor_item, cbor_items, cbor_keys,
+    cbor_values, cbor_text_position, cbor_int_position, cbor_position, cbor_value, cbor_int_node,
+    cbor_float_node, cbor_rational_node, cbor_text_node, cbor_bytes_node, cbor_boolean_node,
+    cbor_null_node, cbor_tag_node, cbor_array_node, cbor_repeated_key, cbor_map_node, cbor_encode,
+    cbor_diagnostic;
+
+// CBOR (RFC 8949) values: one immutable Cbor, decoded or built in code, read
+// without casts and encoded by the runtime in one call.
+//
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// let reply = Cbor(CborEntry("id", 4711), CborEntry("tags", Cbor(items: [Cbor("new"), Cbor(7)])));
+// let bytes = reply.encoding();
+// let read = ParsedCbor(bytes).root();
+// Stdout().writeln(bytes.size().string(), " bytes: ", read.string());
+// Stdout().writeln(read.get("id").int().string());
+// ```
+// ```output
+// 18 bytes: {"id": 4711, "tags": ["new", 7]}
+// 4711
+// ```
+//
+// The data model maps onto Okkama values exactly:
+//
+// - integers of any size: major types 0 and 1, and bignums (tags 2 and 3)
+//   beyond 64 bits;
+// - floats in the shortest width that keeps the value (half, single, double);
+//   a decoded infinity or NaN is kept, but is not an Okkama float;
+// - rat as tag 30 (rational number, IANA registry): [numerator, denominator],
+//   reduced, the denominator positive;
+// - text strings as string, byte strings as @byte (raw, no base64);
+// - arrays, and maps with keys of any CBOR type (string and int keys have
+//   their own lookups; any key is a Cbor);
+// - true and false as bool; null and undefined are absence, read through
+//   maybe();
+// - tags other than 2, 3 and 30 are kept with their content (tag(),
+//   content()), and so are simple values (simple()).
+//
+// Decoding refuses what is not well-formed, text that is not UTF-8, a map key
+// repeated in its map, and bignum or rational tags with the wrong content,
+// each as a CborError with the byte offset. It accepts indefinite lengths and
+// is bounded: 128 levels deep, 1048576 data items and 16 MiB unless told
+// otherwise. Encoding writes definite lengths only: encoding() keeps the map
+// order as built or decoded (RFC 8949 4.1, preferred serialization), and
+// canonical_encoding() sorts map keys by their encoded bytes (4.2.1, core
+// deterministic encoding), the form to hash or sign.
+
+// Which kind of CBOR value a Cbor is.
+//
+// - `int_value`: An integer of any size.
+// - `float_value`: A float, perhaps not finite.
+// - `rat_value`: A rational number (tag 30).
+// - `text_value`: A text string.
+// - `bytes_value`: A byte string.
+// - `boolean_value`: true or false.
+// - `null_value`: null.
+// - `undefined_value`: undefined.
+// - `simple_value`: Another simple value: 0..19 or 32..255.
+// - `array_value`: An array.
+// - `map_value`: A map.
+// - `tagged_value`: A tag other than 2, 3 and 30, with its content.
+enum CborKind = (
+    int_value,
+    float_value,
+    rat_value,
+    text_value,
+    bytes_value,
+    boolean_value,
+    null_value,
+    undefined_value,
+    simple_value,
+    array_value,
+    map_value,
+    tagged_value
+);
+
+// One CBOR value, decoded or built: read it without casts, encode it in one
+// call. Two Cbor values are the same data model value when their
+// canonical_encoding() is equal.
+//
+// ```okkama
+// let point = Cbor(CborEntry(1, Cbor(2.5)), CborEntry(2, Cbor(-1)));
+// let x = point.get(1).float();
+// let canonical = point.canonical_encoding();
+// ```
+object Cbor {
+    has node is CborNodeState;
+
+    // The runtime node of any Cbor, for building arrays, maps and tags of them.
+    cap Node {
+        // The immutable runtime node; values share it.
+        state is CborNodeState {
+            node;
+        }
+    }
+
+    // null.
+    Cbor() {
+        node = cbor_null_node();
+    }
+
+    // An integer of any size.
+    Cbor(value is int) {
+        node = cbor_int_node(value);
+    }
+
+    // A float, encoded in the shortest width that keeps it.
+    Cbor(value is float) {
+        node = cbor_float_node(value);
+    }
+
+    // A rational number: tag 30 over [numerator, denominator].
+    Cbor(value is rat) {
+        node = cbor_rational_node(value.numerator(), value.denominator());
+    }
+
+    // A text string.
+    Cbor(value is string) {
+        node = cbor_text_node(value);
+    }
+
+    // A byte string.
+    Cbor(value is @byte) {
+        node = cbor_bytes_node(value);
+    }
+
+    // true or false.
+    Cbor(value is bool) {
+        node = cbor_boolean_node(value);
+    }
+
+    // An array. Cbor(items: []) is [].
+    Cbor(items is @Cbor) {
+        let nodes is @CborNodeState = items.map() -> item {
+            item::Node::state;
+        };
+        node = cbor_array_node(nodes);
+    }
+
+    // A map in the order of its entries; a repeated key is
+    // CborError.repeated_key. Cbor(entries: []) is {}.
+    Cbor(entries is @CborEntry) {
+        let keys is @CborNodeState = entries.map() -> entry {
+            let key = entry::Entry::key;
+            key::Node::state;
+        };
+        let values is @CborNodeState = entries.map() -> entry {
+            let value = entry::Entry::value;
+            value::Node::state;
+        };
+        let repeated = cbor_repeated_key(keys);
+        confirm repeated == keys.size()
+            else throw CborError.repeated_key(cbor_diagnostic(keys[repeated]));
+        node = cbor_map_node(keys, values);
+    }
+
+    // A map written out entry by entry:
+    // Cbor(CborEntry("id", 7), CborEntry("state", "new")).
+    Cbor(entries is ...CborEntry) {
+        let all is @CborEntry = entries...;
+        let keys is @CborNodeState = all.map() -> entry {
+            let key = entry::Entry::key;
+            key::Node::state;
+        };
+        let values is @CborNodeState = all.map() -> entry {
+            let value = entry::Entry::value;
+            value::Node::state;
+        };
+        let repeated = cbor_repeated_key(keys);
+        confirm repeated == keys.size()
+            else throw CborError.repeated_key(cbor_diagnostic(keys[repeated]));
+        node = cbor_map_node(keys, values);
+    }
+
+    // Tag number tag (0..2^64-1) over content, read as a decode reads it: tag 2
+    // or 3 over bytes is an integer, tag 30 over [int, positive int] a rat, and
+    // any other content of those tags is CborError.refused_tag; other tags are
+    // kept: Cbor(tag: 32, content: Cbor("https://okkama.org")).
+    Cbor(tag is int, content is Cbor) {
+        confirm tag >= 0 && tag <= 18446744073709551615
+            else throw CborError.refused_tag(tag, "a tag number is 0..2^64-1");
+        node = try {
+            cbor_tag_node(tag, content::Node::state);
+        }
+        catch failure is NativeFailure {
+            throw CborError.refused_tag(tag, failure.message());
+        };
+    }
+
+    // A value of the runtime, as ParsedCbor and CborItems make it.
+    Cbor(node is CborNodeState) {
+        self.node = node;
+    }
+
+    // Which kind of value this is.
+    kind() is CborKind {
+        match cbor_kind(node) {
+            case 0 {
+                CborKind.int_value;
+            }
+            case 1 {
+                CborKind.float_value;
+            }
+            case 2 {
+                CborKind.rat_value;
+            }
+            case 3 {
+                CborKind.text_value;
+            }
+            case 4 {
+                CborKind.bytes_value;
+            }
+            case 5 {
+                CborKind.boolean_value;
+            }
+            case 6 {
+                CborKind.null_value;
+            }
+            case 7 {
+                CborKind.undefined_value;
+            }
+            case 8 {
+                CborKind.simple_value;
+            }
+            case 9 {
+                CborKind.array_value;
+            }
+            case 10 {
+                CborKind.map_value;
+            }
+            else {
+                CborKind.tagged_value;
+            }
+        }
+    }
+
+    // This integer, of any size; CborError.wrong_kind for anything else.
+    int() is int {
+        try {
+            cbor_int(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.int_value);
+        }
+    }
+
+    // This float; an infinity or NaN is CborError.unrepresentable.
+    float() is float {
+        try {
+            cbor_float(node);
+        }
+        catch failure is NativeFailure {
+            if self.kind() == CborKind.float_value {
+                throw CborError.unrepresentable(self.string());
+            }
+            throw self.wrong(CborKind.float_value);
+        }
+    }
+
+    // This rational number (tag 30).
+    rat() is rat {
+        try {
+            rat(cbor_numerator(node), cbor_denominator(node));
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.rat_value);
+        }
+    }
+
+    // This text string.
+    text() is string {
+        try {
+            cbor_text(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.text_value);
+        }
+    }
+
+    // This byte string.
+    bytes() is @byte {
+        try {
+            cbor_bytes(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.bytes_value);
+        }
+    }
+
+    // This true or false.
+    boolean() is bool {
+        try {
+            cbor_boolean(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.boolean_value);
+        }
+    }
+
+    // The number of this tag.
+    tag() is int {
+        self.expect(CborKind.tagged_value);
+        cbor_number(node);
+    }
+
+    // The content of this tag.
+    content() is Cbor {
+        self.expect(CborKind.tagged_value);
+        Cbor(cbor_content(node));
+    }
+
+    // The number of this simple value: 0..19 or 32..255.
+    simple() is int {
+        self.expect(CborKind.simple_value);
+        cbor_number(node);
+    }
+
+    // How many items this array has, or entries this map.
+    size() is int {
+        let actual = self.kind();
+        confirm actual == CborKind.array_value || actual == CborKind.map_value
+            else throw CborError.wrong_kind(CborKind.array_value, actual);
+        cbor_size(node);
+    }
+
+    // The array item at index; CborError.missing_index past the end.
+    at(index is int) is Cbor {
+        self.expect(CborKind.array_value);
+        let size = cbor_size(node);
+        confirm index >= 0 && index < size else throw CborError.missing_index(index, size);
+        Cbor(cbor_item(node, index));
+    }
+
+    // The items of this array.
+    items() is @Cbor {
+        let nodes = try {
+            cbor_items(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.array_value);
+        };
+        let items is @Cbor = nodes.map() -> item {
+            Cbor(item);
+        };
+        items;
+    }
+
+    // The keys of this map, in its order.
+    keys() is @Cbor {
+        let nodes = try {
+            cbor_keys(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.map_value);
+        };
+        let keys is @Cbor = nodes.map() -> key {
+            Cbor(key);
+        };
+        keys;
+    }
+
+    // The values of this map, in the order of keys().
+    values() is @Cbor {
+        let nodes = try {
+            cbor_values(node);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.map_value);
+        };
+        let values is @Cbor = nodes.map() -> value {
+            Cbor(value);
+        };
+        values;
+    }
+
+    // Whether this map has the text key.
+    has(key is string) is bool {
+        self.text_position(key) >= 0;
+    }
+
+    // Whether this map has the integer key.
+    has(key is int) is bool {
+        self.int_position(key) >= 0;
+    }
+
+    // Whether this map has a key equal to key.
+    has(key is Cbor) is bool {
+        self.position(key) >= 0;
+    }
+
+    // The value of the text key; CborError.missing_key when there is none.
+    get(key is string) is Cbor {
+        let position = self.text_position(key);
+        confirm position >= 0 else throw CborError.missing_key(Cbor(key).string());
+        Cbor(cbor_value(node, position));
+    }
+
+    // The value of the integer key.
+    get(key is int) is Cbor {
+        let position = self.int_position(key);
+        confirm position >= 0 else throw CborError.missing_key(key.string());
+        Cbor(cbor_value(node, position));
+    }
+
+    // The value of the key equal to key (the same canonical encoding):
+    // 1 and the bignum 1 are one key, 1 and 1.0 two.
+    get(key is Cbor) is Cbor {
+        let position = self.position(key);
+        confirm position >= 0 else throw CborError.missing_key(key.string());
+        Cbor(cbor_value(node, position));
+    }
+
+    // This value, absent when it is null or undefined: reads give Maybe, so a
+    // fallback is `value.maybe().text() else ""`.
+    maybe() is CborMaybeReader {
+        let kind = self.kind();
+        if kind == CborKind.null_value || kind == CborKind.undefined_value {
+            CborMaybeReader(found: Maybe<Cbor>.none);
+        }
+        else {
+            CborMaybeReader(found: Maybe.some(self));
+        }
+    }
+
+    // The value of the text key, absent when the key is missing or its value
+    // is null or undefined: `doc.maybe("note").text() else ""`.
+    maybe(key is string) is CborMaybeReader {
+        let position = self.text_position(key);
+        if position < 0 {
+            CborMaybeReader(found: Maybe<Cbor>.none);
+        }
+        else {
+            Cbor(cbor_value(node, position)).maybe();
+        }
+    }
+
+    // The value of the integer key, absent when missing, null or undefined.
+    maybe(key is int) is CborMaybeReader {
+        let position = self.int_position(key);
+        if position < 0 {
+            CborMaybeReader(found: Maybe<Cbor>.none);
+        }
+        else {
+            Cbor(cbor_value(node, position)).maybe();
+        }
+    }
+
+    // The CBOR bytes in preferred serialization (RFC 8949 4.1): shortest
+    // forms, definite lengths, maps in their order.
+    encoding() is @byte {
+        cbor_encode(node, false);
+    }
+
+    // The CBOR bytes in core deterministic encoding (RFC 8949 4.2.1): as
+    // encoding(), with every map's keys sorted by their encoded bytes. Equal
+    // values give equal bytes, the form to hash or sign.
+    canonical_encoding() is @byte {
+        cbor_encode(node, true);
+    }
+
+    // Diagnostic notation (RFC 8949 8): `{"id": 7, "tags": [1.5, h'00ff']}`.
+    string() is string {
+        cbor_diagnostic(node);
+    }
+
+    hidden expect(expected is CborKind) is void {
+        let actual = self.kind();
+        confirm actual == expected else throw CborError.wrong_kind(expected, actual);
+    }
+
+    hidden wrong(expected is CborKind) is CborError {
+        CborError.wrong_kind(expected, self.kind());
+    }
+
+    hidden text_position(key is string) is int {
+        try {
+            cbor_text_position(node, key);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.map_value);
+        }
+    }
+
+    hidden int_position(key is int) is int {
+        try {
+            cbor_int_position(node, key);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.map_value);
+        }
+    }
+
+    hidden position(key is Cbor) is int {
+        try {
+            cbor_position(node, key::Node::state);
+        }
+        catch failure is NativeFailure {
+            throw self.wrong(CborKind.map_value);
+        }
+    }
+}
+
+// One entry of a map: a key and its value. Text keys take scalars directly:
+// CborEntry("id", 42), CborEntry("name", "Ada"), CborEntry("blob", bytes).
+//
+// ```okkama
+// let header = Cbor(CborEntry(1, Cbor(-7)), CborEntry(Cbor(items: []), Cbor()));
+// ```
+object CborEntry {
+    has entry_key is Cbor;
+    has entry_value is Cbor;
+
+    // An entry of any key and value.
+    CborEntry(key is Cbor, value is Cbor) {
+        entry_key = key;
+        entry_value = value;
+    }
+
+    // An entry of a text key.
+    CborEntry(key is string, value is Cbor) {
+        entry_key = Cbor(key);
+        entry_value = value;
+    }
+
+    // An entry of an integer key.
+    CborEntry(key is int, value is Cbor) {
+        entry_key = Cbor(key);
+        entry_value = value;
+    }
+
+    // A text key and a text string.
+    CborEntry(key is string, value is string) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // A text key and an integer.
+    CborEntry(key is string, value is int) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // A text key and a float.
+    CborEntry(key is string, value is float) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // A text key and a rational number.
+    CborEntry(key is string, value is rat) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // A text key and true or false.
+    CborEntry(key is string, value is bool) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // A text key and a byte string.
+    CborEntry(key is string, value is @byte) {
+        entry_key = Cbor(key);
+        entry_value = Cbor(value);
+    }
+
+    // Read by Cbor(entries), which builds the map.
+    cap Entry {
+        // The entry's key.
+        key is Cbor {
+            entry_key;
+        }
+
+        // The entry's value.
+        value is Cbor {
+            entry_value;
+        }
+    }
+}
+
+// CBOR bytes decoded on the first root(): exactly one item, within the limits
+// (128 levels of containers and tags, 1048576 data items, 16 MiB by default).
+//
+// ```okkama
+// let bytes is @byte = [byte(0xa1), byte(0x61), byte(0x6e), byte(0x01)];
+// let n = ParsedCbor(bytes).root().get("n").int();
+// let small = ParsedCbor(origin: bytes, maximum_depth: 4, maximum_items: 16, maximum_size: 64);
+// ```
+object ParsedCbor {
+    has origin is @byte;
+    has maximum_depth is int;
+    has maximum_items is int;
+    has maximum_size is int;
+
+    // CBOR bytes and the limits of their decode, each positive.
+    ParsedCbor(
+        origin is @byte,
+        maximum_depth is int = 128,
+        maximum_items is int = 1048576,
+        maximum_size is int = 16777216
+    ) {
+        confirm maximum_depth > 0
+            else throw CborError.invalid_limit("maximum_depth", maximum_depth);
+        confirm maximum_items > 0
+            else throw CborError.invalid_limit("maximum_items", maximum_items);
+        confirm maximum_size > 0 else throw CborError.invalid_limit("maximum_size", maximum_size);
+        self.origin = origin;
+        self.maximum_depth = maximum_depth;
+        self.maximum_items = maximum_items;
+        self.maximum_size = maximum_size;
+    }
+
+    // The decoded value, or the CborError of the first fault with its byte
+    // offset (CborError.trailing when bytes follow the item).
+    root() is Cbor {
+        once let state = cbor_decode(origin, 0, true, maximum_depth, maximum_items, maximum_size);
+        confirm cbor_decode_failure(state) == ""
+            else throw CborRefusal(state: state, shift: 0).error();
+        Cbor(cbor_decode_root(state));
+    }
+}
+
+// The items of a CBOR sequence (RFC 8742) as a stream gives them, one at a
+// time: each within the limits of ParsedCbor, the bytes held only until their
+// item is read. A fault is a CborError at its offset in the stream; a stream
+// that ends inside an item is CborError.truncated.
+//
+// ```okkama,ignore
+// for await CborItems(origin: socket) -> item {
+//     item.get("op").text();
+// }
+// ```
+object CborItems {
+    has origin is AsyncReading;
+    has maximum_depth is int;
+    has maximum_items is int;
+    has maximum_size is int;
+    // Bytes read and not yet decoded start at pending's position.
+    has pending is Atomic<@byte>;
+    has position is Atomic<int>;
+    // Stream offset of pending's first byte.
+    has consumed is Atomic<int>;
+    has ended is Atomic<bool>;
+
+    // Items of a stream within these limits, each positive.
+    CborItems(
+        origin is AsyncReading,
+        maximum_depth is int = 128,
+        maximum_items is int = 1048576,
+        maximum_size is int = 16777216
+    ) {
+        confirm maximum_depth > 0
+            else throw CborError.invalid_limit("maximum_depth", maximum_depth);
+        confirm maximum_items > 0
+            else throw CborError.invalid_limit("maximum_items", maximum_items);
+        confirm maximum_size > 0 else throw CborError.invalid_limit("maximum_size", maximum_size);
+        self.origin = origin;
+        self.maximum_depth = maximum_depth;
+        self.maximum_items = maximum_items;
+        self.maximum_size = maximum_size;
+        let empty is @byte = [];
+        pending = Atomic(empty);
+        position = Atomic(0);
+        consumed = Atomic(0);
+        ended = Atomic(false);
+    }
+
+    // The next item, or none after the last: for await walks it.
+    async next() is Maybe<Cbor> {
+        loop {
+            let buffered = pending.value();
+            let at = position.value();
+            if at < buffered.size() {
+                let state = cbor_decode(
+                    buffered,
+                    at,
+                    false,
+                    maximum_depth,
+                    maximum_items,
+                    maximum_size
+                );
+                let failure = cbor_decode_failure(state);
+                if failure == "" {
+                    self.advance(buffered, cbor_decode_end(state));
+                    return Maybe.some(Cbor(cbor_decode_root(state)));
+                }
+                if failure != "truncated" || ended.value() {
+                    throw CborRefusal(state: state, shift: consumed.value()).error();
+                }
+            }
+            else if ended.value() {
+                return Maybe<Cbor>.none;
+            }
+            // Reading at least as much as is held keeps the rescans of a long
+            // item linear.
+            let wanted = if buffered.size() > 65536 {
+                buffered.size();
+            }
+            else {
+                65536;
+            };
+            let chunk = await origin.bytes(wanted);
+            if chunk.size() == 0 {
+                ended.replace(true);
+            }
+            else {
+                pending.replace(buffered + chunk);
+            }
+        }
+    }
+
+    // Past an item ending at end; the read part of the buffer goes once it is
+    // half of it.
+    hidden advance(buffered is @byte, end is int) is void {
+        if end * 2 >= buffered.size() {
+            pending.replace(buffered.slice(end, buffered.size()));
+            consumed.replace(consumed.value() + end);
+            position.replace(0);
+        }
+        else {
+            position.replace(end);
+        }
+    }
+}
+
+// A value that may be absent: null, undefined or a missing key read as none.
+// A value of another kind is still CborError.wrong_kind.
+//
+// ```okkama
+// let doc = Cbor(CborEntry("note", Cbor()));
+// let note = doc.maybe("note").text() else "";
+// ```
+object CborMaybeReader {
+    has found is Maybe<Cbor>;
+
+    // Made by Cbor.maybe; not constructed directly.
+    CborMaybeReader(:found);
+
+    // Whether the value is there.
+    present() is bool {
+        match found {
+            case Maybe.some(value): true;
+            case Maybe.none: false;
+        }
+    }
+
+    // The value of any kind.
+    node() is Maybe<Cbor> {
+        found;
+    }
+
+    // The value as an integer.
+    int() is Maybe<int> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.int());
+            case Maybe.none: Maybe<int>.none;
+        }
+    }
+
+    // The value as a float.
+    float() is Maybe<float> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.float());
+            case Maybe.none: Maybe<float>.none;
+        }
+    }
+
+    // The value as a rational number.
+    rat() is Maybe<rat> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.rat());
+            case Maybe.none: Maybe<rat>.none;
+        }
+    }
+
+    // The value as a text string.
+    text() is Maybe<string> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.text());
+            case Maybe.none: Maybe<string>.none;
+        }
+    }
+
+    // The value as a byte string.
+    bytes() is Maybe<@byte> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.bytes());
+            case Maybe.none: Maybe<@byte>.none;
+        }
+    }
+
+    // The value as true or false.
+    boolean() is Maybe<bool> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.boolean());
+            case Maybe.none: Maybe<bool>.none;
+        }
+    }
+
+    // The value's array items.
+    items() is Maybe<@Cbor> {
+        match found {
+            case Maybe.some(value): Maybe.some(value.items());
+            case Maybe.none: Maybe<@Cbor>.none;
+        }
+    }
+
+    // A text key of this value; absent whenever this value is absent.
+    maybe(key is string) is CborMaybeReader {
+        match found {
+            case Maybe.some(value): value.maybe(key);
+            case Maybe.none: CborMaybeReader(found: Maybe<Cbor>.none);
+        }
+    }
+}
+
+// The CborError of a failed decode, at its offset in the stream.
+hidden object CborRefusal {
+    has state is CborParseState;
+    // What came before the decoded bytes.
+    has shift is int;
+
+    CborRefusal(:state, :shift);
+
+    error() is CborError {
+        let offset = shift + cbor_decode_offset(state);
+        let number = cbor_decode_number(state);
+        let reason = cbor_decode_reason(state);
+        match cbor_decode_failure(state) {
+            case "truncated": CborError.truncated(offset);
+            case "malformed": CborError.malformed(offset, reason);
+            case "invalid_utf8": CborError.invalid_utf8(offset);
+            case "duplicate_key": CborError.duplicate_key(offset);
+            case "invalid_tag": CborError.invalid_tag(offset, number, reason);
+            case "trailing": CborError.trailing(offset);
+            case "too_deep": CborError.too_deep(offset, number);
+            case "too_many_items": CborError.too_many_items(offset, number);
+            case _: CborError.too_large(offset, number);
+        }
+    }
+}
+
+// Everything that goes wrong with CBOR. Decoding names the byte offset of the
+// item at fault (the item that runs past the end, the malformed head, the
+// repeated key, the first trailing byte, the item past a limit).
+//
+// - `truncated`: The input ends inside the item at offset.
+// - `malformed`: Not well-formed CBOR (RFC 8949 Appendix F), and why.
+// - `invalid_utf8`: A text string, or a chunk of one, that is not UTF-8.
+// - `duplicate_key`: A map key equal to an earlier key of its map.
+// - `invalid_tag`: A bignum (2, 3) or rational (30) tag with the wrong content.
+// - `trailing`: Bytes after the item.
+// - `too_deep`: Containers and tags nest deeper than limit.
+// - `too_many_items`: More data items than limit.
+// - `too_large`: More bytes than limit.
+// - `invalid_limit`: A decode limit that is not positive.
+// - `wrong_kind`: A read of another kind than the value's.
+// - `missing_key`: A map has no such key, in diagnostic notation.
+// - `missing_index`: An array index outside 0..size.
+// - `unrepresentable`: A float that is not finite, read as an Okkama float.
+// - `repeated_key`: Building a map gave the same key twice.
+// - `refused_tag`: Building a tag of a number outside 0..2^64-1, or a bignum or
+//   rational tag over the wrong content.
+enum CborError is Error = (
+    truncated(offset is int),
+    malformed(offset is int, reason is string),
+    invalid_utf8(offset is int),
+    duplicate_key(offset is int),
+    invalid_tag(offset is int, tag is int, reason is string),
+    trailing(offset is int),
+    too_deep(offset is int, limit is int),
+    too_many_items(offset is int, limit is int),
+    too_large(offset is int, limit is int),
+    invalid_limit(name is string, amount is int),
+    wrong_kind(expected is CborKind, actual is CborKind),
+    missing_key(key is string),
+    missing_index(index is int, size is int),
+    unrepresentable(value is string),
+    repeated_key(key is string),
+    refused_tag(tag is int, reason is string)
+);
+
+test "RFC 8949 Appendix A examples decode to their diagnostic notation and encode back" {
+    for [
+        ["00", "0"],
+        ["01", "1"],
+        ["0a", "10"],
+        ["17", "23"],
+        ["1818", "24"],
+        ["1819", "25"],
+        ["1864", "100"],
+        ["1903e8", "1000"],
+        ["1a000f4240", "1000000"],
+        ["1b000000e8d4a51000", "1000000000000"],
+        ["1bffffffffffffffff", "18446744073709551615"],
+        ["c249010000000000000000", "18446744073709551616"],
+        ["3bffffffffffffffff", "-18446744073709551616"],
+        ["c349010000000000000000", "-18446744073709551617"],
+        ["20", "-1"],
+        ["29", "-10"],
+        ["3863", "-100"],
+        ["3903e7", "-1000"],
+        ["f90000", "0.0"],
+        ["f98000", "-0.0"],
+        ["f93c00", "1.0"],
+        ["fb3ff199999999999a", "1.1"],
+        ["f93e00", "1.5"],
+        ["f97bff", "65504.0"],
+        ["fa47c35000", "100000.0"],
+        ["fa7f7fffff", "3.4028234663852886e+38"],
+        ["fb7e37e43c8800759c", "1.0e+300"],
+        ["f90001", "5.960464477539063e-8"],
+        ["f90400", "0.00006103515625"],
+        ["f9c400", "-4.0"],
+        ["fbc010666666666666", "-4.1"],
+        ["f97c00", "Infinity"],
+        ["f97e00", "NaN"],
+        ["f9fc00", "-Infinity"],
+        ["f4", "false"],
+        ["f5", "true"],
+        ["f6", "null"],
+        ["f7", "undefined"],
+        ["f0", "simple(16)"],
+        ["f8ff", "simple(255)"],
+        ["c074323031332d30332d32315432303a30343a30305a", "0(\"2013-03-21T20:04:00Z\")"],
+        ["c11a514b67b0", "1(1363896240)"],
+        ["c1fb41d452d9ec200000", "1(1363896240.5)"],
+        ["d74401020304", "23(h'01020304')"],
+        ["d818456449455446", "24(h'6449455446')"],
+        ["d82076687474703a2f2f7777772e6578616d706c652e636f6d", "32(\"http://www.example.com\")"],
+        ["40", "h''"],
+        ["4401020304", "h'01020304'"],
+        ["60", "\"\""],
+        ["6161", "\"a\""],
+        ["6449455446", "\"IETF\""],
+        ["62225c", "\"\\\"\\\\\""],
+        ["62c3bc", "\"ü\""],
+        ["63e6b0b4", "\"水\""],
+        ["64f0908591", "\"𐅑\""],
+        ["80", "[]"],
+        ["83010203", "[1, 2, 3]"],
+        ["8301820203820405", "[1, [2, 3], [4, 5]]"],
+        [
+            "98190102030405060708090a0b0c0d0e0f101112131415161718181819",
+            "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+        ],
+        ["a0", "{}"],
+        ["a201020304", "{1: 2, 3: 4}"],
+        ["a26161016162820203", "{\"a\": 1, \"b\": [2, 3]}"],
+        ["826161a161626163", "[\"a\", {\"b\": \"c\"}]"],
+        [
+            "a56161614161626142616361436164614461656145",
+            "{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}"
+        ]
+    ] -> example {
+        let value = ParsedCbor(HexDecoded(example[0]).bytes()).root();
+        test.is(value.string(), example[1]);
+        test.is(HexEncoded(value.encoding()).string(), example[0]);
+        test.is(HexEncoded(value.canonical_encoding()).string(), example[0]);
+    }
+}
+
+test "wider floats and indefinite lengths of Appendix A encode in the preferred form" {
+    for [
+        ["fa7f800000", "f97c00"],
+        ["fa7fc00000", "f97e00"],
+        ["faff800000", "f9fc00"],
+        ["fb7ff0000000000000", "f97c00"],
+        ["fb7ff8000000000000", "f97e00"],
+        ["fbfff0000000000000", "f9fc00"],
+        ["5f42010243030405ff", "450102030405"],
+        ["7f657374726561646d696e67ff", "6973747265616d696e67"],
+        ["9fff", "80"],
+        ["9f018202039f0405ffff", "8301820203820405"],
+        ["9f01820203820405ff", "8301820203820405"],
+        ["83018202039f0405ff", "8301820203820405"],
+        ["83019f0203ff820405", "8301820203820405"],
+        [
+            "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff",
+            "98190102030405060708090a0b0c0d0e0f101112131415161718181819"
+        ],
+        ["bf61610161629f0203ffff", "a26161016162820203"],
+        ["826161bf61626163ff", "826161a161626163"],
+        ["bf6346756ef563416d7421ff", "a26346756ef563416d7421"]
+    ] -> example {
+        let value = ParsedCbor(HexDecoded(example[0]).bytes()).root();
+        test.is(HexEncoded(value.encoding()).string(), example[1]);
+    }
+}
+
+test "Okkama values built in code read back exactly" {
+    let big = (2).pow(200) + 1;
+    let value = Cbor(
+        CborEntry("small", -24),
+        CborEntry("big", big),
+        CborEntry("negative", -big),
+        CborEntry("float", 0.1),
+        CborEntry("half", 1.5),
+        CborEntry("rat", 1 / 3),
+        CborEntry("text", "Zoë 🙂"),
+        CborEntry("bytes", [byte(0), byte(255)]),
+        CborEntry("yes", true),
+        CborEntry("list", Cbor(items: [Cbor(1), Cbor(), Cbor(items: [])])),
+        CborEntry("table", Cbor(entries: []))
+    );
+    let read = ParsedCbor(value.encoding()).root();
+    test.is(read.get("small").int(), -24);
+    test.is(read.get("big").int(), big);
+    test.is(read.get("negative").int(), -big);
+    test.is(read.get("float").float(), 0.1);
+    test.is(read.get("half").float(), 1.5);
+    test.is(read.get("rat").rat(), 1 / 3);
+    test.is(read.get("text").text(), "Zoë 🙂");
+    test.is(read.get("bytes").bytes(), [byte(0), byte(255)]);
+    test.ok(read.get("yes").boolean());
+    test.is(read.get("list").size(), 3);
+    test.is(read.get("list").at(1).kind(), CborKind.null_value);
+    test.is(read.get("table").size(), 0);
+    test.is(read.keys().size(), 11);
+    test.is(read.values()[0].int(), -24);
+    test.is(read.string(), value.string());
+    test.is(HexEncoded(Cbor(1.5).encoding()).string(), "f93e00");
+    test.is(
+        HexEncoded(Cbor(big).encoding()).string(),
+        "c2581a0100000000000000000000000000000000000000000000000001"
+    );
+    test.is(HexEncoded(Cbor(-3 / 4).encoding()).string(), "d81e822204");
+    test.is(HexEncoded(Cbor(6 / 2).encoding()).string(), "d81e820301");
+    test.is(Cbor(-3 / 4).string(), "30([-3, 4])");
+}
+
+test "maps are looked up by text, integer and any key" {
+    let map = Cbor(
+        CborEntry("a", 1),
+        CborEntry(7, Cbor("seven")),
+        CborEntry(Cbor(1.0), Cbor("float one")),
+        CborEntry(Cbor(items: [Cbor(1)]), Cbor("array"))
+    );
+    test.is(map.get("a").int(), 1);
+    test.is(map.get(7).text(), "seven");
+    test.is(map.get(Cbor(1.0)).text(), "float one");
+    test.is(map.get(Cbor(items: [Cbor(1)])).text(), "array");
+    test.ok(map.has("a") && map.has(7) && map.has(Cbor(1.0)));
+    test.ok(!map.has(1) && !map.has("b"));
+    test.is(
+        try {
+            map.get("b");
+            "";
+        }
+        catch CborError.missing_key(key) {
+            key;
+        },
+        "\"b\""
+    );
+    let empty is @byte = [];
+    test.is(
+        try {
+            map.get(Cbor(empty));
+            "";
+        }
+        catch CborError.missing_key(key) {
+            key;
+        },
+        "h''"
+    );
+    // The bignum 1 is the integer key 1.
+    let keyed = ParsedCbor(HexDecoded("a1c24101f5").bytes()).root();
+    test.ok(keyed.get(1).boolean());
+    // A big map finds keys through an index.
+    let entries is @CborEntry = (0..40).map() -> n {
+        CborEntry("k" + n.string(), n);
+    };
+    let wide = Cbor(entries: entries);
+    test.is(wide.get("k33").int(), 33);
+    test.ok(!wide.has("k40"));
+}
+
+test "repeated keys are refused when built and when decoded" {
+    test.is(
+        try {
+            Cbor(CborEntry("x", 1), CborEntry("y", 2), CborEntry("x", 3));
+            "";
+        }
+        catch CborError.repeated_key(key) {
+            key;
+        },
+        "\"x\""
+    );
+    test.is(
+        try {
+            Cbor(
+                entries: [
+                    CborEntry(1, Cbor(1)),
+                    CborEntry(Cbor(1.0), Cbor(2)),
+                    CborEntry(1, Cbor(3))
+                ]
+            );
+            "";
+        }
+        catch CborError.repeated_key(key) {
+            key;
+        },
+        "1"
+    );
+    test.is(
+        try {
+            ParsedCbor(HexDecoded("a2616101616102").bytes()).root();
+            -1;
+        }
+        catch CborError.duplicate_key(offset) {
+            offset;
+        },
+        4
+    );
+}
+
+test "null, undefined and missing keys read as absence" {
+    let doc = ParsedCbor(HexDecoded("a3616ef66175f76174a1616101").bytes()).root();
+    test.is(doc.maybe("n").text() else "none", "none");
+    test.is(doc.maybe("u").int() else -1, -1);
+    test.is(doc.maybe("missing").bytes() else [byte(1)], [byte(1)]);
+    test.ok(!doc.maybe("n").present());
+    test.ok(doc.maybe("t").present());
+    test.is(doc.maybe("t").maybe("a").int() else 0, 1);
+    test.is(doc.maybe("n").maybe("a").int() else 0, 0);
+    test.is(doc.get("u").kind(), CborKind.undefined_value);
+    test.is(Cbor().maybe().float() else 2.5, 2.5);
+    test.is(Cbor(3).maybe().int() else 0, 3);
+    test.is(
+        try {
+            doc.maybe("t").text();
+            false;
+        }
+        catch CborError.wrong_kind(expected, actual) {
+            expected == CborKind.text_value && actual == CborKind.map_value;
+        },
+        true
+    );
+}
+
+test "reads of another kind are typed errors" {
+    let value = Cbor(items: [Cbor("x")]);
+    test.is(
+        try {
+            value.int();
+            false;
+        }
+        catch CborError.wrong_kind(expected, actual) {
+            expected == CborKind.int_value && actual == CborKind.array_value;
+        },
+        true
+    );
+    test.is(
+        try {
+            value.at(1);
+            "";
+        }
+        catch CborError.missing_index(index, size) {
+            index.string() + "/" + size.string();
+        },
+        "1/1"
+    );
+    test.is(
+        try {
+            value.get("a");
+            false;
+        }
+        catch CborError.wrong_kind(expected, _) {
+            expected == CborKind.map_value;
+        },
+        true
+    );
+    test.is(
+        try {
+            value.at(0).bytes();
+            false;
+        }
+        catch CborError.wrong_kind(expected, actual) {
+            expected == CborKind.bytes_value && actual == CborKind.text_value;
+        },
+        true
+    );
+    test.is(
+        try {
+            Cbor("x").size();
+            false;
+        }
+        catch CborError.wrong_kind(_, actual) {
+            actual == CborKind.text_value;
+        },
+        true
+    );
+}
+
+test "non-finite floats, simple values and other tags are kept" {
+    let infinity = ParsedCbor(HexDecoded("fa7f800000").bytes()).root();
+    test.is(infinity.kind(), CborKind.float_value);
+    test.is(
+        try {
+            infinity.float();
+            "";
+        }
+        catch CborError.unrepresentable(value) {
+            value;
+        },
+        "Infinity"
+    );
+    test.is(HexEncoded(infinity.encoding()).string(), "f97c00");
+    let simple = ParsedCbor(HexDecoded("f8ff").bytes()).root();
+    test.is(simple.simple(), 255);
+    let url = Cbor(tag: 32, content: Cbor("http://www.example.com"));
+    test.is(
+        HexEncoded(url.encoding()).string(),
+        "d82076687474703a2f2f7777772e6578616d706c652e636f6d"
+    );
+    test.is(url.tag(), 32);
+    test.is(url.content().text(), "http://www.example.com");
+    let huge_tag = ParsedCbor(HexDecoded("dbffffffffffffffff00").bytes()).root();
+    test.is(huge_tag.tag(), 18446744073709551615);
+    test.is(HexEncoded(huge_tag.encoding()).string(), "dbffffffffffffffff00");
+    test.is(Cbor(tag: 2, content: Cbor([byte(1), byte(0)])).int(), 256);
+    test.is(Cbor(tag: 30, content: Cbor(items: [Cbor(2), Cbor(4)])).rat(), 1 / 2);
+    test.is(
+        try {
+            Cbor(tag: 2, content: Cbor(1));
+            "";
+        }
+        catch CborError.refused_tag(tag, reason) {
+            tag.string() + ": " + reason;
+        },
+        "2: a bignum's content must be a byte string"
+    );
+    test.is(
+        try {
+            Cbor(tag: -1, content: Cbor());
+            0;
+        }
+        catch CborError.refused_tag(tag, _) {
+            tag;
+        },
+        -1
+    );
+}
+
+test "the canonical encoding sorts map keys by their encoded bytes" {
+    let map = Cbor(
+        CborEntry(Cbor(false), Cbor(0)),
+        CborEntry("aa", 1),
+        CborEntry(Cbor(items: [Cbor(-1)]), Cbor(2)),
+        CborEntry(100, Cbor(3)),
+        CborEntry("z", 4),
+        CborEntry(-1, Cbor(5)),
+        CborEntry(Cbor(items: [Cbor(100)]), Cbor(6)),
+        CborEntry(10, Cbor(7))
+    );
+    test.is(
+        ParsedCbor(map.canonical_encoding()).root().string(),
+        "{10: 7, 100: 3, -1: 5, \"z\": 4, \"aa\": 1, [100]: 6, [-1]: 2, false: 0}"
+    );
+    test.is(
+        ParsedCbor(map.encoding()).root().string(),
+        "{false: 0, \"aa\": 1, [-1]: 2, 100: 3, \"z\": 4, -1: 5, [100]: 6, 10: 7}"
+    );
+    let nested = Cbor(
+        CborEntry("b", Cbor(CborEntry("y", 1), CborEntry("x", 2))),
+        CborEntry("a", 0)
+    );
+    test.is(HexEncoded(nested.canonical_encoding()).string(), "a26161006162a2617802617901");
+    // Equal values decoded from different encodings give equal canonical bytes.
+    let left = ParsedCbor(HexDecoded("bf6162016161f93c00ff").bytes()).root();
+    let right = ParsedCbor(HexDecoded("a26161fb3ff00000000000006162c24101").bytes()).root();
+    test.is(left.canonical_encoding(), right.canonical_encoding());
+}
+
+test "malformed input fails with a typed error and its byte offset" {
+    let failed = (hex is string) is string {
+        try {
+            ParsedCbor(HexDecoded(hex).bytes()).root();
+            "decoded";
+        }
+        catch CborError.truncated(offset) {
+            "truncated@" + offset.string();
+        }
+        catch CborError.malformed(offset, reason) {
+            "malformed@" + offset.string() + ": " + reason;
+        }
+        catch CborError.invalid_utf8(offset) {
+            "utf8@" + offset.string();
+        }
+        catch CborError.trailing(offset) {
+            "trailing@" + offset.string();
+        }
+        catch CborError.invalid_tag(offset, tag, _) {
+            "tag " + tag.string() + "@" + offset.string();
+        }
+    };
+    test.is(failed("8201"), "truncated@0");
+    test.is(failed("820182"), "truncated@2");
+    test.is(failed("5affffffff00"), "truncated@0");
+    test.is(failed("1c"), "malformed@0: reserved additional information (28-30)");
+    test.is(failed("8101ff"), "trailing@2");
+    test.is(failed("9f01ff00"), "trailing@3");
+    test.is(failed("81ff"), "malformed@1: a break outside an indefinite-length item");
+    test.is(failed("f818"), "malformed@0: a simple value below 32 in an extra byte");
+    test.is(failed("820162c328"), "utf8@2");
+    test.is(failed("81c26161"), "tag 2@1");
+    test.is(failed("d81e820100"), "tag 30@0");
+    let empty is @byte = [];
+    test.is(
+        try {
+            ParsedCbor(empty).root();
+            -1;
+        }
+        catch CborError.truncated(offset) {
+            offset;
+        },
+        0
+    );
+}
+
+test "limits stop hostile input where it passes them" {
+    let deep = HexDecoded("8181818100").bytes();
+    test.is(ParsedCbor(origin: deep, maximum_depth: 4).root().string(), "[[[[0]]]]");
+    test.is(
+        try {
+            ParsedCbor(origin: deep, maximum_depth: 3).root();
+            "";
+        }
+        catch CborError.too_deep(offset, limit) {
+            offset.string() + "/" + limit.string();
+        },
+        "3/3"
+    );
+    test.is(
+        try {
+            ParsedCbor(origin: HexDecoded("8401020304").bytes(), maximum_items: 4).root();
+            "";
+        }
+        catch CborError.too_many_items(offset, limit) {
+            offset.string() + "/" + limit.string();
+        },
+        "4/4"
+    );
+    test.is(
+        try {
+            ParsedCbor(origin: HexDecoded("4401020304").bytes(), maximum_size: 4).root();
+            "";
+        }
+        catch CborError.too_large(offset, limit) {
+            offset.string() + "/" + limit.string();
+        },
+        "4/4"
+    );
+    // A declared length far past the input allocates nothing.
+    test.is(
+        try {
+            ParsedCbor(HexDecoded("9bffffffffffffffff").bytes()).root();
+            "";
+        }
+        catch CborError.truncated(offset) {
+            "truncated@" + offset.string();
+        },
+        "truncated@0"
+    );
+    test.is(
+        try {
+            ParsedCbor(origin: deep, maximum_depth: 0);
+            "";
+        }
+        catch CborError.invalid_limit(name, amount) {
+            name + "=" + amount.string();
+        },
+        "maximum_depth=0"
+    );
+}
+
+async test "a CBOR sequence is read from a stream item by item" {
+    let total = Atomic(0);
+    let seen = Atomic("");
+    // 1, "abc", [2, {"k": 3}], h'ff' in pieces of three bytes.
+    for await CborItems(origin: CborTestUpload("01636162638202a1616b0341ff", 3)) -> item {
+        seen.replace(seen.value() + item.string() + ";");
+    }
+    test.is(seen.value(), "1;\"abc\";[2, {\"k\": 3}];h'ff';");
+    for await CborItems(origin: CborTestUpload("", 3)) -> _item {
+        total.replace(total.value() + 1);
+    }
+    test.is(total.value(), 0);
+    let cut = try {
+        for await CborItems(origin: CborTestUpload("01028203048205", 2)) -> _item {}
+        "read";
+    }
+    catch CborError.truncated(offset) {
+        "truncated@" + offset.string();
+    };
+    test.is(cut, "truncated@5");
+    let broken = try {
+        for await CborItems(origin: CborTestUpload("0102031c", 1)) -> _item {}
+        "read";
+    }
+    catch CborError.malformed(offset, _) {
+        "malformed@" + offset.string();
+    };
+    test.is(broken, "malformed@3");
+    let large = try {
+        for await CborItems(
+            origin: CborTestUpload("01450102030405", 4),
+            maximum_size: 4
+        ) -> _item {}
+        "read";
+    }
+    catch CborError.too_large(offset, limit) {
+        offset.string() + "/" + limit.string();
+    };
+    test.is(large, "5/4");
+}
+
+// Bytes given a few at a time, as a slow stream gives them.
+hidden object CborTestUpload does AsyncReading {
+    has content is @byte;
+    has piece is int;
+    has position is Atomic<int>;
+
+    CborTestUpload(hex is string, piece is int) {
+        content = HexDecoded(hex).bytes();
+        self.piece = piece;
+        position = Atomic(0);
+    }
+
+    async bytes(limit is int) is @byte {
+        let at = position.value();
+        let end = if at + piece < content.size() {
+            at + piece;
+        }
+        else {
+            content.size();
+        };
+        position.replace(end);
+        content.slice(at, end);
+    }
+}

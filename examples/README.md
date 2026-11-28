@@ -56,6 +56,12 @@ runs every program on Sparrow and compares the output.
 |---|---|
 | `toml/read.ok` | parse a document, read values by name like json, walk every value with a visitor, read dates and times, report an error's line |
 
+## cbor
+
+| Program | Task |
+|---|---|
+| `cbor/message.ok` | build a message with a big integer, a rational, raw bytes and an absent field; encode, decode and read it back; the canonical bytes; a truncated input's offset |
+
 ## csv
 
 | Program | Task |

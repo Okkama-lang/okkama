@@ -91,10 +91,10 @@ if [ "$MODE" = no-total ]; then echo "no coverage summary"; else echo "TOTAL 10 
             result = subprocess.run(['bash', str(scripts / 'run.sh'), '1', '--coverage'],
                                     env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-            self.assertIn('COVERAGE FAILED: lex parse analyze ir_verify spb exec', result.stderr)
+            self.assertIn('COVERAGE FAILED: lex parse analyze ir_verify spb exec cbor', result.stderr)
             self.assertIn('synthetic replay failure', result.stderr)
             self.assertNotIn('no findings', result.stdout)
-            for target in ['lex', 'parse', 'analyze', 'ir_verify', 'spb', 'exec']:
+            for target in ['lex', 'parse', 'analyze', 'ir_verify', 'spb', 'exec', 'cbor']:
                 self.assertTrue((root / 'okkama-rs/fuzz/logs' / (target + '-coverage.log')).exists())
 
 

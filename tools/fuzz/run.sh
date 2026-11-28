@@ -9,7 +9,8 @@
 # contracts), exec (programs linked against the repository's std, on the
 # Sparrow core under budgets, no host natives; with OKKAMA_FUZZ_DIFFERENTIAL=1
 # each program runs on the JIT and on the interpreter too, and the two must agree
-# but for the design's known divergences, #1123). Needs nightly Rust and cargo-fuzz; mass
+# but for the design's known divergences, #1123), cbor (any bytes decoded as CBOR within
+# limits; encodings decode again and the deterministic one is a fixed point, #1082). Needs nightly Rust and cargo-fuzz; mass
 # runs belong in a container or on CI (.github/workflows/fuzz.yml). Corpora grow in
 # okkama-rs/fuzz/corpus/<target> (seeded from std, conformance, examples and
 # compiled SPB; past findings from okkama-rs/fuzz/regressions/<target>),
@@ -25,7 +26,7 @@ TIME="${1:-300}"
 COVERAGE=0
 [[ "${2:-}" == "--coverage" ]] && COVERAGE=1
 FUZZ="$ROOT/okkama-rs/fuzz"
-TARGETS=(lex parse analyze ir_verify spb exec)
+TARGETS=(lex parse analyze ir_verify spb exec cbor)
 # cargo-fuzz does not expose --locked; its child Cargo invocations use PATH.
 # Keep every build/check/metadata invocation on the checked-in graph.
 export OKKAMA_FUZZ_CARGO="$(command -v cargo)"
@@ -55,6 +56,9 @@ for dir in "$FUZZ/regressions"/*/; do
     mkdir -p "corpus/$target"
     cp -n "$dir"* "corpus/$target/"
 done
+# CBOR seeds: RFC 8949 Appendix A examples and a few malformed items.
+mkdir -p corpus/cbor
+cp -n "$FUZZ/seeds/cbor/"* corpus/cbor/ 2>/dev/null || true
 # SPB seeds: the examples and the fuzz seeds, compiled.
 mkdir -p corpus/spb
 (cd "$ROOT/okkama-rs" && cargo build --release -q -p okkama-cli)

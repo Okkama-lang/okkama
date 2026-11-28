@@ -40,6 +40,7 @@ compile_error!("sparrow-core's `jit` feature generates native code: build for wa
 compile_error!("sparrow-core's `host` feature needs an operating system: build for wasm32 with `--no-default-features`");
 
 pub mod budget;
+pub mod cbor;
 // The one switch policy of every crate (#1095), under its old path.
 #[doc(hidden)]
 pub use okkama_devtrace::env_switch;

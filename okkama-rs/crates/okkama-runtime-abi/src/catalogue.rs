@@ -108,7 +108,7 @@ impl Contract {
 /// Modules whose operations compute over their arguments and handles only.
 const PURE: &[&str] = &[
     "runtime/base32", "runtime/base64", "runtime/base85", "runtime/bigint", "runtime/binary",
-    "runtime/buffer", "runtime/bytes", "runtime/checksum", "runtime/cldr", "runtime/collation",
+    "runtime/buffer", "runtime/bytes", "runtime/cbor", "runtime/checksum", "runtime/cldr", "runtime/collation",
     "runtime/collections", "runtime/compression", "runtime/crypto", "runtime/db",
     "runtime/debug", "runtime/decimal", "runtime/diff", "runtime/format", "runtime/hex",
     "runtime/host_crypto", "runtime/hpack", "runtime/idna", "runtime/input_state", "runtime/io_decorators",
@@ -264,7 +264,7 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 205), ((AbiKind::Sync, Transport::Handle), 286),
+        let expected = [((AbiKind::Sync, Transport::Data), 205), ((AbiKind::Sync, Transport::Handle), 325),
             ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 4),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
@@ -277,12 +277,13 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (all host; #638 added one, #1006 dropped signal_wait).
-        let roles_expected = [(HandleRole::None, 209), (HandleRole::Uses, 219), (HandleRole::Publishes, 91),
+        // #1082: the 39 natives of runtime/cbor use (21) or publish (18) its value handles, all pure.
+        let roles_expected = [(HandleRole::None, 209), (HandleRole::Uses, 240), (HandleRole::Publishes, 109),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
         // #1133: 23 natives that compute without the host (input_state, net, postgres pages, the zone-local
         // date-times, the build's platform, architecture and byte order) moved from host to pure.
-        let effects_expected = [(Effect::Pure, 275), (Effect::Stdio, 3), (Effect::Host, 264)];
+        let effects_expected = [(Effect::Pure, 314), (Effect::Stdio, 3), (Effect::Host, 264)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 
