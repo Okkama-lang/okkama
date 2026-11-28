@@ -19,7 +19,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (121)
+## Tags in one layer (122)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -50,6 +50,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - OKKAMA_DEV — devtrace: `lib.rs`
 - OKKAMA_DEV_OUT — devtrace: `lib.rs`
 - OKKAMA_DUMP_INVALID_IR — lower: `lowering/mod.rs`
+- OKKAMA_EXT_CHECK — sparrow: `host/native_ext.rs`
 - OKKAMA_ICU_LIBDIR — cli: `main.rs`, `repl.rs`
 - OKKAMA_IMPORT_DIRS — cli: `main.rs`
 - OKKAMA_IR_PASSES — lower: `lowering/mod.rs`

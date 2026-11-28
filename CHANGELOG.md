@@ -28,6 +28,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 5a: loading (#1083).** `okkama run --ext PATH` (repeatable) loads a trusted native library
+  and binds the program's natives that std does not provide to it; `--no-native` loads nothing. The library's
+  `okkama_extension` descriptor is checked whole before any of its code runs (ABI version, signatures against the
+  program's declarations, duplicates); a mismatch refuses the run with both signatures. Workers and the REPL get the
+  same switches; restricted runs and the playground refuse external natives. `OKKAMA_EXT_CHECK=1` hands extensions
+  views that are wiped after each call, so a use after return shows up.
 - **Native extensions, step 4: async (#1083).** An extension's `native async` function returns an ordinary Future:
   `prepare` copies the inputs on the VM thread, `execute` runs on a blocking worker with no access to the VM, and
   `complete` builds the result back on the VM thread, so other tasks keep running meanwhile. Cancellation and

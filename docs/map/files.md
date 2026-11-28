@@ -123,35 +123,35 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 78 files, 41912 lines
+## sparrow — 78 files, 42111 lines
 
-- `sparrow-core/src/budget.rs` 453 — Execution budgets (hardening H-04): steps, memory, output and external
+- `sparrow-core/src/budget.rs` 481 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
 - `sparrow-core/src/clock.rs` 171 — Sparrow's clocks (#1124): the monotonic `Instant` of timers and statistics, the wall and monotonic clocks of
 - `sparrow-core/src/code_memory.rs` 207 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 499 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1299 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/ext.rs` 158 — Static, trusted extension registration and load-time signature binding.
+- `sparrow-core/src/ext.rs` 228 — Trusted extension loading, descriptor validation and signature binding.
 - `sparrow-core/src/heap.rs` 3025 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/interp.rs` 1120 — Sparrow's interpreter (#1120; design `okkama-docs/runtime/sparrow-interpreter-1079.md`): the same runtime as
 - `sparrow-core/src/intrinsics.rs` 1155 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 323 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 3891 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 849 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/lib.rs` 874 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 466 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
-- `sparrow-core/src/natives.rs` 308 — The natives the core serves itself, and the dispatch to the host's
+- `sparrow-core/src/natives.rs` 313 — The natives the core serves itself, and the dispatch to the host's
 - `sparrow-core/src/ops.rs` 2119 — Exact semantics of value instructions, where machine code has no inline
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 400 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 406 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/reach.rs` 276 — The functions a run of an SPB program can reach (#1135): what the playground warns about is what a run can cal
-- `sparrow-core/src/runtime.rs` 1350 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1351 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 623 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/texts.rs` 9 — Failure texts of the checks Sparrow's executors make themselves rather than a shared helper (#1120): one text,
 - `sparrow-core/src/word.rs` 119 — One machine word per value. The representation is chosen by the static SPB
 - `sparrow-core/src/worker.rs` 443 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
-- `sparrow-core/src/worker_emulated.rs` 142 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
+- `sparrow-core/src/worker_emulated.rs` 141 — Process workers emulated in the same instance (#1127; owner's decision 8 of the design
 - `sparrow-core/src/worker_process.rs` 771 — One-shot and run-local reusable workers share Tokio process ownership and pipe I/O.
 - `sparrow-core/src/worker_wire.rs` 253 — The values that cross into a worker (OKW2 transfer values, #586): encoded by the static types of the entry's
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
@@ -169,7 +169,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_dns.rs` 326 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 163 — The program's environment is the run's host session
-- `sparrow-core/src/host/native_ext.rs` 296 — Extension call scopes: scalar bits and call-scoped typed tokens.
+- `sparrow-core/src/host/native_ext.rs` 367 — Extension call scopes: scalar bits and call-scoped typed tokens.
 - `sparrow-core/src/host/native_file.rs` 190 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 639 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
 - `sparrow-core/src/host/native_fs.rs` 240 — Filesystem native boundary. Lexical paths are portable and independent of
@@ -209,20 +209,20 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 84 — The environment-switch policy, one implementation for every crate (#1095): booleans (#1067), byte counts
 - `okkama-devtrace/src/lib.rs` 329 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 5189 lines
+## cli — 10 files, 5245 lines
 
 - `okkama-cli/src/agents.rs` 219 — `okkama agents` (#1190): the entry point for AI agents. Nobody but its authors knows Okkama, so the toolchain
-- `okkama-cli/src/core.rs` 81 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
+- `okkama-cli/src/core.rs` 98 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 326 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 923 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1552 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1564 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 425 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 604 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
-- `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
+- `okkama-cli/src/repl.rs` 552 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 80 files, 25514 lines
+## other — 80 files, 25526 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -302,5 +302,5 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `okkama-wasm/build.rs` 31 — Bundles the repository's std (#1078): every `std/**/*.ok`, embedded read-only, so imports resolve without a
 - `okkama-wasm/src/lib.rs` 889 — The Okkama compiler for the playground (#1078): `okkama check`, `fmt`, `tokens`, `ast`, `ir`, the Sparrow
-- `sparrow-cli/src/main.rs` 262 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
-- `sparrow-wasm/src/lib.rs` 524 — Sparrow for the playground (#1125, design `okkama-docs/runtime/sparrow-interpreter-1079.md` §5, §8 item 6):
+- `sparrow-cli/src/main.rs` 270 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
+- `sparrow-wasm/src/lib.rs` 528 — Sparrow for the playground (#1125, design `okkama-docs/runtime/sparrow-interpreter-1079.md` §5, §8 item 6):
