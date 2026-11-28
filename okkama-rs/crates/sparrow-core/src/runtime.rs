@@ -121,6 +121,10 @@ pub struct Runtime {
     pub loaded: Loaded,
     #[cfg(feature = "jit")]
     pub jit: crate::jit::Jit,
+    /// #1149: vectors `split` and `replace` keep across calls (cleared before each use).
+    pub(crate) scratch_offsets: Vec<usize>,
+    pub(crate) scratch_ranges: Vec<(usize, usize)>,
+    pub(crate) scratch_words: Vec<Word>,
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
     /// #588: the capacities of a session runtime (`Runtime::session`), which `extend` grows within.
@@ -460,6 +464,9 @@ impl Runtime {
             .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name)))
             .collect();
         Ok(Self {
+            scratch_offsets: Vec::new(),
+            scratch_ranges: Vec::new(),
+            scratch_words: Vec::new(),
             resources,
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),

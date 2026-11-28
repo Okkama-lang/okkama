@@ -89,3 +89,17 @@ fn the_direct_search_finds_what_match_indices_finds() {
         assert_eq!(found, expected, "{text:?} / {pattern:?}");
     }
 }
+
+/// Parts of every length up to 40 bytes (the short ones copied by overlapping moves) concatenate exactly.
+#[test]
+fn parts_of_every_short_length_copy_exactly() {
+    let mut runtime = runtime();
+    let text: String = (0..64u8).map(|i| (b'a' + i % 26) as char).collect();
+    for first in 0..=40 {
+        for second in [0, 1, 3, 4, 7, 8, 9, 15, 16, 17, 33] {
+            let (a, b) = (&text[..first], &text[64 - second..]);
+            let word = runtime.text_new_of(&[a, b], true);
+            assert_eq!(runtime.heap.text(word), format!("{a}{b}"), "{first} + {second}");
+        }
+    }
+}

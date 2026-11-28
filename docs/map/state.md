@@ -10,9 +10,11 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 - [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`),
   `Heap::payload_mut_unchecked` for builder pushes; 06-collections 10.9 → 7.4 ms. Target ≤ 6 ms: builders as a heap
   kind (#1171, POSTPONED) is the rest.
-- [~] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
-  search ≤ 256 bytes), one-copy replace; tests `ops::strings_1149_tests` (4, mutations caught). 05-strings −5%; the rest
-  is copying the pieces (views over flat strings need care: concat grows SHARED buffers in place) — open.
+- [x] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
+  search ≤ 256 bytes), one-pass replace (`allocate_text_filled`), `Runtime.scratch_{offsets,ranges,words}`,
+  `heap::copy_text`; tests `ops::strings_1149_tests` (5, mutations caught). 05-strings 12.3 → 9.05 ms. Views for
+  split pieces rejected (Fable: −1%, retention); latent: `concat_text` treats any SHARED string as a buffer — a
+  guard (`text_chain`: backing has BUFFER) is needed before anyone builds flat-backed views.
 - [x] #1174 marking: generic `trace_object<P>`, leaf kinds unqueued in `mark_and_queue`; test
   `heap::tests::leaves_are_marked_without_tracing_and_containers_still_trace_1174` (mutation caught); corpus under
   GC stress unchanged (457/457).

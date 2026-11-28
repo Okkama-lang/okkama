@@ -10,9 +10,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   polls (equal ints are indistinguishable, so the unstable sort of words is the stable sort of values), and a
   builder push reaches its items without a virtual downcast. 06-collections steady 10.9 → 7.4 ms (−32%), 10-app
   −3%, 08-roles −4%.
-- **Strings look at their bytes less (#1149, part).** Pieces and flat concatenations of ASCII strings are flagged
-  ASCII without a scan; split by one character searches the character; split and replace search line-sized texts
-  directly instead of building a two-way searcher per call; replace copies its pieces once. 05-strings steady −5%.
+- **Faster strings (#1149).** Pieces and flat concatenations of ASCII strings are flagged ASCII without a scan;
+  split by one character searches the character; split and replace search line-sized texts directly instead of
+  building a two-way searcher per call; replace writes its result in one pass, and split and replace reuse their
+  vectors across calls; short pieces are copied by overlapping word moves instead of a memcpy call. 05-strings
+  steady 12.3 → 9.05 ms (−26%), 10-app −4%. Split pieces as views of their text were measured on paper and not
+  done (−1%, for unbounded retention).
 - **Faster marking (#1174).** The collector's object tracing is generic over its visitor, so marking's visitor is
   inlined into the field loops, and objects with nothing to trace (plain strings, big integers, arrays of raw words)
   are marked without being queued. bench/gc marking: burst −33%, deep −30%, payload −16%, ownership −8%; steady

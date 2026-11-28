@@ -359,6 +359,36 @@ struct Page {
     idle: Option<Reserved>,
 }
 
+/// #1149: copy `source` to `to`; a short piece by two overlapping word or half-word moves instead of a call to
+/// memcpy (most pieces of split, replace and `+` are a few bytes).
+///
+/// SAFETY: `to` has room for `source.len()` bytes and does not overlap `source`.
+#[inline(always)]
+pub(crate) unsafe fn copy_text(source: &[u8], to: *mut u8) {
+    let (from, length) = (source.as_ptr(), source.len());
+    unsafe {
+        match length {
+            0 => {}
+            1..=3 => {
+                *to = *from;
+                *to.add(length / 2) = *from.add(length / 2);
+                *to.add(length - 1) = *from.add(length - 1);
+            }
+            4..=7 => {
+                let (head, tail) = (from.cast::<u32>().read_unaligned(), from.add(length - 4).cast::<u32>().read_unaligned());
+                to.cast::<u32>().write_unaligned(head);
+                to.add(length - 4).cast::<u32>().write_unaligned(tail);
+            }
+            8..=16 => {
+                let (head, tail) = (from.cast::<u64>().read_unaligned(), from.add(length - 8).cast::<u64>().read_unaligned());
+                to.cast::<u64>().write_unaligned(head);
+                to.add(length - 8).cast::<u64>().write_unaligned(tail);
+            }
+            _ => std::ptr::copy_nonoverlapping(from, to, length),
+        }
+    }
+}
+
 /// An integer read from a word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Integer<'a> {
@@ -1013,9 +1043,22 @@ impl Heap {
             *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
             let mut at = (string + 8) as *mut u8;
             for part in parts {
-                std::ptr::copy_nonoverlapping(part.as_ptr(), at, part.len());
+                copy_text(part.as_bytes(), at);
                 at = at.add(part.len());
             }
+        }
+        string
+    }
+
+    /// #1149: a flat string of `bytes` bytes that `fill` writes (all of them), flagged ASCII when `ascii`.
+    pub(crate) fn allocate_text_filled(&mut self, bytes: usize, ascii: bool, fill: impl FnOnce(&mut [u8])) -> Word {
+        let words = 1 + bytes.div_ceil(8).max(1);
+        self.counted("string", 0, words);
+        let string = self.allocate(words);
+        // SAFETY: room for the header and `bytes` bytes, written by `fill` before anything reads them.
+        unsafe {
+            *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
+            fill(std::slice::from_raw_parts_mut((string + 8) as *mut u8, bytes));
         }
         string
     }

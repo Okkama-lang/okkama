@@ -1978,7 +1978,7 @@ fn int_text(runtime: &mut Runtime, word: Word) -> Outcome {
             return Err("int text: the result would pass the 4 GiB a string can hold".to_string());
         }
         // SAFETY: ASCII digits and an optional minus sign.
-        return Ok(runtime.text_new(unsafe { std::str::from_utf8_unchecked(digits) }));
+        return Ok(runtime.text_new_of(&[unsafe { std::str::from_utf8_unchecked(digits) }], true));
     }
     let text = match runtime.heap.integer(word) {
         crate::heap::Integer::Small(n) => n.to_string(),
@@ -2337,13 +2337,14 @@ fn match_starts(source: &str, pattern: &str, mut each: impl FnMut(usize) -> bool
 const SHORT_TEXT: usize = 256;
 
 pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> Word {
-    // Byte ranges of the parts, then one copy per part.
-    let ranges: Vec<(usize, usize)> = {
+    // Byte ranges of the parts, then one copy per part; both vectors are the runtime's, kept across calls (#1149).
+    let mut ranges = std::mem::take(&mut runtime.scratch_ranges);
+    ranges.clear();
+    {
         let (source, separator) = (runtime.heap.text(text), runtime.heap.text(separator));
         if separator.is_empty() {
-            source.char_indices().map(|(i, c)| (i, i + c.len_utf8())).collect()
+            ranges.extend(source.char_indices().map(|(i, c)| (i, i + c.len_utf8())));
         } else {
-            let mut ranges = Vec::new();
             let mut start = 0;
             let mut chars = separator.chars();
             match (chars.next(), chars.next()) {
@@ -2362,11 +2363,15 @@ pub(crate) fn str_split(runtime: &mut Runtime, text: Word, separator: Word) -> W
                 }),
             }
             ranges.push((start, source.len()));
-            ranges
         }
-    };
-    let words: Vec<Word> = ranges.into_iter().map(|(a, b)| runtime.heap.substring(text, a, b)).collect();
-    runtime.heap.allocate_array(Repr::Ref, &words)
+    }
+    let mut words = std::mem::take(&mut runtime.scratch_words);
+    words.clear();
+    words.extend(ranges.iter().map(|&(a, b)| runtime.heap.substring(text, a, b)));
+    let array = runtime.heap.allocate_array(Repr::Ref, &words);
+    runtime.scratch_ranges = ranges;
+    runtime.scratch_words = words;
+    array
 }
 
 /// The size of `source` with every `pattern` replaced, known before it is built (#72).
@@ -2384,20 +2389,39 @@ pub(crate) fn str_replace(runtime: &mut Runtime, text: Word, pattern: Word, repl
         let replaced = if first { source.replacen(pattern, replacement, 1) } else { source.replace(pattern, replacement) };
         return Ok(runtime.text_new(&replaced));
     }
-    // #1149: the pieces between matches and the replacements, copied once into the new string.
-    let (source, replacement) = (source as *const str, replacement as *const str);
-    // SAFETY: the strings stay where they are while the result is allocated (allocation neither moves nor collects).
-    let (source, replacement) = unsafe { (&*source, &*replacement) };
-    let mut parts: Vec<&str> = Vec::new();
-    let mut start = 0;
+    // #1149: the match offsets (in a vector the runtime keeps across calls), then the pieces and the replacements
+    // written once into the new string.
+    let mut starts = std::mem::take(&mut runtime.scratch_offsets);
+    starts.clear();
     match_starts(source, pattern, |at| {
-        parts.push(&source[start..at]);
-        parts.push(replacement);
-        start = at + pattern.len();
+        starts.push(at);
         !first
     });
-    parts.push(&source[start..]);
-    Ok(runtime.text_new_of(&parts, ascii))
+    let (source, width, replacement) = (source as *const str, pattern.len(), replacement as *const str);
+    // SAFETY: the strings stay where they are while the result is allocated (allocation neither moves nor collects).
+    let (source, replacement) = unsafe { (&*source, &*replacement) };
+    let bytes = source.len() - starts.len() * width + starts.len() * replacement.len();
+    let result = runtime.heap.allocate_text_filled(bytes, ascii, |to| {
+        let (mut from, mut at) = (0, 0);
+        for &start in &starts {
+            for piece in [&source.as_bytes()[from..start], replacement.as_bytes()] {
+                // SAFETY: `to` has room for every piece and replacement, in order.
+                unsafe { crate::heap::copy_text(piece, to.as_mut_ptr().add(at)) };
+                at += piece.len();
+            }
+            from = start + width;
+        }
+        let rest = &source.as_bytes()[from..];
+        // SAFETY: as above, the last piece ends the string.
+        unsafe { crate::heap::copy_text(rest, to.as_mut_ptr().add(at)) };
+        debug_assert_eq!(at + rest.len(), to.len());
+    });
+    // A result made of non-ASCII-flagged texts may still be ASCII: look, as a flat string's allocation does.
+    if !ascii && runtime.heap.text(result).is_ascii() {
+        runtime.heap.mark(result, crate::heap::ASCII);
+    }
+    runtime.scratch_offsets = starts;
+    Ok(result)
 }
 
 /// Unicode whitespace removed from both ends.
