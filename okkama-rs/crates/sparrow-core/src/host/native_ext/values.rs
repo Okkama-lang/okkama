@@ -49,7 +49,7 @@ impl Call<'_> {
     fn entry(&self, token: okk_slot) -> Result<Slot> {
         let index = token.bits as u32 as usize;
         if token.bits >> 32 != self.serial || index >= self.count { return Err(OKK_BAD_TOKEN); }
-        let slot = if index < self.slots.len() { self.slots[index] } else { self.overflow[index - self.slots.len()] };
+        let slot = if index < self.inline.len() { self.inline[index] } else { self.overflow[index - self.inline.len()] };
         let kind = match slot.kind() {
             h::BIG => OKK_BIGINT, h::RAT => OKK_RAT, h::STR => OKK_STRING,
             h::ARRAY => OKK_ARRAY, h::MAP => OKK_MAP, _ => return Err(OKK_BAD_KIND),

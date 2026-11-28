@@ -74,7 +74,7 @@ struct Call<'a> {
     host: &'a mut Heap,
     binding: &'a Binding,
     serial: u64,
-    slots: [Slot; 8],
+    inline: [Slot; 8],
     overflow: Vec<Slot>,
     count: usize,
     views: Vec<Vec<u8>>,
@@ -99,7 +99,7 @@ impl Call<'_> {
     fn token(&mut self, slot: Slot, kind: u64) -> Result<okk_slot, u32> {
         self.reserve(2 * std::mem::size_of::<Slot>())?;
         let index = u32::try_from(self.count).map_err(|_| OKK_RANGE)?;
-        if self.count < self.slots.len() { self.slots[self.count] = slot; } else { self.overflow.push(slot); }
+        if self.count < self.inline.len() { self.inline[self.count] = slot; } else { self.overflow.push(slot); }
         self.count += 1;
         Ok(okk_slot { bits: (self.serial << 32) | u64::from(index), kind })
     }
@@ -108,7 +108,7 @@ impl Call<'_> {
         if token.kind != kind { return Err(OKK_BAD_KIND); }
         let index = token.bits as u32 as usize;
         if token.bits >> 32 != self.serial || index >= self.count { return Err(OKK_BAD_TOKEN); }
-        let slot = if index < self.slots.len() { self.slots[index] } else { self.overflow[index - self.slots.len()] };
+        let slot = if index < self.inline.len() { self.inline[index] } else { self.overflow[index - self.inline.len()] };
         if slot.tag != tag { return Err(OKK_BAD_SHAPE); }
         Ok(slot)
     }
@@ -144,7 +144,7 @@ fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word]) -> Result<(Wor
     let shape_start = host.shapes.len();
     let mut call = Call {
         public: okk_call { host: &HOST }, host, binding, serial,
-        slots: [Slot::default(); 8], overflow: Vec::new(), count: 0,
+        inline: [Slot::default(); 8], overflow: Vec::new(), count: 0,
         views: Vec::new(), failure: None, fault: false, stopped: false, scratch: 0, shape_start,
     };
     let mut stack = [okk_slot::default(); 8];
