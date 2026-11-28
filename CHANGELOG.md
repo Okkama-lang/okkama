@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Logging costs a tenth (#1180).** Building and formatting a log line takes 0.9–2 µs instead of 15–18 µs, with
+  byte-identical text and JSON lines, and a call below the logger's level is one comparison (31 ns). On the way,
+  `rat` arithmetic runs in machine words whenever its parts fit (`Duration(seconds:)` 516 → 94 ns), an RFC 3339
+  timestamp is one native call (9.2 → 0.3 µs), and JSON writes integer numbers and checks small objects' names for
+  repeats more cheaply.
 - **The web framework logs requests itself (#1181).** `WebApplication(routes, logger: Logger(name: "web"))` writes
   one line per finished request, 404s included: `GET /notes?limit=5 200 0.412 ms`, with the client address as a
   field. Exceptions keep their status; any other error is logged at error with status 500 and its cause, and passes

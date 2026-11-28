@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 27180 lines
+## other — 85 files, 27176 lines
 
 - `blade/src/install.rs` 1421 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 322 — Core library for the Blade command-line tool.
@@ -260,7 +260,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.
 - `okkama-runtime-abi/src/lib.rs` 266 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 602
+- `okkama-runtime-abi/src/table.rs` 598
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 58 — Allocation accounting and memory scope shared with Sparrow.
 - `okkama-runtime-core/src/data.rs` 90 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
