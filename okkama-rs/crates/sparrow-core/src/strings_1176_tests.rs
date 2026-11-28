@@ -114,6 +114,6 @@ fn dropping_the_head_in_a_loop_copies_each_half_once() {
     assert_eq!(runtime.heap.text(rest), "r");
     // Views are three words and the copies of each half sum to about n bytes; copying every slice would take n²/2
     // (8 MiB here). The heap counts its growth in 64 KiB pages, so the bound is coarse.
-    let allocated = (runtime.heap.stats().allocated_bytes - before) as usize;
+    let allocated = runtime.heap.stats().allocated_bytes - before;
     assert!(allocated < n * n / 8, "{allocated} bytes for {n} slices");
 }
