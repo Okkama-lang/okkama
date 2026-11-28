@@ -28,6 +28,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 6: Blade (#1083).** A package carries native code by naming its cdylib crate in
+  `[native] crate = "native"`; it enters a project only when the root's `[native] allow` lists it (transitive
+  packages too), and `blade sync` says which packages carry native code. `blade build` builds them with cargo into
+  `target/native/`, rebuilding only when the sources or the toolchain change; `blade run` loads them, and
+  `blade run --no-native` does neither.
 - **Native extensions, step 5b: the Rust SDK (#1083).** The crates `okkama-ext` and `okkama-ext-macros` write an
   extension in plain Rust: `#[native] fn decode(bytes: &[u8]) -> Result<Image, Failure>`, `#[native(blocking)]` for
   work longer than a millisecond, `#[state]` and `#[state(shared)]` for data behind a `native object`,

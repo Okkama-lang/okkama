@@ -51,11 +51,11 @@ the session's memory; older rulings live in the commits and tickets named.
   Limits.extensions), `--no-native`; Blade `[native]` + root allow-list, cargo at `blade build`; prebuilt at beta.
 - Step 0: handle types are named in full (`module::Name`) everywhere; the #976 short-name rule is gone. `Maybe` is
   recognised by its variant's shape (`$variant_Maybe_N`, cases `some(value)` and `none`): SPB has no other mark.
-
 - SDK (2026-11-28, my ruling on step 5b): a shared state (`#[state(shared)]`) is released only by a
   `#[native(release)]` function, which calls state_release after the call however it ends (success, Failure, panic);
   a job's `Shared<T>` keeps the data until it ends. By-value shared `T` does not compile. Rust `rat` waits for a
   rational dependency; `okkama ext declare` takes one module per library.
+
 ## `okkama agents`: texts built into the binary (#1190, 2026-11-28; owner's request, epic #1191)
 
 - The agent texts (docs/agents/language.md, style.md, workflow.md) are `include_str!`-ed into okkama-cli instead of

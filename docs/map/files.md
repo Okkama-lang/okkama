@@ -223,13 +223,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 83 files, 26134 lines
+## other — 84 files, 26420 lines
 
-- `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
-- `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
-- `blade/src/lock.rs` 131 — `blade.lock` — the exact versions a project was installed with.
-- `blade/src/manifest.rs` 300 — `blade.toml` — the manifest of a Blade project or package, and the project
-- `blade/src/project.rs` 400 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
+- `blade/src/install.rs` 1421 — Installing the dependencies of a project into its `pkg/`.
+- `blade/src/lib.rs` 322 — Core library for the Blade command-line tool.
+- `blade/src/lock.rs` 149 — `blade.lock` — the exact versions a project was installed with.
+- `blade/src/manifest.rs` 344 — `blade.toml` — the manifest of a Blade project or package, and the project
+- `blade/src/native.rs` 179 — Root consent and source builds for native packages. Installation never runs Cargo.
+- `blade/src/project.rs` 433 — `blade build` and `blade run`: the `[build]` and `[run]` sections of
 - `blade/src/toolchain.rs` 561 — The toolchain behind a build (#1080, #1087): the `okkama` Blade runs, its
 - `blade/src/version.rs` 119 — Package versions and version requirements.
 - `blade-cli/src/main.rs` 7

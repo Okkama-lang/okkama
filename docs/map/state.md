@@ -32,7 +32,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   crates okkama-ext (+ __private shims, fake-host tests) and okkama-ext-macros; okkama-cli src/ext.rs (`ext
   declare`, one module per library); Rust sample tests/extensions/rust (excluded from the workspace, own lock);
   ruling: shared states release through `#[native(release)]` (always releases, also on Failure/panic), by-value
-  shared T is a compile error; Rust `rat` deferred (no num-rational in the lock). Next: step 6 `1083-blade`. Deferred to the ABI freeze (owner's call on return): SDK license
+  shared T is a compile error; Rust `rat` deferred (no num-rational in the lock). Step 6 done (Codex, reviewed): blade
+  src/native.rs (crate_dir inside the package, consent over the whole lock, build with stamp, cargo JSON artifact),
+  manifest/lock/install/project; tests blade/tests/native.rs (7) + fixture tests/fixtures/native. Next: step 7
+  `1083-example-docs` (examples/extensions/imagekit + thumbs, docs/extensions.md, security-model §6, Bible 21,
+  micro cells ext-*). Deferred to the ABI freeze (owner's call on return): SDK license
   and crates.io publication of okkama-ext/okkama-port.
 - [~] Web logging: #1179 researched (agent; design note on the ticket; decision in decisions.md), #1180 reworked
   (formatting → host non-blocking stderr buffer → StderrLogs, drain); step 1 formatting in progress (agent,
