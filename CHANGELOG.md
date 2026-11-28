@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Fixed: a collection could misread its liveness map (#1200).** Since 0.6.7 (#1114) the sweep asks a map of
+  4 KiB granules whether a page held a live cell. With the map off (pages spread over more than 4 GiB, as Linux
+  places them) it still computed a page's offset from a previous collection's base: a debug build overflowed, and a
+  page taken after the map was built could be looked up past its end. A page outside the map is now simply walked.
 - **Logging never stalls a server (#1180).** `Logger` now writes through `StderrLogs()`: a line is formatted on
   the calling task and handed to a bounded buffer that a host thread writes to stderr, so a slow or stuck reader
   of stderr no longer stops other tasks (measured: a request that logs nothing waited 2.6 s behind a stalled pipe

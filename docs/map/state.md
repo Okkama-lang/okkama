@@ -54,6 +54,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   listen() paths, module overview std/logging.ok, okkama-cli tests/logging.rs (2). Web benchmark in Docker (ab -k,
   21.5k req/s): a line per request costs −21…25% (sync destination −13%); the sink was not the cause (batching
   kept, 0a348c260); likely allocation/GC in the server's heap → #1201 for the owner. #1179–#1181 closed. Found: #1199 EPIPE on stdout/stderr cannot be caught.
+- [x] #1200 liveness map (found in Wave debug playground_run, recurred): Liveness::clear checks on/bounds first
+  (d1839f4c4); CI and Wave green on d1839f4c4 — the whole release/068 passed the gate. #1083 closed.
+- [~] Release 0.6.8: micro A/B v0.6.7 (micro-tc/rel067) vs rel068 (d1839f4c4, worktree okkama-work/rel068,
+  toolchains micro-tc/rel068-s1/s2), only-list micro-tc/only-rel068.txt (775 cells, ext-* excluded), log
+  micro-tc/abba-rel068.log. Devil books re-check in progress (Codex Gigas by an agent; Malleus, Clavicula next).
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
   Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust
