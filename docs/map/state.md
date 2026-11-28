@@ -36,6 +36,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
 - [x] #1082 CBOR (agent; feature/1082): std/cbor.ok over std/runtime/cbor.ok (39 natives, IDs 681–719),
   sparrow-core/src/cbor.rs (no recursion), host/native_cbor.rs, tests sparrow-core/tests/cbor.rs (14), std inline 12+2,
   examples/cbor/message.ok, fuzz target `cbor`. runtime/cbor is PURE (playground allowed).
+- [x] #1189 style guide, draft 1 (agent; feature/1189): docs/agents/style.md (13 sections, 86 checked examples, 71 KB —
+  kept: the growth is lint-clean examples with doc comments), okkama-cli tests/agents.rs checks the full guide.
+  Findings: #1192 fmt and `test.case`, #1193 missing-docs on fakes, #1194 dropped futures run never (language.md
+  corrected, a475e522c), #1195 lint rules for the guide (14). Open for the owner: Bible 25.7 `Section` writes from
+  its constructor against std-principles; doc-note's "module overview" warning on a first documented enum.
 - [x] #1188 language reference for agents (agent; 8945e8acf): docs/agents/language.md (50 KB, 31 checked examples),
   docs/agents/check.py (fences okkama / okkama,run / okkama,test / okkama,fail / okkama,ignore), Wave "Corpora" step.
   Findings fixed: LLM-GUIDE §8 arguments line. Bible ch.17 gap (unbounded type parameter answers no action) noted.

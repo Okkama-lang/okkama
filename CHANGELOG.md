@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **The Okkama style guide, draft 1 (#1189).** `okkama agents style` now prints the whole guide: encapsulation (an
+  object tells, it is not asked; it gives the form you need), immutability through successors, small objects with
+  constructors that only assign, roles as parameter types and decorators instead of options, the flat API shape,
+  typed errors, owned tasks, resources with `destroy`, tests beside the code with fakes, the anti-patterns, and the
+  pragmatic exceptions that make it milder than Elegant Objects. Each rule has its reason and a bad and a good
+  example, and all 86 examples are checked in CI. It stays a draft until the owner reviews it.
 - **Helper processes: `os/port` (#1081).** Code in any language, called from Okkama through a helper process (the
   Erlang "ports" model). `Port(command:, instances:)` starts a helper with the first call; `await port.call(method:,
   payload:, bytes:, timeout:)` sends a JSON or CBOR payload and raw bytes and returns a `PortReply`. Calls carry ids,
