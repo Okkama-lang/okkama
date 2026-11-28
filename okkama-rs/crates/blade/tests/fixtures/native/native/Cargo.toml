@@ -1,0 +1,17 @@
+[package]
+name = "blade-native-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "blade_bird"
+crate-type = ["cdylib"]
+
+[dependencies]
+okkama-ext = { path = "../../../../../okkama-ext" }
+
+[workspace]
+
+[patch.crates-io]
+num-bigint = { path = "../../../../../../vendor/num-bigint" }

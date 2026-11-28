@@ -72,6 +72,10 @@ pub struct Manifest {
     pub name: Option<String>,
     /// `[module] version`.
     pub version: Option<String>,
+    /// `[native] crate`, relative to the package root.
+    pub native: Option<String>,
+    /// `[native] allow`; only the root project grants consent.
+    pub native_allow: Vec<String>,
     /// `[dependencies]`, by name.
     pub dependencies: BTreeMap<String, Dependency>,
 }
@@ -100,6 +104,24 @@ impl Manifest {
                 check_package_name(name)?;
             }
             manifest.version = string_field(module, "module", "version")?;
+        }
+        if let Some(native) = table.get("native") {
+            let native = native.as_table().ok_or("[native] must be a table")?;
+            if let Some(key) = native.keys().find(|key| !["crate", "allow"].contains(&key.as_str())) {
+                return Err(format!("unknown key \"{key}\" in [native] (known: crate, allow)"));
+            }
+            manifest.native = string_field(native, "native", "crate")?;
+            if let Some(path) = &manifest.native {
+                crate::native::check_crate_path(path)?;
+            }
+            if let Some(allow) = native.get("allow") {
+                let allow = allow.as_array().ok_or("[native] allow must be a list of package names")?;
+                for name in allow {
+                    let name = name.as_str().ok_or("[native] allow must be a list of package names")?;
+                    check_package_name(name)?;
+                    manifest.native_allow.push(name.to_string());
+                }
+            }
         }
         if let Some(dependencies) = table.get("dependencies") {
             let dependencies = dependencies
@@ -267,6 +289,32 @@ pub fn project_root(package: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_crate_and_root_consent_parse_separately() {
+        let package = Manifest::parse("[native]\ncrate = \"rust/native\"\n").unwrap();
+        assert_eq!(package.native.as_deref(), Some("rust/native"));
+        assert!(package.native_allow.is_empty());
+        let root = Manifest::parse("[native]\nallow = [\"bird\", \"acme/image\"]\n").unwrap();
+        assert_eq!(root.native_allow, ["bird", "acme/image"]);
+        assert!(root.native.is_none());
+        assert!(Manifest::parse("").unwrap().native.is_none());
+    }
+
+    #[test]
+    fn native_settings_refuse_malformed_or_external_paths() {
+        for text in [
+            "native = true", "[native]\ncrate = 1", "[native]\nallow = \"bird\"",
+            "[native]\nallow = [1]", "[native]\nallow = [\"../bird\"]",
+            "[native]\nprebuilt = \"bird.so\"",
+        ] {
+            assert!(Manifest::parse(text).is_err(), "{text}");
+        }
+        for path in ["", "/native", "../native", "native/../other", ".", "native\\other"] {
+            let text = format!("[native]\ncrate = {}\n", toml::Value::String(path.into()));
+            assert!(Manifest::parse(&text).is_err(), "{path}");
+        }
+    }
 
     #[test]
     fn short_and_table_dependencies_parse() {

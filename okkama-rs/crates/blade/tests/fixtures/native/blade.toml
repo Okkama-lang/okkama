@@ -1,0 +1,6 @@
+[module]
+name = "bird"
+version = "1.0.0"
+
+[native]
+crate = "native"

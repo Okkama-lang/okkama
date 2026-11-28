@@ -180,6 +180,7 @@ name = "blade"
 version = "0.6.7"
 dependencies = [
  "okkama-compiler",
+ "serde_json",
  "sha2",
  "toml",
  "toml_edit",

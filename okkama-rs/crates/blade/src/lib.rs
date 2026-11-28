@@ -3,6 +3,7 @@
 pub mod install;
 pub mod lock;
 pub mod manifest;
+mod native;
 pub mod project;
 mod toolchain;
 pub mod version;
@@ -29,12 +30,14 @@ USAGE:
                                      they are; without NAME, everything
     blade remove NAME                drop a dependency and what only it needed
     blade build                      compile the project as [build] says
-    blade run [-- ARGS...]           build if the sources differ from the last
+    blade run [--no-native] [-- ARGS...]
+                                     build if the sources differ from the last
                                      build's (contents, files added or removed)
                                      or okkama does (its version, its binary,
                                      its std, OKKAMA_IMPORT_DIRS, the variables
                                      that change a build: okkama env), then run
                                      it as [run] says; ARGS follow [run] args
+                                     --no-native skips native builds and loading
     blade --help                     (also -h, help)
     blade --version                  (also -V, -v, version)
 
@@ -279,7 +282,11 @@ impl Command for CommandBuild {
 
 impl Command for CommandRun {
     fn execute(&self) -> ExitCode {
-        let extra = match self.args.split_first() {
+        let (no_native, args) = match self.args.split_first() {
+            Some((flag, rest)) if flag == "--no-native" => (true, rest),
+            _ => (false, self.args.as_slice()),
+        };
+        let extra = match args.split_first() {
             None => &[][..],
             Some((dashes, rest)) if dashes == "--" => rest,
             Some(_) => {
@@ -291,7 +298,7 @@ impl Command for CommandRun {
             Ok(project) => project,
             Err(e) => return failure(&e),
         };
-        match project::run(&project, extra) {
+        match project::run_with_native(&project, extra, no_native) {
             // The program's status, clamped to what a process can return.
             Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
             Err(e) => failure(&e),

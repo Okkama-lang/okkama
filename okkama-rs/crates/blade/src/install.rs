@@ -166,10 +166,10 @@ fn install_busy(root: &Path, unlock: &Unlock) -> Result<Report, String> {
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
-    let report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
-    if !commit(root, &chosen, &lock, &new_lock, false, &mut work)? {
-        return Ok(Report::default());
-    }
+    let native = crate::native::consent(&manifest, &new_lock)?;
+    let mut report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
+    report.lines.extend(native);
+    commit(root, &chosen, &lock, &new_lock, false, &mut work)?;
     Ok(report)
 }
 
@@ -288,10 +288,10 @@ pub fn sync(root: &Path) -> Result<Report, String> {
             .map(|(name, package)| (name.clone(), package.locked()))
             .collect(),
     };
-    let report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
-    if !commit(root, &chosen, &lock, &new_lock, true, &mut work)? {
-        return Ok(Report::default());
-    }
+    let native = crate::native::consent(&manifest, &new_lock)?;
+    let mut report = report(root, &installed_lock(root, &lock)?, &lock, &new_lock);
+    report.lines.extend(native);
+    commit(root, &chosen, &lock, &new_lock, true, &mut work)?;
     Ok(report)
 }
 
@@ -463,6 +463,7 @@ impl Package {
             commit: self.commit.clone(),
             checksum: self.checksum.clone(),
             dependencies: self.manifest.dependencies.keys().cloned().collect(),
+            native: self.manifest.native.is_some(),
         }
     }
 
@@ -1012,7 +1013,7 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), String> {
 }
 
 /// Relative paths of the files of a tree, sorted, with `/` separators.
-fn files(dir: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn files(dir: &Path) -> Result<Vec<String>, String> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
         let entries =
             std::fs::read_dir(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
@@ -1048,6 +1049,10 @@ fn generated_manifest(name: &str, version: &Version) -> String {
 /// The rules a package must follow to be installed. Only its modules in
 /// `src/` are read; the rest (a licence, examples, tests) is copied as is.
 fn check_package(dir: &Path, name: &str) -> Result<(), String> {
+    let manifest = Manifest::read_package(dir)?;
+    if let Some(path) = &manifest.native {
+        crate::native::crate_dir(dir, path)?;
+    }
     if !dir.join(SRC).is_dir() {
         return Err(format!(
             "no {SRC}/ directory; a package keeps its modules in {SRC}/"
@@ -1089,7 +1094,7 @@ fn check_package(dir: &Path, name: &str) -> Result<(), String> {
                 "{file} declares module \"{module}\"; modules of package \"{name}\" are named \"{name}\" or \"{name}/…\""
             ));
         }
-        if program.items.iter().any(|item| {
+        if manifest.native.is_none() && program.items.iter().any(|item| {
             matches!(
                 item,
                 ast::Item::NativeAction(_) | ast::Item::NativeObject(_)

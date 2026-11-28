@@ -226,8 +226,15 @@ fn up_to_date(project: &Project, toolchain: &Toolchain, inputs: &str) -> Result<
 }
 
 /// Build the project unless its output was built from the sources as they are
-/// (`force` always builds). `Ok(true)` — it was built.
+/// (`force` always compiles bytecode; unchanged native crates stay built).
+/// `Ok(true)` — the bytecode was built.
 pub fn build(project: &Project, force: bool) -> Result<bool, String> {
+    check_installed(project)?;
+    crate::native::build(&project.root)?;
+    build_bytecode(project, force)
+}
+
+fn build_bytecode(project: &Project, force: bool) -> Result<bool, String> {
     check_installed(project)?;
     for file in &project.entry {
         if !project.root.join(file).is_file() {
@@ -268,19 +275,36 @@ pub fn build(project: &Project, force: bool) -> Result<bool, String> {
     Ok(true)
 }
 
-/// The command `blade run` executes, after `extra` arguments.
+/// The bytecode command without extensions, with `extra` after configured arguments.
 pub fn run_command(project: &Project, extra: &[String]) -> Command {
-    // The built `.spb` runs with `okkama exec`.
+    execution_command(project, extra, &[], false)
+}
+
+fn execution_command(project: &Project, extra: &[String], libraries: &[PathBuf], no_native: bool) -> Command {
     let mut command = Command::new(okkama());
-    command.arg("exec").arg(project.output_path());
+    command.arg("exec");
+    if no_native {
+        command.arg("--no-native");
+    } else {
+        for library in libraries {
+            command.arg("--ext").arg(library);
+        }
+    }
+    command.arg(project.output_path());
     command.current_dir(&project.root).args(&project.args).args(extra).envs(&project.env);
     command
 }
 
 /// Build when needed, run, and return the program's exit status.
 pub fn run(project: &Project, extra: &[String]) -> Result<i32, String> {
-    build(project, false)?;
-    let mut command = run_command(project, extra);
+    run_with_native(project, extra, false)
+}
+
+pub(crate) fn run_with_native(project: &Project, extra: &[String], no_native: bool) -> Result<i32, String> {
+    check_installed(project)?;
+    let libraries = if no_native { Vec::new() } else { crate::native::build(&project.root)? };
+    build_bytecode(project, false)?;
+    let mut command = execution_command(project, extra, &libraries, no_native);
     let status = command
         .status()
         .map_err(|error| format!("cannot run {}: {error}", command.get_program().to_string_lossy()))?;
@@ -290,6 +314,19 @@ pub fn run(project: &Project, extra: &[String]) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_run_options_precede_bytecode_and_program_arguments() {
+        let project = Project::parse(Path::new("/p"), "[run]\nargs = [\"configured\"]").unwrap();
+        let libraries = [PathBuf::from("/p/first.so"), PathBuf::from("/p/second.so")];
+        let args = ["--no-native".to_string()];
+        let command = execution_command(&project, &args, &libraries, false);
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [
+            "exec", "--ext", "/p/first.so", "--ext", "/p/second.so", "/p/target/app.spb", "configured", "--no-native",
+        ]);
+        let command = execution_command(&project, &[], &libraries, true);
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["exec", "--no-native", "/p/target/app.spb", "configured"]);
+    }
 
     #[test]
     fn defaults_follow_the_module() {

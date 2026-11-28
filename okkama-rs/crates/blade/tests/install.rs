@@ -1485,3 +1485,40 @@ fn a_changed_local_package_is_reported_once_and_as_it_is() {
     assert_eq!(install::update(&app, &["util".to_string()]).unwrap().lines, ["~ util 2.1.0 -> 2.2.0"]);
     assert!(install::sync(&app).unwrap().lines.is_empty());
 }
+
+#[test]
+fn native_git_packages_need_root_consent_for_add_update_and_cached_sync() {
+    let tree = Tree::new("native-git");
+    let app = tree.path("app");
+    let repo = tree.path("bird");
+    let root = manifest_text("app", "1.0.0", "");
+    tree.write("app/blade.toml", &root);
+    let package = format!("{}\n[native]\ncrate = \"native\"\n", manifest_text("bird", "1.0.0", ""));
+    tag(&repo, "1.0.0", &[
+        ("blade.toml", &package),
+        ("src/native.ok", "module bird/native; native answer() is int;\n"),
+        ("native/Cargo.toml", "[package]\nname = \"bird\"\nversion = \"1.0.0\"\n[lib]\ncrate-type = [\"cdylib\"]\n"),
+        ("native/src/lib.rs", "pub fn answer() -> i64 { 42 }\n"),
+    ]);
+    let error = install::add(&app, "bird", repo.to_str().unwrap(), Some("1.0.0")).unwrap_err();
+    assert!(error.contains("bird 1.0.0 carries native code") && error.contains("allow"), "{error}");
+    assert_eq!(std::fs::read_to_string(app.join("blade.toml")).unwrap(), root);
+    assert!(!app.join("blade.lock").exists());
+
+    tree.write("app/blade.toml", &format!("{root}\n[native]\nallow = [\"bird\"]\n"));
+    let report = install::add(&app, "bird", repo.to_str().unwrap(), Some("1.0.0")).unwrap();
+    assert!(report.lines.iter().any(|line| line == "bird 1.0.0 carries native code"));
+    assert!(Lock::read(&app).unwrap().packages["bird"].native);
+    for report in [install::sync(&app).unwrap(), install::update(&app, &[]).unwrap()] {
+        assert!(report.lines.iter().any(|line| line == "bird 1.0.0 carries native code"));
+    }
+    let allowed = std::fs::read_to_string(app.join("blade.toml")).unwrap();
+    tree.write("app/blade.toml", &allowed.replace("allow = [\"bird\"]", "allow = []"));
+    let locked = std::fs::read(app.join("blade.lock")).unwrap();
+    for result in [install::sync(&app), install::update(&app, &[])] {
+        let error = result.unwrap_err();
+        assert!(error.contains("bird 1.0.0 carries native code") && error.contains("allow"), "{error}");
+        assert_eq!(std::fs::read(app.join("blade.lock")).unwrap(), locked);
+    }
+    assert!(!app.join("target").exists());
+}

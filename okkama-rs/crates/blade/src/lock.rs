@@ -37,6 +37,8 @@ pub struct Locked {
     /// `sha256:<hex>` of the installed files.
     pub checksum: String,
     pub dependencies: Vec<String>,
+    /// The package builds a native extension from source.
+    pub native: bool,
 }
 
 impl Lock {
@@ -91,6 +93,11 @@ impl Lock {
                     commit: text("commit").map(str::to_string),
                     checksum: text("checksum").unwrap_or_default().to_string(),
                     dependencies,
+                    native: match package.get("native") {
+                        None => false,
+                        Some(toml::Value::Boolean(native)) => *native,
+                        Some(_) => return Err(format!("package \"{name}\": native must be a boolean")),
+                    },
                 },
             );
         }
@@ -112,6 +119,9 @@ impl Lock {
                 out.push_str(&format!("commit = {}\n", quote(commit)));
             }
             out.push_str(&format!("checksum = {}\n", quote(&package.checksum)));
+            if package.native {
+                out.push_str("native = true\n");
+            }
             let names: Vec<String> = package
                 .dependencies
                 .iter()
@@ -134,6 +144,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_mark_defaults_to_false_and_rejects_non_booleans() {
+        let text = "[[package]]\nname = \"bird\"\nversion = \"1.0.0\"\nsource = \"path+bird\"\n";
+        assert!(!Lock::parse(text).unwrap().packages["bird"].native);
+        assert!(Lock::parse(&format!("{text}native = true\n")).unwrap().packages["bird"].native);
+        assert!(Lock::parse(&format!("{text}native = \"true\"\n")).is_err());
+    }
+
+    #[test]
     fn lock_text_round_trips() {
         let mut lock = Lock::default();
         lock.packages.insert(
@@ -144,6 +162,7 @@ mod tests {
                 commit: Some("abc".to_string()),
                 checksum: "sha256:00".to_string(),
                 dependencies: vec!["json".to_string()],
+                native: true,
             },
         );
         lock.packages.insert(
@@ -154,6 +173,7 @@ mod tests {
                 commit: None,
                 checksum: "sha256:11".to_string(),
                 dependencies: Vec::new(),
+                native: false,
             },
         );
         assert_eq!(Lock::parse(&lock.text()).unwrap(), lock);
