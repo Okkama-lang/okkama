@@ -106,7 +106,7 @@ object NamedLogging does Logging {
     log(level is LogLevel, message is string) is void {
         if destination.enabled(name, level) {
             let empty is @Error = [];
-            self.emit(level, message, EmptyLogFields().fields(), empty);
+            self.emit(level, message, fields, empty);
         }
     }
 
@@ -114,14 +114,14 @@ object NamedLogging does Logging {
     log(level is LogLevel, message is string, fields is LogFields) is void {
         if destination.enabled(name, level) {
             let empty is @Error = [];
-            self.emit(level, message, fields, empty);
+            self.emit(level, message, self.merged(fields), empty);
         }
     }
 
     // Logs message at level with fields and its cause.
     log(level is LogLevel, message is string, fields is LogFields, cause is Error) is void {
         if destination.enabled(name, level) {
-            self.emit(level, message, fields, [cause]);
+            self.emit(level, message, self.merged(fields), [cause]);
         }
     }
 
@@ -141,16 +141,23 @@ object NamedLogging does Logging {
         name;
     }
 
+    // Without fields of its own, the record's are taken as they are.
+    hidden merged(added is LogFields) is LogFields {
+        once let bare = fields.values().size() == 0;
+        if bare {
+            return added;
+        }
+        CombinedLogFields(base: fields, added: added).fields();
+    }
+
     hidden emit(
         level is LogLevel,
         message is string,
-        fields is LogFields,
+        merged is LogFields,
         causes is @Error
     ) is void {
-        let merged = CombinedLogFields(base: self.fields, added: fields).fields();
         let at = clock.instant();
-        let pid = process.id();
-        let context = LogContext(name: name, fields: merged, process: pid);
+        let context = LogContext(name: name, fields: merged, process: process.id());
         let record = if causes.size() == 0 {
             LogRecord(occurred: at, level: level, message: message, context: context);
         }

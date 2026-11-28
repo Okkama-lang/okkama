@@ -14,12 +14,12 @@ module logging/logger v1.0.0;
 //
 // NamedLogging stays for a clock, fixed fields or a process of one's own.
 
-import "logging/level" take LogLevel;
+import "logging/level" take LogLevel, LogLevelOrder;
+import "compare" take Order;
 import "logging/name" take LogName, ChildLogName;
 import "logging/field" take LogFields;
 import "logging/named" take Logging, NamedLogging;
-import "logging/write" take LogWriting, CollectedLogs;
-import "logging/filter" take AllowedLogs;
+import "logging/write" take LogWriting, CollectedLogs, DiscardingLogs;
 import "logging/stream" take TextStreamLogs;
 import "io/stdout" take Stderr;
 import "json" take JsonField;
@@ -29,7 +29,6 @@ object Logger does Logging {
     has name is LogName;
     has level is LogLevel;
     has target is LogWriting;
-    has destination is LogWriting;
     has origin is NamedLogging;
 
     // A logger called name, writing to destination at level and above.
@@ -41,77 +40,99 @@ object Logger does Logging {
         self.name = LogName(name.split("."));
         self.level = level;
         target = destination;
-        self.destination = AllowedLogs(origin: destination, level: level);
-        origin = NamedLogging(name: self.name, destination: self.destination);
+        origin = NamedLogging(name: self.name, destination: destination);
     }
 
-    // Logs message at debug with fields; nothing is built below the level.
+    // Logs message at debug with fields; below the level it is one comparison
+    // and nothing is built.
     debug(message is string, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.emit(LogLevel.debug, message, listed);
+        if self.passes(LogLevel.debug) {
+            let listed is @JsonField = fields...;
+            self.emit(LogLevel.debug, message, listed);
+        }
     }
 
     // Logs message at info with fields.
     info(message is string, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.emit(LogLevel.info, message, listed);
+        if self.passes(LogLevel.info) {
+            let listed is @JsonField = fields...;
+            self.emit(LogLevel.info, message, listed);
+        }
     }
 
     // Logs message at warning with fields.
     warning(message is string, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.emit(LogLevel.warning, message, listed);
+        if self.passes(LogLevel.warning) {
+            let listed is @JsonField = fields...;
+            self.emit(LogLevel.warning, message, listed);
+        }
     }
 
     // With the error that caused it: log.warning("retrying", failure).
     warning(message is string, cause is Error, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.failed(LogLevel.warning, message, cause, listed);
+        if self.passes(LogLevel.warning) {
+            let listed is @JsonField = fields...;
+            self.failed(LogLevel.warning, message, cause, listed);
+        }
     }
 
     // Logs message at error with fields.
     error(message is string, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.emit(LogLevel.error, message, listed);
+        if self.passes(LogLevel.error) {
+            let listed is @JsonField = fields...;
+            self.emit(LogLevel.error, message, listed);
+        }
     }
 
     // Logs message at error with the error that caused it.
     error(message is string, cause is Error, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.failed(LogLevel.error, message, cause, listed);
+        if self.passes(LogLevel.error) {
+            let listed is @JsonField = fields...;
+            self.failed(LogLevel.error, message, cause, listed);
+        }
     }
 
     // Logs message at critical with fields.
     critical(message is string, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.emit(LogLevel.critical, message, listed);
+        if self.passes(LogLevel.critical) {
+            let listed is @JsonField = fields...;
+            self.emit(LogLevel.critical, message, listed);
+        }
     }
 
     // Logs message at critical with the error that caused it.
     critical(message is string, cause is Error, fields is ...JsonField) is void {
-        let listed is @JsonField = fields...;
-        self.failed(LogLevel.critical, message, cause, listed);
+        if self.passes(LogLevel.critical) {
+            let listed is @JsonField = fields...;
+            self.failed(LogLevel.critical, message, cause, listed);
+        }
     }
 
     // Logs message at level.
     log(level is LogLevel, message is string) is void {
-        origin.log(level, message);
+        if self.passes(level) {
+            origin.log(level, message);
+        }
     }
 
     // Logs message at level with fields.
     log(level is LogLevel, message is string, fields is LogFields) is void {
-        origin.log(level, message, fields);
+        if self.passes(level) {
+            origin.log(level, message, fields);
+        }
     }
 
     // Logs message at level with fields and the error that caused it.
     log(level is LogLevel, message is string, fields is LogFields, cause is Error) is void {
-        origin.log(level, message, fields, cause);
+        if self.passes(level) {
+            origin.log(level, message, fields, cause);
+        }
     }
 
     // Would a record of this level be written? Ask it before building costly
     // fields: if log.enabled(LogLevel.debug) { ... }.
     enabled(level is LogLevel) is bool {
-        destination.enabled(name, level);
+        self.passes(level) && target.enabled(name, level);
     }
 
     // The logger of a part, to the same destination at the same level:
@@ -126,9 +147,21 @@ object Logger does Logging {
         name;
     }
 
+    // The logger's own level comes first, so a call below it is one comparison.
+    hidden passes(given is LogLevel) is bool {
+        LogLevelOrder(left: given, right: level).order() != Order.less;
+    }
+
+    // Fields are built only for a destination that would write (as AllowedLogs
+    // asked it); without fields the logger's own are taken as they are.
     hidden emit(level is LogLevel, message is string, fields is @JsonField) is void {
-        if destination.enabled(name, level) {
-            origin.log(level, message, LogFields(fields));
+        if target.enabled(name, level) {
+            if fields.size() == 0 {
+                origin.log(level, message);
+            }
+            else {
+                origin.log(level, message, LogFields(fields...));
+            }
         }
     }
 
@@ -138,8 +171,8 @@ object Logger does Logging {
         cause is Error,
         fields is @JsonField
     ) is void {
-        if destination.enabled(name, level) {
-            origin.log(level, message, LogFields(fields), cause);
+        if target.enabled(name, level) {
+            origin.log(level, message, LogFields(fields...), cause);
         }
     }
 }
@@ -194,3 +227,10 @@ test "a logger needs only its name" {
 }
 
 hidden enum LoggerProbe is Error = (failed(reason is string));
+
+test "a destination that would not write gets no fields built" {
+    let quiet = Logger(name: "shop", destination: DiscardingLogs(), level: LogLevel.debug);
+    quiet.info("repeated", JsonField("a", 1), JsonField("a", 2));
+    quiet.error("repeated", LoggerProbe.failed("x"), JsonField("a", 1), JsonField("a", 2));
+    test.ok(!quiet.enabled(LogLevel.critical));
+}

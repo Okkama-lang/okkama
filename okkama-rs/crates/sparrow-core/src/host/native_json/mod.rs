@@ -685,6 +685,11 @@ impl Heap {
                     }
                 }
             }
+            JsonJsonQuoted => {
+                let mut quoted = String::new();
+                push_quoted(&mut quoted, self.text(args[0])?);
+                self.allocate_text(quoted)?
+            }
             JsonJsonTextNode => {
                 let text = self.json_shared(args[0])?;
                 self.json_new(Node::Text(text))?

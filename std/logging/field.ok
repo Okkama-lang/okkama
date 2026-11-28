@@ -34,19 +34,18 @@ object LogFields {
     // The same, one argument per part: LogFields(a, b).
     LogFields(members is ...JsonField) {
         let listed is @JsonField = members...;
-        let size = listed.size();
-        confirm size >= 0 && size <= 256
-            else throw InvalidLogField.because("field count exceeds 256");
-        let snapshot is @JsonField = (0..size).map() -> index {
-            listed.item(index);
-        };
+        confirm listed.size() <= 256 else throw InvalidLogField.because("field count exceeds 256");
         let fields = try {
-            Json(snapshot);
+            Json(listed);
         }
         catch JsonError.duplicate_member(_) {
             throw InvalidLogField.because("duplicate field name");
         };
-        origin = LogFieldLimits(fields).json();
+        // An object of the listed names: only the names and the text to check.
+        let names is @string = listed.map() -> field {
+            field::Member::name;
+        };
+        origin = LogFieldLimits(fields).checked(names);
     }
 
     // The members of a JSON object; InvalidLogField for another value.
@@ -91,17 +90,34 @@ hidden object LogFieldLimits {
         let names = fields.names();
         confirm names.size() <= 256
             else throw InvalidLogField.because("field count exceeds 256");
+        self.checked(names);
+    }
+
+    // The object's names, its size and its depth.
+    checked(names is @string) is Json {
         for names -> name {
             confirm name != "" && name.length() <= 4096
                 else throw InvalidLogField.because("invalid field name");
         }
         if names.size() > 0 {
             let text = fields.string();
-            confirm Utf8Encoded(text).bytes().size() <= 1048576
+            // A code point is at most 4 bytes, so short text needs no encoding.
+            confirm text.length() <= 262144 || Utf8Encoded(text).bytes().size() <= 1048576
                 else throw InvalidLogField.because("fields exceed 1 MiB");
-            ParsedJson(text, 32).root();
+            // An object of scalars is 2 levels deep, and 33 levels take more than
+            // 64 characters; anything else is parsed, for the parser's own error.
+            if text.length() > 64 && !self.flat(names) {
+                ParsedJson(text, 32).root();
+            }
         }
         fields;
+    }
+
+    hidden flat(names is @string) is bool {
+        names.reduce(true) -> flat, name {
+            let kind = fields.get(name).kind();
+            flat && kind != JsonKind.array_value && kind != JsonKind.object_value;
+        };
     }
 }
 

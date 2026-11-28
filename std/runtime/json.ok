@@ -117,6 +117,10 @@ native json_object_node(names is @string, values is @JsonNodeState) is JsonNodeS
 // \r, \t by name and the other controls U+0000..U+001F as lowercase \u00xx.
 native json_node_write(origin is JsonNodeState, indentation is int) is string;
 
+// A string as JSON text, quoted and escaped as json_node_write writes a string
+// node, without making the node (#1180).
+native json_quoted(value is string) is string;
+
 // The RFC 6901 pointer of target inside root (the same node, found depth
 // first; invalid_input when it is not inside), and the member names and values
 // of an object and the items of an array in order.
@@ -223,6 +227,9 @@ test "JSON member positions and quoted strings" {
         "invalid_input"
     );
     test.is(json_node_write(json_text_node(""), 0), "\"\"");
+    for ["", "é🙂/\u{7f}", "\"\\\n\r\t", "\u{0}\u{8}\u{c}\u{1b}\u{1f}", "plain"] -> text {
+        test.is(json_quoted(text), json_node_write(json_text_node(text), -1));
+    }
     test.is(json_node_write(json_text_node("é🙂/\u{7f}"), 0), "\"é🙂/\u{7f}\"");
     test.is(json_node_write(json_text_node("\"\\\n\r\t"), 0), "\"\\\"\\\\\\n\\r\\t\"");
     test.is(

@@ -13,6 +13,8 @@ import "time/duration" take Duration;
 import "time/rfc3339" take Rfc3339;
 import "encoding/utf" take Utf8Encoded;
 import "runtime/unicode_character";
+import "runtime/json" take json_quoted;
+import "runtime/time_zone" take rfc3339_text;
 import "logging/field" take LogFields;
 import "logging/name" take LogName;
 import "time/clock" take Instant;
@@ -33,20 +35,21 @@ object TextLogLine {
     string() is string {
         let time = origin.time();
         let context = origin.context();
-        let name = BoundedLogJson(Json(context.name().string())).string();
-        let message = BoundedLogJson(Json(origin::Entry::message)).string();
-        let fields = BoundedLogJson(context.fields().values()).string();
         let cause = if origin.has_cause() {
-            " cause=" + BoundedLogJson(Json(origin.cause().text())).string();
+            " cause=" + json_quoted(origin.cause().text());
         }
         else {
             "";
         };
         PhysicalLogLine(
-            Rfc3339(origin: time, offset: zone.offset(time)).string() + " level=" + LogLevelName(
+            LogTime(origin: time, offset: zone.offset(time)).string() + " level=" + LogLevelName(
                 origin::Entry::level
-            ).string() + " name=" + name + " process=" + context.process()
-                .string() + " message=" + message + " fields=" + fields + cause
+            ).string() + " name=" + json_quoted(context.name().string()) + " process=" + context
+                .process()
+                .string() + " message=" + json_quoted(origin::Entry::message) + " fields=" + context
+                .fields()
+                .values()
+                .string() + cause
         ).string();
     }
 }
@@ -60,46 +63,63 @@ object JsonLogLine {
         self.origin = origin;
     }
 
-    // The JSON object, with the cause's text when there is one.
+    // The JSON object, with the cause's text when there is one. Written piece by
+    // piece (#1180), as Json writes such an object: compact, members in this
+    // order, strings quoted alike, and the process id as a number.
     string() is string {
         let context = origin.context();
-        let members is @JsonField = [
-            JsonField(
-                "time",
-                Rfc3339(origin: origin.time(), offset: Duration(seconds: 0.rat())).string()
-            ),
-            JsonField("level", LogLevelName(origin::Entry::level).string()),
-            JsonField("name", context.name().string()),
-            JsonField("process", context.process()),
-            JsonField("message", origin::Entry::message),
-            JsonField("fields", context.fields().values())
-        ];
-        let complete is @JsonField = if origin.has_cause() {
-            members + [JsonField("cause", origin.cause().text())];
+        let process = context.process().string();
+        // Json writes a number of more than 21 digits with an exponent.
+        let pid = if process.length() <= 21 {
+            process;
         }
         else {
-            members;
+            Json(context.process()).string();
         };
-        PhysicalLogLine(BoundedLogJson(Json(complete)).string()).string();
+        let cause = if origin.has_cause() {
+            ",\"cause\":" + json_quoted(origin.cause().text());
+        }
+        else {
+            "";
+        };
+        PhysicalLogLine(
+            "{\"time\":\"" +
+                LogTime(origin: origin.time(), offset: Duration(seconds: 0.rat())).string() +
+                "\",\"level\":\"" + LogLevelName(origin::Entry::level).string() + "\",\"name\":" +
+                json_quoted(context.name().string()) + ",\"process\":" + pid + ",\"message\":" +
+                json_quoted(
+                    origin::Entry::message
+                ) + ",\"fields\":" + context.fields().values().string() + cause + "}"
+        ).string();
     }
 }
 
-hidden object BoundedLogJson {
-    has origin is Json;
+// A record's time as RFC 3339 text, in one native call (#1180); what the call
+// leaves out (an offset of seconds, a year beyond 9999) goes to Rfc3339, for its
+// error.
+hidden object LogTime {
+    has origin is Instant;
+    has offset is Duration;
 
-    BoundedLogJson(origin is Json) {
+    LogTime(origin is Instant, offset is Duration) {
         self.origin = origin;
+        self.offset = offset;
     }
 
-    // Compact text of at most 34 levels and 1 MiB.
     string() is string {
-        let text = origin.string();
-        confirm Utf8Encoded(text).bytes().size() <= 1048576 else throw LogLineLimit.exceeded;
-        ParsedJson(text, 34).root();
-        text;
+        let written = rfc3339_text(origin.unix_duration()::Span::seconds, offset::Span::seconds);
+        if written != "" {
+            return written;
+        }
+        Rfc3339(origin: origin, offset: offset).string();
     }
 }
 
+// The line as written, at most 1 MiB of UTF-8 (#1180: checked once, on the
+// whole line). Its pieces need no checks of their own: a piece is never longer
+// than the line, and fields are at most 32 levels deep (LogFields), so a text or
+// JSON line stays within JSON's 34.
+//
 // JSON already escapes C0. Escape remaining terminal controls and Unicode line
 // separators without altering quoting, so text and JSON remain one line.
 hidden object PhysicalLogLine {
@@ -110,11 +130,21 @@ hidden object PhysicalLogLine {
     }
 
     string() is string {
-        confirm origin.length() <= 1048576 else throw LogLineLimit.exceeded;
-        if unicode_character.display_invalid_index(origin) < 0 {
-            confirm Utf8Encoded(origin).bytes().size() <= 1048576 else throw LogLineLimit.exceeded;
-            return origin;
+        let result = if unicode_character.display_invalid_index(origin) < 0 {
+            origin;
         }
+        else {
+            // Escaping only grows a line: one already too long is not escaped.
+            confirm origin.length() <= 1048576 else throw LogLineLimit.exceeded;
+            self.escaped();
+        };
+        // A code point is at most 4 bytes, so a short line needs no encoding.
+        confirm result.length() <= 262144 || Utf8Encoded(result).bytes().size() <= 1048576
+            else throw LogLineLimit.exceeded;
+        result;
+    }
+
+    hidden escaped() is string {
         let digits = "0123456789abcdef";
         // Code points, compared by code (#172): C0 and DEL, C1, U+2028, U+2029.
         let parts is @string = origin.characters().map() -> character {
@@ -134,9 +164,7 @@ hidden object PhysicalLogLine {
                 character.string();
             }
         };
-        let result = parts.join("");
-        confirm Utf8Encoded(result).bytes().size() <= 1048576 else throw LogLineLimit.exceeded;
-        result;
+        parts.join("");
     }
 }
 
@@ -426,6 +454,30 @@ test "a line is at most 1 MiB of UTF-8 after escaping, text or JSON" {
             LogRecord(occurred: at, level: LogLevel.info, message: json_fits + "a", context: plain)
         ).string();
     };
+}
+
+test "a JSON line writes the process id as Json writes a number" {
+    let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
+    let ids is @int = [123456789012345678901, 1234567890123456789012, 100000000000000000000000];
+    let written is @string = ["123456789012345678901", "1.234567890123456789012e21", "1e23"];
+    for (0..3) -> index {
+        let record = LogRecord(
+            occurred: Instant(Duration(seconds: 1700000000.rat())),
+            level: LogLevel.info,
+            message: "m",
+            context: LogContext(name: LogName("app"), fields: LogFields(), process: ids[index])
+        );
+        test.is(
+            JsonLogLine(record).string(),
+            "{\"time\":\"2023-11-14T22:13:20Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":" +
+                written[index] + ",\"message\":\"m\",\"fields\":{}}"
+        );
+        test.is(
+            TextLogLine(origin: record, zone: utc).string(),
+            "2023-11-14T22:13:20Z level=INFO name=\"app\" process=" + ids[index].string() +
+                " message=\"m\" fields={}"
+        );
+    }
 }
 
 hidden enum LogLineProbe is Error = (failed(reason is string));
