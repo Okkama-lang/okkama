@@ -64,7 +64,7 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
     // (conformance L06.native.missing-provider).
     let native = runtime.natives[function].ok_or_else(|| {
         let symbol = runtime.loaded.program.functions[function].native.clone().unwrap_or_default();
-        Refusal::Failure(FailureKind::Program(missing_native(&symbol)))
+        Refusal::Failure(FailureKind::Program(unregistered(runtime, &symbol)))
     })?;
     runtime.limits.permits(native).map_err(|message| Refusal::Failure(FailureKind::Program(message)))?;
     match native {
@@ -342,8 +342,14 @@ fn int_parse(text: &str, radix: i64) -> Option<num_bigint::BigInt> {
     Some(if negative { -value } else { value })
 }
 
-/// As the other engines: a runtime symbol without a provider is not
-/// implemented; a program's own native symbol is not registered.
+// Restricted runs keep their refusal even when they skipped loading the library.
+pub(crate) fn unregistered(runtime: &Runtime, symbol: &str) -> String {
+    if !runtime.limits.no_native && !symbol.starts_with("runtime/")
+        && let Err(message) = runtime.limits.permits_external(symbol) { return message; }
+    missing_native(symbol)
+}
+
+/// A runtime symbol without a provider is not implemented; a program's own symbol is not registered.
 pub(crate) fn missing_native(symbol: &str) -> String {
     if symbol.starts_with("runtime/") {
         format!("native provider is not implemented: {symbol}")

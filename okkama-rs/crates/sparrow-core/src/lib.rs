@@ -388,6 +388,10 @@ pub struct ProgramNatives {
     pub declared: Vec<okkama_runtime_abi::Native>,
     /// Those a run can call ([`reach`]): from the entry, or the tests of a test profile.
     pub reachable: Vec<okkama_runtime_abi::Native>,
+    /// Symbols outside the built-in ABI table, sorted and unique.
+    pub external_declared: Vec<String>,
+    /// External symbols reachable by this run; no embedding profile offers them.
+    pub external_reachable: Vec<String>,
 }
 
 impl ProgramNatives {
@@ -406,25 +410,38 @@ pub fn program_natives(bytes: &[u8]) -> Result<ProgramNatives, Error> {
     let reached = reach::functions(&program);
     let mut declared = Vec::new();
     let mut reachable = Vec::new();
+    let mut external_declared = Vec::new();
+    let mut external_reachable = Vec::new();
     for (function, reached) in program.functions.iter().zip(reached) {
         if let Some(native) = function.native.as_deref().and_then(okkama_runtime_abi::Native::resolve) {
             declared.push(native);
             if reached {
                 reachable.push(native);
             }
+        } else if let Some(symbol) = &function.native {
+            external_declared.push(symbol.clone());
+            if reached { external_reachable.push(symbol.clone()); }
         }
+    }
+    for symbols in [&mut external_declared, &mut external_reachable] {
+        symbols.sort_unstable();
+        symbols.dedup();
     }
     for natives in [&mut declared, &mut reachable] {
         natives.sort_unstable_by_key(|native| *native as usize);
         natives.dedup();
     }
-    Ok(ProgramNatives { declared, reachable })
+    Ok(ProgramNatives { declared, reachable, external_declared, external_reachable })
 }
 
 /// The natives a run of an SPB program can reach that `profile` refuses, by symbol, sorted, each once (#1125,
 /// #1135: the playground warns before a run, and the site marks the examples that run).
-pub fn refused_natives(bytes: &[u8], profile: &budget::Profile) -> Result<Vec<&'static str>, Error> {
-    Ok(ProgramNatives::refused(&program_natives(bytes)?.reachable, profile))
+pub fn refused_natives(bytes: &[u8], profile: &budget::Profile) -> Result<Vec<String>, Error> {
+    let natives = program_natives(bytes)?;
+    let mut refused: Vec<String> = ProgramNatives::refused(&natives.reachable, profile).into_iter().map(str::to_owned).collect();
+    refused.extend(natives.external_reachable);
+    refused.sort_unstable();
+    Ok(refused)
 }
 
 /// CLI execution result. Loading failures remain the outer `Err`; runtime
@@ -888,9 +905,16 @@ fn human_outcome(
 #[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<Vec<u8>, Error> {
+    run_worker_limited(bytes, request, worker_command, budget::Limits::default())
+}
+
+/// A worker with the host's explicit native registry and restrictions.
+#[cfg(feature = "host")]
+#[doc(hidden)]
+pub fn run_worker_limited(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>, limits: budget::Limits) -> Result<Vec<u8>, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.legacy()?))?);
+        let mut runtime = Box::new(runtime::Runtime::with_limits(program::Loaded::new(program.legacy()?), limits)?);
         runtime.worker_command = worker_command;
         Ok(worker::respond(&mut runtime, &request, STACK_BYTES))
     })
@@ -901,6 +925,13 @@ pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi
 #[cfg(feature = "host")]
 #[doc(hidden)]
 pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<(), Error> {
+    serve_worker_limited(bytes, worker_command, budget::Limits::default())
+}
+
+/// Internal CLI transport with explicit native options, including every item in a pool.
+#[cfg(feature = "host")]
+#[doc(hidden)]
+pub fn serve_worker_limited(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>, limits: budget::Limits) -> Result<(), Error> {
     use std::io::{Read, Write};
     #[cfg(unix)]
     if crate::env_switch::enabled("SPARROW_INTERNAL_WORKER_POOL") {
@@ -927,7 +958,7 @@ pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> 
             request.resize(length, 0);
             control.read_exact(&mut request).map_err(|e| Error(e.to_string()))?;
             // Fresh VM, heap, globals, receiver and host session for EVERY item.
-            let response = run_worker(bytes.clone(), request, worker_command.clone())?;
+            let response = run_worker_limited(bytes.clone(), request, worker_command.clone(), limits.clone())?;
             stdout::flush().map_err(|e| Error(e.to_string()))?;
             std::io::stdout().flush().map_err(|e| Error(e.to_string()))?;
             std::io::stderr().flush().map_err(|e| Error(e.to_string()))?;
@@ -942,7 +973,7 @@ pub fn serve_worker(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> 
     std::io::stdin()
         .read_to_end(&mut request)
         .map_err(|e| Error(format!("worker request: {e}")))?;
-    let response = run_worker(bytes, request, worker_command)?;
+    let response = run_worker_limited(bytes, request, worker_command, limits)?;
     stdout::flush().map_err(|e| Error(e.to_string()))?;
     let mut out = std::io::stdout().lock();
     out.write_all(&response)

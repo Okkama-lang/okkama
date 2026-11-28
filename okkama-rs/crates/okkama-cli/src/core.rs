@@ -53,32 +53,49 @@ impl Drop for WorkerFile {
 
 /// `okkama --worker FILE.spb` for the workers of `path` (the core inserts
 /// `--worker` after the executable).
-pub(crate) fn worker_command(path: &Path) -> Vec<OsString> {
+pub(crate) fn worker_command(path: &Path, limits: &sparrow_core::budget::Limits) -> Vec<OsString> {
     let exe = std::env::current_exe().unwrap_or_else(|_| "okkama".into());
     let file = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    vec![exe.into_os_string(), file.into_os_string()]
+    let mut command = vec![exe.into_os_string()];
+    command.extend(limits.extension_options());
+    command.push(file.into_os_string());
+    command
 }
 
 /// The worker command of an in-memory program, with the file it needs.
 pub(crate) fn workers_for(
     program: &okkama_sparrow::Program,
     bytes: &[u8],
+    limits: &sparrow_core::budget::Limits,
 ) -> Result<(Vec<OsString>, Option<WorkerFile>), String> {
     if !spawns_workers(program) {
         return Ok((Vec::new(), None));
     }
     let file = WorkerFile::write(bytes).map_err(|e| format!("cannot write worker bytecode: {e}"))?;
-    Ok((worker_command(file.path()), Some(file)))
+    Ok((worker_command(file.path(), limits), Some(file)))
 }
 
 /// The child side of a process worker: the request on stdin, the response
 /// on stdout; it never runs main.
 pub(crate) fn worker(args: &[String]) -> Result<(), String> {
+    let mut limits = sparrow_core::budget::Limits::default();
+    let mut args = args;
+    while let [option, rest @ ..] = args {
+        match option.as_str() {
+            "--no-native" => { limits.no_native = true; args = rest; }
+            "--ext" => {
+                let Some((path, rest)) = rest.split_first() else { return Err("--ext needs a path".into()); };
+                limits.option(option, path)?;
+                args = rest;
+            }
+            _ => break,
+        }
+    }
     let [path] = args else {
         return Err("--worker needs one bytecode file".into());
     };
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
-    sparrow_core::serve_worker(bytes, worker_command(Path::new(path))).map_err(|e| e.0)
+    sparrow_core::serve_worker_limited(bytes, worker_command(Path::new(path), &limits), limits).map_err(|e| e.0)
 }
 
 /// The report of an uncaught failure, ending with a newline.

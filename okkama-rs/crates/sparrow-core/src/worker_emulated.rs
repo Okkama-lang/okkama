@@ -110,14 +110,13 @@ pub fn spawn(runtime: &mut Runtime, ctx: *mut Ctx, entry: Word, arguments: &[Wor
 /// into it, its output captured. `limit` is the parent's stack limit, which the worker's run keeps.
 fn work(parent: &Runtime, limit: u64, function: usize, types: &[TypeRef], result: Option<TypeRef>, request: &[u8]) -> Report {
     let report = |outcome, stdout, stderr| Report { outcome, stdout, stderr, result, started: false };
-    let mut runtime = match Runtime::new(parent.loaded.clone()) {
+    let mut runtime = match Runtime::with_limits(parent.loaded.clone(), parent.limits.clone()) {
         Ok(runtime) => Box::new(runtime),
         Err(error) => return report(Err(error.0), Vec::new(), Vec::new()),
     };
     if parent.interp.is_some() {
         runtime.use_engine(crate::Engine::Interpreter);
     }
-    runtime.limits = parent.limits.clone();
     // #1141: a worker's own workers are emulated too, as its parent's are (the flag is only set on a runtime that
     // emulates, so nested spawns never take the host's process path).
     runtime.emulated_workers = parent.emulated_workers;

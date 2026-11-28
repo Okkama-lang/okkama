@@ -238,8 +238,9 @@ impl Runtime {
     }
 
     /// Bind the embedding's extensions before any function can run.
-    pub fn with_limits(loaded: Loaded, limits: crate::budget::Limits) -> Result<Self, Error> {
+    pub fn with_limits(loaded: Loaded, mut limits: crate::budget::Limits) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        limits.load_extensions()?;
         let mut runtime = Self::assemble(loaded)?;
         if !limits.extensions.is_empty() {
             runtime.external = crate::ext::bind(&runtime.loaded, &limits.extensions, runtime.host.as_mut().expect("native host"))?;

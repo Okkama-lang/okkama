@@ -383,7 +383,7 @@ fn run_native(
             }
         };
     }
-    let (command, _file) = match crate::core::workers_for(&program, &bytes) {
+    let (command, _file) = match crate::core::workers_for(&program, &bytes, &Default::default()) {
         Ok(workers) => workers,
         Err(message) => return Reply::internal(mode, message),
     };

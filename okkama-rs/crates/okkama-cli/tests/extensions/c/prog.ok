@@ -1,0 +1,20 @@
+module prog;
+import "io/stdout" take Stdout;
+
+import "sample" take add, negate, text_copy, bytes_copy, create, read, uppercase;
+
+async main() is int {
+    Stdout().writeln(add(a: 17, b: 29));
+    Stdout().writeln(negate(value: false));
+    Stdout().writeln(text_copy(value: "hello 🐦"));
+    confirm bytes_copy(value: [byte(0), byte(128), byte(255)]) == [byte(0), byte(128), byte(255)];
+    let counter = create(value: 42);
+    Stdout().writeln(read(counter: counter));
+    Stdout().writeln(await uppercase(value: "async bird"));
+    0;
+}
+
+test "C extension" {
+    confirm add(a: 17, b: 29) == 46;
+    confirm text_copy(value: "test") == "test";
+}

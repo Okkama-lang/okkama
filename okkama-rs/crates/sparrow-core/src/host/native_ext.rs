@@ -97,6 +97,7 @@ struct Call<'a> {
     overflow: Vec<Slot>,
     count: usize,
     views: Vec<Vec<u8>>,
+    checked: bool,
     failure: Option<Word>,
     fault: bool,
     stopped: bool,
@@ -106,6 +107,7 @@ struct Call<'a> {
 
 impl Drop for Call<'_> {
     fn drop(&mut self) {
+        self.expire_views();
         // Dynamic shapes describe call-local tokens, never words stored in the VM.
         while self.host.shapes.len() > self.shape_start {
             let shape = self.host.shapes.pop().expect("call shape");
@@ -115,6 +117,15 @@ impl Drop for Call<'_> {
 }
 
 impl Call<'_> {
+    fn expire_views(&mut self) {
+        if self.checked {
+            for view in &mut self.views {
+                for byte in view { unsafe { std::ptr::write_volatile(byte, 0xDD); } }
+            }
+            self.checked = false;
+        }
+    }
+
     fn token(&mut self, slot: Slot, kind: u64) -> Result<okk_slot, u32> {
         self.reserve(2 * std::mem::size_of::<Slot>())?;
         let index = u32::try_from(self.count).map_err(|_| OKK_RANGE)?;
@@ -163,13 +174,15 @@ fn fault(binding: &Binding, reason: impl std::fmt::Display) -> Refusal {
 fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word], result_required: bool,
     callback: impl FnOnce(*mut okk_call, *const okk_slot, *mut okk_slot) -> u32) -> Result<(Word, Repr), Refusal>
 {
+    static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let checked = *CHECKED.get_or_init(|| crate::env_switch::enabled("OKKAMA_EXT_CHECK"));
     let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
     if serial > u64::from(u32::MAX) { return Err(fault(binding, "call token serial exhausted")); }
     let shape_start = host.shapes.len();
     let mut call = Call {
         public: okk_call { host: &HOST }, host, binding, serial,
         inline: [Slot::default(); 8], overflow: Vec::new(), count: 0,
-        views: Vec::new(), failure: None, fault: false, stopped: false, scratch: 0, shape_start,
+        views: Vec::new(), checked, failure: None, fault: false, stopped: false, scratch: 0, shape_start,
     };
     let mut stack = [okk_slot::default(); 8];
     let mut overflow = Vec::new();
@@ -190,6 +203,7 @@ fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word], result_require
     static TRACE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
     let started = TRACE.on().then(std::time::Instant::now);
     let status = callback(context, args.as_ptr(), &mut result);
+    call.expire_views();
     if let Some(started) = started {
         let elapsed = started.elapsed();
         if elapsed > std::time::Duration::from_millis(1) {
@@ -245,8 +259,16 @@ unsafe extern "C" fn text(call: *mut okk_call, value: okk_slot, data: *mut *cons
     unsafe { guarded(call, |call| {
         if output(data).and(output(len)).is_err() { return OKK_BAD_SHAPE; }
         let slot = match call.get(value, OKK_STRING, super::STR) { Ok(s) => s, Err(s) => return s };
-        let view = call.host.core().text(slot.bits);
-        *data = view.as_ptr(); *len = view.len();
+        let length = call.host.core().text(slot.bits).len();
+        if call.checked {
+            if let Err(s) = call.reserve(length.saturating_add(2 * std::mem::size_of::<Vec<u8>>())) { return s; }
+            let view = call.host.core().text(slot.bits).as_bytes().to_vec();
+            *data = view.as_ptr(); *len = view.len();
+            call.views.push(view);
+        } else {
+            let view = call.host.core().text(slot.bits);
+            *data = view.as_ptr(); *len = view.len();
+        }
         OKK_OK
     }) }
 }
@@ -255,9 +277,10 @@ unsafe extern "C" fn bytes(call: *mut okk_call, value: okk_slot, data: *mut *con
     unsafe { guarded(call, |call| {
         if output(data).and(output(len)).is_err() { return OKK_BAD_SHAPE; }
         let slot = match call.byte_slot(value) { Ok(s) => s, Err(s) => return s };
-        if !call.host.core().is_bytes(slot.bits)
+        if (call.checked || !call.host.core().is_bytes(slot.bits))
             && let Err(s) = call.preflight(call.host.core().array_length(slot.bits), 1) { return s; }
         let view = call.host.core().byte_view(slot.bits);
+        let view = if call.checked { Cow::Owned(view.into_owned()) } else { view };
         *len = view.len();
         match view {
             Cow::Borrowed(view) => *data = view.as_ptr(),
@@ -332,4 +355,56 @@ pub(crate) fn start(host: &mut Heap, binding: std::rc::Rc<Binding>, arguments: &
         let _ = (host, arguments);
         Err(Refusal::Failure(crate::runtime::FailureKind::Program(format!("native {} requires the host", binding.symbol))))
     }
+}
+
+#[cfg(test)]
+mod checked_tests {
+    use super::*;
+
+    #[test]
+    fn ext_checked_views_are_copies_poisoned_without_touching_vm_values() {
+        let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(okkama_sparrow::Program::default())).unwrap());
+        let text_word = runtime.heap.allocate_text("bird");
+        let packed = runtime.heap.allocate_bytes(b"bird");
+        let unpacked = runtime.heap.allocate_array(Repr::Raw, &[98, 105, 114, 100]);
+        super::super::with_host(&mut runtime, false, |host| {
+            let Shape::Array(byte) = host.shape(&Type::bytes()) else { unreachable!() };
+            let binding = Binding { symbol: "checked@0::test/0", callback: Callback::Sync(noop), params: Box::new([]),
+                result: Shape::Str, bytes_tag: super::super::ARRAY | ((byte as u64) << 8), states: Box::new([]) };
+            let shape_start = host.shapes.len();
+            for checked in [false, true] {
+                let mut call = Call {
+                    public: okk_call { host: &HOST }, host, binding: &binding, serial: 1,
+                    inline: [Slot::default(); 8], overflow: Vec::new(), count: 0,
+                    views: Vec::new(), checked, failure: None, fault: false, stopped: false, scratch: 0, shape_start,
+                };
+                let context = (&mut call as *mut Call<'_>).cast::<okk_call>();
+                for (word, kind, tag, view_fn) in [
+                    (text_word, OKK_STRING, super::super::STR, text as unsafe extern "C" fn(_, _, _, _) -> _),
+                    (packed, OKK_ARRAY, binding.bytes_tag, bytes),
+                    (unpacked, OKK_ARRAY, binding.bytes_tag, bytes),
+                ] {
+                    let token = call.token(Slot { bits: word, tag }, kind).unwrap();
+                    let mut data = std::ptr::null(); let mut len = 0;
+                    assert_eq!(unsafe { view_fn(context, token, &mut data, &mut len) }, OKK_OK);
+                    assert_eq!(unsafe { std::slice::from_raw_parts(data, len) }, b"bird");
+                    if checked {
+                        assert!(call.views.iter().any(|view| view.as_ptr() == data));
+                        if word == text_word { assert_ne!(data, call.host.core().text(word).as_ptr()); }
+                        if word == packed { assert_ne!(data, call.host.core().bytes(word).as_ptr()); }
+                    }
+                }
+                let mut sign = 0; let mut data = std::ptr::null(); let mut len = 0;
+                assert_eq!(unsafe { bigint_read(context, okk_slot { bits: 12345, kind: OKK_INT }, &mut sign, &mut data, &mut len) }, OKK_OK);
+                call.expire_views();
+                if checked { assert!(call.views.iter().flatten().all(|byte| *byte == 0xDD)); }
+                else { assert_eq!(call.views[0], b"bird"); }
+                assert_eq!(call.host.core().text(text_word), "bird");
+                assert_eq!(&*call.host.core().byte_view(packed), b"bird");
+                assert_eq!(&*call.host.core().byte_view(unpacked), b"bird");
+            }
+        });
+    }
+
+    unsafe extern "C" fn noop(_: *mut okk_call, _: *const okk_slot, _: *mut okk_slot) -> u32 { OKK_OK }
 }

@@ -112,7 +112,7 @@ fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, de
     }
     let symbol = runtime.loaded.program.functions[function].native.clone().unwrap_or_default();
     let Some(native) = okkama_runtime_abi::Native::resolve(&symbol) else {
-        return fail(runtime, FailureKind::Program(crate::natives::missing_native(&symbol)));
+        return fail(runtime, FailureKind::Program(crate::natives::unregistered(runtime, &symbol)));
     };
     if let Err(message) = runtime.limits.permits(native) {
         return fail(runtime, FailureKind::Program(message));

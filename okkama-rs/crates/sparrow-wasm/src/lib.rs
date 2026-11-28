@@ -196,8 +196,12 @@ pub fn requirements(spb: &[u8]) -> String {
     let cldr = natives.reachable.iter().any(|native| native.symbol().starts_with("runtime/cldr@"));
     let files: Vec<&str> =
         if cldr { okkama_runtime_core::native::CLDR_FILES.iter().map(|(_, file)| *file).collect() } else { Vec::new() };
-    let reachable = ProgramNatives::refused(&natives.reachable, &PLAYGROUND);
-    let declared = ProgramNatives::refused(&natives.declared, &PLAYGROUND);
+    let mut reachable = ProgramNatives::refused(&natives.reachable, &PLAYGROUND);
+    reachable.extend(natives.external_reachable.iter().map(String::as_str));
+    reachable.sort_unstable();
+    let mut declared = ProgramNatives::refused(&natives.declared, &PLAYGROUND);
+    declared.extend(natives.external_declared.iter().map(String::as_str));
+    declared.sort_unstable();
     json!({"refused": reachable, "declared": declared, "files": files}).to_string()
 }
 

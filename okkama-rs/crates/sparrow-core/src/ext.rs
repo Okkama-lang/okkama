@@ -1,4 +1,4 @@
-//! Static, trusted extension registration and load-time signature binding.
+//! Trusted extension loading, descriptor validation and signature binding.
 #![allow(unsafe_code)]
 
 use crate::{Error, host, program::Loaded};
@@ -22,6 +22,8 @@ pub struct Extension {
 }
 
 impl Extension {
+    pub(crate) fn same_descriptor(&self, other: &Self) -> bool { Arc::ptr_eq(&self.exports, &other.exports) }
+
     /// Validate a static descriptor without invoking its code.
     ///
     /// # Safety
@@ -41,9 +43,7 @@ impl Extension {
         {
             return Err(Error("extension descriptor has a null table".into()));
         }
-        let exports = if descriptor.export_count == 0 { &[][..] } else {
-            unsafe { std::slice::from_raw_parts(descriptor.exports, descriptor.export_count as usize) }
-        };
+        let exports = unsafe { table(descriptor.exports, descriptor.export_count)? };
         let mut parsed = Vec::with_capacity(exports.len());
         let mut symbols = std::collections::HashSet::new();
         for export in exports {
@@ -77,13 +77,22 @@ impl Extension {
             }
             let callback = match export.sync {
                 Some(sync) => host::native_ext::Callback::Sync(sync),
-                None => host::native_ext::Callback::Async(unsafe { &*export.r#async }),
+                None => {
+                    let callbacks = unsafe { table(export.r#async.cast::<RawAsync>(), 1)? };
+                    let callbacks = &callbacks[0];
+                    if callbacks.prepare.is_none() || callbacks.execute.is_none() || callbacks.complete.is_none() || callbacks.drop.is_none() {
+                        return Err(Error(format!("extension {symbol} has a null async callback")));
+                    }
+                    host::native_ext::Callback::Async(unsafe { &*export.r#async })
+                }
             };
             parsed.push(Export { symbol, text: signature_text, signature, callback });
         }
-        let states = if descriptor.state_count == 0 { &[][..] } else {
-            unsafe { std::slice::from_raw_parts(descriptor.states, descriptor.state_count as usize) }
-        };
+        let raw_states = unsafe { table(descriptor.states.cast::<RawState>(), descriptor.state_count)? };
+        if raw_states.iter().any(|state| state.drop.is_none()) {
+            return Err(Error("extension has a null state drop callback".into()));
+        }
+        let states = unsafe { table(descriptor.states, descriptor.state_count)? };
         let mut names = std::collections::HashSet::new();
         for state in states {
             let name = unsafe { text(state.name)? };
@@ -96,11 +105,86 @@ impl Extension {
     }
 }
 
+// Nullable mirrors let validation inspect C data before forming Rust function pointers.
+#[repr(C)]
+struct RawAsync {
+    prepare: Option<unsafe extern "C" fn(*mut okk_call, *const okk_slot, *mut *mut core::ffi::c_void) -> u32>,
+    execute: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const okk_cancel)>,
+    complete: Option<unsafe extern "C" fn(*mut okk_call, *mut core::ffi::c_void, *mut okk_slot) -> u32>,
+    drop: Option<unsafe extern "C" fn(*mut core::ffi::c_void)>,
+}
+#[repr(C)]
+struct RawState {
+    name: *const core::ffi::c_char,
+    drop: Option<unsafe extern "C" fn(*mut core::ffi::c_void)>,
+}
+
+unsafe fn table<T>(pointer: *const T, len: u32) -> Result<&'static [T], Error> {
+    if len == 0 { return Ok(&[]); }
+    if pointer.is_null() || !pointer.is_aligned() || len as usize > isize::MAX as usize / std::mem::size_of::<T>() {
+        return Err(Error("extension descriptor has an invalid table".into()));
+    }
+    Ok(unsafe { std::slice::from_raw_parts(pointer, len as usize) })
+}
+
 unsafe fn text(pointer: *const core::ffi::c_char) -> Result<&'static str, Error> {
     if pointer.is_null() {
         return Err(Error("extension descriptor has a null string".into()));
     }
     unsafe { CStr::from_ptr(pointer) }.to_str().map_err(|_| Error("extension descriptor has invalid UTF-8".into()))
+}
+
+/// Load trusted process code. Libraries and descriptor pointers live until process exit.
+/// Bytecode never supplies this path; loading can run the library's OS constructors.
+pub fn load(path: impl AsRef<std::path::Path>) -> Result<Extension, Error> {
+    #[cfg(all(unix, feature = "host"))]
+    { loader::load(path.as_ref()) }
+    #[cfg(not(all(unix, feature = "host")))]
+    { Err(Error(format!("{}: native extensions are not supported on this platform", path.as_ref().display()))) }
+}
+
+#[cfg(all(unix, feature = "host"))]
+mod loader {
+    use super::*;
+    use std::{ffi::CString, os::unix::ffi::OsStrExt, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
+
+    pub(super) fn load(path: &Path) -> Result<Extension, Error> {
+        let error = |reason| Error(format!("native extension {}: {reason}", path.display()));
+        let canonical = path.canonicalize().map_err(|e| error(format!("cannot resolve path: {e}")))?;
+        // Serialise validation too, so every runtime gets the same descriptor and state identities.
+        static CACHE: OnceLock<Mutex<HashMap<PathBuf, Result<Extension, String>>>> = OnceLock::new();
+        let mut cache = CACHE.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
+        cache.entry(canonical.clone()).or_insert_with(|| unsafe { open(&canonical) })
+            .clone().map_err(error)
+    }
+
+    unsafe fn open(path: &Path) -> Result<Extension, String> {
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| "path contains NUL".to_owned())?;
+        unsafe {
+            let library = libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            if library.is_null() { return Err(dlerror()); }
+            // Never dlclose, including refused descriptors: constructors may have retained pointers.
+            libc::dlerror();
+            let descriptor = libc::dlsym(library, c"okkama_extension".as_ptr());
+            let failure = libc::dlerror();
+            if !failure.is_null() { return Err(CStr::from_ptr(failure).to_string_lossy().into_owned()); }
+            if descriptor.is_null() { return Err("missing okkama_extension descriptor".into()); }
+            let descriptor = descriptor.cast::<okk_extension>();
+            if !descriptor.is_aligned() { return Err("unaligned extension descriptor".into()); }
+            // Read the common prefix before forming a reference to the complete ABI-1 descriptor.
+            let prefix = descriptor.cast::<u32>();
+            if prefix.read() != OKKAMA_EXT_ABI || prefix.add(1).read() as usize != std::mem::size_of::<okk_extension>() {
+                return Err("extension ABI or descriptor size does not match".into());
+            }
+            Extension::from_static(&*descriptor).map_err(|e| e.0)
+        }
+    }
+
+    unsafe fn dlerror() -> String {
+        let pointer = unsafe { libc::dlerror() };
+        if pointer.is_null() { "dynamic loader failed without a diagnostic".into() }
+        else { unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned() }
+    }
 }
 
 pub(crate) fn bind(loaded: &Loaded, extensions: &[Extension], host: &mut host::Heap)

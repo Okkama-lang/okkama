@@ -1,0 +1,11 @@
+module sample;
+
+native add(a is int, b is int) is int;
+native negate(value is bool) is bool;
+native text_copy(value is string) is string;
+native bytes_copy(value is @byte) is @byte;
+native object Counter;
+native create(value is int) is Counter;
+native read(counter is Counter) is int;
+native release(counter is Counter) is void;
+native async uppercase(value is string) is string;

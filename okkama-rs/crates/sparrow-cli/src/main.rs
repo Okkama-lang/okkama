@@ -45,6 +45,9 @@ run          Verify and execute bytecode; ARGS are the program's arguments.
                --max-memory SIZE  stop when the run holds more than SIZE bytes (K/M/G)
                --max-output SIZE  stop when stdout and stderr exceed SIZE bytes
                --timeout SECONDS  interrupt the run after SECONDS of wall-clock time
+             Native extensions (run and test):
+               --ext PATH         load a trusted native library (repeatable)
+               --no-native        disable native extensions, including every --ext
 test         Run the tests of bytecode built with `okkama build -t`
              (`sparrow --test FILE.spb` is the same).
 check        Verify bytecode (types, calls, intrinsic contracts) without
@@ -87,10 +90,13 @@ fn write(path: &str, bytes: &[u8]) -> Result<u8, Failure> {
 }
 
 /// Process workers run the same file in `sparrow --worker FILE.spb`.
-fn worker_command(path: &Path) -> Vec<std::ffi::OsString> {
+fn worker_command(path: &Path, limits: &sparrow_core::budget::Limits) -> Vec<std::ffi::OsString> {
     let exe = std::env::current_exe().unwrap_or_else(|_| "sparrow".into());
     let file = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    vec![exe.into_os_string(), file.into_os_string()]
+    let mut command = vec![exe.into_os_string()];
+    command.extend(limits.extension_options());
+    command.push(file.into_os_string());
+    command
 }
 
 /// An uncaught failure is the program's report; it ends with a newline.
@@ -131,7 +137,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
     let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     let options = sparrow_core::ExecutionOptions { stats, trace, on_verified, ..Default::default() };
-    let result = sparrow_core::run_executable(bytes, arguments, worker_command(path), limits, options);
+    let result = sparrow_core::run_executable(bytes, arguments, worker_command(path, &limits), limits, options);
     let _ = sparrow_core::stdout::flush();
     match result {
         Ok(sparrow_core::Execution::Main(Ok(code))) => outcome(Ok(code)),
@@ -146,9 +152,9 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
     }
 }
 
-fn test(path: &Path) -> Result<u8, Failure> {
+fn test(path: &Path, limits: sparrow_core::budget::Limits) -> Result<u8, Failure> {
     let bytes = read(path)?;
-    match sparrow_core::run_executable(bytes, Vec::new(), worker_command(path), Default::default(),
+    match sparrow_core::run_executable(bytes, Vec::new(), worker_command(path, &limits), limits,
         sparrow_core::ExecutionOptions { tests: Some(Box::new(sparrow_core::stdout::Buffered)), ..Default::default() }) {
         Ok(sparrow_core::Execution::Tests(passed)) => Ok(u8::from(!passed)),
         Ok(_) => Err((1, "module has no tests".into())),
@@ -158,9 +164,9 @@ fn test(path: &Path) -> Result<u8, Failure> {
 
 /// The child side of a process worker: the request on stdin, the response
 /// on stdout; it never runs main.
-fn answer(path: &Path) -> Result<u8, Failure> {
+fn answer(path: &Path, limits: sparrow_core::budget::Limits) -> Result<u8, Failure> {
     let (bytes, _) = load(path)?;
-    sparrow_core::serve_worker(bytes, worker_command(path)).map_err(|e| (1, e.0))?;
+    sparrow_core::serve_worker_limited(bytes, worker_command(path, &limits), limits).map_err(|e| (1, e.0))?;
     Ok(0)
 }
 
@@ -176,8 +182,32 @@ fn capabilities() -> u8 {
     0
 }
 
+fn runtime_options(mut args: &[String]) -> Result<(&[String], sparrow_core::budget::Limits, bool), Failure> {
+    let mut limits = sparrow_core::budget::Limits::default();
+    let mut stats = false;
+    while let Some((flag, rest)) = args.split_first() {
+        match flag.as_str() {
+            "--stats" => { stats = true; args = rest; }
+            // Compatibility with the previous VM; Sparrow always compiles.
+            "--cold" => args = rest,
+            "--no-native" => { limits.no_native = true; args = rest; }
+            "--ext" | "--max-steps" | "--max-memory" | "--max-output" | "--timeout" => {
+                let Some((value, rest)) = rest.split_first() else { return Err((2, format!("{flag} needs a value"))); };
+                limits.option(flag, value).map_err(|e| (2, e))?;
+                args = rest;
+            }
+            _ => break,
+        }
+    }
+    Ok((args, limits, stats))
+}
+
 fn run() -> Result<u8, Failure> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--test") { args[0] = "test".into(); }
+    if args.first().is_some_and(|a| matches!(a.as_str(), "--ext" | "--no-native" | "--stats" | "--cold") || a.starts_with("--max-") || a == "--timeout") {
+        args.insert(0, "run".into());
+    }
     let usage = || (2, help());
     let worker = args.first().is_some_and(|a| a == "--worker");
     if crate::env_switch::enabled("SPARROW_INTERNAL_WORKER") && !worker {
@@ -196,10 +226,13 @@ fn run() -> Result<u8, Failure> {
             Ok(0)
         }
         "--native-capabilities" if rest.is_empty() => Ok(capabilities()),
-        "--worker" => match rest {
-            [path] => answer(Path::new(path)),
-            _ => Err(usage()),
-        },
+        "--worker" => {
+            let (rest, limits, _) = runtime_options(rest)?;
+            match rest {
+                [path] => answer(Path::new(path), limits),
+                _ => Err(usage()),
+            }
+        }
         "--assemble" => {
             let [input, flag, output] = rest else {
                 return Err(usage());
@@ -227,25 +260,9 @@ fn run() -> Result<u8, Failure> {
                 }
             }
         }
-        "--test" => match rest {
-            [path] => test(Path::new(path)),
-            _ => Err(usage()),
-        },
         "run" | "check" | "test" => {
-            let mut stats = false;
-            let mut limits = sparrow_core::budget::Limits::default();
-            let mut rest = rest;
-            // Options belong to `run` only.
-            while let ("run", [flag, tail @ ..]) = (first.as_str(), rest) {
-                match (flag.as_str(), tail) {
-                    ("--stats", _) => {
-                        stats = true;
-                        rest = tail;
-                    }
-                    (_, [value, tail @ ..]) if limits.option(flag, value).map_err(|e| (2, e))? => rest = tail,
-                    _ => break,
-                }
-            }
+            let (rest, limits, stats) = if first == "check" { (rest, Default::default(), false) }
+                else { runtime_options(rest)? };
             let Some((path, arguments)) = rest.split_first() else {
                 return Err(usage());
             };
@@ -258,20 +275,11 @@ fn run() -> Result<u8, Failure> {
                     let bytes = read(Path::new(path))?;
                     sparrow_core::check(&bytes).map(|()| 0).map_err(|e| (1, e.0))
                 }
-                "test" if arguments.is_empty() => test(Path::new(path)),
+                "test" if arguments.is_empty() => test(Path::new(path), limits),
                 "run" => execute(Path::new(path), arguments, stats, limits),
                 _ => Err(usage()),
             }
         }
-        "--stats" => match rest.split_first() {
-            Some((path, arguments)) => execute(Path::new(path), arguments, true, Default::default()),
-            None => Err(usage()),
-        },
-        // `--cold` was a switch of the previous VM; the core always compiles.
-        "--cold" => match rest.split_first() {
-            Some((path, arguments)) => execute(Path::new(path), arguments, false, Default::default()),
-            None => Err(usage()),
-        },
         option if option.starts_with('-') => Err((2, format!("unknown option `{option}`\n{}", help()))),
         path => {
             if !Path::new(path).exists() && !path.ends_with(".spb") {

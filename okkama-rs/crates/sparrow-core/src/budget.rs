@@ -33,8 +33,12 @@ pub const SLICE: u64 = 1 << 16;
 /// Budgets of one run; `None` is unbounded.
 #[derive(Debug, Clone, Default)]
 pub struct Limits {
-    /// Trusted static extension descriptors, supplied only by the embedding.
+    /// Validated extension descriptors, supplied only by the host.
     pub extensions: Vec<crate::ext::Extension>,
+    /// Explicit host paths, loaded only after every command-line option is parsed.
+    pub extension_paths: Vec<std::path::PathBuf>,
+    /// Suppress both dynamic and static native extensions.
+    pub no_native: bool,
     /// Function entries and loop back-edges.
     pub steps: Option<u64>,
     /// Allocator bytes beyond the start of the run, or the runtime's own
@@ -297,13 +301,41 @@ impl Limits {
         self.interrupt.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed))
     }
 
+    /// Resolve explicit extensions after switches and embedding restrictions are known.
+    pub(crate) fn load_extensions(&mut self) -> Result<(), crate::Error> {
+        if self.no_native {
+            self.extensions.clear();
+        } else if self.natives.is_none() && self.profile.is_none() {
+            for path in &self.extension_paths {
+                let extension = crate::ext::load(path)?;
+                if !self.extensions.iter().any(|old| old.same_descriptor(&extension)) {
+                    self.extensions.push(extension);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Native switches for a child runtime; paths stay valid after a program changes directory.
+    pub fn extension_options(&self) -> Vec<std::ffi::OsString> {
+        if self.no_native || self.natives.is_some() || self.profile.is_some() {
+            return vec!["--no-native".into()];
+        }
+        self.extension_paths.iter().flat_map(|path| {
+            let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            ["--ext".into(), path.into_os_string()]
+        }).collect()
+    }
+
     /// Apply a command-line budget option: `--max-steps N`, `--max-memory
     /// SIZE`, `--max-output SIZE` (bytes, or with a K/M/G suffix of 1024s) or
     /// `--timeout SECONDS` (wall clock; interrupts the run). Ok(false) when
-    /// `option` is not one of them.
+    /// `option` is not one of them. `--ext PATH` records a library; `--no-native` ignores `value`.
     pub fn option(&mut self, option: &str, value: &str) -> Result<bool, String> {
         let invalid = || format!("invalid value `{value}` for {option}");
         match option {
+            "--ext" => self.extension_paths.push(value.into()),
+            "--no-native" => self.no_native = true,
             "--max-steps" => self.steps = Some(value.parse().map_err(|_| invalid())?),
             "--max-memory" => self.memory = Some(size(value).ok_or_else(invalid)?),
             "--max-output" => self.output = Some(size(value).ok_or_else(invalid)?),
@@ -330,6 +362,8 @@ pub const OPTIONS_HELP: &str = "\
     --max-memory SIZE  stop when the run holds more than SIZE bytes (K/M/G suffixes)
     --max-output SIZE  stop when stdout and stderr exceed SIZE bytes
     --timeout SECONDS  interrupt the run after SECONDS of wall-clock time
+    --ext PATH         load a trusted native library (repeatable)
+    --no-native        disable native extensions, including every --ext
 ";
 
 /// Bytes with an optional K, M or G suffix (powers of 1024).

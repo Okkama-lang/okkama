@@ -45,6 +45,9 @@ The value of a trailing expression is dumped; variables live on between inputs.
     :help     this text
     :quit     leave (also Ctrl-D)
 
+Native extensions: --ext PATH loads a trusted library (repeatable);
+--no-native disables native extensions, including every --ext.
+
 On a terminal: arrows move the cursor and walk the history (~/.okkama_history),
 Ctrl-R searches it. Actions (closures) and futures are not kept between inputs.
 ";
@@ -68,6 +71,7 @@ struct Var {
 
 #[derive(Default)]
 struct Session {
+    limits: sparrow_core::budget::Limits,
     imports: Vec<String>,
     decls: Vec<String>,
     vars: Vec<Var>,
@@ -124,11 +128,24 @@ impl Input {
 /// `sparrow_core::STACK_BYTES` as its stack limit, so the thread must really
 /// have it; on the 8 MiB main thread deep recursion killed the process
 /// instead of failing with "Stack overflow".
-pub(crate) fn run() -> ExitCode {
+pub(crate) fn run(args: &[String]) -> ExitCode {
+    let mut limits = sparrow_core::budget::Limits::default();
+    let mut args = args;
+    while let Some((option, rest)) = args.split_first() {
+        match option.as_str() {
+            "--help" | "-h" => { print!("{}", help()); return ExitCode::SUCCESS; }
+            "--no-native" => { limits.no_native = true; args = rest; }
+            "--ext" if !rest.is_empty() => {
+                limits.extension_paths.push(rest[0].clone().into());
+                args = &rest[1..];
+            }
+            _ => { eprintln!("okkama repl: expected --ext PATH or --no-native"); return ExitCode::from(2); }
+        }
+    }
     let thread = std::thread::Builder::new()
         .name("okkama-repl".into())
         .stack_size(sparrow_core::STACK_BYTES as usize)
-        .spawn(repl);
+        .spawn(move || repl(limits));
     match thread.map(std::thread::JoinHandle::join) {
         Ok(Ok(code)) => code,
         Ok(Err(_)) => ExitCode::from(70),
@@ -139,7 +156,7 @@ pub(crate) fn run() -> ExitCode {
     }
 }
 
-fn repl() -> ExitCode {
+fn repl(limits: sparrow_core::budget::Limits) -> ExitCode {
     if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none()
         && let Some(icu) = pinned_icu()
     {
@@ -160,7 +177,7 @@ fn repl() -> ExitCode {
     } else {
         Input::Pipe(io::stdin())
     };
-    let mut session = Session::default();
+    let mut session = Session { limits, ..Session::default() };
     let mut text = String::new();
     loop {
         let prompt = if text.is_empty() { "okkama> " } else { "   ...> " };
@@ -218,7 +235,7 @@ impl Session {
             }
             ":reset" => {
                 self.close();
-                *self = Self::default();
+                *self = Self { limits: self.limits.clone(), ..Self::default() };
             }
             other => eprintln!("unknown command `{other}` (:help lists commands)"),
         }
@@ -309,7 +326,7 @@ impl Session {
                 runtime.extend(merged).map_err(|error| format!("okkama: {}; :reset starts a fresh session\n", error.0))?;
             }
             None => {
-                let runtime = Runtime::session(Loaded::verified(fresh).map_err(|error| format!("okkama: {}\n", error.0))?, CAPACITIES).map_err(|error| format!("okkama: {}\n", error.0))?;
+                let runtime = Runtime::session_with_limits(Loaded::verified(fresh).map_err(|error| format!("okkama: {}\n", error.0))?, CAPACITIES, self.limits.clone()).map_err(|error| format!("okkama: {}\n", error.0))?;
                 self.runtime = Some(Box::new(runtime));
             }
         }
@@ -371,6 +388,17 @@ impl Session {
         let args: Vec<Word> = std::iter::once(sparrow_core::word::UNBOUND)
             .chain(carried.iter().map(|index| self.vars[*index].value))
             .collect();
+        let bytes = if crate::core::spawns_workers(&runtime.loaded.program) {
+            match okkama_sparrow::encode(&runtime.loaded.program) {
+                Ok(bytes) => bytes,
+                Err(error) => { eprintln!("okkama: {error}"); return; }
+            }
+        } else { Vec::new() };
+        let (command, _worker_file) = match crate::core::workers_for(&runtime.loaded.program, &bytes, &runtime.limits) {
+            Ok(workers) => workers,
+            Err(error) => { eprintln!("okkama: {error}"); return; }
+        };
+        runtime.worker_command = command;
         flush();
         let result = runtime.run_function_with(entry, &args, sparrow_core::STACK_BYTES);
         flush();

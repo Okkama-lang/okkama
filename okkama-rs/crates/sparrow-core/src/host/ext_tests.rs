@@ -601,3 +601,85 @@ fn ext_fuzz_seeds() {
         }
     }
 }
+
+#[test]
+fn ext_load_characterization_descriptor_validation() {
+    let refuses = |descriptor: okk_extension, message: &str| {
+        let error = unsafe { Extension::from_static(Box::leak(Box::new(descriptor))) }.unwrap_err();
+        assert!(error.0.contains(message), "{}", error.0);
+    };
+    refuses(okk_extension { abi: OKKAMA_EXT_ABI + 1, ..DESCRIPTOR }, "ABI");
+    refuses(okk_extension { size: 0, ..DESCRIPTOR }, "size");
+    refuses(okk_extension { name: ptr::null(), ..DESCRIPTOR }, "null string");
+    refuses(okk_extension { name: c"\xff".as_ptr(), ..DESCRIPTOR }, "UTF-8");
+    refuses(okk_extension { exports: ptr::null(), ..DESCRIPTOR }, "null table");
+    for (symbol, signature, message) in [
+        (c"bad", c"() -> int", "invalid extension symbol"),
+        (c"example@0::f/1", c"() -> int", "invalid extension symbol"),
+        (c"example@0::f/0", c"nonsense", "signature"),
+        (c"example@0::f/0", c"async () -> int", "async callback"),
+    ] {
+        let export = Box::leak(Box::new(okk_export { symbol: symbol.as_ptr(), signature: signature.as_ptr(),
+            params: c"".as_ptr(), sync: Some(echo), r#async: ptr::null() }));
+        refuses(okk_extension { exports: export, export_count: 1, ..DESCRIPTOR }, message);
+    }
+}
+
+#[test]
+fn ext_load_restrictions_skip_paths_and_preserve_refusal_texts() {
+    let missing = std::path::PathBuf::from("/nonexistent-extension-1083.so");
+    for (mut policy, message) in [
+        (Limits { natives: Some(vec![]), ..Limits::default() }, "is in no native group"),
+        (Limits::playground(), "is not available in the playground"),
+        (Limits { no_native: true, ..limits() }, "is not registered"),
+    ] {
+        policy.extension_paths.push(missing.clone());
+        let mut r = Box::new(Runtime::with_limits(Loaded::new(program("example/native@0::sum/2")), policy).unwrap());
+        let error = r.run_entry(1 << 24).unwrap_err();
+        assert!(error.0.contains(message), "{}", error.0);
+    }
+}
+
+#[test]
+fn ext_load_playground_lists_external_symbols_before_running() {
+    let bytes = okkama_sparrow::encode(&program("example/native@0::sum/2")).unwrap();
+    let natives = crate::program_natives(&bytes).unwrap();
+    assert_eq!(natives.external_declared, ["example/native@0::sum/2"]);
+    assert_eq!(natives.external_reachable, natives.external_declared);
+    assert_eq!(crate::refused_natives(&bytes, &crate::budget::PLAYGROUND).unwrap(), ["example/native@0::sum/2"]);
+}
+
+#[test]
+fn ext_load_worker_options_keep_paths_and_disable_switch() {
+    let mut limits = Limits::default();
+    assert!(limits.option("--ext", "first.so").unwrap());
+    assert!(limits.option("--ext", "second.so").unwrap());
+    assert_eq!(limits.extension_options(), ["--ext", "first.so", "--ext", "second.so"].map(std::ffi::OsString::from));
+    limits.option("--no-native", "").unwrap();
+    assert_eq!(limits.extension_options(), [std::ffi::OsString::from("--no-native")]);
+    limits.no_native = false;
+    limits.natives = Some(vec![]);
+    assert_eq!(limits.extension_options(), [std::ffi::OsString::from("--no-native")]);
+}
+
+#[cfg(feature = "host")]
+#[test]
+fn ext_load_worker_runtime_receives_registry_and_disable_switch() {
+    let bytes = okkama_sparrow::encode(&program("example/native@0::sum/2")).unwrap();
+    let mut request = Vec::new();
+    crate::worker_wire::text(&mut request, env!("CARGO_MANIFEST_DIR")).unwrap();
+    crate::worker_wire::text(&mut request, "main").unwrap();
+    crate::worker_wire::count(&mut request, 0).unwrap();
+    let response = crate::run_worker_limited(bytes.clone(), request.clone(), vec![], limits()).unwrap();
+    assert_eq!(&response[..12], b"OKW2\x01\x01\x00\x00\x00\x0246");
+    let response = crate::run_worker_limited(bytes, request, vec![], Limits { no_native: true, ..limits() }).unwrap();
+    assert_eq!(&response[..5], b"OKW2\x00");
+    assert!(String::from_utf8_lossy(&response[9..]).contains("is not registered"));
+}
+
+#[cfg(not(all(unix, feature = "host")))]
+#[test]
+fn ext_load_without_native_platform_is_an_explicit_refusal() {
+    let error = crate::ext::load("extension.so").unwrap_err();
+    assert!(error.0.contains("native extensions are not supported on this platform"));
+}

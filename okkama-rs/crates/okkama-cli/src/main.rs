@@ -157,6 +157,10 @@ RUN OPTIONS:
     --test-timeout SECS   With --workers: stop a test's process after SECS
                           seconds (monotonic, above 0, at most 86400) and
                           report it as timed out
+    Native extensions:
+    --ext PATH            Load a trusted native library (repeatable).
+    --no-native           Disable native extensions, including every --ext.
+
     --max-steps N         Stop after N steps: function entries and loop
                           iterations (off by default)
     --max-memory SIZE     Stop when the run holds more than SIZE bytes
@@ -275,6 +279,9 @@ USAGE:
 BUDGETS (off by default): --max-steps N, --max-memory SIZE, --max-output SIZE,
 --timeout SECONDS (see `okkama help run`); running out exits 1.
 
+Native extensions: --ext PATH loads a trusted native library (repeatable);
+--no-native disables native extensions, including every --ext.
+
 Loads and verifies an SPB file, then executes it in the Rust process with
 ARGS as the program's arguments; a test-profile file (`build -t`) runs its
 tests. Source files are not required. main must return an integer
@@ -286,9 +293,12 @@ and read errors with 3.
 fn sparrow_exec_command(args: &[String]) -> Outcome {
     let mut limits = sparrow_core::budget::Limits::default();
     let mut args = args;
-    while let [option, value, rest @ ..] = args {
+    while let [option, rest @ ..] = args {
+        let takes_value = option != "--no-native";
+        let value = rest.first().map(String::as_str).unwrap_or("");
+        if option == "--ext" && value.is_empty() { return Outcome::usage("--ext needs a path"); }
         match limits.option(option, value) {
-            Ok(true) => args = rest,
+            Ok(true) => args = &rest[usize::from(takes_value)..],
             Ok(false) => break,
             Err(message) => return Outcome::usage(&message),
         }
@@ -319,7 +329,7 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
     let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     match sparrow_core::run_executable(
-        bytes, arguments, core::worker_command(Path::new(path)), limits,
+        bytes, arguments, core::worker_command(Path::new(path), &limits), limits,
         sparrow_core::ExecutionOptions {
             tests: Some(Box::new(okkama_runtime_core::stdout::Buffered)), trace, ..Default::default()
         },
@@ -477,8 +487,8 @@ fn main() -> ExitCode {
         return lsp::run();
     }
     // The REPL reads stdin and writes as it goes.
-    if args.len() == 1 && args[0] == "repl" {
-        return repl::run();
+    if args.first().is_some_and(|a| a == "repl") {
+        return repl::run(&args[1..]);
     }
     let outcome = run(&args);
     // The program's buffered output goes before the command's own and before
@@ -1423,7 +1433,11 @@ fn run_command(args: &[String]) -> Outcome {
                 rest = &rest[1..];
                 break;
             }
-            budget if budget.starts_with("--max-") || budget == "--timeout" => {
+            "--no-native" => {
+                limits.no_native = true;
+                budgets.push(first.clone());
+            }
+            budget if budget.starts_with("--max-") || budget == "--timeout" || budget == "--ext" => {
                 let Some(value) = rest.get(1) else {
                     return Outcome::usage(&format!("{budget} needs a value"));
                 };
@@ -1598,7 +1612,7 @@ fn run_command(args: &[String]) -> Outcome {
     // Tests may start process workers (`parallel/map`, `spawn`): they need
     // the command that runs this bytecode, kept on disk while they run.
     let (workers, _worker_file) = if tests {
-        match core::workers_for(&program, &bytes) {
+        match core::workers_for(&program, &bytes, &limits) {
             Ok(workers) => workers,
             Err(message) => return unrun(Outcome::failure(format!("okkama: {message}\n"), EXIT_IO)),
         }
@@ -1634,7 +1648,7 @@ fn run_command(args: &[String]) -> Outcome {
         }
         return outcome;
     }
-    let (command, _file) = match core::workers_for(&program, &bytes) {
+    let (command, _file) = match core::workers_for(&program, &bytes, &limits) {
         Ok(workers) => workers,
         Err(message) => return Outcome::failure(format!("okkama: {message}\n"), EXIT_IO),
     };
