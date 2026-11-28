@@ -123,6 +123,9 @@ GETTEXT_TEST_MO = b'\xde\x12\x04\x95\x00\x00\x00\x00\x03\x00\x00\x00\x1c\x00\x00
 
 
 def contribution(name, i):
+    if name in ("ext-scalar", "ext-async"): return i % 251 + 1
+    if name == "ext-bytes": return i % 64
+    if name == "ext-state": return i % 251
     if name in LAST244_ORACLES:
         return LAST244_ORACLES[name](i)
     if name in TAIL244_ORACLES:

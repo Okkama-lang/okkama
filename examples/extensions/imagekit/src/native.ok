@@ -1,0 +1,16 @@
+module imagekit/native;
+
+// Opaque shared image storage; Picture owns its release.
+native object Image;
+// Decodes PNG bytes on the blocking pool; bad_format on invalid data.
+native async decode(bytes is @byte) is Image;
+// Fits inside width by height, preserving aspect ratio; bad_size outside 1..4096.
+native async resize(image is Image, width is int, height is int) is Image;
+// Encodes a PNG on the blocking pool; encode_failed on failure.
+native async encode(image is Image) is @byte;
+// Pixel width.
+native width(image is Image) is int;
+// Pixel height.
+native height(image is Image) is int;
+// Releases the host reference; active jobs retain their own references.
+native release(image is Image) is void;

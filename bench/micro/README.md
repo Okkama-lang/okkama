@@ -1,6 +1,6 @@
 # Micro-benchmarks (protocol v2)
 
-The suite contains **64 language programs** and **709 std/builtin programs**.
+The suite contains **68 language programs** and **709 std/builtin programs**.
 `manifest.json` is the machine-readable inventory. `coverage.py` reports declared
 measurement targets, not incidental imports or whole-module API coverage.
 
@@ -295,3 +295,38 @@ The historical review reports are not included in this repository.
 File fixtures create private temporary directories in the writable current working
 directory: the program directory under `check.py`, or `/work` under `run.py`.
 They remove the directories on destruction.
+
+## Native extension cells (#1083)
+
+`ext-scalar` calls an i64 successor; `ext-bytes` copies a 64-byte fixture and
+reads one indexed byte; `ext-state` creates, reads and explicitly releases a Box
+state; `ext-async` awaits one trivial blocking-pool job. All use the same harness,
+observable checksums and independent `oracles.py` formulas. These are composite
+iterations, including loop/checksum work. The async cell measures scheduling and
+publication as well as the callback, and needs a much smaller N than scalar.
+
+The standalone Rust crate `extension/` uses the local SDK and its own lock.
+`check.py` builds it once with `cargo build --offline --locked -j 4` when any of
+these cells is selected, under `$CARGO_TARGET_DIR/micro-ext` (default:
+`okkama-rs/target/micro-ext`); `--ext-library /absolute/path` reuses a prebuilt
+library. Only extension cells receive `--ext`; the other cells are unchanged.
+They run only when named with `--only` (a release baseline cannot load
+extensions, so the default campaign leaves them out).
+
+For a timed Linux campaign, build the crate for the same platform as the frozen
+toolchain and put `libokkama_micro_ext.so` inside its mounted installation. Pass
+`run.py --ext-library /toolchain/lib/libokkama_micro_ext.so`. The runner records
+its SHA-256 and includes the extension source and lock in suite provenance;
+it never builds inside a timed invocation. The four cells require Sparrow.
+Missing dependencies or a missing library are failures, not timing samples.
+
+One quick host smoke (not a release measurement), after building the extension:
+
+```sh
+OKKAMA_STDLIB_DIR="$PWD/std" okkama run --ext "$CARGO_TARGET_DIR/micro-ext/debug/libokkama_micro_ext.so" \
+  bench/micro/lang/ext-scalar.ok 17 3
+```
+
+Use `.dylib` on macOS and substitute `ext-bytes`, `ext-state`, `ext-async` for the
+other cells. Correctness runs can select all four with
+`check.py --only ext-scalar,ext-bytes,ext-state,ext-async --okkama BIN --cage`.

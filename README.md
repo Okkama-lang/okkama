@@ -545,6 +545,7 @@ Sparrow runs them in 8–25 MB, Go in 4–13 MB, Java in 44–209 MB and Kotlin 
 | 📕 [Библия Okkama (RU)](docs/OkkamaBible/OkkamaBible-RU.pdf) ([Markdown](docs/OkkamaBible/OkkamaBible-RU.md)) | The Bible in Russian |
 | 🐦 [The Sparrow Book](docs/SparrowBook/SparrowBook.md) | Sparrow assembly (`.spa`) and SPB: every instruction, the verifier, how Sparrow runs it |
 | 🐦 [Книга Sparrow (RU)](docs/SparrowBook/SparrowBook-RU.md) | The Sparrow book in Russian |
+| 🔌 [Native extensions](docs/extensions.md) | C ABI, Rust SDK, async states and Blade packaging |
 | 🛡️ [Trust model](docs/security-model.md) | Which input is safe to compile, verify and run today, per boundary, with the open issues |
 | 🤖 [Guide for LLM agents](docs/LLM-GUIDE.md) | Working on this repository: layout, build, tests, benchmarks, architecture |
 | 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1051 cases with expected observations |

@@ -1,0 +1,17 @@
+[package]
+name = "imagekit-native"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+okkama-ext = { path = "../../../../okkama-rs/crates/okkama-ext" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[workspace]
+
+[patch.crates-io]
+num-bigint = { path = "../../../../okkama-rs/vendor/num-bigint" }

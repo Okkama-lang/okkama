@@ -1,0 +1,8 @@
+module micro_ext;
+native scalar(value is int) is int;
+native bytes(value is @byte) is @byte;
+native object Counter;
+native create(value is int) is Counter;
+native read(counter is Counter) is int;
+native release(counter is Counter) is void;
+native async asynchronous(value is int) is int;

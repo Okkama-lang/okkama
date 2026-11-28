@@ -1,0 +1,43 @@
+module thumbs;
+
+import "pkg/imagekit/src/image" take Png;
+import "async/scope" take FutureGroup;
+import "cli/arguments" take ProcessArguments;
+import "digest/sha2" take Sha256;
+import "fs/directory" take Directory, DirectoryEntries;
+import "fs/file" take File, FileMode;
+import "fs/path" take Path;
+import "fs/stat" take FileKind;
+import "io/stdout" take Stdout;
+
+// One PNG, independently decoded, resized and written.
+object Thumbnail {
+    has source, destination is Path;
+    Thumbnail(:source, :destination);
+    async run() is string {
+        let picture = await Png(bytes: File(source).binary().bytes()).picture();
+        let small = await picture.resized(width: 8, height: 8);
+        let bytes = await small.png();
+        File(destination, FileMode.writing).binary().write(bytes);
+        source.name() + " " + small.width().string() + "x" + small.height().string() + " " + Sha256(bytes).hex();
+    }
+}
+
+// Runs all PNG jobs together; prints in the directory snapshot's filename order.
+async main() is int {
+    let args = ProcessArguments().strings();
+    let input = if args.size() > 0 { args[0]; } else { "input"; };
+    let output = if args.size() > 1 { args[1]; } else { "output"; };
+    Directory(Path(output)).create(parents: true);
+    let group is FutureGroup<string> = FutureGroup();
+    let jobs = DirectoryEntries(Directory(Path(input))).filter() -> entry {
+        entry.kind() == FileKind.file && entry.path().extension() == "png";
+    }.map() -> entry {
+        let job = Thumbnail(source: entry.path(), destination: Path(output, entry.path().name())).run();
+        group.start(job);
+        job;
+    };
+    await group.wait();
+    for jobs -> job { Stdout().writeln(await job); }
+    0;
+}

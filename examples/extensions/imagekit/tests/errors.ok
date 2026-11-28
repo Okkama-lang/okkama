@@ -1,0 +1,27 @@
+module imagekit/errors;
+import "../src/image" take Png, ImageError;
+import "cli/arguments" take ProcessArguments;
+import "fs/file" take File;
+import "fs/path" take Path;
+
+async main() is int {
+    let invalid = try {
+        await Png(bytes: [byte(0)]).picture();
+        false;
+    } catch ImageError.bad_format(message) { message.length() > 0; };
+    confirm invalid;
+    let path = ProcessArguments().strings()[0];
+    let picture = await Png(bytes: File(Path(path)).binary().bytes()).picture();
+    for [0, -1, 4097] -> width {
+        let refused = try {
+            await picture.resized(width: width, height: 8);
+            false;
+        } catch ImageError.bad_size(message) { message.length() > 0; };
+        confirm refused;
+    }
+    let small = await picture.resized(width: 8, height: 8);
+    confirm small.width() == 8 && small.height() == 5;
+    let roundtrip = await Png(bytes: await small.png()).picture();
+    confirm roundtrip.width() == 8 && roundtrip.height() == 5;
+    0;
+}

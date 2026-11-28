@@ -1,0 +1,9 @@
+[module]
+name = "thumbs"
+version = "1.0.0"
+
+[dependencies]
+imagekit = { path = "../imagekit", version = "1.0.0" }
+
+[native]
+allow = ["imagekit"]

@@ -186,6 +186,7 @@ def main():
     p.add_argument('--okkama',required=True,help='absolute executable path inside the container')
     p.add_argument('--image',required=True,help='local Docker image; resolved to immutable image ID')
     p.add_argument('--toolchain');p.add_argument('--stdlib')
+    p.add_argument('--ext-library', help='absolute micro extension path inside the container (e.g. /toolchain/lib/libokkama_micro_ext.so)')
     p.add_argument('--build-profile',help='declared build flags/profile, e.g. release fat-LTO; recorded, not inferred')
     p.add_argument('--revision',help='source revision of the candidate toolchain')
     p.add_argument('--allow-version-mismatch',action='store_true',help='retain a loudly flagged mismatched campaign; never release evidence')
@@ -208,7 +209,7 @@ def main():
         p.error('--runs must be a multiple of the placements, with at least two runs per placement')
     engines=[{'tomato':'sparrow'}.get(e,e) for e in a.engines.split(',')]
     if len(set(engines))!=len(engines) or not set(engines)<={'ir','sparrow','jvm'}:p.error('unknown or duplicate engine')
-    manifest=json.loads((HERE/'manifest.json').read_text());selected=set(a.only.split(',')) if a.only else set(manifest)
+    manifest=json.loads((HERE/'manifest.json').read_text());selected=set(a.only.split(',')) if a.only else {n for n in manifest if not manifest[n].get('extension')}  # ext cells only by --only: a release baseline cannot load extensions
     if not selected<=manifest.keys():p.error('unknown benchmark: '+','.join(sorted(selected-manifest.keys())))
     if not a.okkama.startswith('/'):p.error('--okkama must be absolute inside container')
     jobs=[(name,e) for name in sorted(selected) for e in engines]
@@ -216,11 +217,16 @@ def main():
     if out.exists():p.error('result already exists; use a new label (no overwrite)')
     if not a.plan and (not a.build_profile or not a.revision):p.error('execution requires --build-profile and --revision provenance')
     if a.plan:print(json.dumps({'jobs':jobs,'n':a.n,'warmup':a.warmup,'output':str(out)},indent=2));return
+    extensions={name for name in selected if manifest[name].get('extension')}
+    if extensions and (not a.ext_library or not a.ext_library.startswith('/')):
+        p.error('extension cells require --ext-library with an absolute container path')
+    if extensions and engines != ['sparrow']:
+        p.error('extension cells require Sparrow')
     old=json.loads(Path(a.compare).read_text()) if a.compare else None
     # Exclusive reservation prevents concurrent writers from reusing a release name.
     out.parent.mkdir(exist_ok=True)
     with out.open('x') as f:f.write('{"status":"INCOMPLETE","schema":2}\n')
-    files=sorted([*HERE.glob('lang/*.ok'),*HERE.glob('std/*.ok'),*HERE.glob('support/*.ok'),HERE/'manifest.json',HERE/'oracles.py',HERE/'run.py'])
+    files=sorted([*HERE.glob('lang/*.ok'),*HERE.glob('std/*.ok'),*HERE.glob('support/*.ok'),*HERE.glob('extension/src/*.rs'),*HERE.glob('extension/Cargo.*'),HERE/'manifest.json',HERE/'oracles.py',HERE/'run.py'])
     hashes={str(f.relative_to(HERE)):digest(f) for f in files}
     suite_hash=hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
     result={'schema':SCHEMA,'status':'INCOMPLETE','label':a.label,'protocol':'micro-v2 warmed batch; no baseline subtraction','suite_hash':suite_hash,'source_hashes':hashes,'n':a.n,'warmup':a.warmup,'runs':a.runs,'quality_policy':{'min_ms':a.min_ms,'max_spread':.10},'seed':a.seed,**({'placements':a.placements} if a.placements else {}),'order':[],'workloads':{name:manifest[name] for name in sorted(selected)},'benchmarks':{},'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
@@ -247,6 +253,8 @@ def main():
             if 'jvm' in engines:result['toolchain']['java']=docker.run(['java','-version'])[1].strip()
             # Since 0.6.0 (Tweed) Sparrow is the only engine and `run` has no --engine; a toolchain from before
             # that still takes it (and before #584 defaulted to IR), so pass it only where the binary knows it.
+            if extensions:
+                result['extension']={'path':a.ext_library, 'sha256':docker.run(['sha256sum',a.ext_library])[0].split()[0]}
             def legacy_flag():
                 if any(e!='sparrow' for e in engines):return True
                 try:return '--engine' in docker.run([a.okkama,'run','--help'])[0]
@@ -259,7 +267,7 @@ def main():
                     artifact='/work/'+name.replace('-','_')+'.jar'
                     docker.run([a.okkama,'build',source,'--target','jvm','-o',artifact])
                     commands[name,e]=['java','--enable-native-access=ALL-UNNAMED','-jar',artifact]
-                else:commands[name,e]=[a.okkama,'run',*(['--engine',e] if legacy else []),source]
+                else:commands[name,e]=[a.okkama,'run',*(['--engine',e] if legacy else []),*(['--ext',a.ext_library] if name in extensions else []),source]
             samples={key:[] for key in jobs};broken=set();rng=random.Random(a.seed)
             # Short independent-oracle checks exercise more than one iteration count.
             for name,e in jobs:

@@ -29,7 +29,10 @@ WARMUP = 3
 
 
 def check(name, source, args):
-    command = [args.okkama, "run", "--timeout", str(args.timeout), str(source)]
+    command = [args.okkama, "run", "--timeout", str(args.timeout)]
+    if name in args.extensions:
+        command += ["--ext", args.ext_library]
+    command += [str(source)]
     env = dict(os.environ, OKKAMA_STDLIB_DIR=args.stdlib, OKKAMA_TRACE="off")
     for n in COUNTS:
         run = command + [str(n), str(WARMUP)]
@@ -61,6 +64,7 @@ def main():
     parser.add_argument("--cage", action="store_true")
     parser.add_argument("--stdlib", default=str(ROOT / "std"), help="std of the binary (default: this checkout's)")
     parser.add_argument("--only", default="")
+    parser.add_argument("--ext-library", help="prebuilt micro extension; otherwise build offline once")
     args = parser.parse_args()
     args.okkama = os.path.abspath(args.okkama)
     if not os.access(args.okkama, os.X_OK):
@@ -70,6 +74,14 @@ def main():
     unknown = [name for name in selected if name not in manifest]
     if unknown:
         parser.error("unknown benchmark: " + ", ".join(unknown))
+    args.extensions = {name for name in selected if manifest[name].get("extension")}
+    if args.extensions:
+        if not args.ext_library:
+            from extensions import build
+            args.ext_library = build()
+        args.ext_library = os.path.abspath(args.ext_library)
+        if not os.path.isfile(args.ext_library):
+            parser.error(f"no micro extension at {args.ext_library}")
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda name: check(name, HERE / manifest[name]["path"], args), selected))
     failed = [(name, problem) for name, problem in results if problem]

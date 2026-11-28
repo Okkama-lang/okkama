@@ -1,0 +1,59 @@
+module imagekit/image;
+
+import "native" take Image, decode, resize, encode, width, height, release;
+
+// PNG data or dimensions refused by imagekit.
+enum ImageError is Error = (
+    bad_format(message is string),
+    bad_size(message is string),
+    encode_failed(message is string),
+    closed,
+    failed(code is string, message is string)
+);
+
+hidden object ImageFailure {
+    has failure is NativeFailure;
+    ImageFailure(:failure);
+    error() is ImageError {
+        let code = failure.code();
+        if code == "bad_format" { ImageError.bad_format(failure.message()); }
+        else if code == "bad_size" { ImageError.bad_size(failure.message()); }
+        else if code == "encode_failed" { ImageError.encode_failed(failure.message()); }
+        else if code == "already_closed" { ImageError.closed; }
+        else { ImageError.failed(code, failure.message()); }
+    }
+}
+
+// PNG bytes to decode when picture() is awaited.
+object Png {
+    has bytes is @byte;
+    // Keeps these bytes until decoding.
+    Png(:bytes);
+    // Decodes the PNG; ImageError.bad_format on invalid input.
+    async picture() is Picture {
+        try { Picture(state: await decode(bytes)); }
+        catch failure is NativeFailure { throw ImageFailure(failure: failure).error(); }
+    }
+}
+
+// An image with deterministic release on scope exit, failure or cancellation.
+object Picture {
+    has state is Image;
+    // Adopts a fresh native state; use Png.picture() or resized().
+    Picture(:state);
+    destroy { release(state); }
+    // Pixel width.
+    width() is int { width(state); }
+    // Pixel height.
+    height() is int { height(state); }
+    // A new image fitting the box, preserving aspect ratio.
+    async resized(width is int, height is int) is Picture {
+        try { Picture(state: await resize(state, width, height)); }
+        catch failure is NativeFailure { throw ImageFailure(failure: failure).error(); }
+    }
+    // PNG bytes of this image.
+    async png() is @byte {
+        try { await encode(state); }
+        catch failure is NativeFailure { throw ImageFailure(failure: failure).error(); }
+    }
+}

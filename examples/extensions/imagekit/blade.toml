@@ -1,0 +1,6 @@
+[module]
+name = "imagekit"
+version = "1.0.0"
+
+[native]
+crate = "native"

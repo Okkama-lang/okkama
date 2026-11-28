@@ -206,6 +206,29 @@ transports kill/reap cancelled workers before settlement; the run closes/reaps i
 `okkama-cli/tests/parallel_map.rs`.
 
 
+## 6. Native extensions (#1083)
+
+A native extension is a shared library loaded into the Okkama process. It is trusted process code: the language's
+guarantees, bytecode verification, budgets, native groups and ownership do not reach inside it.
+
+**Checked boundaries.** No library is loaded unless the host names it: `--ext`, the root project's `[native] allow`
+in Blade, or `Limits.extensions` (empty by default). An SPB cannot name a library or a path. Under `--no-native`,
+restricted native groups or an embedding profile no extension is loaded or called. Before any callback runs,
+the descriptor is validated and the signature of every bound native is compared with the program's; a mismatch
+refuses the run. An extension sees values only through call-scoped tokens. A result of another shape, a stale
+token or a caught Rust panic stops the run and poisons the runtime. A state's payload is dropped exactly once.
+For SDK shared states the host releases its Arc once; jobs retain their own Arcs until they finish.
+Regressions: `okkama-cli/tests/extensions.rs`, `blade/tests/native.rs`, and `blade/tests/extension_example.rs`
+(the shipped PNG example, including checked views and `--no-native`).
+
+**Not guaranteed.** A fault in native code (memory corruption, an abort, a C++ exception or `longjmp` across the
+boundary) corrupts or ends the process. Extension code has the user's authority: files, network, processes,
+threads. Its own allocations are outside `--max-memory`, its work is charged no steps, its writes to the standard
+streams bypass `--max-output`, and cancellation and `--timeout` are cooperative. Building a package's crate runs
+its build scripts; loading runs the OS loader's constructors. For code you do not trust, or that may crash, use a
+[helper process](port-protocol.md) (#1081) under OS isolation. Authoring and packaging:
+[native extensions](extensions.md).
+
 [#16]: https://github.com/Okkama-lang/okkama/issues/16
 [#17]: https://github.com/Okkama-lang/okkama/issues/17
 [#18]: https://github.com/Okkama-lang/okkama/issues/18

@@ -24,8 +24,9 @@ examples = sorted(
     for root in roots
     for folder, _, names in os.walk(root)
     # The Bible's examples have their own format and runner (bible/check.py); the port examples need a helper
-    # built by cargo, and okkama-rs/crates/okkama-cli/tests/port.rs builds it and runs them.
-    if os.path.relpath(folder, HERE).split(os.sep)[0] not in ("bible", "port")
+    # built by cargo, and okkama-rs/crates/okkama-cli/tests/port.rs builds it and runs them; the extension
+    # example needs its library, and okkama-rs/crates/blade/tests/extension_example.rs builds and runs it.
+    if os.path.relpath(folder, HERE).split(os.sep)[0] not in ("bible", "port", "extensions")
     for name in names
     if name.endswith(".ok") and os.path.exists(os.path.join(folder, name[:-3] + ".expected"))
 )

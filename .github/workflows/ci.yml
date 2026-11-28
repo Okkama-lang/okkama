@@ -45,6 +45,8 @@ jobs:
       - name: Build
         working-directory: okkama-rs
         run: cargo build --profile gate --locked -p okkama-cli -p sparrow-cli -p blade-cli
+      - name: Cache imagekit dependencies for the offline integration test
+        run: cargo fetch --locked --manifest-path examples/extensions/imagekit/native/Cargo.toml
       # Every test binary in parallel, all failures in one report, one retry
       # marked FLAKY (okkama-rs/.config/nextest.toml).
       - name: Test

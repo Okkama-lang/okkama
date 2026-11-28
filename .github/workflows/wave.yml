@@ -70,6 +70,9 @@ jobs:
             sparrow) cargo test $gate -p okkama-sparrow -p sparrow-core ;;
             cli) cargo test $gate -p okkama-cli ;;
             rest)
+              cargo fetch --locked --manifest-path ../examples/extensions/imagekit/native/Cargo.toml
+              cargo build $gate -p okkama-cli -p blade-cli
+              SPARROW_CORE_GC_STRESS=1 cargo test $gate -p blade --test extension_example
               cargo test $gate --workspace --exclude okkama-compiler --exclude okkama-sparrow \
                 --exclude sparrow-core --exclude okkama-cli ;;
             clippy)

@@ -13120,5 +13120,41 @@
     "actions": [
       "parallel/map:ParallelMapped.workers"
     ]
+  },
+  "ext-scalar": {
+    "path": "lang/ext-scalar.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [],
+    "extension": true,
+    "interpretation": "An i64 call and return; includes loop and checksum, not isolated callback latency."
+  },
+  "ext-bytes": {
+    "path": "lang/ext-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [],
+    "extension": true,
+    "interpretation": "A 64-byte copy and indexed read; includes loop and checksum, not isolated callback latency."
+  },
+  "ext-state": {
+    "path": "lang/ext-state.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [],
+    "extension": true,
+    "interpretation": "State creation, read and explicit release; includes loop and checksum, not isolated callback latency."
+  },
+  "ext-async": {
+    "path": "lang/ext-async.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [],
+    "extension": true,
+    "interpretation": "A blocking-pool round trip with an i64; includes loop and checksum, not isolated callback latency."
   }
 }
