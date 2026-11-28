@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **`okkama agents`, the toolchain teaching AI agents (#1190, #1188).** `okkama help` opens with a line for agents,
+  and `okkama agents` prints an entry page: what Okkama is, the workflow (`check`, `fmt -w`, `lint`, `run -t`), where
+  std lives and how to look things up. Its sections are built into the binary, so they always describe it:
+  `language` (a reference for a reader who has never seen Okkama, every example checked in the Wave by
+  `docs/agents/check.py`), `style` (a short form until the style guide #1189), `workflow` and `std` (every module
+  with its summary). `okkama agents init [DIR]` writes a project's AGENTS.md (`--claude`: CLAUDE.md too), never over
+  an existing file without `--force`; `--check` tells a current file from a stale or foreign one.
+
 ## [0.6.7] — 2026-11-28
 
 0.6.7 is a performance release. Against 0.6.6 the cross-language ladder runs 27% faster cold and 41% faster after

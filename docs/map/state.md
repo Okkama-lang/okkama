@@ -1,5 +1,22 @@
 # State (update at the end of every task)
 
+## Release 0.6.8 (release/068, from main 0d9369755 = v0.6.7): extensions, web logging, agent onboarding
+
+Owner on vacation until ~2026-12-12 (memory vacation-release-0-6-7): release alone, the same authorizations as 0.6.7.
+Baseline: v0.6.7's release micro A/B and showcase (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7; the candidate
+toolchains okkama-work/micro-tc/rel067-s{1,2} are v0.6.7's code). Board v0.6.8, order (owner's farewell, 2026-11-28): finish what is
+started (#1188 language reference — agent, worktree p-1188; #1190 `okkama agents` — p-068, feature/1190) → **ABI
+first**: #1083 native ABI (design by Fable, then implementation) with #1081 helper processes and #1082 CBOR (#1084 only
+if it falls out) → #1189 style guide, #1191 trial → web logging #1179 → #1180 (if needed) → #1181 → at the very end,
+after every feature branch is merged, rewrite the implementer books. Micro A/B after each ticket that can move speed.
+
+- [x] #1188 language reference for agents (agent; 8945e8acf): docs/agents/language.md (50 KB, 31 checked examples),
+  docs/agents/check.py (fences okkama / okkama,run / okkama,test / okkama,fail / okkama,ignore), Wave "Corpora" step.
+  Findings fixed: LLM-GUIDE §8 arguments line. Bible ch.17 gap (unbounded type parameter answers no action) noted.
+- [x] #1190 `okkama agents` (feature/1190): okkama-cli src/agents.rs (texts include_str! from docs/agents),
+  `man::std_index`, help line and command entry; tests okkama-cli/tests/agents.rs (5). docs/agents/workflow.md,
+  style.md (short form until #1189). README "Using Okkama with AI agents".
+
 ## Release 0.6.7 (release/067, from main 418da2b86): performance
 
 **Release 0.6.7, 2026-11-28 (owner on vacation, authorized):** every v0.6.7 ticket closed (remainders POSTPONED:

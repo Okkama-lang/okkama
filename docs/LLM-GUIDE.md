@@ -695,7 +695,8 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 - `char` has no `.string()`; `@@byte()` is not a constructor; empty typed
   arrays need a type: `let empty is @T = [];`.
 - A `;` after a `match` inside `try` is a syntax error.
-- Program arguments: `runtime/process.process_arguments()` (not `Environment`).
+- Program arguments as text: `cli/arguments`' `ProcessArguments().strings()`; `runtime/process.process_arguments()` is
+  the native beneath it and returns `@@byte` (not `Environment`).
 - `Stdout` is in `io/stdout`; there is no `io/stderr` module (`Stderr` is in
   `io/stdout`).
 - A cap value (`owner::Cap`) exposes computed fields via `::`, no actions.

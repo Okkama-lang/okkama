@@ -27,6 +27,7 @@ static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
 // The one switch policy of every crate (#1095); `crate::env_switch` names it.
 use okkama_devtrace::env_switch;
 
+mod agents;
 mod core;
 mod doctest;
 mod import_paths;
@@ -65,7 +66,10 @@ const EXIT_TEST_RUN: u8 = 4;
 const HELP: &str = "\
 okkama — Okkama language front end and IR
 
+AI agents: start with `okkama agents` (the language, its style, std, the workflow).
+
 USAGE:
+    okkama agents [language|style|workflow|std] | okkama agents init [DIR]
     okkama tokens <FILE|-> [--format text|json]
     okkama ast <FILE|-> [--format tree|json] [--spans] [--mode full|production] [--prune-tests]
     okkama check <FILE|->
@@ -84,6 +88,8 @@ USAGE:
     okkama --version
 
 COMMANDS:
+    agents    For AI agents: the language, its style guide, std and the
+              workflow; `init` writes a project's AGENTS.md
     tokens    Print the token stream of a source file
     ast       Parse a source file and print its syntax tree
     check     Check a program and its imports; report every compile-time error
@@ -502,6 +508,7 @@ fn run(args: &[String]) -> Outcome {
             Some("build") => Outcome::success(BUILD_HELP.to_string()),
             Some("exec") => Outcome::success(EXEC_HELP.to_string()),
             Some("man") => Outcome::success(man::HELP.to_string()),
+            Some("agents") => Outcome::success(agents::HELP.to_string()),
             // Every command `--help` lists has a page (#1017): `check` and
             // `run` are on the main one, as their own `--help` shows.
             Some("check" | "run") => Outcome::success(HELP.to_string()),
@@ -533,6 +540,7 @@ fn run(args: &[String]) -> Outcome {
         "env" => env_command(rest),
         "lint" => lint_command(rest),
         "man" => man::command(rest),
+        "agents" => agents::command(rest, &stdlib_dir()),
         "ir" => ir_command(rest),
         "build" => build_command(rest),
         "exec" => sparrow_exec_command(rest),

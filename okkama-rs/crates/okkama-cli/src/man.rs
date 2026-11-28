@@ -222,6 +222,14 @@ fn index(loader: &FileLoader, format: Format, style: &Style) -> Result<String, S
     })
 }
 
+/// #1190: the index of std (every module with its one-line summary) for `okkama agents std`, as `okkama man` prints
+/// it without a module, in Markdown or plain text at 100 columns.
+pub(crate) fn std_index(markdown: bool) -> Result<String, String> {
+    let loader = FileLoader::from_env();
+    let style = Style { width: 100, ansi: false };
+    index(&loader, if markdown { Format::Markdown } else { Format::Text }, &style)
+}
+
 /// The documentation of the std file `path`, read and parsed (tests skipped).
 fn load_doc(path: &Path) -> Result<ModuleDoc, String> {
     let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;

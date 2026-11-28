@@ -4,6 +4,16 @@ The newest entries are at the top of each section. Each one gives its date, who 
 are. Working rules (testing, CI, roles) are in LLM-GUIDE §1 and are not repeated here. Seeded 2026-11-20 from
 the session's memory; older rulings live in the commits and tickets named.
 
+## `okkama agents`: texts built into the binary (#1190, 2026-11-28; owner's request, epic #1191)
+
+- The agent texts (docs/agents/language.md, style.md, workflow.md) are `include_str!`-ed into okkama-cli instead of
+  installed under lib/okkama: they always describe the binary that prints them, and no install or package change is
+  needed. The std map is generated at run time from std's doc comments (`man::std_index`), like `okkama man`.
+- `okkama agents init` stamps AGENTS.md with the toolchain version on its first line; `--check` compares it. It never
+  overwrites without `--force`, and writes nothing unless every file may be written.
+- Facts from #1188 that the agent texts follow: errors are enums (no `Exception` type); no free functions, `while` or
+  `+=`; no regions visible to programs; loops are `for … -> x`, `loop`, `next`, `last`.
+
 ## Direction (owner)
 
 - **2026-11-27. Trunk-based branches (owner).** «main — источник релиза, туда льем только через пулл-реквесты,

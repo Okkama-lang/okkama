@@ -552,6 +552,13 @@ Sparrow runs them in 8–25 MB, Go in 4–13 MB, Java in 44–209 MB and Kotlin 
 Where documents disagree, the source of truth is the conformance suite
 (`conformance/`) and the specification — in that order.
 
+## Using Okkama with AI agents
+
+Okkama is new, so an agent cannot know it from its training. The toolchain teaches it: `okkama help` points to
+`okkama agents`, which prints an entry page, the language reference with a checked example per rule
+(`okkama agents language`), the style guide (`okkama agents style`), the workflow and the std map. In a project,
+`okkama agents init` writes an AGENTS.md (and `--claude` a CLAUDE.md) that sends any agent there first.
+
 ## Status
 
 Okkama is **experimental**: the language and the standard library still
