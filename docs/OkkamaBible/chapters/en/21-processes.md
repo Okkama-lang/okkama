@@ -323,6 +323,100 @@ for Stdin() -> line {
 
 A line loses its LF and the one CR before it. Invalid UTF-8 fails by default; `Stdin(decoding: InputDecoding.lenient)` replaces bad sequences with U+FFFD. `Stdin().chunks(size: 65536)` reads bytes. All `Stdin()` values share one input position, so a program may read a header by lines and then the remaining bytes without losing intervening data.
 
+### 21.5.3 Helper processes: ports
+
+Sooner or later a program needs code that is not written in Okkama: an image
+codec, a tokenizer, a model, a crate that took someone years. `os/port`
+(issue #1081) calls such code without linking it into the program. The code
+runs in a **helper**, a separate program in any language. The helper reads
+requests on its standard input and writes replies on its standard output,
+in frames of a small protocol. This is Erlang's *port*
+[@armstrong2003]. Erlang keeps C code outside the virtual machine the same
+way, so that a crash in it cannot take the machine down.
+
+```okkama
+let images = Port(command: InheritedCommand(program: Path("bin/image-helper")), instances: 2);
+defer images.close();
+try {
+    let reply = await images.call(
+        method: "resize",
+        payload: Json(JsonField("width", 200)),
+        bytes: photo,
+        timeout: Duration(seconds: 2.rat()),
+    );
+    Stdout().writeln("thumbnail: ", reply.bytes().size(), " bytes, ", reply.json().text("format"));
+}
+catch failure is PortFailure {
+    match failure {
+        case PortFailure.refused(method, code, _message) {
+            Stdout().writeln(method, " refused: ", code);
+        }
+        case PortFailure.timed_out(method) {
+            Stdout().writeln(method, " took too long");
+        }
+        else {
+            Stdout().writeln("the helper failed; the next call starts a new one");
+        }
+    }
+};
+```
+
+- **The payload is JSON or CBOR.** `call` takes a `Json` or a `Cbor`, and
+  the reply comes back in the same codec: `reply.json()` or `reply.cbor()`.
+  Raw bytes, such as the photo here, travel beside the payload in frames of
+  their own, and `reply.bytes()` returns the helper's bytes. Nothing is
+  base64'd. The common case needs only `await images.call("words",
+  Json(JsonField("text", text)))`; options are named, and then all
+  arguments are.
+- **A helper starts with the first call.** Making a `Port` starts nothing.
+  Calls carry ids, so several can be in flight on one helper, and the
+  replies may come back in any order. `instances: 2` keeps up to two
+  helpers, and each call goes to the one with fewer calls in flight.
+- **Every failure has a type.** Every failure of a call is a
+  `PortFailure`. `refused` is the helper's own answer, with its code and
+  message, and the helper keeps serving. `crashed` carries the exit status
+  and the last of the helper's standard error. `malformed` is a helper that
+  broke the protocol. `timed_out` is a call that took longer than its
+  timeout, 30 seconds unless the call says otherwise. `unavailable` is a
+  helper that could not be started, and `closed` is a port that was closed.
+- **A failed helper is replaced.** A helper that crashed, broke the protocol
+  or did not answer in time is stopped. A hung helper would hold up every
+  call after it, so a timeout stops the helper too. The calls in flight on
+  it fail, and the next call starts a fresh helper. The program itself
+  goes on.
+
+**The guarantee comes from the process boundary.** A helper cannot corrupt
+the program's memory, whatever language it is written in and however it
+fails. A segfault, an abort or a panic in it is only an exit status. The
+program's own budgets of time, memory and steps keep holding on the Okkama
+side. What the helper does with its own memory and threads is the
+operating system's business. The authority is explicit too. A helper is a
+`Command` like any other (Section 21.5): the program names its path,
+arguments and environment. An embedder that denies the `Process` group
+(Section 21.6) denies helpers with it. For now Blade does not carry helper
+binaries, so a project builds its helper and names the path.
+
+**A helper can be written in any language.** `docs/port-protocol.md`
+specifies the protocol:
+- frames with a 4-byte length;
+- a hello that names the protocol version;
+- requests and replies with ids;
+- what happens when a frame is malformed, a helper crashes or a helper
+  hangs.
+
+A helper can be written from that page alone; the repository has one in
+Python. A helper in Rust is a few lines with the crate `okkama-port`:
+`okkama_port::serve(|call| …)` hands every call to one function, reads the
+payload into a serde type and sends a reply or a failure back.
+
+**The price.** A call costs a few tens of microseconds: two writes to a pipe
+and the encoding. Data is copied both ways. That is nothing next to
+resizing an image or asking a model, and too much for an inner loop over
+numbers. The playground cannot start processes, so it has no helpers
+either. For code that must share the program's memory and calls, the
+answer is a native extension (issue #1083). A native extension is faster,
+but the program has to trust it completely.
+
 ## 21.6 What an embedder can deny
 
 A program run by `okkama run` may use every native. A host running plug-ins or user scripts may restrict the native groups available to a run:
