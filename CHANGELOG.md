@@ -6,6 +6,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-11-28
+
+0.6.7 is a performance release. Against 0.6.6 the cross-language ladder runs 27% faster cold and 41% faster after
+warm-up (geometric means over eleven programs, same machine and command), and the micro-benchmark A/B moves 30% over
+66 language constructs, none slower by more than 3%. After warm-up Go is now 1.23× ahead (2.1× at 0.6.6), Java 1.43×
+(2.5×), Kotlin 1.32× (2.3×); cold, Sparrow is 2.4× faster than Java and 2.9× faster than Kotlin. Small-int function
+versions and float code (#1113, #1178), OIR inlining and scalar replacement (#1112), the collector's sweep by page,
+marking and safepoints (#1114, #1174, #1175), background compilation (#1147), builders in the heap with
+`builder.sized` (#1171, #1150), one allocation per chain of string `+` (#1177), bounded string slices (#1176),
+vendored num-bigint and cranelift-frontend changes (#1148, #1151) and ownership indexes inherited by slices (#1152).
+The SPB format is now 19 (`builder.sized`, `str.concat_n`): programs built by 0.6.6 must be rebuilt. Nothing in the
+language or the public std changes.
+
 - **Float code gets small-int versions (#1178).** A function whose registers include floats now also gets the
   untagged small-int version of #1113 when its instructions are float arithmetic and comparisons besides small-int
   arithmetic (no conversions): float arithmetic is pure, so a restart in the general version repeats nothing
@@ -9394,7 +9407,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/Okkama-lang/okkama/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/Okkama-lang/okkama/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/Okkama-lang/okkama/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/Okkama-lang/okkama/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/Okkama-lang/okkama/compare/v0.6.3...v0.6.4

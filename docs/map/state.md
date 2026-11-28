@@ -2,6 +2,12 @@
 
 ## Release 0.6.7 (release/067, from main 418da2b86): performance
 
+**Release 0.6.7, 2026-11-28 (owner on vacation, authorized):** every v0.6.7 ticket closed (remainders POSTPONED:
+#1182–#1186). Gate = CI + Wave green on 59acebe33 (local gate refused by the test-protocol hook). Micro A/B v0.6.6 →
+release/067: −30.2% over 66 lang cells, none slower than +3% (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7/micro.html).
+Showcase vs v0.6.6: cold −27%, steady −41% (report.html there). Version 0.6.7, CHANGELOG [0.6.7], Bible rebuilt; then PR
+release/067 → main, tag v0.6.7 on the merge commit, packages, install-pgo, /man/, playground (SPB 19), develop.
+
 **Owner on vacation 2026-11-28 → ~2026-12-12; release alone in /loop (memory vacation-release-0-6-7).** Authorized:
 merge PR release/067 → main, tag v0.6.7, GitHub Release, design decisions with Fable, close/postpone myself. Plan:
 #1177, #1176 done → #1152 (Fable's design in hand: structure index known at birth) → #1151 (Fable design pending; naive sync explicit roots measured 02 +122%, 09 +36%) → #1178 done → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
