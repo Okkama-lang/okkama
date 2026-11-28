@@ -645,8 +645,12 @@ main() is int {
 - `await` is allowed only in an `async` action, `async main` or `async test`.
   It returns the value or rethrows the failure. `await x + 1` is
   `(await x) + 1`.
-- A `Future<T>` has only `done()`, `cancel()` and `cancelled()`. It must be
-  awaited or handed on (returned, passed, stored, spawned).
+- A `Future<T>` has only `done()`, `cancel()` and `cancelled()`. The
+  compiler insists on an `await` only for the future of a successor action
+  (it carries the receiver's next value). Any other future may be dropped
+  without a word, and since the call is lazy its body then never runs:
+  `Worker().run();` does nothing. Await it, hand it on (return, pass,
+  store) or `spawn` it.
 - `spawn Receiver(…).action(…)` starts a call now. An async action becomes a
   task of the run: one scheduler, tasks switch only at `await`. A
   synchronous action runs in a worker process; only scalars, arrays and maps
