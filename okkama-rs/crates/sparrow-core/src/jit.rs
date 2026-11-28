@@ -983,6 +983,17 @@ fn emit_unit(runtime: &mut Runtime, function: usize, captures: Option<usize>, ve
         call_sites = emit.call_sites;
         lazy = std::mem::take(&mut emit.lazy);
         mark!();
+        // #1151 (Fable): a synchronous function with a loop does not reload values live across safepoints from their
+        // stack slots (the collector never moves objects, so slot and value agree): its loop amortizes keeping them in
+        // callee-saved registers. Without a loop, reloading stays cheaper (recursion, closures, role methods).
+        // `SPARROW_CORE_RELOADS=always` (every function reloads) or `never` (no synchronous one does) for comparison.
+        let no_reloads = !source.is_async
+            && match reload_policy() {
+                ReloadPolicy::Always => false,
+                ReloadPolicy::NotInLoops => has_loop(source),
+                ReloadPolicy::Never => true,
+            };
+        builder.set_stack_map_reloads(!no_reloads);
         builder.seal_all_blocks();
         builder.finalize(config);
     }
@@ -1251,6 +1262,23 @@ struct Inline {
     ok: Block,
     fail: Block,
     depth: u32,
+}
+
+/// #1151: when synchronous functions reload values live across safepoints (`SPARROW_CORE_RELOADS`).
+#[derive(Clone, Copy)]
+enum ReloadPolicy {
+    Always,
+    NotInLoops,
+    Never,
+}
+
+fn reload_policy() -> ReloadPolicy {
+    static POLICY: std::sync::OnceLock<ReloadPolicy> = std::sync::OnceLock::new();
+    *POLICY.get_or_init(|| match std::env::var("SPARROW_CORE_RELOADS").as_deref() {
+        Ok("always") => ReloadPolicy::Always,
+        Ok("never") => ReloadPolicy::Never,
+        _ => ReloadPolicy::NotInLoops,
+    })
 }
 
 /// Does `source` jump backwards (a loop)? Such a callee is not inlined: its loop amortizes the call, and moved into

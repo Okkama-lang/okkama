@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **No reloads of GC roots in loops (#1151).** A synchronous function with a loop keeps values that are live across
+  a call in registers instead of reloading them from their stack-map slot after every call: the slot is still
+  written at the definition and listed in every stack map, which is exact because the collector never moves
+  objects. Cranelift's frontend is vendored with one switch for this (`set_stack_map_reloads`). Functions without a
+  loop (recursion, closures, role methods) keep reloading, which is cheaper there. Steady: 07-objects −16%, 10-app
+  −7%, 06-collections −2.5%; 09-closures +4.8% (its hot loop calls a closure every iteration), 03-float +2.8%, the
+  rest within ±2%. `SPARROW_CORE_RELOADS=always|never` compares.
 - **Slices inherit their parent's ownership index (#1152, step 1).** The structure index of an array (the
   children that may hold a resource) keeps each child's position; a copied slice of an indexed array takes the
   part of the parent's index inside its range instead of scanning its elements at its first walk. 11-ownership:

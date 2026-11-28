@@ -37,7 +37,12 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   10.9 → 6.67 ms (target ≤ 6), 50 collections per 20 repetitions (40 before #1171 counted builder memory, 80 after;
   room given back by a shrink is uncounted).
   Left: GC share (~25%) and the closures' JIT code.
-- [~] #1151 roles: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
+- [~] #1151 roots (Fable's design): vendored `cranelift-frontend` 0.137.0 (`vendor/cranelift-frontend`, OKKAMA.md) with
+  `FunctionBuilder::set_stack_map_reloads`; jit.rs `reload_policy` (default: no reloads in synchronous functions with a
+  loop; `SPARROW_CORE_RELOADS=always|never`). 07 −16%, 10 −7%, 06 −2.5%, 09 +4.8% (bisected: lambda#3's closure-calling
+  loop), 08 unchanged (12.6 ms; target ≤ 10 not met: Fable's next lever is sealing an instruction's blocks early, so
+  loop-invariant values stop going through loop-header parameters). Naive sync explicit roots: 02 +122%, rejected.
+  Earlier: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
   lever is the frontend's spills around calls (#1147's deferred own root slots).
 - [~] #1152 ownership, Fable's design (structure index known at birth): step 1 done — `Resources::positions`,
   `array_structure`, `inherit_slice_structure` (from `ops::slice_array`, copied slices), `may_hold_identity`; test

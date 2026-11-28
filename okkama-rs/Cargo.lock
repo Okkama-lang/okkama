@@ -480,8 +480,6 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.137.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b929f09b82a270e2aae062945cf86cd9db39c59ad9bead6986ea6b09fcf8a969"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",

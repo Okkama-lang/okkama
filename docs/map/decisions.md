@@ -1318,6 +1318,18 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## GC roots across calls in synchronous functions (#1151, 2026-11-28; design Fable)
+
+- Synchronous functions keep Cranelift's frontend stack maps (not `Roots`): the naive move to explicit roots lost
+  inlining, stored every definition and cleared every written register (02-calls +122%).
+- The frontend's reloads after safepoints are needless for a non-moving collector. Vendored `cranelift-frontend`
+  0.137.0 adds `set_stack_map_reloads(false)`: the slot is written at the definition and listed in stack maps as
+  before; uses keep the SSA value. Policy: off in synchronous functions with a loop (it amortizes the callee-saved
+  registers); functions without a loop keep reloading (02 ±0). A per-value rule (cold safepoints, live-count limits,
+  closure bodies) was tried: counts and "not a closure" did not separate the 09 loser from the winners.
+- Vendoring follows num-bigint's pattern: `[patch.crates-io]`, OKKAMA.md with the removal condition; re-apply at each
+  Cranelift bump.
+
 ## Structure index known at birth (#1152, 2026-11-28; design Fable)
 
 - No new ownership rule: the #906 index of a container is inherited when it can be derived instead of being built

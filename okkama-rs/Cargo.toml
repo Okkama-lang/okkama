@@ -84,3 +84,4 @@ opt-level = 2
 # #1148: num-bigint 0.4.8 with an ADCS addition path on aarch64 (vendor/num-bigint/OKKAMA.md); upstream PR pending.
 [patch.crates-io]
 num-bigint = { path = "vendor/num-bigint" }
+cranelift-frontend = { path = "vendor/cranelift-frontend" }
