@@ -41,7 +41,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 15 files, 12252 lines
+## lower — 15 files, 12248 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 247 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1596 — Контекст lowering из THIR: специализации, функции, объявления OIR.
@@ -49,7 +49,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/intrinsics.rs` 446 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
 - `okkama-compiler/src/lowering/mod.rs` 981 — Lowering: проверенная программа (THIR анализа, `lower_analyzed`) → модуль OIR-2.
 - `okkama-compiler/src/lowering/modules.rs` 294 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
-- `okkama-compiler/src/lowering/natives.rs` 101 — A native declaration against the runtime's native table (#1098): a
+- `okkama-compiler/src/lowering/natives.rs` 97 — A native declaration against the runtime's native table (#1098): a
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
 - `okkama-compiler/src/lowering/body/builtins.rs` 199 — Builtins built from existing instructions (#210, #211, #231): searches and

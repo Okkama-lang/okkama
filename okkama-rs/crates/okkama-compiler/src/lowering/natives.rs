@@ -25,11 +25,7 @@ fn same(ctx: &Ctx<'_, '_>, ty: &Type, abi: &Abi) -> bool {
         | (Type::Char, Abi::Char)
         | (Type::Str, Abi::Str)
         | (Type::Any, Abi::Any) => true,
-        (Type::Handle(handle), Abi::Handle(name)) => ctx
-            .reg
-            .handles
-            .get(handle.0)
-            .is_some_and(|decl| format!("{}{}", ctx.prefixes[decl.module], decl.name) == *name),
+        (Type::Handle(handle), Abi::Handle(name)) => ctx.reg.handles.get(handle.0).is_some_and(|decl| ctx.handle_name(decl) == *name),
         (Type::Variant(variant), Abi::Maybe(inner)) => ctx.variants.get(variant.0).is_some_and(|variant| {
             let name = variant.name.rsplit("::").next().unwrap_or(&variant.name);
             let case = |wanted: &str| variant.cases.iter().find(|(case, _)| case == wanted).map(|(_, object)| *object);

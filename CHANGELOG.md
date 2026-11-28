@@ -6,6 +6,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Fixed: the fuzz crate builds again.** It now carries the main workspace's `[patch.crates-io]` for the vendored
+  num-bigint and cranelift-frontend; since 0.6.7 (#1151) it built sparrow-core against crates.io's
+  cranelift-frontend, which lacks `set_stack_map_reloads`, and the nightly Fuzz runs failed.
 - **Native extensions, step 0: one signature language (#1083).** The native table names a `native object` with
   its module, as SPB does (`runtime.host_crypto::DigestState`), so two modules may declare handles of one short name
   and a native is typed against its own module's handle only; the #976 rule refusing such programs is gone. The

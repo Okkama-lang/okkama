@@ -880,6 +880,14 @@ impl<'r, 'a> Ctx<'r, 'a> {
             .map(|(ty, _)| ty.clone())
     }
 
+    /// #1083: the SPB name of a `native object`: its declaring module's path and its name
+    /// (`runtime.buffer::BufferState`), even for the root module, whose other declarations carry no
+    /// prefix: the native table names handles that way, and a std module tested on its own
+    /// (`okkama run -t std/runtime/buffer.ok`) is the root.
+    pub fn handle_name(&self, decl: &crate::analysis::registry::HandleInfo) -> String {
+        format!("{}::{}", self.reg.modules[decl.module].name.replace('/', "."), decl.name)
+    }
+
     /// Вариант и номер случая объекта `object`, если это раскладка случая.
     pub fn case_of(&self, object: ObjectId) -> Option<(ir::VariantId, usize)> {
         self.variants.iter().enumerate().find_map(|(id, variant)| {
@@ -1702,10 +1710,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             .reg
             .handles
             .iter()
-            .map(|decl| ir::Handle {
-                name: format!("{}{}", self.prefixes[decl.module], decl.name),
-                span: decl.span,
-            })
+            .map(|decl| ir::Handle { name: self.handle_name(decl), span: decl.span })
             .collect();
         ir::Module {
             name: super::modules::module_path(program),

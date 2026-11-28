@@ -19,6 +19,12 @@ sparrow-core = { path = "../crates/sparrow-core" }
 [workspace]
 members = ["."]
 
+# The main workspace's vendored crates (num-bigint #1148, cranelift-frontend #1151): without them this crate builds
+# sparrow-core against crates.io's copies, and `set_stack_map_reloads` is missing.
+[patch.crates-io]
+num-bigint = { path = "../vendor/num-bigint" }
+cranelift-frontend = { path = "../vendor/cranelift-frontend" }
+
 [[bin]]
 name = "lex"
 path = "fuzz_targets/lex.rs"
