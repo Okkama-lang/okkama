@@ -1350,6 +1350,10 @@ every declaration is open (#1005, owner decision).
 - `builder.sized` is a capacity hint, not a contract: a non-small or negative count is no hint, at most 4M
   elements up front. Only `map` uses it; `filter` sized by its source cost 10-app +5% (filters that keep little).
 - Walkers treat BUILDER as they treated the Builder payload (may reach; no children; never summarized).
+- #1150 follow-up: a large buffer (past the small classes) is a raw global allocation in `Heap::builder_large`,
+  grown by realloc (only the growth counts toward a collection; no garbage per doubling) and shrunk at `finish` to
+  its length, then owned by `large` as a boxed slice of exactly that layout. A small result of a large buffer is
+  copied and the buffer freed at once; a dead builder's large buffer is freed by the sweep.
 
 ## 0.6.7 scope after the mid-release showcase (2026-11-28; owner)
 

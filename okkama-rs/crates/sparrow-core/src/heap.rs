@@ -491,6 +491,10 @@ pub struct Heap {
     /// #1171: buffers builders left (outgrown, or copied from at `finish`), as (capacity, buffer), for the next
     /// builders until the next collection, which drops them (nothing refers to them, so the sweep frees them).
     spare_buffers: Vec<(usize, Word)>,
+    /// #1171: large builder buffers, as (address, words): raw allocations that grow and shrink in place (realloc)
+    /// instead of leaving a garbage buffer per doubling; `finish` hands a buffer to `large` as its array. Swept like
+    /// large objects.
+    builder_large: Vec<(Word, usize)>,
     live: usize,
     external_live: usize,
     collections: usize,
@@ -656,6 +660,7 @@ impl Heap {
             threshold: COLLECTION_FLOOR,
             spare: Vec::new(),
             spare_buffers: Vec::new(),
+            builder_large: Vec::new(),
             live: 0,
             external_live: 0,
             collections: 0,
@@ -1473,7 +1478,7 @@ impl Heap {
     /// A buffer cell with room for `capacity` elements: length 0, so the collector marks it without tracing it.
     fn allocate_builder_buffer(&mut self, capacity: usize) -> Word {
         self.counted("builder buffer", 0, capacity + 1);
-        let buffer = self.allocate(capacity + 1);
+        let buffer = if Self::class_of(capacity + 1).is_some() { self.allocate(capacity + 1) } else { self.allocate_large_buffer(capacity + 1) };
         // SAFETY: room for the header.
         unsafe { *(buffer as *mut u64) = header(ARRAY, Repr::Raw, 0) };
         buffer
@@ -1512,12 +1517,20 @@ impl Heap {
             return;
         }
         let wanted = needed.max(capacity.saturating_mul(2)).max(BUILDER_FIRST);
+        let room = builder_room(wanted);
+        if buffer != 0 && Self::class_of(capacity + 1).is_none() {
+            // A large buffer grows in place (or moves once): no garbage, and only the growth counts.
+            let grown = self.resize_large_buffer(buffer, capacity + 1, room + 1);
+            // SAFETY: four words.
+            unsafe {
+                *((builder + BUILDER_CAPACITY as Word) as *mut u64) = room as u64;
+                *((builder + BUILDER_BUFFER as Word) as *mut u64) = grown;
+            }
+            return;
+        }
         let (capacity, grown) = match self.take_spare_buffer(wanted) {
             Some(spare) => spare,
-            None => {
-                let capacity = builder_room(wanted);
-                (capacity, self.allocate_builder_buffer(capacity))
-            }
+            None => (room, self.allocate_builder_buffer(room)),
         };
         // SAFETY: both buffers have room for `length` elements; distinct cells.
         unsafe {
@@ -1536,6 +1549,72 @@ impl Heap {
     fn take_spare_buffer(&mut self, wanted: usize) -> Option<(usize, Word)> {
         let position = self.spare_buffers.iter().rposition(|&(capacity, _)| capacity >= wanted)?;
         Some(self.spare_buffers.swap_remove(position))
+    }
+
+    /// A large builder buffer of `words` words: header `ARRAY` raw, length 0 (a leaf), the rest uninitialized.
+    fn allocate_large_buffer(&mut self, words: usize) -> Word {
+        let layout = std::alloc::Layout::array::<u64>(words).expect("buffer size");
+        // SAFETY: a non-zero layout (a large buffer has more than SMALL_CLASS_LIMIT words).
+        let buffer = unsafe { std::alloc::alloc(layout) } as Word;
+        if buffer == 0 {
+            std::alloc::handle_alloc_error(layout);
+        }
+        // SAFETY: room for the header.
+        unsafe { *(buffer as *mut u64) = header(ARRAY, Repr::Raw, 0) };
+        self.builder_large.push((buffer, words));
+        self.grow_large_bytes(words * 8);
+        buffer
+    }
+
+    /// Resize a large builder buffer from `old` to `new` words; its contents up to the smaller size are kept.
+    fn resize_large_buffer(&mut self, buffer: Word, old: usize, new: usize) -> Word {
+        let position = self.builder_large.iter().position(|&(address, _)| address == buffer).expect("a large builder buffer");
+        debug_assert_eq!(self.builder_large[position].1, old);
+        let layout = std::alloc::Layout::array::<u64>(old).expect("buffer size");
+        let size = std::alloc::Layout::array::<u64>(new).expect("buffer size").size();
+        // SAFETY: allocated with `layout` by `allocate_large_buffer` or an earlier resize; `size` is non-zero.
+        let moved = unsafe { std::alloc::realloc(buffer as *mut u8, layout, size) } as Word;
+        if moved == 0 {
+            std::alloc::handle_alloc_error(std::alloc::Layout::array::<u64>(new).expect("buffer size"));
+        }
+        self.builder_large[position] = (moved, new);
+        if new > old {
+            self.grow_large_bytes((new - old) * 8);
+        } else {
+            self.large_bytes -= (old - new) * 8;
+        }
+        moved
+    }
+
+    /// A finished large buffer, shrunk to `words` words, handed to the large objects as its array.
+    fn take_large_buffer(&mut self, buffer: Word, old: usize, words: usize) -> Word {
+        let array = self.resize_large_buffer(buffer, old, words);
+        let position = self.builder_large.iter().position(|&(address, _)| address == array).expect("a large builder buffer");
+        self.builder_large.swap_remove(position);
+        // SAFETY: a global allocation of exactly `words` u64s with `Layout::array::<u64>(words)`, the layout a boxed
+        // slice of that length frees with; the header and the array's elements are written.
+        let memory = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(array as *mut u64, words)) };
+        self.large.push(memory);
+        array
+    }
+
+    /// Free a large builder buffer at once (its elements were copied out).
+    fn free_large_buffer(&mut self, buffer: Word, words: usize) {
+        let position = self.builder_large.iter().position(|&(address, _)| address == buffer).expect("a large builder buffer");
+        self.builder_large.swap_remove(position);
+        // SAFETY: allocated with this layout; nothing refers to it any more (the builder is reset by its caller).
+        unsafe { std::alloc::dealloc(buffer as *mut u8, std::alloc::Layout::array::<u64>(words).expect("buffer size")) };
+        self.large_bytes -= words * 8;
+    }
+
+    /// Count `bytes` of new large memory, as `allocate` counts a large object.
+    fn grow_large_bytes(&mut self, bytes: usize) {
+        self.allocated += bytes;
+        self.large_bytes += bytes;
+        let held = self.held_bytes();
+        if let Some(watch) = &mut self.watch {
+            watch.grow(bytes, held);
+        }
     }
 
     /// Keep a buffer no builder uses any more for the next ones, when it is small and there is room.
@@ -1592,13 +1671,19 @@ impl Heap {
         let (count, capacity, buffer) = Self::builder_parts(builder);
         debug_assert!(count > 0, "an empty builder finishes as the shared empty array");
         let repr = element_repr(self.header_of(builder));
+        let large = Self::class_of(capacity + 1).is_none();
         let in_place = !packed
             && match (Self::class_of(count + 1), Self::class_of(capacity + 1)) {
                 (Some(used), Some(room)) => used == room,
-                (None, None) => capacity - count <= capacity / 8,
                 _ => false,
             };
-        let array = if in_place {
+        let array = if large && !packed && Self::class_of(count + 1).is_none() {
+            // A large buffer shrinks to its length in place (or moves once) and becomes a large array.
+            self.counted("builder finished in place", 0, 0);
+            // SAFETY: the buffer's first `count` slots are written; its header becomes an array's.
+            unsafe { *(buffer as *mut u64) = header(ARRAY, repr, length(count)) };
+            self.take_large_buffer(buffer, capacity + 1, count + 1)
+        } else if in_place {
             self.counted("builder finished in place", 0, 0);
             // SAFETY: the buffer's first `count` slots are written; its header becomes an array's.
             unsafe { *(buffer as *mut u64) = header(ARRAY, repr, length(count)) };
@@ -1612,7 +1697,11 @@ impl Heap {
             } else {
                 self.allocate_array(repr, items)
             };
-            self.keep_spare_buffer(capacity, buffer);
+            if large {
+                self.free_large_buffer(buffer, capacity + 1);
+            } else {
+                self.keep_spare_buffer(capacity, buffer);
+            }
             array
         };
         // SAFETY: four words.
@@ -2448,6 +2537,21 @@ impl Heap {
             }
         }
         let mut large_bytes = 0;
+        // #1171: large builder buffers: a marked one lives on, a dead one (its builder unreachable) is freed.
+        self.builder_large.retain(|&(address, words)| {
+            // SAFETY: a live raw allocation of `words` words starting with a header.
+            let header = unsafe { *(address as *const u64) };
+            if header & MARK != 0 {
+                unsafe { *(address as *mut u64) = header & !MARK };
+                live += words * 8;
+                large_bytes += words * 8;
+                true
+            } else {
+                // SAFETY: allocated with this layout; unreachable, so nothing refers to it.
+                unsafe { std::alloc::dealloc(address as *mut u8, std::alloc::Layout::array::<u64>(words).expect("buffer size")) };
+                false
+            }
+        });
         self.large.retain_mut(|memory| {
             let address = memory.as_mut_ptr() as Word;
             let header = memory[0];

@@ -32,8 +32,10 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   dispatch_537, mnemonics. Steady 10-app −14%, 11 −14%, 08 −8%, 05 −3%, 06 ±0; 08 footprint 28.4 → 21.1 MB.
   `filter` sized by its source rejected (06 −4…−6%, 10-app +5%).
 - [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`);
-  06-collections 10.9 → 7.5 ms. With #1171 the push is inline; what is left is the growth and copy of the large
-  `filter` results (200 000 sources) and the JIT code of the closures.
+  large builder buffers are raw allocations resized by realloc (`Heap::builder_large`, `allocate_large_buffer`,
+  `resize_large_buffer`, `take_large_buffer` → `large`, freed by the sweep when unreachable); 06-collections
+  10.9 → 6.75 ms (target ≤ 6), 60 collections per 20 repetitions (40 before #1171 counted builder memory, 80 after).
+  Left: GC share (~25%) and the closures' JIT code.
 - [~] #1151 roles: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
   lever is the frontend's spills around calls (#1147's deferred own root slots).
 - [~] #1152 ownership: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured

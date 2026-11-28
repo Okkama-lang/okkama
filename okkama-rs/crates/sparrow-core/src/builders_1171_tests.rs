@@ -66,18 +66,52 @@ fn finish_takes_the_buffer_in_place_when_its_cell_fits() {
 }
 
 #[test]
-fn large_buffers_finish_in_place_only_when_little_room_is_left() {
+fn large_buffers_grow_in_place_and_finish_shrunk_to_their_length() {
     let mut heap = stressed();
+    // Exact room: finished at its length.
     let exact = heap.allocate_builder(Repr::Int, 1000);
-    let buffer = unsafe { *((exact + BUILDER_BUFFER as Word) as *const u64) };
     heap.builder_fill(exact, 1000, |n| word::small(n as i64).unwrap());
-    assert_eq!(heap.builder_finish(exact, false), buffer);
+    let array = heap.builder_finish(exact, false);
+    assert_eq!(heap.array_length(array), 1000);
+    // Four fifths used: shrunk to 800, not copied into another cell of the heap.
     let roomy = heap.allocate_builder(Repr::Int, 1000);
-    let buffer = unsafe { *((roomy + BUILDER_BUFFER as Word) as *const u64) };
     heap.builder_fill(roomy, 800, |n| word::small(n as i64).unwrap());
     let array = heap.builder_finish(roomy, false);
-    assert_ne!(array, buffer, "a fifth of the cell left: copied");
-    assert_eq!(heap.array_length(array), 800);
+    assert_eq!(heap.elements(array).iter().map(|&w| word::small_value(w).unwrap()).collect::<Vec<_>>(), (0..800).collect::<Vec<_>>());
+    assert!(heap.builder_large.is_empty(), "finished buffers are large arrays now");
+    // Grown from nothing past the small classes with references, collecting at every push: every element survives.
+    let builder = heap.allocate_builder(Repr::Ref, 0);
+    for n in 0..2000 {
+        let text = heap.allocate_text(&format!("t{n}"));
+        heap.builder_push(builder, text);
+        if n % 97 == 0 {
+            heap.collect(|visit| visit(builder, Repr::Ref));
+        }
+    }
+    assert_eq!(heap.builder_large.len(), 1, "one buffer, resized in place");
+    let before = heap.stats().allocated_bytes;
+    let array = heap.builder_finish(builder, false);
+    assert_eq!(heap.stats().allocated_bytes, before, "a shrink allocates nothing");
+    heap.collect(|visit| visit(array, Repr::Ref));
+    for (n, &item) in heap.elements(array).iter().enumerate() {
+        assert_eq!(heap.text(item), format!("t{n}"));
+    }
+    // A builder dropped before finishing: its large buffer is freed by the next collection.
+    let lost = heap.allocate_builder(Repr::Int, 5000);
+    heap.builder_fill(lost, 10, |n| word::small(n as i64).unwrap());
+    heap.collect(|_| {});
+    assert!(heap.builder_large.is_empty());
+}
+
+#[test]
+fn a_large_packed_builder_finishes_as_bytes_and_frees_its_buffer() {
+    let mut heap = stressed();
+    let builder = heap.allocate_builder(Repr::Raw, 0);
+    heap.builder_fill(builder, 3000, |n| (n % 256) as Word);
+    let array = heap.builder_finish(builder, true);
+    assert_eq!(heap.bytes(array).len(), 3000);
+    assert_eq!(heap.bytes(array)[300], (300 % 256) as u8);
+    assert!(heap.builder_large.is_empty());
 }
 
 #[test]
