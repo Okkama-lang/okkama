@@ -12,7 +12,10 @@ import "web/internal/request_log" take RequestLog;
 import "web/testing" take WebTestClient;
 import "web/exception" take Exception;
 import "logging/logger" take Logger;
-import "logging/write" take DiscardingLogs, CollectedLogs;
+import "logging/write" take DiscardingLogs, CollectedLogs, LogWriting;
+import "logging/record" take LogRecord;
+import "logging/name" take LogName;
+import "async/atomic" take Atomic;
 import "logging/level" take LogLevel;
 import "testing/time" take ManualClock;
 import "compression/gzip" take GzipDecompressed;
@@ -48,8 +51,9 @@ import "crypto/x509/trust" take PemTrustStore;
 //
 // listen() serves until SIGTERM or SIGINT: then the server stops accepting,
 // gives the requests in flight 10 seconds to finish, closes, and listen()
-// returns; a second signal ends the process at once. The address is an IP
-// literal; no name resolution happens here. server() binds and returns the std
+// drains its logger (StderrLogs waits at most two seconds) and returns. A
+// second signal ends the process at once. The address is an IP literal; no
+// name resolution happens here. server() binds and returns the std
 // HttpServer without serving, for callers that own the lifetime themselves:
 // port 0 picks a free port, local_endpoint() reports it, and server.drain(limit:)
 // drains it.
@@ -117,16 +121,14 @@ object WebApplication does Handling {
     async listen(address is string, port is int) is void {
         let stopping = AppStopping();
         defer await stopping.close();
-        await stopping.serve(await self.server(address, port));
-        // #1180: listen() drains the logger here
+        await AppLogging(logger).settle(stopping.serve(await self.server(address, port)));
     }
 
     // HTTPS: the identity's certificate and key, HTTP/2 and HTTP/1.1 by ALPN.
     async listen(address is string, port is int, tls is TlsIdentity) is void {
         let stopping = AppStopping();
         defer await stopping.close();
-        await stopping.serve(await self.server(address, port, tls));
-        // #1180: listen() drains the logger here
+        await AppLogging(logger).settle(stopping.serve(await self.server(address, port, tls)));
     }
 
     // The HTTPS server, bound and not serving; its own URL is https.
@@ -191,6 +193,24 @@ object WebApplication does Handling {
         };
         log.info(logger, StatusCode(status).number().string());
         answer;
+    }
+
+    async test "shutdown drains the logger after serving settles without sockets" {
+        for [false, true] -> failed {
+            let state = Atomic(0);
+            let destination = ShutdownLogs(state);
+            let logging = AppLogging(Logger(name: "web", destination: destination));
+            let serving = SettledApp(state: state, failed: failed);
+            let caught = try {
+                await logging.settle(serving.run());
+                false;
+            }
+            catch RequestLogFailure.broken {
+                true;
+            };
+            test.is(caught, failed);
+            test.is(state.value(), 3);
+        }
     }
 
     async test "request logging covers responses exceptions and propagated failures" {
@@ -358,6 +378,21 @@ object WebApplication does Handling {
     }
 }
 
+// Both listen paths finish here. AppStopping.serve has closed and settled
+// the server before the logger drains, even when serving throws.
+hidden object AppLogging {
+    has logger is Logger;
+
+    AppLogging(logger is Logger) {
+        self.logger = logger;
+    }
+
+    async settle(serving is Future<bool>) is void {
+        defer await logger.drain();
+        await serving;
+    }
+}
+
 // Serving that stops on SIGTERM or SIGINT. The signals are taken when the
 // object is made, before the port is bound (Interruption), so a signal that
 // comes as soon as the port accepts is not missed. On the signal the server
@@ -378,11 +413,12 @@ hidden object AppStopping {
         draining = FutureGroup();
     }
 
-    async serve(server is HttpServer) is void {
+    async serve(server is HttpServer) is bool {
         draining.start(self.drained(server));
         defer await server.settled();
         defer server.close();
         await server.serve();
+        true;
     }
 
     async drained(server is HttpServer) is bool {
@@ -403,6 +439,44 @@ hidden object AppStopping {
         }
         catch e is Cancelled {}
         interruption.close();
+    }
+}
+
+hidden object SettledApp {
+    has state is Atomic<int>;
+    has failed is bool;
+
+    SettledApp(state is Atomic<int>, failed is bool) {
+        self.state = state;
+        self.failed = failed;
+    }
+
+    async run() is bool {
+        defer state.replace(2);
+        state.replace(1);
+        if failed {
+            throw RequestLogFailure.broken;
+        }
+        true;
+    }
+}
+
+hidden object ShutdownLogs does LogWriting {
+    has state is Atomic<int>;
+
+    ShutdownLogs(state is Atomic<int>) {
+        self.state = state;
+    }
+
+    write(record is LogRecord) is void {}
+
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+
+    async drain() is void {
+        confirm state.value() == 2 else throw RequestLogFailure.broken;
+        state.replace(3);
     }
 }
 

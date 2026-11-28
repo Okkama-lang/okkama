@@ -6,8 +6,10 @@ module logging/stream v1.0.0;
 //     JsonStreamLogs(Stdout());
 //     TextTerminalLogs(origin: session.output(), zone: utc, styles: [LogStyle(level: LogLevel.error, style: red)]);
 
+import "runtime/stdio" take log_write, log_drain, log_dropped, log_buffer_limit;
 import "logging/write" take LogWriting;
-import "logging/record" take LogRecord, LogContext;
+import "logging/record" take LogRecord, LogContext, InvalidLogProcess;
+import "io/stdout" take Stderr;
 import "logging/level" take LogLevel;
 import "logging/line" take TextLogLine, JsonLogLine;
 import "time/zone" take TimeZone, FixedZone;
@@ -21,6 +23,7 @@ import "json" take JsonField;
 import "logging/field" take LogFields;
 import "logging/name" take LogName;
 import "time/clock" take Instant;
+import "time/rfc3339" take InvalidRfc3339Offset;
 import "time/duration" take Duration;
 
 // The style of one level's lines on a terminal.
@@ -98,6 +101,64 @@ object LogStyles {
 // Styles that cannot be used.
 enum InvalidLogStyles is Error = (invalid);
 
+// Records as text or JSON lines on standard error, without waiting for the sink.
+// Formats on the calling task, then copies UTF-8 bytes to the host's buffer.
+//
+//     let logs = StderrLogs(json: true);
+//     let log = Logger(name: "web", destination: logs);
+//     await log.drain();
+object StderrLogs does LogWriting {
+    has json is bool;
+    has zone is TimeZone;
+
+    // Text in UTC by default; JSON always uses UTC, as JsonStreamLogs does.
+    // Sets the process-wide host buffer limit once at construction, including
+    // the in-flight line. The last construction wins; zero or less drops all.
+    // Captures and the threadless playground ignore the limit.
+    StderrLogs(
+        json is bool = false,
+        zone is TimeZone = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat())),
+        limit is int = 1048576
+    ) {
+        self.json = json;
+        self.zone = zone;
+        log_buffer_limit(limit);
+    }
+
+    // Formats exactly as the stream destinations, including the final LF.
+    // Never throws: a record that cannot be formatted is discarded before
+    // reaching the host, so it is not included in dropped().
+    write(record is LogRecord) is void {
+        try {
+            let line = if json {
+                JsonLogLine(record).string();
+            }
+            else {
+                TextLogLine(origin: record, zone: zone).string();
+            };
+            log_write(Utf8Encoded(line + "\n").bytes());
+        }
+        catch failure is Error {}
+    }
+
+    // All names and levels are eligible, even when the host buffer is full.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+
+    // Waits for previously accepted lines, at most two seconds on the host.
+    // A failed sink (including EPIPE) is silent; timeout may leave lines pending.
+    async drain() is void {
+        await log_drain();
+    }
+
+    // Cumulative process-wide losses from overflow or sink failure, not just
+    // this destination's; capped at 2^63 - 1. Reading does not reset the count.
+    dropped() is int {
+        log_dropped();
+    }
+}
+
 // Records as text lines on a stream.
 object TextStreamLogs does LogWriting {
     has origin is Writing;
@@ -111,6 +172,9 @@ object TextStreamLogs does LogWriting {
         self.origin = origin;
         self.zone = zone;
     }
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Writes record as a text line.
     write(record is LogRecord) is void {
@@ -132,6 +196,9 @@ object JsonStreamLogs does LogWriting {
     JsonStreamLogs(origin is Writing) {
         self.origin = origin;
     }
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Writes record as a JSON line.
     write(record is LogRecord) is void {
@@ -157,6 +224,9 @@ object TextTerminalLogs does LogWriting {
         self.zone = zone;
         self.styles = LogStyles(styles);
     }
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Writes record as a styled line.
     write(record is LogRecord) is void {
@@ -184,6 +254,9 @@ object JsonTerminalLogs does LogWriting {
         self.origin = origin;
         self.styles = LogStyles(styles);
     }
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Writes record as a styled JSON line.
     write(record is LogRecord) is void {
@@ -250,4 +323,96 @@ test "stream writers put one line per record on their output" {
             )
         );
     };
+}
+
+// The CLI capture test compares the two halves of stderr byte for byte.
+async test "stderr text matches synchronous streams" {
+    let records = StreamLogRecords().records();
+    for [
+        FixedZone(name: "UTC", offset: Duration(seconds: 0.rat())),
+        FixedZone(name: "east", offset: Duration(seconds: 19800.rat()))
+    ] -> zone {
+        let synchronous = TextStreamLogs(origin: Stderr(), zone: zone);
+        let buffered = StderrLogs(zone: zone);
+        for records -> record {
+            synchronous.write(record);
+        }
+        for records -> record {
+            buffered.write(record);
+        }
+        await buffered.drain();
+        test.ok(buffered.enabled(LogName("app"), LogLevel.debug));
+        test.ok(buffered.dropped() >= 0);
+    }
+}
+
+async test "stderr JSON matches synchronous streams" {
+    let records = StreamLogRecords().records();
+    let synchronous = JsonStreamLogs(Stderr());
+    let buffered = StderrLogs(
+        json: true,
+        zone: FixedZone(name: "east", offset: Duration(seconds: 19800.rat()))
+    );
+    for records -> record {
+        synchronous.write(record);
+    }
+    for records -> record {
+        buffered.write(record);
+    }
+    await buffered.drain();
+}
+
+hidden object StreamLogRecords {
+    StreamLogRecords();
+
+    records() is @LogRecord {
+        let context = LogContext(
+            name: LogName("app", "db"),
+            fields: LogFields(JsonField("ключ", "значение"), JsonField("count", 7)),
+            process: 42
+        );
+        let time = Instant(Duration(seconds: rat(1700000000123, 1000)));
+        [
+            LogRecord(occurred: time, level: LogLevel.debug, message: "", context: context),
+            LogRecord(occurred: time, level: LogLevel.info, message: "привет 🙂", context: context),
+            LogRecord(
+                occurred: time,
+                level: LogLevel.warning,
+                message: "a\nb\t\"c\"",
+                context: context
+            ),
+            LogRecord(
+                occurred: time,
+                level: LogLevel.error,
+                message: "x" + 8232.char().string(),
+                context: context,
+                cause: InvalidLogProcess.invalid
+            ),
+            LogRecord(occurred: time, level: LogLevel.critical, message: "down", context: context)
+        ];
+    }
+}
+
+async test "synchronous streams drain without writing" {
+    let bytes = ByteBuffer();
+    let text is LogWriting = TextStreamLogs(bytes.writing());
+    let json is LogWriting = JsonStreamLogs(bytes.writing());
+    await text.drain();
+    await json.drain();
+    await StderrLogs().drain();
+    test.is(bytes.content().bytes().size(), 0);
+}
+
+async test "stderr ignores formatting failures before reaching the host" {
+    let zone = FixedZone(name: "seconds", offset: Duration(seconds: 1.rat()));
+    let record = StreamLogRecords().records()[0];
+    let bytes = ByteBuffer();
+    test.throws(InvalidRfc3339Offset) {
+        TextStreamLogs(origin: bytes.writing(), zone: zone).write(record);
+    };
+    let logs = StderrLogs(zone: zone);
+    let before = logs.dropped();
+    logs.write(record);
+    await logs.drain();
+    test.is(logs.dropped(), before);
 }

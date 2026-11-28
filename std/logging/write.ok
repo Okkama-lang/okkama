@@ -18,6 +18,8 @@ import "time/duration" take Duration;
 
 // A destination of log records.
 role LogWriting {
+    // Waits for accepted records; synchronous destinations have nothing to wait for.
+    async drain() is void;
     // Writes origin.
     write(origin is LogRecord) is void;
     // Whether a record of name at level would be written; callers skip building
@@ -29,6 +31,9 @@ role LogWriting {
 object DiscardingLogs does LogWriting {
     // The destination.
     DiscardingLogs();
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Drops origin.
     write(origin is LogRecord) is void {}
@@ -58,6 +63,9 @@ object CollectedLogs does LogWriting {
         origin = Atomic(empty);
         self.capacity = capacity;
     }
+
+    // Nothing is pending after a synchronous write.
+    async drain() is void {}
 
     // Keeps record; LogCollectionLimit when full.
     write(record is LogRecord) is void {
@@ -108,6 +116,24 @@ object BroadcastLogs does LogWriting {
         self.destinations = snapshot;
     }
 
+    // Drains every destination, reporting failures after all have been tried.
+    async drain() is void {
+        let empty is @Error = [];
+        let failures = Atomic(empty);
+        for destinations -> destination {
+            try {
+                await destination.drain();
+            }
+            catch failure is Error {
+                failures.replace(failures.value() + [failure]);
+            }
+        }
+        let failed = failures.value();
+        if failed.size() > 0 {
+            throw LogDeliveryFailure.failed(failed.size(), failed[0].text());
+        }
+    }
+
     // Writes origin to each; LogDeliveryFailure says how many failed.
     write(origin is LogRecord) is void {
         let empty is @Error = [];
@@ -146,6 +172,11 @@ object FallbackLogs does LogWriting {
         self.fallback = fallback;
     }
 
+    // Both may have accepted records; drains both even if the primary fails.
+    async drain() is void {
+        await BroadcastLogs(primary, fallback).drain();
+    }
+
     // Writes origin to primary, or to fallback when primary throws.
     write(origin is LogRecord) is void {
         try {
@@ -178,6 +209,16 @@ object BestEffortLogs does LogWriting {
         count = Atomic((0));
     }
 
+    // Drains origin; a failure is counted, not thrown.
+    async drain() is void {
+        try {
+            await origin.drain();
+        }
+        catch failure is Error {
+            count.replace(count.value() + 1);
+        }
+    }
+
     // Writes record; a failure is counted, not thrown.
     write(record is LogRecord) is void {
         try {
@@ -193,7 +234,7 @@ object BestEffortLogs does LogWriting {
         origin.enabled(name, level);
     }
 
-    // How many writes failed.
+    // How many writes or drains failed.
     failures() is int {
         count.value();
     }
@@ -257,4 +298,62 @@ test "writers say which records they would write" {
         )
     );
     test.ok(!BestEffortLogs(DiscardingLogs()).enabled(app, LogLevel.error));
+}
+
+async test "synchronous destinations drain without changing records" {
+    let kept = CollectedLogs();
+    let record = LogRecord(
+        occurred: Instant(Duration(seconds: 0.rat())),
+        level: LogLevel.info,
+        message: "kept",
+        context: LogContext(name: LogName("app"), fields: LogFields(), process: 1)
+    );
+    kept.write(record);
+    let destination is LogWriting = kept;
+    await destination.drain();
+    await destination.drain();
+    await DiscardingLogs().drain();
+    test.is(kept.size(), 1);
+    test.is(kept.records().first()::Entry::message, "kept");
+}
+
+hidden object DrainProbe does LogWriting {
+    has count is Atomic<int>;
+    has failing is bool;
+
+    DrainProbe(count is Atomic<int>, failing is bool = false) {
+        self.count = count;
+        self.failing = failing;
+    }
+
+    write(record is LogRecord) is void {}
+
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+
+    async drain() is void {
+        count.replace(count.value() + 1);
+        if failing {
+            throw LogCollectionLimit.exceeded;
+        }
+    }
+}
+
+async test "combined destinations drain every branch and preserve failure policy" {
+    let count = Atomic(0);
+    let first = DrainProbe(count: count, failing: true);
+    let second = DrainProbe(count);
+    test.throws(LogDeliveryFailure) {
+        await BroadcastLogs(first, second).drain();
+    };
+    test.is(count.value(), 2);
+    test.throws(LogDeliveryFailure) {
+        await FallbackLogs(primary: first, fallback: second).drain();
+    };
+    test.is(count.value(), 4);
+    let quiet = BestEffortLogs(first);
+    await quiet.drain();
+    test.is(count.value(), 5);
+    test.is(quiet.failures(), 1);
 }

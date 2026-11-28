@@ -21,28 +21,49 @@ import "io/stdout" take Stdout;
 // A destination that prints the level, the logger's name, the message and
 // the fields, and nothing that changes from run to run.
 object Lines does LogWriting {
+    // The deterministic output destination.
     Lines();
+
+    // Each write completes synchronously.
+    async drain() is void {}
+
+    // Writes one record to stdout.
     write(origin is LogRecord) is void {
-        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " + origin.context().name().string() + ": "
-            + origin::Entry::message + " " + origin.context().fields().values().string());
+        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " +
+            origin.context().name().string() + ": " + origin::Entry::message + " " +
+            origin.context().fields().values().string());
     }
-    enabled(name is LogName, level is LogLevel) is bool { true; }
+
+    // Every name and level is accepted.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
 }
 
 main() is int {
     let out = Stdout();
-    let file = TomlSettings(document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
-        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml"));
-    let env = EnvironmentSettings(environment: Environment(values: ["APP_PORT": "9090"]),
+    let file = TomlSettings(
+        document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
+        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml")
+    );
+    let env = EnvironmentSettings(
+        environment: Environment(values: ["APP_PORT": "9090"]),
         names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
-        source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
+        source: SettingSource(kind: SettingSourceKind.environment, name: "environment")
+    );
     let settings = LayeredSettings(file, env);
-    out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
-        + match settings.source("server.port") { case Maybe.some(source): source::Source::name; case Maybe.none: "nowhere"; });
-    out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
-        + (settings.bool("server.debug") else false).string());
-    let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
-        level: LogLevel.info);
+    out.writeln("port " + (settings.int("server.port") else 80).string() + " from " +
+        match settings.source("server.port") {
+        case Maybe.some(source): source::Source::name;
+        case Maybe.none: "nowhere";
+    });
+    out.writeln("host " + (settings.text("server.host") else "?") + ", debug " +
+        (settings.bool("server.debug") else false).string());
+    let log = Logger(
+        name: "shop.auth",
+        destination: RedactedLogs(origin: Lines(), names: ["password"]),
+        level: LogLevel.info
+    );
     log.debug("not written, not even built");
     log.info("login", JsonField("user", "ann"), JsonField("password", "hunter2"));
     0;

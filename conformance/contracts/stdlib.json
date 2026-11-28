@@ -124,6 +124,21 @@
       }
     },
     {
+      "id": "STD.LOGGING",
+      "title": "std logging public contract (no public declarations)",
+      "family": "Standard library: logging",
+      "spec_refs": [
+        "std/logging.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "n/a: module owns no public declarations",
+        "invalid": "n/a: module owns no public declarations",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.OPERATORS",
       "title": "std operators public contract (Adding, Dividing, Multiplying, Negating, Remaindering, Subtracting)",
       "family": "Standard library: operators",
@@ -4295,7 +4310,7 @@
     },
     {
       "id": "STD.LOGGING.STREAM",
-      "title": "std logging/stream public contract (InvalidLogStyles, JsonStreamLogs, JsonTerminalLogs, LogStyle, LogStyles, TextStreamLogs, TextTerminalLogs)",
+      "title": "std logging/stream public contract (InvalidLogStyles, JsonStreamLogs, JsonTerminalLogs, LogStyle, LogStyles, StderrLogs, TextStreamLogs, TextTerminalLogs)",
       "family": "Standard library: logging",
       "spec_refs": [
         "std/logging/stream.ok"

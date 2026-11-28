@@ -21011,28 +21011,49 @@ import "io/stdout" take Stdout;
 // A destination that prints the level, the logger's name, the message and
 // the fields, and nothing that changes from run to run.
 object Lines does LogWriting {
+    // The deterministic output destination.
     Lines();
+
+    // Each write completes synchronously.
+    async drain() is void {}
+
+    // Writes one record to stdout.
     write(origin is LogRecord) is void {
-        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " + origin.context().name().string() + ": "
-            + origin::Entry::message + " " + origin.context().fields().values().string());
+        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " +
+            origin.context().name().string() + ": " + origin::Entry::message + " " +
+            origin.context().fields().values().string());
     }
-    enabled(name is LogName, level is LogLevel) is bool { true; }
+
+    // Every name and level is accepted.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
 }
 
 main() is int {
     let out = Stdout();
-    let file = TomlSettings(document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
-        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml"));
-    let env = EnvironmentSettings(environment: Environment(values: ["APP_PORT": "9090"]),
+    let file = TomlSettings(
+        document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
+        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml")
+    );
+    let env = EnvironmentSettings(
+        environment: Environment(values: ["APP_PORT": "9090"]),
         names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
-        source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
+        source: SettingSource(kind: SettingSourceKind.environment, name: "environment")
+    );
     let settings = LayeredSettings(file, env);
-    out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
-        + match settings.source("server.port") { case Maybe.some(source): source::Source::name; case Maybe.none: "nowhere"; });
-    out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
-        + (settings.bool("server.debug") else false).string());
-    let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
-        level: LogLevel.info);
+    out.writeln("port " + (settings.int("server.port") else 80).string() + " from " +
+        match settings.source("server.port") {
+        case Maybe.some(source): source::Source::name;
+        case Maybe.none: "nowhere";
+    });
+    out.writeln("host " + (settings.text("server.host") else "?") + ", debug " +
+        (settings.bool("server.debug") else false).string());
+    let log = Logger(
+        name: "shop.auth",
+        destination: RedactedLogs(origin: Lines(), names: ["password"]),
+        level: LogLevel.info
+    );
     log.debug("not written, not even built");
     log.info("login", JsonField("user", "ann"), JsonField("password", "hunter2"));
     0;
@@ -21066,6 +21087,19 @@ the named fields as `[redacted]` before anything reaches the destination
 it wraps, so a password passed in by mistake never reaches the log. The
 example's own destination leaves out the time and the process id, so its
 output is the same on every run.
+
+`Logger("shop")` now defaults to `StderrLogs()`: it formats the same text
+lines, then gives their UTF-8 bytes to a bounded host buffer whose writer
+runs off the task scheduler. Servers and async code can use it directly;
+`StderrLogs(json: true)` selects JSON. After the tasks that log have settled,
+call `await log.drain()`; the host waits at most two seconds, and
+`WebApplication.listen()` does this at shutdown. A full buffer drops whole
+lines and reports their count in the stream; `dropped()` reads the shared
+process-wide total. EPIPE is silent. `limit:` defaults to 1 MiB and sets the
+process-wide limit once at construction. `Stderr()` stays synchronous, and
+`QueuedLogs` is for asynchronous deliveries: it cannot make a synchronous
+stream write non-blocking. Custom `LogWriting` destinations implement
+`async drain() is void`, a no-op when writes already finish synchronously.
 
 ### The network's formats: `mail`, `net`
 

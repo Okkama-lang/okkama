@@ -1,0 +1,45 @@
+module logging v1.0.0;
+
+// Application logging. Import Logger from logging/logger; destinations live
+// in logging/stream and logging/write, and filters in logging/filter.
+//
+// ```okkama
+// import "logging/logger" take Logger;
+// async main() is int {
+//     let log = Logger("shop");
+//     log.info("started");
+//     await log.drain();
+//     0;
+// }
+// ```
+//
+// # Servers and async code
+//
+// Logger defaults to StderrLogs(): the same text lines as TextStreamLogs(Stderr()),
+// formatted on the calling task, then handed to a bounded host buffer. A host
+// writer thread writes them to stderr without blocking the task scheduler.
+// Use StderrLogs(json: true) for JSON lines; zone: selects the text time zone.
+// Its limit: defaults to 1048576 bytes and sets the shared process-wide limit
+// once at construction, including the in-flight line. Share one destination
+// when several loggers need the same policy; the last construction sets it.
+//
+// At shutdown, await log.drain() after the tasks that log have settled.
+// StderrLogs waits for already accepted lines for at most two seconds. The host
+// also drains at exit and before an uncaught failure report. A timed-out drain
+// can leave lines pending. WebApplication.listen() drains its logger after the
+// server settles, including after SIGTERM or SIGINT.
+//
+// Overflow drops whole lines. The next line the host writes is preceded by
+// "okkama: N log lines dropped"; logs.dropped() reads cumulative process-wide
+// losses. EPIPE and other sink failures are silent: the host drops subsequent
+// lines and counts them. Records that fail formatting are discarded before
+// reaching the host and are not included in dropped().
+// Captured test output and the threadless playground receive bytes directly;
+// their writes ignore the buffer limit.
+//
+// Stderr() and TextStreamLogs remain synchronous. QueuedLogs is for genuinely
+// asynchronous LogDelivering destinations; wrapping a synchronous stream in
+// QueuedLogs does not keep that stream's write from blocking the scheduler.
+// Every LogWriting destination has async drain(); synchronous destinations do
+// nothing, and wrappers drain their destinations. NamedLogging, child loggers
+// and FieldLogging forward drain() to the same shared destination.

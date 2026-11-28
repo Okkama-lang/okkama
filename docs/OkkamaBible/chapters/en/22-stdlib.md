@@ -734,6 +734,19 @@ it wraps, so a password passed in by mistake never reaches the log. The
 example's own destination leaves out the time and the process id, so its
 output is the same on every run.
 
+`Logger("shop")` now defaults to `StderrLogs()`: it formats the same text
+lines, then gives their UTF-8 bytes to a bounded host buffer whose writer
+runs off the task scheduler. Servers and async code can use it directly;
+`StderrLogs(json: true)` selects JSON. After the tasks that log have settled,
+call `await log.drain()`; the host waits at most two seconds, and
+`WebApplication.listen()` does this at shutdown. A full buffer drops whole
+lines and reports their count in the stream; `dropped()` reads the shared
+process-wide total. EPIPE is silent. `limit:` defaults to 1 MiB and sets the
+process-wide limit once at construction. `Stderr()` stays synchronous, and
+`QueuedLogs` is for asynchronous deliveries: it cannot make a synchronous
+stream write non-blocking. Custom `LogWriting` destinations implement
+`async drain() is void`, a no-op when writes already finish synchronously.
+
 ### The network's formats: `mail`, `net`
 
 {{example:22-net}}

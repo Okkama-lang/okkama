@@ -421,7 +421,8 @@ hidden object QueueRun {
             rejected.replace(true);
         }
         delivery.open();
-        await logs.drain();
+        let writing is LogWriting = logs;
+        await writing.drain();
         dropped.replace(logs.dropped_records().string());
         logs.close();
         try {

@@ -1,7 +1,7 @@
 module logging/logger v1.0.0;
 
 // A logger for an application (#181): text lines to standard error, info and
-// above, unless told otherwise.
+// above, without waiting for the sink, unless told otherwise.
 //
 //     let log = Logger("shop");
 //     log.info("started");
@@ -20,9 +20,13 @@ import "logging/name" take LogName, ChildLogName;
 import "logging/field" take LogFields;
 import "logging/named" take Logging, NamedLogging;
 import "logging/write" take LogWriting, CollectedLogs, DiscardingLogs;
-import "logging/stream" take TextStreamLogs;
-import "io/stdout" take Stderr;
+import "logging/stream" take StderrLogs;
 import "json" take JsonField;
+import "logging/record" take LogRecord;
+import "logging/filter" take AllowedLogs;
+import "logging/redact" take RedactedLogs, RedactedCauseLogs;
+import "logging/enrichment" take FieldLogging;
+import "async/atomic" take Atomic;
 
 // A logger: a name, a destination and a level.
 object Logger does Logging {
@@ -34,13 +38,18 @@ object Logger does Logging {
     // A logger called name, writing to destination at level and above.
     Logger(
         name is string,
-        destination is LogWriting = TextStreamLogs(Stderr()),
+        destination is LogWriting = StderrLogs(),
         level is LogLevel = LogLevel.info
     ) {
         self.name = LogName(name.split("."));
         self.level = level;
         target = destination;
         origin = NamedLogging(name: self.name, destination: destination);
+    }
+
+    // Drains the shared destination, including records from child loggers.
+    async drain() is void {
+        await target.drain();
     }
 
     // Logs message at debug with fields; below the level it is one comparison
@@ -233,4 +242,49 @@ test "a destination that would not write gets no fields built" {
     quiet.info("repeated", JsonField("a", 1), JsonField("a", 2));
     quiet.error("repeated", LoggerProbe.failed("x"), JsonField("a", 1), JsonField("a", 2));
     test.ok(!quiet.enabled(LogLevel.critical));
+}
+
+hidden object LoggerDrainProbe does LogWriting {
+    has count is Atomic<int>;
+
+    LoggerDrainProbe(count is Atomic<int>) {
+        self.count = count;
+    }
+
+    write(record is LogRecord) is void {}
+
+    enabled(name is LogName, level is LogLevel) is bool {
+        false;
+    }
+
+    async drain() is void {
+        count.replace(count.value() + 1);
+    }
+}
+
+async test "loggers children and decorators delegate drain even when disabled" {
+    let count = Atomic(0);
+    let destination = AllowedLogs(
+        origin: RedactedLogs(
+            origin: RedactedCauseLogs(origin: LoggerDrainProbe(count), replacement: "hidden"),
+            names: ["secret"]
+        ),
+        level: LogLevel.error
+    );
+    let log = Logger(name: "app", destination: destination);
+    await log.drain();
+    await log.child("child").drain();
+    let named = NamedLogging(name: "app", destination: destination);
+    await named.drain();
+    await named.child("child").drain();
+    let general is Logging = FieldLogging(origin: log, fields: LogFields());
+    await general.drain();
+    test.is(count.value(), 5);
+}
+
+async test "default logger writes to stderr and drains" {
+    let log = Logger("default");
+    log.debug("omitted");
+    log.info("through StderrLogs");
+    await log.drain();
 }

@@ -41,6 +41,8 @@ hidden object CurrentLogProcess does LogProcessReading {
 
 // Something that logs.
 role Logging {
+    // Drains the destination shared by this logger and its children.
+    async drain() is void;
     // Logs message at level.
     log(level is LogLevel, message is string) is void;
     // Logs message at level with fields.
@@ -99,6 +101,11 @@ object NamedLogging does Logging {
         self.clock = clock;
         self.fields = fields;
         self.process = process;
+    }
+
+    // Drains the destination shared by this logger and its children.
+    async drain() is void {
+        await destination.drain();
     }
 
     // A level the destination would not write costs one question (#180): no

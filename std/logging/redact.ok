@@ -41,6 +41,11 @@ object RedactedLogs does LogWriting {
         self.replacement = LogFields(JsonField("replacement", replacement)).value("replacement");
     }
 
+    // Drains the wrapped destination.
+    async drain() is void {
+        await origin.drain();
+    }
+
     // Writes record with the named fields replaced.
     write(record is LogRecord) is void {
         let values = record.context().fields().values();
@@ -79,6 +84,11 @@ object RedactedCauseLogs does LogWriting {
     RedactedCauseLogs(origin is LogWriting, replacement is string) {
         self.origin = origin;
         self.replacement = replacement;
+    }
+
+    // Drains the wrapped destination.
+    async drain() is void {
+        await origin.drain();
     }
 
     // Writes record with its cause replaced.

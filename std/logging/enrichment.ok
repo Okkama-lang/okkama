@@ -26,6 +26,11 @@ object FieldLogging does Logging {
         self.fields = fields;
     }
 
+    // Drains the wrapped logger's destination.
+    async drain() is void {
+        await origin.drain();
+    }
+
     // Logs message at level.
     log(level is LogLevel, message is string) is void {
         origin.log(level, message, fields);

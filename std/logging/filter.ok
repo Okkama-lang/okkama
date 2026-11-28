@@ -168,6 +168,11 @@ object AllowedLogs does LogWriting {
         allowing = LevelThresholds(fallback: level, overrides: overrides);
     }
 
+    // Drains the wrapped destination.
+    async drain() is void {
+        await origin.drain();
+    }
+
     // Writes record when it passes.
     write(record is LogRecord) is void {
         if allowing.allowed(record.context().name(), record::Entry::level) {
