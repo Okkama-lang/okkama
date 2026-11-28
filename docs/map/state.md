@@ -18,6 +18,9 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   Limits.extensions, ext::bind, Runtime.external, host/native_ext.rs (sync, scalars, views, text_new, bytes_new,
   fail, interrupted; contract faults stop and poison), 15 ext_tests, cost 0.25× std crc32. Next: step 2 `1083-values`
   (bigint, rat, arrays, maps, bytes_reserve, ?T, memory stop; fuzz target with a hostile extension).
+- [x] #1082 CBOR (agent; feature/1082): std/cbor.ok over std/runtime/cbor.ok (39 natives, IDs 681–719),
+  sparrow-core/src/cbor.rs (no recursion), host/native_cbor.rs, tests sparrow-core/tests/cbor.rs (14), std inline 12+2,
+  examples/cbor/message.ok, fuzz target `cbor`. runtime/cbor is PURE (playground allowed).
 - [x] #1188 language reference for agents (agent; 8945e8acf): docs/agents/language.md (50 KB, 31 checked examples),
   docs/agents/check.py (fences okkama / okkama,run / okkama,test / okkama,fail / okkama,ignore), Wave "Corpora" step.
   Findings fixed: LLM-GUIDE §8 arguments line. Bible ch.17 gap (unbounded type parameter answers no action) noted.

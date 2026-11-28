@@ -4,6 +4,16 @@ The newest entries are at the top of each section. Each one gives its date, who 
 are. Working rules (testing, CI, roles) are in LLM-GUIDE §1 and are not repeated here. Seeded 2026-11-20 from
 the session's memory; older rulings live in the commits and tickets named.
 
+## CBOR in std (#1082, 2026-11-28; agent's design under std-principles, the owner delegated the API)
+
+- Module `cbor` at the top level beside json/toml/xml (a data format, not a byte-to-text encoding).
+- rat = tag 30 `[n, d]` reduced, d > 0; map keys any CBOR value, equal by deterministic encoding (bignum 1 = 1,
+  1 ≠ 1.0); duplicates refused at decode and at build. Unknown tags, simple values, undefined and non-finite floats
+  are kept and written back; `float()` on a non-finite value throws `unrepresentable`. Encoding never produces
+  indefinite lengths. A declared length past the remaining bytes is `truncated` before any allocation.
+- The codec is native (Rust): an Okkama decoder's header walk alone took ~4 ms per MB against 6–9 ms for the full
+  native decode with the tree.
+
 ## Native-extension ABI (#1083, 2026-11-28; design Fable, the owner delegated the decisions)
 
 - The design is okkama-docs/runtime/native-abi-1083.md (supersedes native-extension-abi-design.md): a C ABI of opaque

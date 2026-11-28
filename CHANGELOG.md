@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **CBOR in std (#1082).** `import "cbor"`: `Cbor`, an immutable CBOR (RFC 8949) value read without casts and built
+  in code; `ParsedCbor(bytes).root()` decodes one item with limits on depth, items and size (malformed input fails
+  with a typed `CborError` and its byte offset; duplicate keys are refused); `CborItems` reads a CBOR sequence from a
+  stream. `encoding()` writes the preferred serialization (shortest floats, bignums past 64 bits, definite lengths),
+  `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
+  `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
+  json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
 - **Native extensions, step 1: the seam (#1083).** An embedder registers extension descriptors (`Limits.extensions`,
   the C ABI of `okkama-runtime-abi/include/okkama_ext.h`); at runtime creation the runtime binds the program's
   natives that the std table does not name to them, refusing a signature mismatch, a duplicate or a std shadow. Calls
