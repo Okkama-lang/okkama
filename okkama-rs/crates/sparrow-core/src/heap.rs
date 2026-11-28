@@ -1581,7 +1581,9 @@ impl Heap {
         if new > old {
             self.grow_large_bytes((new - old) * 8);
         } else {
+            // Room given back at once never becomes garbage: it no longer counts toward the next collection.
             self.large_bytes -= (old - new) * 8;
+            self.allocated = self.allocated.saturating_sub((old - new) * 8);
         }
         moved
     }
@@ -1605,6 +1607,7 @@ impl Heap {
         // SAFETY: allocated with this layout; nothing refers to it any more (the builder is reset by its caller).
         unsafe { std::alloc::dealloc(buffer as *mut u8, std::alloc::Layout::array::<u64>(words).expect("buffer size")) };
         self.large_bytes -= words * 8;
+        self.allocated = self.allocated.saturating_sub(words * 8);
     }
 
     /// Count `bytes` of new large memory, as `allocate` counts a large object.

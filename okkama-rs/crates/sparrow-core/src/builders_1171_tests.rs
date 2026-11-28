@@ -91,7 +91,8 @@ fn large_buffers_grow_in_place_and_finish_shrunk_to_their_length() {
     assert_eq!(heap.builder_large.len(), 1, "one buffer, resized in place");
     let before = heap.stats().allocated_bytes;
     let array = heap.builder_finish(builder, false);
-    assert_eq!(heap.stats().allocated_bytes, before, "a shrink allocates nothing");
+    // A shrink allocates nothing, and the room it gives back no longer counts toward the next collection.
+    assert!(heap.stats().allocated_bytes < before, "a shrink gives room back");
     heap.collect(|visit| visit(array, Repr::Ref));
     for (n, &item) in heap.elements(array).iter().enumerate() {
         assert_eq!(heap.text(item), format!("t{n}"));

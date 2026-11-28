@@ -9,8 +9,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Large builders grow in place (#1150).** A builder buffer past the small size classes is a raw allocation that
   grows and shrinks by `realloc`: doubling leaves no garbage buffer behind and counts only its growth toward the
   next collection, and `finish` shrinks it to its length and keeps it as the array, never copying a large result.
-  06-collections steady 7.56 → 6.75 ms (−11%; 60 collections over 20 repetitions instead of 80), peak footprint
-  25.0 → 22.0 MB; the rest of the ladder within ±1.7%.
+  Room a shrink gives back no longer counts toward the next collection. 06-collections steady 7.56 → 6.67 ms
+  (−12%; 50 collections over 20 repetitions instead of 80), peak footprint 25.0 → 22.0 MB; the rest of the ladder
+  within ±1.7%.
 - **String slices share their text (#1176).** A slice or substring of 64 bytes or more shares its source's
   storage (the flat string, or a version's text buffer) when it keeps at most twice what it holds, the rule array
   slices follow (#249): `rest = rest.slice(1, n)` in a loop shares until half is left, copies that half once, and
