@@ -112,6 +112,9 @@ pub struct Resources {
     /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
     /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
     structure: HashMap<Word, Box<[(Word, Repr)]>>,
+    /// #1152: for an array's index, the position of each child (ascending): a copied slice takes the part of its
+    /// parent's index inside its range instead of scanning its elements (`inherit_slice_structure`).
+    positions: HashMap<Word, Box<[u32]>>,
     /// Development measurement (OKKAMA_DEV=runtime, #909): per identity, the region that first owned it and
     /// whether it ever moved to another owner. Empty unless the category is on.
     origins: HashMap<Word, (Word, bool)>,
@@ -242,6 +245,7 @@ impl Resources {
             self.summaries.remove(object);
             self.origins.remove(object);
             self.structure.remove(object);
+            self.positions.remove(object);
         }
     }
 }
@@ -1118,10 +1122,10 @@ impl Runtime {
                     if header & heap::BUFFER != 0 {
                         pending.extend(elements.iter().rev().map(|&e| (e, repr)));
                     } else {
-                        let children = elements.iter().map(|&e| (e, repr));
-                        let index = self.structure_of(children);
+                        let (index, positions) = self.array_structure(&elements, repr);
                         pending.extend(index.iter().rev().copied());
                         self.remember_structure(object, index);
+                        self.resources.positions.insert(object, positions);
                     }
                 }
                 heap::CLOSURE => {
@@ -1271,17 +1275,55 @@ impl Runtime {
     /// string, an object that is not an identity, a container whose index is empty) is left out for good.
     fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> Box<[(Word, Repr)]> {
         okkama_devtrace::count!("runtime", "structure index built");
-        children.filter(|&(word, repr)| {
-            let Some(pointer) = repr.pointer(word) else { return false };
-            let header = self.heap.header_of(pointer);
-            match heap::kind(header) {
-                heap::OBJECT => header & heap::IDENTITY != 0,
-                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
-                    && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
-                heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
-                _ => false,
-            }
-        }).collect()
+        children.filter(|&(word, repr)| self.may_hold_identity(word, repr)).collect()
+    }
+
+    /// Whether a child belongs in a structure index: it may hold an identity now or later.
+    fn may_hold_identity(&self, word: Word, repr: Repr) -> bool {
+        let Some(pointer) = repr.pointer(word) else { return false };
+        let header = self.heap.header_of(pointer);
+        match heap::kind(header) {
+            heap::OBJECT => header & heap::IDENTITY != 0,
+            heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
+                && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
+            heap::CLOSURE | heap::PAYLOAD | heap::BUILDER | heap::FRAME => true,
+            _ => false,
+        }
+    }
+
+    /// #1152: `structure_of` an array's elements, with the position of each child kept.
+    fn array_structure(&self, elements: &[Word], repr: Repr) -> (Box<[(Word, Repr)]>, Box<[u32]>) {
+        okkama_devtrace::count!("runtime", "structure index built");
+        let mut positions = Vec::new();
+        let index = elements
+            .iter()
+            .enumerate()
+            .filter(|&(_, &word)| self.may_hold_identity(word, repr))
+            .map(|(position, &word)| {
+                positions.push(position as u32);
+                (word, repr)
+            })
+            .collect();
+        (index, positions.into_boxed_slice())
+    }
+
+    /// #1152: a copied slice `range` of `parent` gets the part of the parent's index inside the range (positions
+    /// rebased), when the parent has one: the index is complete for the parent's elements, so its restriction is
+    /// complete for the slice. Without a parent index the slice is indexed by its first walk, as before.
+    pub(crate) fn inherit_slice_structure(&mut self, parent: Word, range: std::ops::Range<usize>, slice: Word) {
+        if !self.resources.enabled {
+            return;
+        }
+        let (Some(index), Some(positions)) = (self.resources.structure.get(&parent), self.resources.positions.get(&parent)) else {
+            return;
+        };
+        let low = positions.partition_point(|&position| (position as usize) < range.start);
+        let high = positions.partition_point(|&position| (position as usize) < range.end);
+        let children: Box<[(Word, Repr)]> = index[low..high].into();
+        let rebased: Box<[u32]> = positions[low..high].iter().map(|&position| position - range.start as u32).collect();
+        okkama_devtrace::count!("runtime", "structure index inherited");
+        self.remember_structure(slice, children);
+        self.resources.positions.insert(slice, rebased);
     }
 
     /// Can `value` reach a free identity? False is certain (the common case:
@@ -2609,6 +2651,40 @@ mod structure_tests {
         // The inner array was indexed (empty) in the same walk, after the outer index was built from what was
         // known then: the outer one keeps it (unknown at that moment), never the string.
         assert_eq!(&*runtime.resources.structure[&outer], &[(inner, Repr::Ref)]);
+    }
+
+    /// #1152: a copied slice of an indexed array takes the part of the parent's index inside its range, positions
+    /// rebased; what a fresh scan of the slice finds is always in it. A slice of an array never walked waits for
+    /// its own first walk, as before.
+    #[test]
+    fn a_copied_slice_inherits_its_parents_index_inside_its_range() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("leaf");
+        let (a, b) = (runtime.heap.allocate_array(Repr::Ref, &[text]), runtime.heap.allocate_array(Repr::Ref, &[text]));
+        let filler: Vec<Word> = (0..40).map(|n| if n == 7 { a } else if n == 30 { b } else { text }).collect();
+        let parent = runtime.heap.allocate_array(Repr::Ref, &filler);
+        let lone = runtime.heap.allocate_array(Repr::Ref, &filler);
+        runtime.resource_graph(&[parent], None);
+        assert_eq!(&*runtime.resources.positions[&parent], &[7, 30]);
+        let small = |n: i64| crate::word::small(n).unwrap();
+        let cases = [(0, 8, vec![a], vec![7]), (7, 31, vec![a, b], vec![0, 23]), (8, 30, vec![], vec![]), (30, 40, vec![b], vec![0])];
+        for (start, end, children, positions) in cases {
+            let slice = crate::ops::slice_array(&mut runtime, parent, small(start), small(end)).unwrap();
+            let index: Vec<Word> = runtime.resources.structure[&slice].iter().map(|&(word, _)| word).collect();
+            assert_eq!(index, children, "{start}..{end}");
+            assert_eq!(&*runtime.resources.positions[&slice], &positions[..], "{start}..{end}");
+            let elements = runtime.heap.elements(slice).into_owned();
+            let (fresh, _) = runtime.array_structure(&elements, Repr::Ref);
+            assert!(fresh.iter().all(|child| runtime.resources.structure[&slice].contains(child)), "{start}..{end}");
+            // A slice of the slice inherits in turn.
+            if end - start > 2 {
+                let inner = crate::ops::slice_array(&mut runtime, slice, small(1), small(end - start)).unwrap();
+                let expected: Vec<u32> = positions.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect();
+                assert_eq!(&*runtime.resources.positions[&inner], &expected[..], "{start}..{end} then 1..");
+            }
+        }
+        let unknown = crate::ops::slice_array(&mut runtime, lone, small(0), small(10)).unwrap();
+        assert!(!runtime.resources.structure.contains_key(&unknown), "no parent index: indexed by its own first walk");
     }
 }
 

@@ -4,7 +4,7 @@
 
 **Owner on vacation 2026-11-28 → ~2026-12-12; release alone in /loop (memory vacation-release-0-6-7).** Authorized:
 merge PR release/067 → main, tag v0.6.7, GitHub Release, design decisions with Fable, close/postpone myself. Plan:
-#1177, #1176 done → #1151 (next: Fable design; naive sync explicit roots measured 02 +122%, 09 +36%) → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
+#1177, #1176 done → #1152 (Fable's design in hand: structure index known at birth) → #1151 (Fable design pending; naive sync explicit roots measured 02 +122%, 09 +36%) → #1178 (float, owner returned it 2026-11-28) → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
 showcase, Bible, man, CHANGELOG, version, PR, merge, tag, release, install-pgo, cleanup). Line: worktree
 okkama-work/p-1110 (feature/1110) → release/067 + wave/067-*.
 
@@ -39,7 +39,11 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
   Left: GC share (~25%) and the closures' JIT code.
 - [~] #1151 roles: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
   lever is the frontend's spills around calls (#1147's deferred own root slots).
-- [~] #1152 ownership: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured
+- [~] #1152 ownership, Fable's design (structure index known at birth): step 1 done — `Resources::positions`,
+  `array_structure`, `inherit_slice_structure` (from `ops::slice_array`, copied slices), `may_hold_identity`; test
+  `structure_tests::a_copied_slice_inherits_its_parents_index_inside_its_range` (range mutation caught); 11 −7%,
+  indexes built 1002 → 2. Next: the INERT header bit (bit 30) and a table-driven array scan.
+  Earlier: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured
   (−4%, +6…21 MB footprint), not kept; first repetition ≤ 2× steady met by #1147. Steady ≤ 4 ms needs a model design.
 - [~] #1153 memory: breakdown on the ticket (builder Vec doubling 4.2 MB on 08-roles → gone with #1171: 28.4 → 21.1 MB;
   collection floor #920; compile worker +2.6…4.4 MB); macOS `time -l` RSS of the `sparrow` binary reads ~1 MB (odd).

@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Slices inherit their parent's ownership index (#1152, step 1).** The structure index of an array (the
+  children that may hold a resource) keeps each child's position; a copied slice of an indexed array takes the
+  part of the parent's index inside its range instead of scanning its elements at its first walk. 11-ownership:
+  structure indexes built per repetition 1002 → 2, walk steps 13 147 → 7 747, steady −7%; programs without
+  `destroy` are untouched.
 - **Large builders grow in place (#1150).** A builder buffer past the small size classes is a raw allocation that
   grows and shrinks by `realloc`: doubling leaves no garbage buffer behind and counts only its growth toward the
   next collection, and `finish` shrinks it to its length and keeps it as the array, never copying a large result.

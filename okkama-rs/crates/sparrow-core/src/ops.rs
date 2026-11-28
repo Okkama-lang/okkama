@@ -946,8 +946,11 @@ pub(crate) fn slice_array(runtime: &mut Runtime, array: Word, start: Word, end: 
     if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
         return Ok(view);
     }
-    let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
-    Ok(runtime.heap.allocate_array(repr, &items))
+    let items: Vec<Word> = runtime.heap.elements(array)[range.clone()].to_vec();
+    let slice = runtime.heap.allocate_array(repr, &items);
+    // #1152: the slice's structure index from its parent's, when the parent has one.
+    runtime.inherit_slice_structure(array, range, slice);
+    Ok(slice)
 }
 
 /// The position `index` inside `array`, or `array.get`'s failure.

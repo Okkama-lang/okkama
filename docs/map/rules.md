@@ -19,7 +19,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 | OKKAMA_CHECK_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/mod.rs` |
 | OKKAMA_PROFILE_REGISTERS | 2 | lower: `lowering/mod.rs`; codegen: `codegen/sparrow/registers.rs` |
 
-## Tags in one layer (120)
+## Tags in one layer (121)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -87,6 +87,7 @@ The following matches are not design or verifier rules; exclude them from rule-d
 - SPARROW_CORE_PLAIN — sparrow: `jit.rs`
 - SPARROW_CORE_POINTER_FREE — sparrow: `program.rs`
 - SPARROW_CORE_PROFILE_COMPILE — sparrow: `jit.rs`, `program.rs`
+- SPARROW_CORE_RELOADS — sparrow: `jit.rs`
 - SPARROW_CORE_SMALL_INTS — sparrow: `jit.rs`
 - SPARROW_CORE_STATS — sparrow: `runtime.rs`
 - SPARROW_CORE_UNOPTIMIZED — sparrow: `jit.rs`

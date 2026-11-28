@@ -1318,6 +1318,14 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## Structure index known at birth (#1152, 2026-11-28; design Fable)
+
+- No new ownership rule: the #906 index of a container is inherited when it can be derived instead of being built
+  by the first walk. An array's index keeps child positions (ascending u32); a copied slice takes the part inside its
+  range, rebased. The parent's index is complete for its elements, so the restriction is complete for the slice.
+- Views (shared slices) do not inherit yet; planned next: an INERT header bit for "index empty" (no table entry, no
+  watch), map.new/merge/concat inheritance, one `interesting(header)` predicate, and the JIT region-add test.
+
 ## Bounded string slices (#1176, 2026-11-28; Fable's review of #1149)
 
 - A string version's storage is either a text buffer (BUFFER, grows) or a flat string (never written). `+` treats
