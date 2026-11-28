@@ -804,6 +804,8 @@ struct Unit {
     lazy: Vec<usize>,
 }
 
+// One value per compile, moved straight into codegen: boxing the unit would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum Emitted {
     /// Already compiled: its code.
     Published(u64),
