@@ -10,6 +10,12 @@ Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladde
 - [~] #1150 collections: int sort by tagged words (`sort_natural` fast path, test `ints_sort_in_value_order_small_or_big`),
   `Heap::payload_mut_unchecked` for builder pushes; 06-collections 10.9 → 7.4 ms. Target ≤ 6 ms: builders as a heap
   kind (#1171, POSTPONED) is the rest.
+- [~] #1151 roles: breakdown on the ticket; a per-(role, slot) code table measured no gain (+0.4%), not kept; the
+  lever is the frontend's spills around calls (#1147's deferred own root slots).
+- [~] #1152 ownership: breakdown on the ticket (GC ~40%, region transfer walk ~8%); 2× growth threshold measured
+  (−4%, +6…21 MB footprint), not kept; first repetition ≤ 2× steady met by #1147. Steady ≤ 4 ms needs a model design.
+- [~] #1153 memory: breakdown on the ticket (builder Vec doubling 4.2 MB on 08-roles → #1171 `builder.sized`;
+  collection floor #920; compile worker +2.6…4.4 MB); macOS `time -l` RSS of the `sparrow` binary reads ~1 MB (odd).
 - [x] #1149 strings: known-ASCII allocation (`allocate_text_with`, `text_new_of`), char split, `match_starts` (direct
   search ≤ 256 bytes), one-pass replace (`allocate_text_filled`), `Runtime.scratch_{offsets,ranges,words}`,
   `heap::copy_text`; tests `ops::strings_1149_tests` (5, mutations caught). 05-strings 12.3 → 9.05 ms. Views for
