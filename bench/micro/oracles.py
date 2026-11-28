@@ -170,6 +170,7 @@ def contribution(name, i):
     if name=='role-call':return 2 if i%2==0 else 5
     if name=='string-concat':return (2+len(str(i)))%7
     if name=='string-length':return (10+i)%7
+    if name=='string-rest':return (512 if i%512==511 else 511-i%512)%7
     if name=='string-slice':return (10-i%5)%7
     if name=='try-catch':return (1 if i%2 else i)%7
     if name=='base64-encode':return base64.b64encode(bytes([i%256,102,111,111,98,97,114,33]))[0]%7

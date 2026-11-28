@@ -6,6 +6,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **String slices share their text (#1176).** A slice or substring of 64 bytes or more shares its source's
+  storage (the flat string, or a version's text buffer) when it keeps at most twice what it holds, the rule array
+  slices follow (#249): `rest = rest.slice(1, n)` in a loop shares until half is left, copies that half once, and
+  so on, O(n) in all where every step used to copy. A version over a flat string is never taken for a growable
+  text buffer: `+` continues a chain only when the storage is a buffer, and a write into anything else is refused.
+  New micro cell `string-rest`. The ladder is unchanged (±1.4%).
 - **One allocation for a chain of string `+` (#1177).** `a + b + c …` of strings evaluates its parts left to right
   and joins them with one new instruction, `str.concat_n` (opcode 164, SPB 19): the string is allocated once and
   each part copied once, where pairwise `+` copied everything built so far at each step. A part of 256 bytes or

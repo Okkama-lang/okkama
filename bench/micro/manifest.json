@@ -471,6 +471,14 @@
     "targets": [],
     "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   },
+  "string-rest": {
+    "path": "lang/string-rest.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
   "string-slice": {
     "path": "lang/string-slice.ok",
     "unit": "iteration",

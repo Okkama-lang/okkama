@@ -1318,6 +1318,14 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## Bounded string slices (#1176, 2026-11-28; Fable's review of #1149)
+
+- A string version's storage is either a text buffer (BUFFER, grows) or a flat string (never written). `+` treats
+  a SHARED string as a chain only when its storage is a buffer (`Heap::text_chain`); `text_buffer_write` asserts it.
+- `substring` shares at ≥ 64 bytes when the piece keeps at most twice what it holds (flat length, or the buffer's
+  room), the array rule (#249). Views point at the storage, never at another view. A piece of a buffer is just
+  another version of it (it may continue the chain where it ends, as a branch may).
+
 ## One instruction for a chain of string `+` (#1177, 2026-11-28; owner: in the compiler, not the JIT)
 
 - The ticket's JIT fusion of consecutive `str.concat` does nothing: the parts are computed between the concats

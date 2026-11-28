@@ -666,14 +666,14 @@ pub(crate) fn concat_too_long(runtime: &Runtime, left: Word, right: Word) -> Opt
 /// `+` would give). Err: past the 4 GiB a string holds (the pairwise text); Ok(None): `fits` refused the size.
 /// Nothing collects in between: the parts are read before the caller's safepoint.
 pub(crate) fn concat_parts(runtime: &mut Runtime, parts: &[Word], fits: impl Fn(&Runtime, usize) -> bool) -> Result<Option<Word>, String> {
-    use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
+    use crate::heap::{APPENDED, ASCII, PREPENDED, TEXT_CHAIN_MIN, payload};
     let (mut total, mut ascii, mut chained) = (0u64, true, false);
     for &part in parts {
         let header = runtime.heap.header_of(part);
         let length = payload(header);
         total += u64::from(length);
         ascii &= header & ASCII != 0;
-        chained |= length as usize >= TEXT_CHAIN_MIN || header & (SHARED | APPENDED | PREPENDED) != 0;
+        chained |= length as usize >= TEXT_CHAIN_MIN || header & (APPENDED | PREPENDED) != 0 || runtime.heap.text_chain(part);
     }
     if total > u64::from(u32::MAX) {
         return Err(concat_limit());
@@ -753,19 +753,21 @@ mod concat_limit_tests {
 /// made from it (branches) copy instead of each taking a buffer twice its
 /// size (x86-64 made that +80…375%).
 pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: impl Fn(&Runtime, usize) -> bool) -> Option<Word> {
-    use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
+    use crate::heap::{APPENDED, ASCII, PREPENDED, TEXT_CHAIN_MIN, payload};
     let (lh, rh) = (runtime.heap.header_of(left), runtime.heap.header_of(right));
     let (ll, rl) = (payload(lh) as usize, payload(rh) as usize);
     let (size, ascii) = (ll + rl, lh & rh & ASCII != 0);
     let chains = shared_strings() && 2 * size <= u32::MAX as usize;
-    let chained = |header: u64| header & (APPENDED | PREPENDED | SHARED) != 0;
+    // #1176: a slice is SHARED over a flat string too; only a version in a text buffer continues a chain.
+    let (left_chain, right_chain) = (runtime.heap.text_chain(left), runtime.heap.text_chain(right));
+    let chained = |header: u64, chain: bool| header & (APPENDED | PREPENDED) != 0 || chain;
     // A new buffer for a chain that outgrew its own: the share of the room
     // it keeps in front, as a fraction.
     let mut grow = None;
     // A flat string a buffer is started from: no longer a chain's start.
     let mut spent = None;
-    if chains && chained(lh) && ll >= rl {
-        if lh & SHARED != 0 {
+    if chains && chained(lh, left_chain) && ll >= rl {
+        if left_chain {
             let (buffer, start) = runtime.heap.text_shared(left);
             let (_, high, capacity) = runtime.heap.text_buffer_room(buffer);
             if start + ll == high && high + rl <= capacity {
@@ -781,8 +783,8 @@ pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: 
             grow = Some(if lh & PREPENDED != 0 { (1, 4) } else { (0, 1) });
             spent = Some(left);
         }
-    } else if chains && chained(rh) && rl > ll {
-        if rh & SHARED != 0 {
+    } else if chains && chained(rh, right_chain) && rl > ll {
+        if right_chain {
             let (buffer, start) = runtime.heap.text_shared(right);
             let (low, _, _) = runtime.heap.text_buffer_room(buffer);
             if start == low && start >= ll {
@@ -2545,3 +2547,7 @@ mod key_depth_tests;
 #[cfg(test)]
 #[path = "strings_1177_tests.rs"]
 mod strings_1177_tests;
+
+#[cfg(test)]
+#[path = "strings_1176_tests.rs"]
+mod strings_1176_tests;

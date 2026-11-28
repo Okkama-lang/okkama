@@ -76,6 +76,8 @@ pub const CHAIN_MIN: usize = 32;
 /// whose next `+` gets a text buffer. A string version in a text buffer is
 /// [`SHARED`]: word 1 the address of its first byte, word 2 the buffer.
 pub const TEXT_CHAIN_MIN: usize = 256;
+/// #1176: string slices shorter than this, in bytes, are copied: three words of view cost more than the bytes.
+pub const SLICE_MIN: usize = 64;
 /// An array version kept as a 32-way trie (#250): word 1 is the root branch,
 /// word 2 the tail (the last 1–32 elements), word 3 the root's shift; the
 /// payload is the length. Its nodes are ordinary arrays — branches of node
@@ -1206,10 +1208,54 @@ impl Heap {
         self.header_of(string) & SHARED != 0
     }
 
+    /// #1176: is `string` a version in a growable text buffer (`+` may write next to it)? A slice shares a flat
+    /// string's bytes too ([`Heap::allocate_text_slice`]): SHARED alone does not make a chain.
+    pub fn text_chain(&self, string: Word) -> bool {
+        // SAFETY: a shared string has three words; word 2 is its storage.
+        self.header_of(string) & SHARED != 0 && self.header_of(unsafe { *((string + 16) as *const u64) }) & BUFFER != 0
+    }
+
+    /// #1176: a string of `length` bytes of `source` from byte `start`, sharing its storage (the flat string, or the
+    /// text buffer of a version): word 1 the first byte, word 2 the storage, which keeps it alive. Never a view of a
+    /// view.
+    pub fn allocate_text_slice(&mut self, source: Word, start: usize, length: usize, ascii: bool) -> Word {
+        let source_header = self.header_of(source);
+        // SAFETY: a shared string has three words.
+        let storage = if source_header & SHARED != 0 { unsafe { *((source + 16) as *const u64) } } else { source };
+        let first = self.text_bytes(source).0 as u64 + start as u64;
+        self.counted("string slice", 0, 3);
+        let view = self.allocate(3);
+        // SAFETY: three words.
+        unsafe {
+            *(view as *mut u64) = header(STRING, Repr::Raw, self::length(length)) | SHARED | if ascii { ASCII } else { 0 };
+            *((view + 8) as *mut u64) = first;
+            *((view + 16) as *mut u64) = storage;
+        }
+        view
+    }
+
+    /// #1176: the bytes a slice of `source` would keep alive: its flat string's length, or its text buffer's room.
+    fn text_storage_bytes(&self, source: Word) -> usize {
+        let header = self.header_of(source);
+        if header & SHARED == 0 {
+            return payload(header) as usize;
+        }
+        // SAFETY: a shared string has three words.
+        let storage = unsafe { *((source + 16) as *const u64) };
+        let storage_header = self.header_of(storage);
+        if storage_header & BUFFER != 0 {
+            1 << ((storage_header >> CAPACITY_SHIFT) & 63)
+        } else {
+            payload(storage_header) as usize
+        }
+    }
+
     /// Write `text` at the high end of `buffer`, or right before its low end
     /// (the caller checked the room). `text` may be part of a version of the
     /// same buffer: it lies between the marks, the write outside them.
     pub fn text_buffer_write(&mut self, buffer: Word, text: &str, at_front: bool) {
+        // #1176: only a text buffer grows; a slice's storage may be a flat string, never written again.
+        assert!(self.header_of(buffer) & BUFFER != 0, "a write into a string that is no text buffer");
         let (low, high, capacity) = self.text_buffer_room(buffer);
         let at = if at_front { low.checked_sub(text.len()).expect("text buffer underflow") } else { high };
         assert!(at + text.len() <= capacity, "text buffer overflow");
@@ -1252,6 +1298,12 @@ impl Heap {
         let part = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(pointer, length)) };
         // #1149: a piece of an ASCII string is ASCII.
         let ascii = self.is_ascii_text(string);
+        // #1176: a piece of SLICE_MIN bytes or more shares its source's storage when it keeps at most twice what it
+        // holds (the rule of array slices, #249): `rest = rest.slice(k, n)` shares until half is left, copies that
+        // half once, and so on.
+        if length >= SLICE_MIN && 2 * length >= self.text_storage_bytes(string) {
+            return self.allocate_text_slice(string, start, length, ascii);
+        }
         self.allocate_text_with(&[part], ascii)
     }
 
