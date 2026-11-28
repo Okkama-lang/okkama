@@ -358,11 +358,15 @@ impl Liveness {
         okkama_devtrace::count!("gc", "liveness map page granules", (pages.len() * PAGE_BYTES) >> GRANULE_SHIFT);
     }
 
-    /// No marked cell in `bytes` from `base`?
+    /// No marked cell in `bytes` from `base`? Only a page inside the map can say yes (#1200): with the map off,
+    /// `lo` is a previous collection's, and a page outside it (below `lo`, or taken after `reset`) is walked.
     fn clear(&self, base: Word, bytes: usize) -> bool {
+        if !self.on || base < self.lo || bytes == 0 {
+            return false;
+        }
         let first = ((base - self.lo) >> GRANULE_SHIFT) as usize;
         let last = ((base + bytes as Word - 1 - self.lo) >> GRANULE_SHIFT) as usize;
-        self.on && self.map[first..=last].iter().all(|&granule| granule == 0)
+        self.map.get(first..=last).is_some_and(|granules| granules.iter().all(|&granule| granule == 0))
     }
 }
 
@@ -2771,6 +2775,20 @@ mod length_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1200: a page outside the liveness map — the map off with a previous collection's `lo`, below `lo`, past
+    /// its end — is walked, never indexed: a debug build overflowed on `base - lo`.
+    #[test]
+    fn liveness_answers_only_inside_its_map() {
+        let off = Liveness { lo: 1 << 40, map: Vec::new(), on: false };
+        assert!(!off.clear(4096, 8));
+        let on = Liveness { lo: 1 << 20, map: vec![0, 1, 0], on: true };
+        assert!(!on.clear((1 << 20) - 4096, 8), "below lo");
+        assert!(on.clear(1 << 20, 4096), "the first granule is clear");
+        assert!(!on.clear((1 << 20) + 4096, 8), "the second holds a marked cell");
+        assert!(!on.clear((1 << 20) + 3 * 4096, 8), "past the map");
+        assert!(!on.clear(1 << 20, 0), "no bytes");
+    }
     use crate::word::UNBOUND;
     use std::rc::Rc;
 
