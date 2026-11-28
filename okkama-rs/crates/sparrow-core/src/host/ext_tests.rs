@@ -404,6 +404,8 @@ fn ext_cost_crc32_64_bytes() {
     assert!(ratio <= 1.5, "extension/std = {ratio:.3}");
 }
 
+// The host's `cc` compiles for the host: on the 32-bit run of this suite (i686 musl, #1131) its layout is not ours.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn ext_c_header_matches_rust_layout() {
     use std::{io::Write, mem::{align_of, offset_of, size_of}, process::{Command, Stdio}};
