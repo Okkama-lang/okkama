@@ -220,3 +220,66 @@ test "log fields keep member order, reject bad names and merge by name" {
     );
     test.is(LogFields(fields.members()).values().string(), fields.values().string());
 }
+
+test "fields are at most 1 MiB of compact text and 32 levels deep" {
+    let ays is @string = (0..(1048576 - 8)).map() -> index {
+        "a";
+    };
+    let fits = ays.join("");
+    test.is(LogFields(JsonField("v", fits)).values().string().length(), 1048576);
+    let wides is @string = (0..((1048576 - 8) / 2).int()).map() -> index {
+        "ж";
+    };
+    test.is(LogFields(JsonField("v", wides.join(""))).values().string().length(), 524292);
+    for [fits + "a", wides.join("") + "a"] -> value {
+        test.is(
+            try {
+                LogFields(JsonField("v", value)).values().string();
+            }
+            catch failure is InvalidLogField {
+                failure.text();
+            },
+            "InvalidLogField.because(\"fields exceed 1 MiB\")"
+        );
+    }
+    let opens is @string = (0..31).map() -> index {
+        "[";
+    };
+    let closes is @string = (0..31).map() -> index {
+        "]";
+    };
+    let deepest = ParsedJson(opens.join("") + closes.join("")).root();
+    test.is(LogFields(JsonField("v", deepest)).values().string().length(), 68);
+    test.is(LogFields(Json([JsonField("v", deepest)])).values().string().length(), 68);
+    let deeper = ParsedJson("[" + opens.join("") + closes.join("") + "]").root();
+    test.is(
+        try {
+            LogFields(JsonField("v", deeper)).values().string();
+        }
+        catch failure is JsonError {
+            failure.text();
+        },
+        "JsonError.invalid(36, 1, 37, \"maximum JSON depth exceeded\")"
+    );
+    test.is(
+        try {
+            LogFields(JsonField("w", Json([JsonField("x", Json([deepest]))]))).values().string();
+        }
+        catch failure is JsonError {
+            failure.text();
+        },
+        "JsonError.invalid(40, 1, 41, \"maximum JSON depth exceeded\")"
+    );
+    let too_long is @string = (0..4097).map() -> index {
+        "n";
+    };
+    test.is(
+        try {
+            LogFields(JsonField(too_long.join(""), 1)).values().string();
+        }
+        catch failure is InvalidLogField {
+            failure.text();
+        },
+        "InvalidLogField.because(\"invalid field name\")"
+    );
+}

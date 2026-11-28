@@ -16,6 +16,7 @@ import "runtime/unicode_character";
 import "logging/field" take LogFields;
 import "logging/name" take LogName;
 import "time/clock" take Instant;
+import "math/decimal" take Decimal;
 
 // A record as a text line.
 object TextLogLine {
@@ -173,3 +174,258 @@ test "a physical line escapes terminal controls and line separators only" {
     test.is(PhysicalLogLine(text).string(), "a\\u0007б\\u007f\\u0085в\\u2028\\u2029\\u0009ж");
     test.is(PhysicalLogLine("plain ж").string(), "plain ж");
 }
+
+test "text and JSON lines stay byte for byte: levels, field kinds, controls, zones" {
+    let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
+    let east = FixedZone(name: "IST", offset: Duration(seconds: 19800.rat()));
+    let west = FixedZone(name: "PST", offset: Duration(seconds: (-28800).rat()));
+    let plain = LogContext(name: LogName("app"), fields: LogFields(), process: 1);
+    let at = Instant(Duration(seconds: 1700000000.rat()));
+    let up = LogRecord(occurred: at, level: LogLevel.info, message: "up", context: plain);
+    test.is(
+        TextLogLine(origin: up, zone: utc).string(),
+        "2023-11-14T22:13:20Z level=INFO name=\"app\" process=1 message=\"up\" fields={}"
+    );
+    test.is(
+        JsonLogLine(up).string(),
+        "{\"time\":\"2023-11-14T22:13:20Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"up\",\"fields\":{}}"
+    );
+    let empty = LogRecord(occurred: at, level: LogLevel.info, message: "", context: plain);
+    test.is(
+        TextLogLine(origin: empty, zone: utc).string(),
+        "2023-11-14T22:13:20Z level=INFO name=\"app\" process=1 message=\"\" fields={}"
+    );
+    test.is(
+        JsonLogLine(empty).string(),
+        "{\"time\":\"2023-11-14T22:13:20Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"\",\"fields\":{}}"
+    );
+    let kinds = LogFields(
+        JsonField("int", -42),
+        JsonField("str", "a \"b\" \\c"),
+        JsonField("yes", true),
+        JsonField("no", false),
+        JsonField("float", 1.5),
+        JsonField("tiny", 0.0000001),
+        JsonField("dec", Decimal("12.50")),
+        JsonField("null", Json()),
+        JsonField("obj", ParsedJson("{\"k\":[1,2,{\"z\":null}]}").root()),
+        JsonField("arr", Json([Json(1), Json("x")])),
+        JsonField("big", 123456789012345678901.0)
+    );
+    let typed = LogRecord(
+        occurred: Instant(Duration(seconds: rat(1700000000123456789, 1000000000))),
+        level: LogLevel.debug,
+        message: "привет 🙂 «ok» 中文",
+        context: LogContext(name: LogName("shop", "db", "pool"), fields: kinds, process: 123456)
+    );
+    test.is(
+        TextLogLine(origin: typed, zone: utc).string(),
+        "2023-11-14T22:13:20.123456789Z level=DEBUG name=\"shop.db.pool\" process=123456 message=\"привет 🙂 «ok» 中文\" fields={\"int\":-42,\"str\":\"a \\\"b\\\" \\\\c\",\"yes\":true,\"no\":false,\"float\":1.5,\"tiny\":1e-7,\"dec\":12.5,\"null\":null,\"obj\":{\"k\":[1,2,{\"z\":null}]},\"arr\":[1,\"x\"],\"big\":123456789012345680000}"
+    );
+    test.is(
+        JsonLogLine(typed).string(),
+        "{\"time\":\"2023-11-14T22:13:20.123456789Z\",\"level\":\"DEBUG\",\"name\":\"shop.db.pool\",\"process\":123456,\"message\":\"привет 🙂 «ok» 中文\",\"fields\":{\"int\":-42,\"str\":\"a \\\"b\\\" \\\\c\",\"yes\":true,\"no\":false,\"float\":1.5,\"tiny\":1e-7,\"dec\":12.5,\"null\":null,\"obj\":{\"k\":[1,2,{\"z\":null}]},\"arr\":[1,\"x\"],\"big\":123456789012345680000}}"
+    );
+    let controls = LogRecord(
+        occurred: Instant(Duration(seconds: rat(17000000005, 10))),
+        level: LogLevel.warning,
+        message: "a\nb\rc\td" + 0.char().string() + 27.char().string() + "\"q\" \\ /",
+        context: LogContext(
+            name: LogName("web"),
+            fields: LogFields(
+                JsonField("text", "line1\nline2\r\t" + 127.char().string() + "end"),
+                JsonField("ключ", "значение")
+            ),
+            process: 0
+        )
+    );
+    test.is(
+        TextLogLine(origin: controls, zone: east).string(),
+        "2023-11-15T03:43:20.5+05:30 level=WARNING name=\"web\" process=0 message=\"a\\nb\\rc\\td\\u0000\\u001b\\\"q\\\" \\\\ /\" fields={\"text\":\"line1\\nline2\\r\\t\\u007fend\",\"ключ\":\"значение\"}"
+    );
+    test.is(
+        JsonLogLine(controls).string(),
+        "{\"time\":\"2023-11-14T22:13:20.5Z\",\"level\":\"WARNING\",\"name\":\"web\",\"process\":0,\"message\":\"a\\nb\\rc\\td\\u0000\\u001b\\\"q\\\" \\\\ /\",\"fields\":{\"text\":\"line1\\nline2\\r\\t\\u007fend\",\"ключ\":\"значение\"}}"
+    );
+    let separated = "x" + 127.char().string() + 133.char().string() + 159.char().string() +
+        160.char().string() + 8232.char().string() + 8233.char().string() + "y";
+    let separators = LogRecord(
+        occurred: Instant(Duration(seconds: rat(-1000000001, 1000000000))),
+        level: LogLevel.error,
+        message: separated,
+        context: LogContext(
+            name: LogName("srv"),
+            fields: LogFields(JsonField("k" + 133.char().string(), separated)),
+            process: 7
+        ),
+        cause: LogLineProbe.failed("disk\nfull " + 8232.char().string())
+    );
+    test.is(
+        TextLogLine(origin: separators, zone: west).string(),
+        "1969-12-31T15:59:58.999999999-08:00 level=ERROR name=\"srv\" process=7 message=\"x\\u007f\\u0085\\u009f \\u2028\\u2029y\" fields={\"k\\u0085\":\"x\\u007f\\u0085\\u009f \\u2028\\u2029y\"} cause=\"LogLineProbe.failed(\\\"disk\\\\nfull \\u2028\\\")\""
+    );
+    test.is(
+        JsonLogLine(separators).string(),
+        "{\"time\":\"1969-12-31T23:59:58.999999999Z\",\"level\":\"ERROR\",\"name\":\"srv\",\"process\":7,\"message\":\"x\\u007f\\u0085\\u009f \\u2028\\u2029y\",\"fields\":{\"k\\u0085\":\"x\\u007f\\u0085\\u009f \\u2028\\u2029y\"},\"cause\":\"LogLineProbe.failed(\\\"disk\\\\nfull \\u2028\\\")\"}"
+    );
+}
+
+test "lines keep long values whole and write times from year 1 to 9999" {
+    let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
+    let west = FixedZone(name: "PST", offset: Duration(seconds: (-28800).rat()));
+    let plain = LogContext(name: LogName("app"), fields: LogFields(), process: 1);
+    let xs is @string = (0..10000).map() -> index {
+        "x";
+    };
+    let long_message = xs.join("") + "ж";
+    let ys is @string = (0..5000).map() -> index {
+        "й";
+    };
+    let long_value = ys.join("");
+    let long = LogRecord(
+        occurred: Instant(Duration(seconds: 1700000000.rat())),
+        level: LogLevel.critical,
+        message: long_message,
+        context: LogContext(
+            name: LogName("long"),
+            fields: LogFields(JsonField("v", long_value)),
+            process: 99
+        ),
+        cause: InvalidLogProcess.invalid
+    );
+    test.is(
+        TextLogLine(origin: long, zone: utc).string(),
+        "2023-11-14T22:13:20Z level=CRITICAL name=\"long\" process=99 message=\"" + long_message +
+            "\" fields={\"v\":\"" + long_value + "\"} cause=\"InvalidLogProcess.invalid\""
+    );
+    test.is(
+        JsonLogLine(long).string(),
+        "{\"time\":\"2023-11-14T22:13:20Z\",\"level\":\"CRITICAL\",\"name\":\"long\",\"process\":99,\"message\":\"" +
+            long_message + "\",\"fields\":{\"v\":\"" + long_value +
+            "\"},\"cause\":\"InvalidLogProcess.invalid\"}"
+    );
+    let first = LogRecord(
+        occurred: Instant(Duration(seconds: (-62135596800).rat())),
+        level: LogLevel.info,
+        message: "m",
+        context: plain
+    );
+    test.is(
+        TextLogLine(origin: first, zone: utc).string(),
+        "0001-01-01T00:00:00Z level=INFO name=\"app\" process=1 message=\"m\" fields={}"
+    );
+    test.is(
+        JsonLogLine(first).string(),
+        "{\"time\":\"0001-01-01T00:00:00Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"m\",\"fields\":{}}"
+    );
+    let edge = LogRecord(
+        occurred: Instant(Duration(seconds: rat(9223372036854775807, 1000000000))),
+        level: LogLevel.info,
+        message: "m",
+        context: plain
+    );
+    test.is(
+        TextLogLine(origin: edge, zone: west).string(),
+        "2262-04-11T15:47:16.854775807-08:00 level=INFO name=\"app\" process=1 message=\"m\" fields={}"
+    );
+    test.is(
+        JsonLogLine(edge).string(),
+        "{\"time\":\"2262-04-11T23:47:16.854775807Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"m\",\"fields\":{}}"
+    );
+    let past_edge = LogRecord(
+        occurred: Instant(Duration(seconds: rat(9223372036854775808, 1000000000))),
+        level: LogLevel.info,
+        message: "m",
+        context: plain
+    );
+    test.is(
+        TextLogLine(origin: past_edge, zone: utc).string(),
+        "2262-04-11T23:47:16.854775808Z level=INFO name=\"app\" process=1 message=\"m\" fields={}"
+    );
+    test.is(
+        JsonLogLine(past_edge).string(),
+        "{\"time\":\"2262-04-11T23:47:16.854775808Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"m\",\"fields\":{}}"
+    );
+    let low_edge = LogRecord(
+        occurred: Instant(Duration(seconds: rat(-9223372036854775807, 1000000000))),
+        level: LogLevel.info,
+        message: "m",
+        context: plain
+    );
+    test.is(
+        TextLogLine(origin: low_edge, zone: utc).string(),
+        "1677-09-21T00:12:43.145224193Z level=INFO name=\"app\" process=1 message=\"m\" fields={}"
+    );
+    test.is(
+        JsonLogLine(low_edge).string(),
+        "{\"time\":\"1677-09-21T00:12:43.145224193Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"m\",\"fields\":{}}"
+    );
+    let latest = LogRecord(
+        occurred: Instant(Duration(seconds: 253402300799.rat())),
+        level: LogLevel.info,
+        message: "m",
+        context: plain
+    );
+    test.is(
+        JsonLogLine(latest).string(),
+        "{\"time\":\"9999-12-31T23:59:59Z\",\"level\":\"INFO\",\"name\":\"app\",\"process\":1,\"message\":\"m\",\"fields\":{}}"
+    );
+}
+
+test "a line is at most 1 MiB of UTF-8 after escaping, text or JSON" {
+    let utc = FixedZone(name: "UTC", offset: Duration(seconds: 0.rat()));
+    let plain = LogContext(name: LogName("app"), fields: LogFields(), process: 1);
+    let at = Instant(Duration(seconds: 1700000000.rat()));
+    // The plain text line is 73 bytes without its message, the JSON line 96.
+    let ays is @string = (0..(1048576 - 73)).map() -> index {
+        "a";
+    };
+    let fits = ays.join("");
+    let line = TextLogLine(
+        origin: LogRecord(occurred: at, level: LogLevel.info, message: fits, context: plain),
+        zone: utc
+    ).string();
+    test.is(line.length(), 1048576);
+    test.is(
+        line,
+        "2023-11-14T22:13:20Z level=INFO name=\"app\" process=1 message=\"" + fits + "\" fields={}"
+    );
+    let wides is @string = (0..(((1048576 - 73) / 2).int() + 1)).map() -> index {
+        "ж";
+    };
+    let escapes is @string = (0..(((1048576 - 73) / 6).int() + 1)).map() -> index {
+        127.char().string();
+    };
+    for [fits + "a", wides.join(""), escapes.join("")] -> message {
+        let record = LogRecord(
+            occurred: at,
+            level: LogLevel.info,
+            message: message,
+            context: plain
+        );
+        test.throws(LogLineLimit) {
+            TextLogLine(origin: record, zone: utc).string();
+        };
+        test.throws(LogLineLimit) {
+            JsonLogLine(record).string();
+        };
+    }
+    let json_ays is @string = (0..(1048576 - 96)).map() -> index {
+        "a";
+    };
+    let json_fits = json_ays.join("");
+    let json_record = LogRecord(
+        occurred: at,
+        level: LogLevel.info,
+        message: json_fits,
+        context: plain
+    );
+    test.is(JsonLogLine(json_record).string().length(), 1048576);
+    test.throws(LogLineLimit) {
+        JsonLogLine(
+            LogRecord(occurred: at, level: LogLevel.info, message: json_fits + "a", context: plain)
+        ).string();
+    };
+}
+
+hidden enum LogLineProbe is Error = (failed(reason is string));
