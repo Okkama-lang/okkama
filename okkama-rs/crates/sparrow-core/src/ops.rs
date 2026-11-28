@@ -2323,6 +2323,9 @@ pub(crate) fn rat_unary(runtime: &mut Runtime, negate: bool, value: Word) -> Out
 pub(crate) fn rat_part(runtime: &mut Runtime, value: Word, denominator: bool) -> Word {
     let ratio = runtime.rational(value);
     let part = if denominator { ratio.denominator() } else { ratio.numerator() };
+    if let Some(small) = part.to_i64() {
+        return runtime.heap.int(small);
+    }
     let part = part.to_big().as_bigint().clone();
     integer_word(runtime, part)
 }

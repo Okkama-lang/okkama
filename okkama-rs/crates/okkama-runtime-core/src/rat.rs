@@ -23,6 +23,61 @@ fn pow10(exponent: u32) -> IntValue {
     IntValue::from_big(crate::bignum::Big::from_u64(10).power(exponent))
 }
 
+/// Both parts of a fraction as machine words, when they fit (#1180): the
+/// arithmetic below then runs in `i128` and reduces with `u64` gcds, as Knuth
+/// 4.5.1 does, instead of going through `Big`. A time is such a fraction
+/// (nanoseconds over 10⁹), and one multiplication by 10⁹ took 0.5 µs.
+fn small_parts(value: &Rat) -> Option<(i64, i64)> {
+    Some((value.num.to_i64()?, value.den.to_i64()?))
+}
+
+fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// A reduced fraction from parts already in lowest terms, `den > 0`.
+fn from_reduced(num: i128, den: i128) -> Rat {
+    if num == 0 {
+        return Rat {
+            num: IntValue::from_i64(0),
+            den: one(),
+        };
+    }
+    Rat {
+        num: IntValue::from_i128(num),
+        den: IntValue::from_i128(den),
+    }
+}
+
+/// `a/b * c/d` for reduced fractions with `b, d > 0`: cancel across first,
+/// then the products are already in lowest terms.
+fn small_mul(a: i64, b: i64, c: i64, d: i64) -> Rat {
+    let g1 = gcd_u64(a.unsigned_abs(), d as u64).max(1) as i128;
+    let g2 = gcd_u64(c.unsigned_abs(), b as u64).max(1) as i128;
+    let num = (i128::from(a) / g1) * (i128::from(c) / g2);
+    let den = (i128::from(b) / g2) * (i128::from(d) / g1);
+    from_reduced(num, den)
+}
+
+/// `a/b ± c/d` for reduced fractions with `b, d > 0` (Knuth 4.5.1).
+fn small_add(a: i64, b: i64, c: i64, d: i64, subtract: bool) -> Rat {
+    let c = if subtract { -i128::from(c) } else { i128::from(c) };
+    let d1 = gcd_u64(b as u64, d as u64);
+    if d1 == 1 {
+        // |a·d| and |c·b| are below 2¹²⁶, so their sum fits.
+        let num = i128::from(a) * i128::from(d) + c * i128::from(b);
+        return from_reduced(num, i128::from(b) * i128::from(d));
+    }
+    let d1 = i128::from(d1);
+    let t = i128::from(a) * (i128::from(d) / d1) + c * (i128::from(b) / d1);
+    // gcd(t, d1) through t mod d1; it is d1 itself when t is a multiple.
+    let d2 = i128::from(gcd_u64((t.unsigned_abs() % d1 as u128) as u64, d1 as u64));
+    from_reduced(t / d2, (i128::from(b) / d1) * (i128::from(d) / d2))
+}
+
 impl Rat {
     fn normalized(mut num: IntValue, mut den: IntValue) -> Self {
         if den.is_negative() {
@@ -44,6 +99,12 @@ impl Rat {
     pub fn new(num: &IntValue, den: &IntValue) -> Result<Self> {
         if den.is_zero() {
             return Err("Division by zero".into());
+        }
+        if let (Some(n), Some(d)) = (num.to_i64(), den.to_i64()) {
+            // Words: one u64 gcd, no IntValue arithmetic (a clock reading is rat(ns, 10⁹)).
+            let g = i128::from(gcd_u64(n.unsigned_abs(), d.unsigned_abs()));
+            let (n, d) = if d < 0 { (-i128::from(n), -i128::from(d)) } else { (i128::from(n), i128::from(d)) };
+            return Ok(from_reduced(n / g, d / g));
         }
         Ok(Self::normalized(num.clone(), den.clone()))
     }
@@ -85,6 +146,9 @@ impl Rat {
     }
 
     pub fn add(&self, other: &Self) -> Self {
+        if let (Some((a, b)), Some((c, d))) = (small_parts(self), small_parts(other)) {
+            return small_add(a, b, c, d, false);
+        }
         Self::normalized(
             add(
                 &multiply(&self.num, &other.den),
@@ -95,6 +159,9 @@ impl Rat {
     }
 
     pub fn sub(&self, other: &Self) -> Self {
+        if let (Some((a, b)), Some((c, d))) = (small_parts(self), small_parts(other)) {
+            return small_add(a, b, c, d, true);
+        }
         Self::normalized(
             subtract(
                 &multiply(&self.num, &other.den),
@@ -105,6 +172,9 @@ impl Rat {
     }
 
     pub fn mul(&self, other: &Self) -> Self {
+        if let (Some((a, b)), Some((c, d))) = (small_parts(self), small_parts(other)) {
+            return small_mul(a, b, c, d);
+        }
         Self::normalized(
             multiply(&self.num, &other.num),
             multiply(&self.den, &other.den),
@@ -114,6 +184,12 @@ impl Rat {
     pub fn div(&self, other: &Self) -> Result<Self> {
         if other.num.is_zero() {
             return Err("Division by zero".into());
+        }
+        if let (Some((a, b)), Some((c, d))) = (small_parts(self), small_parts(other)) {
+            // The reciprocal d/c with a positive denominator; -i64::MIN does not fit.
+            if c != i64::MIN {
+                return Ok(if c < 0 { small_mul(a, b, -d, -c) } else { small_mul(a, b, d, c) });
+            }
         }
         Ok(Self::normalized(
             multiply(&self.num, &other.den),
@@ -151,6 +227,9 @@ impl Rat {
     }
 
     pub fn compare(&self, other: &Self) -> Ordering {
+        if let (Some((a, b)), Some((c, d))) = (small_parts(self), small_parts(other)) {
+            return (i128::from(a) * i128::from(d)).cmp(&(i128::from(c) * i128::from(b)));
+        }
         compare(
             &multiply(&self.num, &other.den),
             &multiply(&other.num, &self.den),
@@ -278,5 +357,78 @@ mod tests {
             rat(300, 1).to_byte(None).unwrap_err(),
             "Cannot convert rat value 300 to byte: expected 0..255"
         );
+    }
+    /// The word fast paths (#1180) agree with the general arithmetic over
+    /// `Big` on edge values and on a deterministic spread of fractions.
+    #[test]
+    fn word_fast_paths_agree_with_big_arithmetic() {
+        fn reference(op: usize, x: &Rat, y: &Rat) -> Option<Rat> {
+            let (a, b, c, d) = (&x.num, &x.den, &y.num, &y.den);
+            match op {
+                0 => Some(Rat::normalized(add(&multiply(a, d), &multiply(c, b)), multiply(b, d))),
+                1 => Some(Rat::normalized(subtract(&multiply(a, d), &multiply(c, b)), multiply(b, d))),
+                2 => Some(Rat::normalized(multiply(a, c), multiply(b, d))),
+                _ if c.is_zero() => None,
+                _ => Some(Rat::normalized(multiply(a, d), multiply(b, c))),
+            }
+        }
+        let edges = [
+            0,
+            1,
+            -1,
+            2,
+            -2,
+            7,
+            1_000_000_000,
+            -1_000_000_000,
+            1_700_000_000_123_456_789,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN + 1,
+            i64::MAX - 1,
+            3_037_000_499,
+            4_611_686_018_427_387_904,
+        ];
+        let mut values: Vec<Rat> = Vec::new();
+        for &n in &edges {
+            for &d in &[1, 2, 3, 10, 1_000_000_000, i64::MAX, 4_611_686_018_427_387_904, 999_999_937] {
+                values.push(rat_parts(n, d));
+            }
+        }
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            state
+        };
+        for _ in 0..150 {
+            let n = (next() as i64) >> (next() % 63);
+            let d = ((next() >> 1) as i64 >> (next() % 62)).max(1);
+            values.push(rat_parts(n, d));
+        }
+        for &n in &edges {
+            for &d in &edges {
+                if d != 0 {
+                    let made = Rat::new(&IntValue::from_i64(n), &IntValue::from_i64(d)).unwrap();
+                    assert_eq!(made, Rat::normalized(IntValue::from_i64(n), IntValue::from_i64(d)), "rat({n}, {d})");
+                }
+            }
+        }
+        for x in &values {
+            for y in &values {
+                assert_eq!(x.add(y), reference(0, x, y).unwrap(), "{x} + {y}");
+                assert_eq!(x.sub(y), reference(1, x, y).unwrap(), "{x} - {y}");
+                assert_eq!(x.mul(y), reference(2, x, y).unwrap(), "{x} * {y}");
+                match reference(3, x, y) {
+                    Some(quotient) => assert_eq!(x.div(y).unwrap(), quotient, "{x} / {y}"),
+                    None => assert!(x.div(y).is_err()),
+                }
+                let expected = compare(&multiply(&x.num, &y.den), &multiply(&y.num, &x.den));
+                assert_eq!(x.compare(y), expected, "{x} <=> {y}");
+            }
+        }
+    }
+
+    fn rat_parts(n: i64, d: i64) -> Rat {
+        Rat::new(&IntValue::from_i64(n), &IntValue::from_i64(d)).unwrap()
     }
 }
