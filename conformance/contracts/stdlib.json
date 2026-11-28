@@ -5270,7 +5270,7 @@
     },
     {
       "id": "STD.OS.PORT",
-      "title": "std os/port public contract (Port, PortFailure, PortReply)",
+      "title": "std os/port public contract (Port, PortCodec, PortFailure, PortReply)",
       "family": "Standard library: os",
       "spec_refs": [
         "std/os/port.ok"
