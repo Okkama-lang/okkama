@@ -33,9 +33,10 @@ is not registered`, and the run ends with status 1. A native's name is its
 module, the module's major version, its own name and its arity, and only a
 provider registered under exactly that name answers it. A program cannot
 reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.6).
+`--ext` is how a host adds doors from a trusted extension (Section 21.5.4).
 
-The rule has a cost that the next sections pay off. Every effect a program
-can have outside itself has a name in `runtime/*`, so the list of what a
+The rule has a cost that the next sections pay off. Every effect supplied by std
+has a name in `runtime/*`, so the list of what a
 program might do is short and fixed: it is the list of natives its imports
 reach. That list is what the native groups of Section 21.6 restrict.
 
@@ -417,6 +418,117 @@ either. For code that must share the program's memory and calls, the
 answer is a native extension (issue #1083). A native extension is faster,
 but the program has to trust it completely.
 
+### 21.5.4 Native extensions
+
+Sometimes std has no operation a program needs, and a helper process is too
+slow for frequent small calls or too coarse for a typed interface to a
+library. A **native extension** (issue #1083) supplies that interface inside
+the program's process. The package declares its natives in its own module;
+it does not add declarations to std. Here is part of imagekit's
+`src/native.ok`:
+
+```okkama
+module imagekit/native;
+
+native object Image;
+native async decode(bytes is @byte) is Image;
+native width(image is Image) is int;
+native release(image is Image) is void;
+```
+
+The names follow Section 21.1: `module@major::name/arity`. A package module
+without a version has major 0, so these functions are
+`imagekit/native@0::decode/1`, `imagekit/native@0::width/1` and
+`imagekit/native@0::release/1`. The declaration describes a call; only a
+loaded provider can answer it. `Image` is an opaque native object, not an
+Okkama view of the library's image data.
+
+**The wrapper owns the resource.** As with std handles (Section 21.3), the
+package puts the native object in an ordinary object and releases it in
+`destroy`. The shape of imagekit's `src/image.ok`, with just one operation,
+is:
+
+```okkama
+module imagekit/image;
+
+import "native" take Image, width, release;
+
+object Picture {
+    has state is Image;
+    Picture(:state);
+    destroy { release(state); }
+    width() is int { width(state); }
+}
+```
+
+The full package's `Png.picture()` awaits `decode` and gives the new state
+to `Picture`; resizing returns another owned `Picture`. Ordinary scope
+exit, failure and cancellation run the owner's cleanup (Chapter 11).
+Keeping a bare `Image` does not give it this ownership rule. The wrapper
+also translates `NativeFailure` codes into its own `ImageError` cases, so
+callers work with the package's vocabulary. These listings show the
+interface; running its calls requires the extension library. The complete
+package and its thumbnail application are in `examples/extensions/`.
+
+**Loading is the host's decision.** An import cannot choose or load a
+library. The command line names each trusted library explicitly:
+
+```sh
+okkama run --ext path/to/library.so main.ok
+okkama run --no-native --ext path/to/library.so main.ok
+```
+
+On macOS the library normally ends in `.dylib`. `--ext` may be repeated;
+`--no-native` suppresses extension loading regardless of option order,
+without disabling std natives. A declaration without a provider still
+fails only when called.
+
+Blade carries the same decision through packages (Chapter 19). The
+package's manifest names its source crate:
+
+```toml
+[native]
+crate = "native"
+```
+
+The root project's manifest explicitly allows the native packages it
+trusts, including any transitive dependencies:
+
+```toml
+[native]
+allow = ["imagekit"]
+```
+
+`blade sync` records native packages without building them. `blade build`
+builds the allowed libraries; `blade run` builds as needed and passes their
+paths to Okkama. `blade run --no-native` skips both native builds and
+loading. Adding a dependency alone grants no permission to load its code.
+
+**The boundary is checked; the library is trusted.** At load and binding,
+the host validates the library's descriptor and compares the signatures of
+its bound natives with the program's declarations. A mismatch refuses the
+run before any extension native is called. This does not mean loading is
+inert: the operating system may run library constructors during loading,
+and building a crate may run build scripts.
+
+On the Okkama side, calls remain typed, native objects remain opaque, and
+wrappers obey the usual ownership and cleanup rules. Those guarantees do
+not extend into C or Rust code. The extension runs in the same process,
+with the user's authority. A crash or a memory error there can end or
+corrupt the whole program; `catch` cannot contain it. Its own allocations
+and work are not bounded by the program's memory and step budgets, and
+cancellation requires its cooperation. The playground and restricted runs
+refuse extensions. For code that may crash or needs isolation, use a port
+(Section 21.5.3) and operating-system isolation.
+
+**The price.** A call costs about as much as a std native call, plus the
+work the library does. Strings, byte arrays and other data still incur
+copies at the boundary; this is not a promise of free bulk transfer.
+Ports pay for communication between processes and keep failures separate;
+extensions save that communication and give up that separation. For
+writing an extension in C or Rust, its interface and packaging, see
+`docs/extensions.md`.
+
 ## 21.6 What an embedder can deny
 
 A program run by `okkama run` may use every native. A host running plug-ins or user scripts may restrict the native groups available to a run:
@@ -481,6 +593,8 @@ and each native must respect the host’s policy.
   also denies the `spawn` of a synchronous action (Chapter 20.4).
 - **Natives are looked up at the call.** A program that declares a native
   nobody provides starts and fails only when it calls it (Section 21.1).
+- **Extensions are trusted code.** There is no sandbox inside the process;
+  a fault in an extension can corrupt or end the program (Section 21.5.4).
 
 ## 21.9 What this design costs
 
