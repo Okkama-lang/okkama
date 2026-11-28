@@ -49,7 +49,10 @@ Spaces, tabs and line breaks separate tokens.
 
 **Comments.** `//` to the end of the line; `/* … */` does not nest. The `//`
 lines directly above a declaration are its *doc comment*, in CommonMark,
-shown by `okkama man` and the editor. In a doc comment a fence marked
+shown by `okkama man` and the editor. The module's own overview is a
+comment after the `module` line (before or after the imports) that no
+declaration owns: leave a blank line between it and the first declaration.
+A comment above the `module` line is not documentation. In a doc comment a fence marked
 `okkama` must compile, `okkama,run` runs and must print the `output` fence
 after it, and `okkama,ignore` is only shown; `okkama run -t` checks them.
 
@@ -898,7 +901,7 @@ text is built with `strings/buffer`'s `TextBuffer` or `strings/format`.
 `ordering()` (stable sort; import `compare`'s `Comparing`), `+`
 (concatenate), `-` (remove equal elements). A range inside a literal is
 spread: `[0, 2..=4]` has four elements. An empty literal needs a declared
-type, `let none is @string = [];`, and a mixed one an `@any` boundary.
+type, `let empty is @string = [];`, and a mixed one an `@any` boundary.
 
 **Maps `%K:V`:** `size()`, `has(key)`, `keys()`, `values()`, `m[key]` (fails
 when missing; `m[key] else v`), `m + ["k": v]` sets, `m - ["k": v]` removes

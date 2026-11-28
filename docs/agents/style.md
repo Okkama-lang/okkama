@@ -333,6 +333,11 @@ is already computed or trivially computable, does no work and calls no
 other object; anything that needs work stays an action. Prefer an action
 when the caller's real question can be answered by the object (1.2).
 
+Fields are private per instance: inside `order(other is Money)` the code
+cannot read `other.amount` either. Comparing two instances is the usual
+reason for a cap: `order()` reads `other::Amount::cents`, as std's calendar
+dates do (`other::Calendar::year`), and no getter appears.
+
 **Avoid**
 
 ```okkama
