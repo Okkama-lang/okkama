@@ -4,6 +4,19 @@ The newest entries are at the top of each section. Each one gives its date, who 
 are. Working rules (testing, CI, roles) are in LLM-GUIDE §1 and are not repeated here. Seeded 2026-11-20 from
 the session's memory; older rulings live in the commits and tickets named.
 
+## Server logging: one Logger, a non-blocking destination in the host (#1179, 2026-11-28; research by an agent, ruled by me)
+
+- Measured on Sparrow: stdout/stderr writes are a blocking write(2) on the VM thread, so a stalled reader stops the
+  whole scheduler (a request that logs nothing waited 2.6 s); `QueuedLogs` does not isolate (its writer task blocks
+  the same thread). In the normal case the cost is CPU: ~18.8 µs per line (−30% on the web benchmark).
+- Decision (a): `Logger` stays the only logger. Like pino's SonicBoom, the non-blocking part lives in the host: a
+  bounded byte buffer per log descriptor drained by a writer thread; a full buffer drops whole lines and counts them,
+  and "… N log lines dropped" reaches the log; flushed at exit within a bound and before an uncaught failure's report;
+  EPIPE is silent there. std: `StderrLogs` becomes Logger's default destination; `async drain()` on `LogWriting` and
+  `Logger`; `Stderr()` stays synchronous, `QueuedLogs` stays for truly asynchronous deliveries.
+- Order: cheaper formatting first (≤ 1.5 µs per line, same text) → host destination (#1180) → `WebApplication(…,
+  logger:)` (#1181) whose `listen()` drains it. The request object never carries a logger (owner).
+
 ## Helper processes: `os/port` (#1081, 2026-11-28; agent's design, API ruled by me — the owner delegated decisions)
 
 - Module `os/port` (processes live in `os/`; there is no `process/`). `Port(command is Commanding, instances = 1,

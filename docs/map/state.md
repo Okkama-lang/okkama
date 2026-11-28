@@ -31,6 +31,9 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   unrequested `okkama test` alias. Next: 5b `1083-sdk` (okkama-ext + okkama-ext-macros, Rust sample, `okkama ext
   declare`). Deferred to the ABI freeze (owner's call on return): SDK license
   and crates.io publication of okkama-ext/okkama-port.
+- [~] Web logging: #1179 researched (agent; design note on the ticket; decision in decisions.md), #1180 reworked
+  (formatting → host non-blocking stderr buffer → StderrLogs, drain); step 1 formatting in progress (agent,
+  feature/1180-format). Then #1181. Found: #1199 EPIPE on stdout/stderr cannot be caught.
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
   Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust
