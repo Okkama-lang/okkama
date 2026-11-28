@@ -44,6 +44,10 @@ fn every_section_prints_its_markdown() {
         assert_eq!(code, Some(0), "{section}");
         assert!(text.starts_with("# "), "{section}: {text}");
     }
+    // #1189: the style guide in full, a draft until the owner reviews it, with its explicit exceptions.
+    let (_, style, _) = agents(&["style"]);
+    assert!(style.starts_with("# Okkama style guide (draft 1)"), "{style}");
+    assert!(style.contains("## 11. Pragmatic exceptions"), "{style}");
     let (code, map, _) = agents(&["std"]);
     assert_eq!(code, Some(0), "{map}");
     assert!(map.contains("`io/stdout`"), "the std map lists io/stdout: {map}");
