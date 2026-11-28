@@ -1,0 +1,20 @@
+[package]
+name = "okkama-port"
+description = "The helper side of Okkama ports (#1081): serve calls from an Okkama program over stdin and stdout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Typed payloads: a helper reads its request into its own struct and answers with another.
+serde = "1"
+serde_json = "1"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The examples and doctests read payloads into their own structs.
+serde = { version = "1", features = ["derive"] }

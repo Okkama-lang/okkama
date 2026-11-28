@@ -1312,6 +1312,14 @@ name = "okkama-persistent"
 version = "0.6.7"
 
 [[package]]
+name = "okkama-port"
+version = "0.6.7"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "okkama-runtime-abi"
 version = "0.6.7"
 

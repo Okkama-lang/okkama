@@ -220,7 +220,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 525 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 74 files, 24494 lines
+## other — 80 files, 25514 lines
 
 - `blade/src/install.rs` 1416 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 315 — Core library for the Blade command-line tool.
@@ -243,6 +243,12 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/pmap.rs` 782 — A persistent ordered map (#252–#254): a B+ tree whose nodes versions share.
 - `okkama-persistent/src/slots.rs` 133 — A vector of at most `N` items stored inline, so that a map node is one
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
+- `okkama-port/examples/port_test_helper.rs` 26 — The helper of okkama-cli's `tests/port.rs` (#1081): methods that answer, wait, fail, crash and hang, to test
+- `okkama-port/examples/text_helper.rs` 32 — A text helper for Okkama's `os/port` (#1081): the Rust side of `examples/port/text.ok`.
+- `okkama-port/src/cbor.rs` 288 — A small CBOR (RFC 8949) codec for payloads: what Okkama's `cbor` module writes and what other helpers may
+- `okkama-port/src/frame.rs` 61 — Frames: a 4-byte big-endian length, then that many bytes, the first of which says what the frame is.
+- `okkama-port/src/lib.rs` 347 — The helper side of Okkama ports (#1081): a program that serves calls from an Okkama program over its standard
+- `okkama-port/src/value.rs` 266 — The payload data model: one value type for JSON and CBOR messages, so a helper reads a payload the same way
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.
 - `okkama-runtime-abi/src/lib.rs` 266 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
