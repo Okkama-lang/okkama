@@ -102,7 +102,7 @@ impl Drop for Image { fn drop(&mut self) { IMAGE_DROPS.fetch_add(1, Ordering::Se
 #[native] fn image() -> Image { Image("shared".into()) }
 #[native(blocking)] fn blocking(image: Shared<Image>, text: &str) -> String { format!("{} {text}", image.clone().0) }
 #[native(blocking)] fn async_panic() -> i64 { panic!("pool panic"); }
-#[native] fn types(a: Vec<Vec<i64>>, b: BTreeMap<String, Option<i64>>, c: Option<String>, d: BigInt, e: f64, f: bool, g: u8, h: char, i: &[u8]) -> Result<(), Failure> {
+#[native] #[allow(clippy::too_many_arguments)] fn types(a: Vec<Vec<i64>>, b: BTreeMap<String, Option<i64>>, c: Option<String>, d: BigInt, e: f64, f: bool, g: u8, h: char, i: &[u8]) -> Result<(), Failure> {
     let _ = (a, b, c, d, e, f, g, h, i); Ok(())
 }
 #[native(release)] fn close_image(value: Shared<Image>) { drop(value); }
