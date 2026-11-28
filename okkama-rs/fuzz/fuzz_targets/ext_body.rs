@@ -3,9 +3,12 @@
 #[cfg(test)]
 use crate as sparrow_core;
 use okkama_runtime_abi::ext::*;
-use std::{cell::{Cell, RefCell}, ptr};
+use std::{cell::{Cell, RefCell}, ptr, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
 thread_local! {
+    static JOBS: RefCell<Arc<JobCounts>> = RefCell::new(Arc::new(JobCounts::default()));
+    static PREPARE_STATUS: Cell<u32> = const { Cell::new(0) };
+    static COMPLETE_STATUS: Cell<u32> = const { Cell::new(0) };
     static CREATED: Cell<usize> = const { Cell::new(0) };
     static DROPPED: Cell<usize> = const { Cell::new(0) };
     static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -108,6 +111,45 @@ static EXPORT: okk_export = okk_export { symbol: c"fuzz/ext@0::hostile/0".as_ptr
 static EXTENSION: okk_extension = okk_extension { abi: OKKAMA_EXT_ABI, size: std::mem::size_of::<okk_extension>() as u32,
     name: c"hostile".as_ptr(), exports: &EXPORT, export_count: 1, states: STATES.as_ptr(), state_count: STATES.len() as u32 };
 
+#[derive(Default)]
+struct JobCounts { created: AtomicUsize, dropped: AtomicUsize }
+struct Job { counts: Arc<JobCounts>, returned: bool }
+unsafe extern "C" fn drop_job(pointer: *mut std::ffi::c_void) {
+    let job = unsafe { Box::from_raw(pointer.cast::<Job>()) };
+    let dropped = job.counts.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+    assert!(dropped <= job.counts.created.load(Ordering::SeqCst));
+}
+unsafe extern "C" fn prepare(c: *mut okk_call, _: *const okk_slot, out: *mut *mut std::ffi::c_void) -> u32 {
+    let counts = JOBS.with(|j| j.borrow().clone());
+    counts.created.fetch_add(1, Ordering::SeqCst);
+    let job = Box::into_raw(Box::new(Job { counts, returned: false })).cast();
+    let status = PREPARE_STATUS.with(Cell::get);
+    if status != OKK_OK {
+        unsafe { drop_job(job); }
+        if status == OKK_FAILED { unsafe { ((*(*c).host).fail)(c, b"prepare".as_ptr(), 7, ptr::null(), 0); } }
+    } else { unsafe { *out = job; } }
+    status
+}
+unsafe extern "C" fn execute(pointer: *mut std::ffi::c_void, cancel: *const okk_cancel) {
+    unsafe {
+        assert!(((*cancel).cancelled)(cancel) <= 1);
+        (*pointer.cast::<Job>()).returned = true;
+    }
+}
+unsafe extern "C" fn complete(c: *mut okk_call, pointer: *mut std::ffi::c_void, out: *mut okk_slot) -> u32 {
+    unsafe {
+        assert!((*pointer.cast::<Job>()).returned);
+        hostile(c, ptr::null(), out);
+        let status = COMPLETE_STATUS.with(Cell::get);
+        if status == OKK_FAILED { ((*(*c).host).fail)(c, b"complete".as_ptr(), 8, ptr::null(), 0); }
+        status
+    }
+}
+static ASYNC: okk_async = okk_async { prepare, execute, complete, drop: drop_job };
+static ASYNC_EXPORT: okk_export = okk_export { symbol: c"fuzz/ext@0::async_hostile/0".as_ptr(), signature: c"async () -> int".as_ptr(),
+    params: c"".as_ptr(), sync: None, r#async: &ASYNC };
+static ASYNC_EXTENSION: okk_extension = okk_extension { exports: &ASYNC_EXPORT, ..EXTENSION };
+
 pub fn exercise(data: &[u8]) {
     CREATED.with(|n| n.set(0));
     DROPPED.with(|n| n.set(0));
@@ -139,11 +181,32 @@ function f1 "main" {
 entry f1
 "#).unwrap();
     INPUT.with(|input| { let mut input = input.borrow_mut(); input.clear(); input.extend_from_slice(&data[..data.len().min(1537)]); });
-    let limits = sparrow_core::budget::Limits {
+    let limits = || sparrow_core::budget::Limits {
         memory: Some(2 << 20), memory_scope: sparrow_core::budget::MemoryScope::Runtime,
         steps: Some(1000), extensions: vec![unsafe { sparrow_core::ext::Extension::from_static(&EXTENSION).unwrap() }],
         ..Default::default()
     };
-    let _ = sparrow_core::run_limited(okkama_sparrow::encode(&program).unwrap(), vec![], false, vec![], limits);
+    let _ = sparrow_core::run_limited(okkama_sparrow::encode(&program).unwrap(), vec![], false, vec![], limits());
+    let counts = Arc::new(JobCounts::default());
+    JOBS.with(|j| *j.borrow_mut() = counts.clone());
+    let mut program = program;
+    program.functions.truncate(1);
+    program.functions[0].is_async = true;
+    program.functions[0].native = Some("fuzz/ext@0::async_hostile/0".into());
+    program.entry = Some(okkama_sparrow::FuncRef(0));
+    let encoded = okkama_sparrow::encode(&program).unwrap();
+    let arbitrary_status = |offset: usize| {
+        let mut bytes = [0; 4];
+        for (out, input) in bytes.iter_mut().zip(data.get(offset..).unwrap_or_default()) { *out = *input; }
+        u32::from_le_bytes(bytes)
+    };
+    for preparing in [true, false] {
+        PREPARE_STATUS.with(|s| s.set(if preparing { arbitrary_status(0) } else { OKK_OK }));
+        COMPLETE_STATUS.with(|s| s.set(arbitrary_status(4)));
+        let mut limits = limits();
+        limits.extensions = vec![unsafe { sparrow_core::ext::Extension::from_static(&ASYNC_EXTENSION).unwrap() }];
+        let _ = sparrow_core::run_limited(encoded.clone(), vec![], false, vec![], limits);
+        assert_eq!(counts.created.load(Ordering::SeqCst), counts.dropped.load(Ordering::SeqCst), "every allocated job is dropped exactly once");
+    }
     CREATED.with(|c| DROPPED.with(|d| assert_eq!(c.get(), d.get(), "teardown drops every state")));
 }

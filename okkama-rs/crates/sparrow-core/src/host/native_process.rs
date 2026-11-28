@@ -125,14 +125,14 @@ pub(crate) enum ProcessHandle {
     Captured(Rc<Captured>),
 }
 impl Output for Captured {
-    fn publish(self: Box<Self>, h: &mut Heap) -> Result<Slot, Error> {
-        h.process_new(ProcessHandle::Captured(Rc::new(*self)))
+    fn publish(self: Box<Self>, h: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        h.process_new(ProcessHandle::Captured(Rc::new(*self))).map_err(Into::into)
     }
 }
 struct Status(std::process::ExitStatus);
 impl Output for Status {
-    fn publish(self: Box<Self>, h: &mut Heap) -> Result<Slot, Error> {
-        h.process_status(self.0)
+    fn publish(self: Box<Self>, h: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        h.process_status(self.0).map_err(Into::into)
     }
 }
 fn failure(n: Native, code: &str, message: &str) -> NativeFailure {

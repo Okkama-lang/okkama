@@ -120,7 +120,7 @@ fn forward(n: Native, source: &str, port: Option<i64>) -> Result<Forward, Native
 
 struct Addresses(Vec<Vec<String>>);
 impl Output for Addresses {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         let mut addresses = Vec::with_capacity(self.0.len());
         for row in self.0 {
             let values = row
@@ -129,12 +129,12 @@ impl Output for Addresses {
                 .collect::<Result<Vec<_>, _>>()?;
             addresses.push(heap.allocate_array(values)?);
         }
-        heap.allocate_array(addresses)
+        heap.allocate_array(addresses).map_err(Into::into)
     }
 }
 impl Output for String {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
-        heap.allocate_text(*self)
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        heap.allocate_text(*self).map_err(Into::into)
     }
 }
 fn records(n: Native, mut records: Vec<SocketAddr>) -> Result<Addresses, NativeFailure> {

@@ -117,7 +117,7 @@ impl Drop for Connecting {
     }
 }
 impl Output for i64 {
-    fn publish(self: Box<Self>, _: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, _: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         Ok(Slot::small(*self))
     }
 }

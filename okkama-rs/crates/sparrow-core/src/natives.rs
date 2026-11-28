@@ -15,6 +15,10 @@ pub enum Refusal {
     Exhausted(crate::budget::Exhausted),
 }
 
+impl From<crate::Error> for Refusal {
+    fn from(error: crate::Error) -> Self { Self::Failure(FailureKind::Program(error.0)) }
+}
+
 /// Natives this core provides.
 pub fn supported(native: Native) -> bool {
     matches!(

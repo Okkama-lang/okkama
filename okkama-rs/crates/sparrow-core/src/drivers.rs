@@ -104,14 +104,11 @@ fn call_failed(ctx: *mut Ctx) -> Result<Word, ()> {
 }
 
 fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, deliver: bool) -> Step {
-    if runtime.external[function].is_some() {
-        if deliver { return cancelled(runtime); }
-        let count = runtime.loaded.program.functions[function].params.len();
-        let arguments: Vec<_> = (0..count).map(|i| param(runtime, frame, function, i)).collect();
-        let word = crate::runtime::rt_native(ctx, function as u64, arguments.as_ptr(), count as u64);
-        return if unsafe { (*ctx).status } == OK { Done(word) } else {
-            match call_failed(ctx) { Ok(failure) => Failed(failure), Err(()) => Stop }
-        };
+    if let Some(binding) = runtime.external[function].clone() {
+        if let Err(message) = runtime.limits.permits_external(binding.symbol) {
+            return fail(runtime, FailureKind::Program(message));
+        }
+        return native_io(runtime, ctx, frame, function, crate::host::NativeKey::Extension(binding), deliver);
     }
     let symbol = runtime.loaded.program.functions[function].native.clone().unwrap_or_default();
     let Some(native) = okkama_runtime_abi::Native::resolve(&symbol) else {
@@ -126,7 +123,7 @@ fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, de
             crate::runtime::fatal(unsafe { &mut *ctx }, runtime, message);
             return Stop;
         }
-        return native_io(runtime, frame, function, native, deliver);
+        return native_io(runtime, ctx, frame, function, native.into(), deliver);
     }
     match resume(frame) {
         0 => {
@@ -159,7 +156,7 @@ fn native(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, de
 }
 
 /// An async native provider: start its request, then poll it on each wake.
-fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama_runtime_abi::Native, deliver: bool) -> Step {
+fn native_io(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, native: crate::host::NativeKey, deliver: bool) -> Step {
     use crate::host::Start;
     let started = match runtime.io.requests.get(&frame) {
         Some(&id) => {
@@ -178,6 +175,8 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
             }
         }
         None => {
+            // Builtins keep their start-then-cancel order (cleanups may rely on it).
+            if deliver && matches!(native, crate::host::NativeKey::Extension(_)) { return cancelled(runtime); }
             let count = runtime.loaded.program.functions[function].params.len();
             let arguments: Vec<Word> = (0..count).map(|i| param(runtime, frame, function, i)).collect();
             match crate::host::start(runtime, native, &arguments) {
@@ -205,6 +204,19 @@ fn native_io(runtime: &mut Runtime, frame: Word, function: usize, native: okkama
         Start::Raise(failure) => Failed(failure),
         Start::Refused(message) => fail(runtime, FailureKind::Program(message)),
         Start::Pending(_) => Pending,
+        Start::Stopped(refusal) => match refusal {
+            crate::natives::Refusal::Failure(kind) => fail(runtime, kind),
+            crate::natives::Refusal::Raise(word) => Failed(word),
+            crate::natives::Refusal::Fatal(message) => {
+                runtime.poisoned = true;
+                crate::runtime::fatal(unsafe { &mut *ctx }, runtime, message);
+                Stop
+            }
+            crate::natives::Refusal::Exhausted(what) => {
+                runtime.exhaust(unsafe { &mut *ctx }, what);
+                Stop
+            }
+        },
     }
 }
 

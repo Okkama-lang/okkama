@@ -11,7 +11,7 @@ struct Export {
     symbol: &'static str,
     text: &'static str,
     signature: Signature,
-    sync: Option<okk_sync>,
+    callback: host::native_ext::Callback,
 }
 
 /// An immutable descriptor registered by the embedding, never by bytecode.
@@ -28,7 +28,9 @@ impl Extension {
     /// All descriptor pointers must be aligned, readable and immutable for
     /// the process lifetime, including strings, arrays and callbacks. Strings
     /// must be NUL-terminated. Callbacks obey `okkama_ext.h`, never unwind, and
-    /// support independent runtimes on different threads.
+    /// support independent runtimes on different threads. Async jobs own their
+    /// copied inputs and can move to and from a blocking pool thread; job drop
+    /// may run on either thread after execute has returned.
     pub unsafe fn from_static(descriptor: &'static okk_extension) -> Result<Self, Error> {
         if descriptor.abi != OKKAMA_EXT_ABI || descriptor.size as usize != std::mem::size_of::<okk_extension>() {
             return Err(Error("extension ABI or descriptor size does not match".into()));
@@ -73,7 +75,11 @@ impl Extension {
             } else if export.sync.is_none() || !export.r#async.is_null() {
                 return Err(Error(format!("extension {symbol} needs a sync callback")));
             }
-            parsed.push(Export { symbol, text: signature_text, signature, sync: export.sync });
+            let callback = match export.sync {
+                Some(sync) => host::native_ext::Callback::Sync(sync),
+                None => host::native_ext::Callback::Async(unsafe { &*export.r#async }),
+            };
+            parsed.push(Export { symbol, text: signature_text, signature, callback });
         }
         let states = if descriptor.state_count == 0 { &[][..] } else {
             unsafe { std::slice::from_raw_parts(descriptor.states, descriptor.state_count as usize) }
@@ -128,7 +134,7 @@ pub(crate) fn bind(loaded: &Loaded, extensions: &[Extension], host: &mut host::H
             return Err(Error(format!("native {} signature mismatch: program {asynchronous}({}) -> {result}; extension {}",
                 export.symbol, params.join(", "), export.text)));
         }
-        host::native_ext::Binding::new(host, program, function, export.symbol, signature, export.sync, states).map(|b| Some(Rc::new(b)))
+        host::native_ext::Binding::new(host, program, function, export.symbol, signature, export.callback, states).map(|b| Some(Rc::new(b)))
     }).collect()
 }
 

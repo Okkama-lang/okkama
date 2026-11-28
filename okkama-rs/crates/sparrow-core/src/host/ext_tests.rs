@@ -569,6 +569,13 @@ fn ext_fuzz_seeds() {
         include_bytes!("../../../../fuzz/seeds/ext/memory").as_slice()] {
         ext_fuzz::exercise(seed);
     }
+    for status in [OKK_OK, OKK_FAILED, OKK_PANIC, OKK_STOPPED, OKK_BAD_TOKEN, OKK_BAD_KIND,
+        OKK_BAD_SHAPE, OKK_BAD_TEXT, OKK_RANGE, OKK_UNSUPPORTED, u32::MAX] {
+        let mut seed = [0; 8];
+        seed[..4].copy_from_slice(&status.to_le_bytes());
+        seed[4..].copy_from_slice(&status.to_le_bytes());
+        ext_fuzz::exercise(&seed);
+    }
     // Create/read/release, then a closed-state read; retain the source token.
     let mut state_seed = vec![0];
     for op in [25, 26, 25] {

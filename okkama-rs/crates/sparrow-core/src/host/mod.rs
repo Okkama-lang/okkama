@@ -965,6 +965,7 @@ pub enum Start {
     Refused(String),
     /// A pending request (its id in the host).
     Pending(u64),
+    Stopped(crate::natives::Refusal),
 }
 
 fn with_host<T>(runtime: &mut Runtime, tokio: bool, body: impl FnOnce(&mut Heap) -> T) -> T {
@@ -989,8 +990,26 @@ fn with_host<T>(runtime: &mut Runtime, tokio: bool, body: impl FnOnce(&mut Heap)
     result
 }
 
+/// Both providers share the same request, polling and cancellation driver.
+#[derive(Clone)]
+pub(crate) enum NativeKey {
+    Builtin(Native),
+    Extension(Rc<native_ext::Binding>),
+}
+impl From<Native> for NativeKey {
+    fn from(native: Native) -> Self { Self::Builtin(native) }
+}
+impl NativeKey {
+    fn is_void(&self) -> bool {
+        match self {
+            Self::Builtin(n) => matches!(n.signature().result, Abi::Void),
+            Self::Extension(b) => b.is_void(),
+        }
+    }
+}
+
 impl Heap {
-    fn settled(&mut self, native: Native, id: u64) -> Start {
+    fn settled(&mut self, native: &NativeKey, id: u64) -> Start {
         // Taking the state leaves `Io`, which is what a pending request keeps.
         let state = match self.futures.get_mut(id) {
             Ok(cell) => std::mem::replace(&mut cell.state, State::Io),
@@ -1001,7 +1020,7 @@ impl Heap {
             State::Ready(result) => {
                 self.futures.release(id);
                 match result {
-                    Ok(value) if matches!(native.signature().result, Abi::Void) => {
+                    Ok(value) if native.is_void() => {
                         let _ = value;
                         Start::Done(crate::word::UNBOUND)
                     }
@@ -1014,12 +1033,20 @@ impl Heap {
 }
 
 /// Start async `native`: its result now, or a pending request.
-pub fn start(runtime: &mut Runtime, native: Native, arguments: &[Word]) -> Start {
+pub(crate) fn start(runtime: &mut Runtime, native: impl Into<NativeKey>, arguments: &[Word]) -> Start {
+    let key = native.into();
     with_host(runtime, true, |host| {
+        let native = match &key {
+            NativeKey::Builtin(n) => *n,
+            NativeKey::Extension(binding) => return match native_ext::start(host, binding.clone(), arguments) {
+                Ok(future) => host.settled(&key, future.bits),
+                Err(refusal) => Start::Stopped(refusal),
+            },
+        };
         let mut slots = vec![Slot::default(); arguments.len()];
         host.slots(native, arguments, &mut slots);
         match host.native_invoke(native, &slots) {
-            Ok(Outcome::Value(future)) if future.kind() == FUTURE => host.settled(native, future.bits),
+            Ok(Outcome::Value(future)) if future.kind() == FUTURE => host.settled(&key, future.bits),
             Ok(Outcome::Value(value)) => Start::Done(host.word(value)),
             Ok(Outcome::Failure(failure)) => Start::Raise(failure.bits),
             Err(Error(message)) => Start::Refused(message),
@@ -1028,7 +1055,8 @@ pub fn start(runtime: &mut Runtime, native: Native, arguments: &[Word]) -> Start
 }
 
 /// Poll a pending request with `waker`; None while it is pending.
-pub fn poll(runtime: &mut Runtime, native: Native, id: u64, waker: &std::task::Waker) -> Option<Start> {
+pub(crate) fn poll(runtime: &mut Runtime, native: impl Into<NativeKey>, id: u64, waker: &std::task::Waker) -> Option<Start> {
+    let key = native.into();
     with_host(runtime, true, |host| {
         let request = match host.futures.get(id) {
             Ok(cell) => cell.io.clone(),
@@ -1038,11 +1066,12 @@ pub fn poll(runtime: &mut Runtime, native: Native, id: u64, waker: &std::task::W
             if request.poll(&mut std::task::Context::from_waker(waker)).is_pending() {
                 return None;
             }
-            if let Err(Error(message)) = host.native_io_settle(Slot { bits: id, tag: FUTURE }) {
-                return Some(Start::Refused(message));
+            if let Err(refusal) = host.native_io_settle(Slot { bits: id, tag: FUTURE }) {
+                host.futures.release(id);
+                return Some(Start::Stopped(refusal));
             }
         }
-        Some(host.settled(native, id))
+        Some(host.settled(&key, id))
     })
 }
 
@@ -1073,3 +1102,6 @@ mod ext_tests;
 
 #[cfg(test)]
 mod ext_states_tests;
+
+#[cfg(all(test, feature = "host"))]
+mod ext_async_tests;

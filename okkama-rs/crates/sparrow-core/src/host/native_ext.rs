@@ -1,4 +1,4 @@
-//! Synchronous extension calls: scalar bits and call-scoped typed tokens.
+//! Extension call scopes: scalar bits and call-scoped typed tokens.
 #![allow(unsafe_code)]
 
 use super::{Heap, Shape, Slot};
@@ -6,10 +6,18 @@ use crate::{Error, natives::Refusal, runtime::Runtime, word::{Repr, Word}};
 use okkama_runtime_abi::{NativeFailure, Signature, Type, ext::*};
 use std::{borrow::Cow, ffi::c_void, sync::atomic::{AtomicU64, Ordering}};
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Callback {
+    Sync(okk_sync),
+    // Pure builds bind signatures but cannot run pool callbacks.
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
+    Async(&'static okk_async),
+}
+
 #[derive(Debug)]
 pub(crate) struct Binding {
     pub symbol: &'static str,
-    sync: okk_sync,
+    callback: Callback,
     params: Box<[Shape]>,
     result: Shape,
     bytes_tag: u64,
@@ -17,12 +25,11 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
+    pub(crate) fn is_void(&self) -> bool { self.result == Shape::Unknown }
+
     pub(crate) fn new(host: &mut Heap, program: &okkama_sparrow::Program, function: &okkama_sparrow::Function,
-        symbol: &'static str, signature: &Signature, sync: Option<okk_sync>, states: &'static [okk_state_type]) -> Result<Self, Error>
+        symbol: &'static str, signature: &Signature, callback: Callback, states: &'static [okk_state_type]) -> Result<Self, Error>
     {
-        let Some(sync) = sync.filter(|_| !signature.is_async) else {
-            return Err(Error(format!("native {symbol}: async extensions are not in this step")));
-        };
         let module = symbol.split('@').next().unwrap_or("").replace('/', ".");
         let states: Box<[_]> = states.iter().filter_map(|state| {
             // Registration validated the immutable descriptor strings.
@@ -39,7 +46,7 @@ impl Binding {
             None => Shape::Unknown,
         };
         let Shape::Array(byte) = host.shape(&Type::bytes()) else { unreachable!() };
-        Ok(Self { symbol, sync, params, result, states, bytes_tag: super::ARRAY | ((byte as u64) << 8) })
+        Ok(Self { symbol, callback, params, result, states, bytes_tag: super::ARRAY | ((byte as u64) << 8) })
     }
 }
 
@@ -137,7 +144,10 @@ impl Call<'_> {
 }
 
 pub(crate) fn call(runtime: &mut Runtime, binding: &Binding, arguments: &[Word]) -> Result<(Word, Repr), Refusal> {
-    let result = super::with_host(runtime, false, |host| invoke(host, binding, arguments));
+    let Callback::Sync(sync) = binding.callback else { return Err(fault(binding, "async callback used synchronously")); };
+    let result = super::with_host(runtime, false, |host| invoke(host, binding, arguments, true, |c, a, out| unsafe {
+        sync(c, a, out)
+    }));
     if matches!(result, Err(Refusal::Fatal(_))) { runtime.poisoned = true; return result; }
     if runtime.limits.interrupted() {
         return Err(Refusal::Exhausted(crate::budget::Exhausted::Interrupted));
@@ -150,7 +160,9 @@ fn fault(binding: &Binding, reason: impl std::fmt::Display) -> Refusal {
     Refusal::Fatal(format!("internal error in native {}: {reason}", binding.symbol))
 }
 
-fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word]) -> Result<(Word, Repr), Refusal> {
+fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word], result_required: bool,
+    callback: impl FnOnce(*mut okk_call, *const okk_slot, *mut okk_slot) -> u32) -> Result<(Word, Repr), Refusal>
+{
     let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
     if serial > u64::from(u32::MAX) { return Err(fault(binding, "call token serial exhausted")); }
     let shape_start = host.shapes.len();
@@ -172,10 +184,18 @@ fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word]) -> Result<(Wor
     let collections = call.host.core().stats().collections;
     let mut result = okk_slot::default();
     // No collection or VM re-entry until the callback returns; the result
-    // becomes rt_native's extra safepoint root immediately afterwards.
+    // becomes the native result or the driver's settled Future before any safepoint.
     // Derive the pointer from the whole context, not just its public prefix.
     let context = (&mut call as *mut Call<'_>).cast::<okk_call>();
-    let status = unsafe { (binding.sync)(context, args.as_ptr(), &mut result) };
+    static TRACE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+    let started = TRACE.on().then(std::time::Instant::now);
+    let status = callback(context, args.as_ptr(), &mut result);
+    if let Some(started) = started {
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(1) {
+            okkama_devtrace::event!("runtime", "slow extension callback", symbol = binding.symbol, micros = elapsed.as_micros());
+        }
+    }
     #[cfg(debug_assertions)]
     debug_assert_eq!(call.host.core().stats().collections, collections);
     if call.fault { return Err(fault(binding, "invalid host operation or panic")); }
@@ -188,6 +208,7 @@ fn invoke(host: &mut Heap, binding: &Binding, arguments: &[Word]) -> Result<(Wor
     }
     if status != OKK_OK { return Err(fault(binding, format_args!("status {status}"))); }
     if call.failure.is_some() { return Err(fault(binding, "pending failure with OKK_OK")); }
+    if !result_required { return Ok((crate::word::UNBOUND, Repr::Raw)); }
     let slot = call.import_as(result, &binding.result, true).map_err(|s| call.refusal(s))?;
     let word = call.host.word(slot);
     call.reserve(0).map_err(|s| call.refusal(s))?;
@@ -299,3 +320,16 @@ static HOST: okk_host = okk_host {
     array_len, array_get, array_read, array_new, map_len, map_entries, map_new,
     state_new, state_get, state_release, fail, interrupted,
 };
+
+#[cfg(feature = "host")]
+mod asynchronous;
+
+pub(crate) fn start(host: &mut Heap, binding: std::rc::Rc<Binding>, arguments: &[Word]) -> Result<Slot, Refusal> {
+    #[cfg(feature = "host")]
+    { asynchronous::start(host, binding, arguments) }
+    #[cfg(not(feature = "host"))]
+    {
+        let _ = (host, arguments);
+        Err(Refusal::Failure(crate::runtime::FailureKind::Program(format!("native {} requires the host", binding.symbol))))
+    }
+}

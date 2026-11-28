@@ -74,7 +74,7 @@ struct Event {
     previous: String,
 }
 impl Output for Event {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         let mut entries = vec![];
         for (key, value) in [
             ("kind", self.kind.to_owned()),
@@ -83,7 +83,7 @@ impl Output for Event {
         ] {
             entries.push((heap.allocate_text(key.into())?, heap.allocate_text(value)?));
         }
-        heap.map_new(entries.into_iter())
+        heap.map_new(entries.into_iter()).map_err(Into::into)
     }
 }
 #[derive(Debug)]

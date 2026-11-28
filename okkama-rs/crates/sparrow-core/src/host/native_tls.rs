@@ -370,8 +370,8 @@ struct Received {
 }
 
 impl Output for Received {
-    fn publish(mut self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
-        heap.native_byte_array(self.bytes.take().unwrap_or_default())
+    fn publish(mut self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        heap.native_byte_array(self.bytes.take().unwrap_or_default()).map_err(Into::into)
     }
 }
 

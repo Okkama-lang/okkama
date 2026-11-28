@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 #define OKKAMA_EXT_ABI 1
-#define OKKAMA_EXT_STACK (512 * 1024)
+#define OKKAMA_EXT_STACK (768 * 1024)
 typedef struct okk_host okk_host;
 typedef struct okk_call { const okk_host *host; } okk_call;
 typedef struct okk_cancel { uint32_t (*cancelled)(const struct okk_cancel *); } okk_cancel;
@@ -17,6 +17,24 @@ enum { OKK_NONE, OKK_INT, OKK_FLOAT, OKK_BOOL, OKK_BYTE, OKK_CHAR,
 enum { OKK_OK, OKK_FAILED, OKK_PANIC, OKK_STOPPED, OKK_BAD_TOKEN,
        OKK_BAD_KIND, OKK_BAD_SHAPE, OKK_BAD_TEXT, OKK_RANGE, OKK_UNSUPPORTED };
 typedef uint32_t (*okk_sync)(okk_call *, const okk_slot *, okk_slot *);
+/* An async call creates an ordinary cold Future: prepare starts on first poll.
+ * prepare and complete run on the VM thread, each in a fresh call scope.
+ * execute runs on a blocking pool thread without VM access. It must return.
+ * OKK_OK from prepare transfers job ownership, including a null job, to the
+ * runtime. For any other status the runtime does not own the pointer:
+ * leave it null or free it before returning. complete never frees the job.
+ * drop runs exactly once after complete, or instead of complete on cancellation,
+ * a rejected successful prepare, or teardown; never concurrently with execute.
+ * drop may run on the VM or a pool thread and must not use the host API.
+ * cancelled() is valid only during execute; it stays 1 after task cancellation
+ * or the run's timeout/interrupt. Cancellation waits for execute to return,
+ * skips complete, drops the job, then resolves the Future as Cancelled.
+ * Tokens, call pointers and views cannot be stored in a job. Copy inputs.
+ * A state payload can be read in prepare, but release may run during execute:
+ * the job must retain its own ownership (e.g. an Arc clone), not a borrowed
+ * raw payload pointer. State drop itself still runs only on the VM thread.
+ * Native work consumes no steps; host allocations in complete obey max-memory.
+ */
 typedef struct {
     uint32_t (*prepare)(okk_call *, const okk_slot *, void **);
     void (*execute)(void *, const okk_cancel *);
@@ -40,7 +58,11 @@ typedef struct {
     uint32_t state_count;
 } okk_extension;
 extern const okk_extension okkama_extension;
-/* All callbacks run on the VM thread. Tokens and views expire on return.
+/* sync, prepare, complete and state drop run on the VM thread.
+ * Keep these callbacks below 1 ms; longer work belongs in async execute.
+ * VM-thread callbacks have at least OKKAMA_EXT_STACK (786432 bytes / 768 KiB)
+ * of stack: runtime STACK_HEADROOM (1 MiB) minus JIT MAX_FRAME (256 KiB).
+ * Tokens and views expire on return.
  * Scalars are bits (INT: signed i64, FLOAT: binary64); other bits are tokens.
  * Input buffers are copied. Null is allowed only for an empty input.
  * Output pointers must be writable. No exceptions or longjmp across the ABI.

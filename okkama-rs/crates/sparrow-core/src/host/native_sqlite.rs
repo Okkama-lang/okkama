@@ -1643,7 +1643,7 @@ fn cleanup_cancelled(state: &ConnectionRef, op: &str, data: &Data) {
 
 struct ReplyOutput(bool, Data);
 impl Output for ReplyOutput {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         let reply = Rc::new(Reply {
             ok: self.0,
             data: RefCell::new(self.1),
@@ -1657,7 +1657,7 @@ impl Output for ReplyOutput {
 }
 struct Flag(bool);
 impl Output for Flag {
-    fn publish(self: Box<Self>, _heap: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, _heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         Ok(Slot::boolean(self.0))
     }
 }

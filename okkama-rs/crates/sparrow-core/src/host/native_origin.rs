@@ -51,8 +51,8 @@ impl Drop for Pending {
 struct Settled(Value, Type);
 
 impl Output for Settled {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
-        heap.from_origin(self.0, &self.1)
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        heap.from_origin(self.0, &self.1).map_err(Into::into)
     }
 }
 

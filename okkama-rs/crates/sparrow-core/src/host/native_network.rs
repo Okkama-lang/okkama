@@ -164,17 +164,17 @@ pub(crate) enum NetworkHandle {
     Unix(crate::host::native_unix::UnixHandle),
 }
 impl Output for NetworkHandle {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
-        heap.network_new(*self)
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        heap.network_new(*self).map_err(Into::into)
     }
 }
 impl Output for Vec<u8> {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
-        heap.native_byte_array(*self)
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
+        heap.native_byte_array(*self).map_err(Into::into)
     }
 }
 impl Output for bool {
-    fn publish(self: Box<Self>, _: &mut Heap) -> Result<Slot, Error> {
+    fn publish(self: Box<Self>, _: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
         Ok(Slot::boolean(*self))
     }
 }

@@ -12,7 +12,7 @@ use std::{
 
 /// Implementations may own Rust data/resources, never untraced VM Slots.
 pub(crate) trait Output {
-    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error>;
+    fn publish(self: Box<Self>, heap: &mut Heap) -> Result<Slot, crate::natives::Refusal>;
 }
 pub(crate) type ResultValue = Result<Box<dyn Output>, NativeFailure>;
 pub(crate) type Body = Pin<Box<dyn Future<Output = ResultValue>>>;
@@ -169,7 +169,7 @@ impl Heap {
     }
     /// A request whose body is woken only from a provider thread (it waits on
     /// a channel a worker thread answers, never on the reactor or a timer);
-    /// a cancellation cleanup is not bound by that. Only SQLite's workers answer so (`host`).
+    /// a cancellation cleanup is not bound by that. SQLite workers and extension jobs answer this way (`host`).
     #[cfg(feature = "host")]
     pub(crate) fn native_io_threaded<F, T>(
         &mut self,
@@ -187,7 +187,7 @@ impl Heap {
         Ok(slot)
     }
     /// Publish a completed request into its Future's state.
-    pub(crate) fn native_io_settle(&mut self, future: Slot) -> Result<(), Error> {
+    pub(crate) fn native_io_settle(&mut self, future: Slot) -> Result<(), crate::natives::Refusal> {
         if !matches!(self.future(future)?.state, State::Io) {
             return Ok(());
         }
@@ -205,7 +205,10 @@ impl Heap {
         let value = match result {
             Completion::Value(Ok(output)) => match output.publish(self) {
                 Ok(value) => Ok(value),
-                Err(error) => Err(self.failure_new(FailureKind::Program(error.0))?),
+                Err(crate::natives::Refusal::Failure(crate::runtime::FailureKind::Program(message))) =>
+                    Err(self.failure_new(FailureKind::Program(message))?),
+                Err(crate::natives::Refusal::Raise(word)) => Err(Slot { bits: word, tag: FAILURE }),
+                Err(stop) => return Err(stop),
             },
             Completion::Value(Err(error)) => {
                 let payload = self.native_failure_new(error)?;
@@ -234,7 +237,7 @@ mod tests {
 
     struct Nothing;
     impl Output for Nothing {
-        fn publish(self: Box<Self>, _heap: &mut Heap) -> Result<Slot, Error> {
+        fn publish(self: Box<Self>, _heap: &mut Heap) -> Result<Slot, crate::natives::Refusal> {
             Ok(Slot::default())
         }
     }

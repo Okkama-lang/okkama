@@ -4,8 +4,8 @@
 use core::ffi::{c_char, c_void};
 
 pub const OKKAMA_EXT_ABI: u32 = 1;
-/// Minimum stack available to a synchronous callback, in bytes.
-pub const OKKAMA_EXT_STACK: usize = 512 * 1024;
+/// Minimum stack available to a VM-thread callback, in bytes.
+pub const OKKAMA_EXT_STACK: usize = 768 * 1024;
 
 // Integers, not Rust enums: an untrusted discriminant must remain representable.
 pub const OKK_NONE: u64 = 0;
@@ -43,12 +43,18 @@ pub struct okk_call { pub host: *const okk_host }
 
 #[repr(C)]
 #[derive(Debug)]
+/// Valid only during execute; sticky task cancellation or run interruption.
 pub struct okk_cancel { pub cancelled: unsafe extern "C" fn(*const okk_cancel) -> u32 }
 
 pub type okk_sync = unsafe extern "C" fn(*mut okk_call, *const okk_slot, *mut okk_slot) -> u32;
 
 #[repr(C)]
 #[derive(Debug)]
+/// prepare/complete run in separate VM-thread call scopes; execute has no VM access.
+/// OK prepare transfers the job, including null; on any other status the extension
+/// must leave it null or free it itself. Jobs own copied inputs and state references.
+/// drop runs exactly once, after complete or instead of it, on the VM or pool thread,
+/// never concurrently with execute. See the header for the full threading contract.
 pub struct okk_async {
     pub prepare: unsafe extern "C" fn(*mut okk_call, *const okk_slot, *mut *mut c_void) -> u32,
     pub execute: unsafe extern "C" fn(*mut c_void, *const okk_cancel),
