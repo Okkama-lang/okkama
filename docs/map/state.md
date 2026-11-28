@@ -16,8 +16,10 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   shape; verify.rs #976 rule removed; root-module handles qualified too (`Ctx::handle_name`, test okkama-cli
   handles_1083). Step 1 done (Codex, reviewed; a241144ca): okkama-runtime-abi ext.rs + include/okkama_ext.h,
   Limits.extensions, ext::bind, Runtime.external, host/native_ext.rs (sync, scalars, views, text_new, bytes_new,
-  fail, interrupted; contract faults stop and poison), 15 ext_tests, cost 0.25× std crc32. Next: step 2 `1083-values`
-  (bigint, rat, arrays, maps, bytes_reserve, ?T, memory stop; fuzz target with a hostile extension).
+  fail, interrupted; contract faults stop and poison), 15 ext_tests, cost 0.25× std crc32. Step 2 done (Codex, reviewed;
+  feature/1083-values): host/native_ext/values.rs (bigint, rat, arrays, maps, bytes_reserve, ?T; memory stop is a
+  sticky OKK_STOPPED → Exhausted::Memory), ext_values_tests, fuzz target `ext` (hostile extension). Next: step 3
+  `1083-states` (extension states owned by the .ok wrapper, destroy).
 - [x] #1082 CBOR (agent; feature/1082): std/cbor.ok over std/runtime/cbor.ok (39 natives, IDs 681–719),
   sparrow-core/src/cbor.rs (no recursion), host/native_cbor.rs, tests sparrow-core/tests/cbor.rs (14), std inline 12+2,
   examples/cbor/message.ok, fuzz target `cbor`. runtime/cbor is PURE (playground allowed).

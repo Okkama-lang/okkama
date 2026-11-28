@@ -416,7 +416,7 @@ impl Decoder<'_> {
                         Ok(text) => Value::Text(text),
                         Err(_) => return Self::fail(Failure::InvalidUtf8, start),
                     },
-                    (4 | 5 | 6, argument) => {
+                    (4..=6, argument) => {
                         let left = match argument {
                             Argument::Value(n) if major == 5 => {
                                 // A key and a value take at least a byte each.

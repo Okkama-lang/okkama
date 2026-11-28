@@ -45,8 +45,23 @@ extern const okk_extension okkama_extension;
  * Input buffers are copied. Null is allowed only for an empty input.
  * Output pointers must be writable. No exceptions or longjmp across the ABI.
  * fail sets a pending failure; the callback must return OKK_FAILED.
- * bigint magnitudes are big-endian, signs -1/0/1. array_read copies count
- * slots from start. map_entries copies count keys and values in key order.
+ * BAD_TOKEN, BAD_KIND and BAD_SHAPE are sticky contract faults, even if ignored.
+ * BAD_TEXT (invalid UTF-8) and RANGE (data/bounds errors) are recoverable;
+ * returning either status from the callback is a contract fault.
+ * Host allocation beyond the run's memory budget sets sticky STOPPED.
+ * bigint magnitudes are unsigned big-endian, signs -1/0/1. Leading zeroes
+ * are accepted; sign 0 requires a zero magnitude. Values fitting i64 are INT.
+ * bigint_read accepts INT or BIGINT; the view lasts until callback return.
+ * rat_parts produces normalized int slots; rat_new reduces, makes the
+ * denominator positive, and returns RANGE for zero denominator.
+ * bytes_reserve returns zeroed writable bytes and an ARRAY slot. The buffer
+ * stays writable until callback return, including after other host calls.
+ * array_new requires one element shape; empty arrays fit every array type.
+ * array_get checks the index; array_read copies count slots from start.
+ * map_new requires one key shape and one value shape; duplicate keys are RANGE.
+ * map_entries copies the first count keys and values in key order; count
+ * beyond map_len is RANGE. Empty input/output buffers may be null.
+ * Maybe is NONE (bits = 0) or its inner slot, never a token for the wrapper.
  * Unimplemented entries return OKK_UNSUPPORTED without changing outputs. */
 struct okk_host {
     uint32_t (*text)(okk_call *, okk_slot, const uint8_t * *, size_t *);

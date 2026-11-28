@@ -112,7 +112,6 @@ unsafe extern "C" fn checks(c: *mut okk_call, _: *const okk_slot, out: *mut okk_
     unsafe {
         let host = &*(*c).host;
         if (host.text_new)(c, [255].as_ptr(), 1, out) != OKK_BAD_TEXT { return OKK_PANIC; }
-        if (host.bytes_reserve)(c, 0, ptr::null_mut(), out) != OKK_UNSUPPORTED { return OKK_PANIC; }
         let mut interrupted = 99;
         if (host.interrupted)(c, &mut interrupted) != OKK_OK { return OKK_PANIC; }
         if interrupted != 0 { return OKK_STOPPED; }
@@ -156,7 +155,41 @@ static DESCRIPTOR: okk_extension = okk_extension {
 fn extension() -> Extension { unsafe { Extension::from_static(&DESCRIPTOR).unwrap() } }
 fn limits() -> Limits { Limits { extensions: vec![extension()], ..Limits::default() } }
 
-const TYPES: &str = "type t0 int\ntype t1 float\ntype t2 bool\ntype t3 byte\ntype t4 char\ntype t5 str\ntype t6 array t3\ntype t7 failure\ntype t8 object obj0\nobject obj0 \"NativeFailure\" builtin {\n field \"domain\" t5\n field \"code\" t5\n field \"operation\" t5\n field \"message\" t5\n}\n";
+const TYPES: &str = r#"type t0 int
+type t1 float
+type t2 bool
+type t3 byte
+type t4 char
+type t5 str
+type t6 array t3
+type t7 failure
+type t8 object obj0
+object obj0 "NativeFailure" builtin {
+ field "domain" t5
+ field "code" t5
+ field "operation" t5
+ field "message" t5
+}
+type t9 rat
+type t10 array t5
+type t11 array t0
+type t12 map t5 t11
+type t13 array t12
+type t14 variant variant0
+type t15 variant variant1
+type t16 array t9
+type t17 array t11
+type t18 map t0 t5
+type t19 array t14
+type t20 array t2
+type t21 map t9 t5
+object obj1 "some_int" { field "value" t0 }
+object obj2 "none_int" {}
+object obj3 "some_array" { field "value" t11 }
+object obj4 "none_array" {}
+variant variant0 "$variant_Maybe_0" { case "some" obj1 case "none" obj2 }
+variant variant1 "$variant_Maybe_1" { case "some" obj3 case "none" obj4 }
+"#;
 
 fn wrapper(symbol: &str, params: &[usize], result: usize) -> okkama_sparrow::Program {
     let types = params.iter().map(|t| format!("t{t}")).collect::<Vec<_>>().join(", ");
@@ -261,7 +294,7 @@ fn ext_contract_faults_stop_and_poison() {
 }
 
 #[test]
-fn ext_utf8_deferred_and_interrupted_host_entries() {
+fn ext_utf8_and_interrupted_host_entries() {
     let mut r = runtime("example/native@0::checks/0", &[], 0);
     let result = r.run_function_with(1, &[], 1 << 24).unwrap();
     assert_eq!(r.small_or_big(result), Some(0));
@@ -390,6 +423,22 @@ fn ext_c_header_matches_rust_layout() {
     layout!(okk_extension; abi, size, name, exports, export_count, states, state_count);
     layout!(okk_host; text, bytes, text_new, bytes_new, bytes_reserve, bigint_read, bigint_new, rat_parts, rat_new,
         array_len, array_get, array_read, array_new, map_len, map_entries, map_new, state_new, state_get, state_release, fail, interrupted);
+    for (field, args) in [
+        ("bytes_reserve", "okk_call *, size_t, uint8_t **, okk_slot *"),
+        ("bigint_read", "okk_call *, okk_slot, int32_t *, const uint8_t **, size_t *"),
+        ("bigint_new", "okk_call *, int32_t, const uint8_t *, size_t, okk_slot *"),
+        ("rat_parts", "okk_call *, okk_slot, okk_slot *, okk_slot *"),
+        ("rat_new", "okk_call *, okk_slot, okk_slot, okk_slot *"),
+        ("array_len", "okk_call *, okk_slot, size_t *"),
+        ("array_get", "okk_call *, okk_slot, size_t, okk_slot *"),
+        ("array_read", "okk_call *, okk_slot, size_t, okk_slot *, size_t"),
+        ("array_new", "okk_call *, const okk_slot *, size_t, okk_slot *"),
+        ("map_len", "okk_call *, okk_slot, size_t *"),
+        ("map_entries", "okk_call *, okk_slot, okk_slot *, okk_slot *, size_t"),
+        ("map_new", "okk_call *, const okk_slot *, const okk_slot *, size_t, okk_slot *"),
+    ] {
+        source.push_str(&format!("_Static_assert(_Generic(((okk_host *)0)->{field}, uint32_t (*)({args}): 1, default: 0), \"prototype\");\n"));
+    }
     macro_rules! constant {
         ($($c:ident),*) => { $(source.push_str(&format!("_Static_assert({} == {}, \"constant\");\n", stringify!($c), $c));)* };
     }
@@ -487,5 +536,41 @@ function f0 "native" async native "{symbol}" {{
         let result = r.run_function_with(0, &[zero], 1 << 24);
         if missing { assert!(result.unwrap_err().0.contains("Native symbol \"example/native@0::missing/1\" is not registered")); }
         else { result.unwrap(); }
+    }
+}
+
+#[test]
+fn ext_values_bigint_normalization() {
+    use num_bigint::BigInt;
+    for n in [BigInt::from(1u64 << 62), BigInt::from(i64::MAX), BigInt::from(i64::MIN),
+        BigInt::from(1u64 << 63), BigInt::from(1u128 << 64), -BigInt::from(1u128 << 64),
+        BigInt::parse_bytes("9".repeat(300).as_bytes(), 10).unwrap()] {
+        let mut r = runtime("example/native@0::int/1", &[0], 0);
+        let argument = r.heap.big(n.clone());
+        let result = r.run_function_with(1, &[argument], 1 << 24).unwrap();
+        assert_eq!(match r.heap.integer(result) { crate::heap::Integer::Small(v) => BigInt::from(v), crate::heap::Integer::Big(v) => v.clone() }, n);
+    }
+}
+
+#[path = "ext_values_tests.rs"]
+mod values_tests;
+
+#[path = "../../../../fuzz/fuzz_targets/ext_body.rs"]
+mod ext_fuzz;
+
+#[test]
+fn ext_fuzz_seeds() {
+    for seed in [include_bytes!("../../../../fuzz/seeds/ext/scalars").as_slice(),
+        include_bytes!("../../../../fuzz/seeds/ext/values").as_slice(),
+        include_bytes!("../../../../fuzz/seeds/ext/invalid").as_slice(),
+        include_bytes!("../../../../fuzz/seeds/ext/memory").as_slice()] {
+        ext_fuzz::exercise(seed);
+    }
+    for op in 0..24 {
+        for selector in [0, 1, 7, 255] {
+            let mut seed = [0; 25]; seed[1] = op; seed[2] = selector; seed[3] = selector % 8;
+            seed[13] = selector; seed[21] = selector % 17;
+            ext_fuzz::exercise(&seed);
+        }
     }
 }

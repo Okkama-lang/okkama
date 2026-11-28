@@ -123,7 +123,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 75 files, 41214 lines
+## sparrow — 76 files, 41633 lines
 
 - `sparrow-core/src/budget.rs` 453 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
@@ -157,7 +157,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/arena.rs` 78 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 164 — Whole-file locks that belong to one open file description, not to the
 - `sparrow-core/src/host/handle.rs` 150 — Typed native state in the engine's generational arena. No legacy Value or
-- `sparrow-core/src/host/mod.rs` 933 — Native provider host. The providers (`native_*`) see a [`Heap`] and
+- `sparrow-core/src/host/mod.rs` 939 — Native provider host. The providers (`native_*`) see a [`Heap`] and
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the
 - `sparrow-core/src/host/native_cbor.rs` 276 — `runtime/cbor` (#1082): CBOR values as leaf handles over `crate::cbor`'s immutable trees. A handle holds an
@@ -169,7 +169,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_dns.rs` 326 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 163 — The program's environment is the run's host session
-- `sparrow-core/src/host/native_ext.rs` 243 — Synchronous extension calls: scalar bits and call-scoped typed tokens.
+- `sparrow-core/src/host/native_ext.rs` 267 — Synchronous extension calls: scalar bits and call-scoped typed tokens.
 - `sparrow-core/src/host/native_file.rs` 190 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 639 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
 - `sparrow-core/src/host/native_fs.rs` 240 — Filesystem native boundary. Lexical paths are portable and independent of
@@ -197,6 +197,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/path_regex.rs` 97 — Pure fixed-pattern compatibility helpers for portable lexical paths.
 - `sparrow-core/src/host/path_syntax.rs` 291 — Portable POSIX/Windows path syntax; no filesystem access or VM values.
 - `sparrow-core/src/host/process_host.rs` 428 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
+- `sparrow-core/src/host/native_ext/values.rs` 389 — Checked value conversion; only validated call-table entries reach the heap.
 - `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 - `sparrow-core/src/jit/background.rs` 105 — #1147 (step 2): Cranelift's codegen of emitted units on worker threads.

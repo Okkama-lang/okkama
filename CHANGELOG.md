@@ -13,6 +13,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 2: values (#1083).** An extension now reads and builds every value of the signature
+  language: big integers (a sign and big-endian magnitude bytes), rationals (numerator and denominator,
+  reduced on the way in), arrays and maps (a view of the elements, new ones
+  built item by item), `?T` (`OKK_NONE` or the value), and `bytes_reserve` for a result written in place. Every
+  allocation counts against the run's memory budget; once it runs out, each further host call answers `OKK_STOPPED`
+  and the run ends with the ordinary memory stop. A fuzz target `ext` drives a hostile extension through the host table
+  (stale tokens, wrong kinds, broken UTF-8, lengths past the view) and checks that each answer is a status, not a crash.
 - **Native extensions, step 1: the seam (#1083).** An embedder registers extension descriptors (`Limits.extensions`,
   the C ABI of `okkama-runtime-abi/include/okkama_ext.h`); at runtime creation the runtime binds the program's
   natives that the std table does not name to them, refusing a signature mismatch, a duplicate or a std shadow. Calls

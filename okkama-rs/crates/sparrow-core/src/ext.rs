@@ -122,7 +122,7 @@ pub(crate) fn bind(loaded: &Loaded, extensions: &[Extension], host: &mut host::H
             return Err(Error(format!("native {} signature mismatch: program {asynchronous}({}) -> {result}; extension {}",
                 export.symbol, params.join(", "), export.text)));
         }
-        host::native_ext::Binding::new(host, export.symbol, signature, export.sync).map(|b| Some(Rc::new(b)))
+        host::native_ext::Binding::new(host, program, function, export.symbol, signature, export.sync).map(|b| Some(Rc::new(b)))
     }).collect()
 }
 

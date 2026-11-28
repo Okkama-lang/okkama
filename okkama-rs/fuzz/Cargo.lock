@@ -1135,6 +1135,7 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "okkama-compiler",
+ "okkama-runtime-abi",
  "okkama-sparrow",
  "sparrow-core",
 ]

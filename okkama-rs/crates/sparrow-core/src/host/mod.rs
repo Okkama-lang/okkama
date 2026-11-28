@@ -109,6 +109,8 @@ pub(crate) const FUTURE: u64 = 21;
 pub(crate) const NATIVE_FAILURE: u64 = 22;
 pub(crate) const HANDLE: u64 = 24;
 pub(crate) const JSON_NODE: u64 = 25;
+pub(crate) const RAT: u64 = 26;
+pub(crate) const MAYBE: u64 = 27;
 /// Low byte of a tag is the kind; arrays and maps keep a shape index above it.
 const KIND: u64 = 0xff;
 
@@ -193,6 +195,8 @@ impl From<Error> for ProviderError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Shape {
     Unknown,
+    Rat,
+    Maybe(usize, u32, u32),
     Int,
     Bool,
     Byte,
@@ -345,6 +349,8 @@ impl Heap {
                 let index = self.shape_index.get(shape).copied().unwrap_or(0);
                 Slot { bits: word, tag: MAP | ((index as u64) << 8) }
             }
+            Shape::Rat => Slot { bits: word, tag: RAT },
+            Shape::Maybe(..) => Slot { bits: word, tag: MAYBE | ((self.shape_index[shape] as u64) << 8) },
             Shape::Unknown => Slot { bits: word, tag: OBJECT },
         }
     }

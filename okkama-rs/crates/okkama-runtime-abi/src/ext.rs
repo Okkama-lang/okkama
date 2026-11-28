@@ -93,7 +93,10 @@ unsafe impl Sync for okk_extension {}
 
 /// Views and output buffers last until the callback returns. Input buffers
 /// are copied. All pointers must address the stated length; null is allowed
-/// only for an empty input. A call and its tokens belong to its VM thread.
+/// only for an empty buffer. A call and its tokens belong to its VM thread.
+/// BAD_TOKEN/KIND/SHAPE poison the call even when ignored. BAD_TEXT and RANGE
+/// are recoverable data errors; returning them from the callback is a fault.
+/// Allocation past the run's budget sets sticky STOPPED, without poison.
 #[repr(C)]
 #[derive(Debug)]
 pub struct okk_host {
@@ -101,17 +104,29 @@ pub struct okk_host {
     pub bytes: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut *const u8, *mut usize) -> u32,
     pub text_new: unsafe extern "C" fn(*mut okk_call, *const u8, usize, *mut okk_slot) -> u32,
     pub bytes_new: unsafe extern "C" fn(*mut okk_call, *const u8, usize, *mut okk_slot) -> u32,
+    /// Zeroed writable bytes and their ARRAY token; writable until callback return.
     pub bytes_reserve: unsafe extern "C" fn(*mut okk_call, usize, *mut *mut u8, *mut okk_slot) -> u32,
+    /// INT or BIGINT to sign (-1/0/1) and unsigned big-endian magnitude view.
     pub bigint_read: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut i32, *mut *const u8, *mut usize) -> u32,
+    /// Leading zeroes accepted; sign zero requires zero magnitude. Normalize to INT when possible.
     pub bigint_new: unsafe extern "C" fn(*mut okk_call, i32, *const u8, usize, *mut okk_slot) -> u32,
+    /// Reduced numerator and positive denominator as INT/BIGINT slots.
     pub rat_parts: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut okk_slot, *mut okk_slot) -> u32,
+    /// Reduce two int slots; zero denominator returns RANGE.
     pub rat_new: unsafe extern "C" fn(*mut okk_call, okk_slot, okk_slot, *mut okk_slot) -> u32,
+    /// Element count of any ARRAY token.
     pub array_len: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut usize) -> u32,
+    /// One element; out-of-bounds index returns RANGE.
     pub array_get: unsafe extern "C" fn(*mut okk_call, okk_slot, usize, *mut okk_slot) -> u32,
+    /// Copy count slots starting at the index; check the whole range first.
     pub array_read: unsafe extern "C" fn(*mut okk_call, okk_slot, usize, *mut okk_slot, usize) -> u32,
+    /// Copy elements of one shape; an empty array fits every element type.
     pub array_new: unsafe extern "C" fn(*mut okk_call, *const okk_slot, usize, *mut okk_slot) -> u32,
+    /// Entry count of a MAP token.
     pub map_len: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut usize) -> u32,
+    /// Copy the first count key/value pairs in key order; excess count returns RANGE.
     pub map_entries: unsafe extern "C" fn(*mut okk_call, okk_slot, *mut okk_slot, *mut okk_slot, usize) -> u32,
+    /// Copy keys and values of one shape each; repeated keys return RANGE.
     pub map_new: unsafe extern "C" fn(*mut okk_call, *const okk_slot, *const okk_slot, usize, *mut okk_slot) -> u32,
     pub state_new: unsafe extern "C" fn(*mut okk_call, *const okk_state_type, *mut c_void, usize, *mut okk_slot) -> u32,
     pub state_get: unsafe extern "C" fn(*mut okk_call, okk_slot, *const okk_state_type, *mut *mut c_void) -> u32,
