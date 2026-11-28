@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **The web framework logs requests itself (#1181).** `WebApplication(routes, logger: Logger(name: "web"))` writes
+  one line per finished request, 404s included: `GET /notes?limit=5 200 0.412 ms`, with the client address as a
+  field. Exceptions keep their status; any other error is logged at error with status 500 and its cause, and passes
+  on. Without a logger nothing is written. The request object never carries a logger. `WebTestClient` now takes a
+  `WebApplication` too.
 - **The Okkama style guide, draft 1 (#1189).** `okkama agents style` now prints the whole guide: encapsulation (an
   object tells, it is not asked; it gives the form you need), immutability through successors, small objects with
   constructors that only assign, roles as parameter types and decorators instead of options, the flat API shape,

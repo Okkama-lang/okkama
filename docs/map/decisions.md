@@ -17,6 +17,14 @@ the session's memory; older rulings live in the commits and tickets named.
 - Order: cheaper formatting first (≤ 1.5 µs per line, same text) → host destination (#1180) → `WebApplication(…,
   logger:)` (#1181) whose `listen()` drains it. The request object never carries a logger (owner).
 
+## Request logging in the web framework (#1181, 2026-11-28; owner's request, built by Codex, ruled by me)
+
+- `WebApplication(…, logger: Logger = Logger(name: "web", destination: DiscardingLogs()))`; the application wraps
+  the route table, so 404s and fallbacks are logged. Line: `METHOD TARGET STATUS N.NNN ms`, field `address`.
+  Exception → its status at info; other errors → 500 at error with the cause, rethrown. A silent logger costs one
+  level check per request. WebApplication `does Handling` (WebTestClient can run it whole) — accepted as a
+  testability addition. AccessLog's line is unchanged and shares the builder.
+
 ## Helper processes: `os/port` (#1081, 2026-11-28; agent's design, API ruled by me — the owner delegated decisions)
 
 - Module `os/port` (processes live in `os/`; there is no `process/`). `Port(command is Commanding, instances = 1,
