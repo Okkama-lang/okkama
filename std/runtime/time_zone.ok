@@ -1,8 +1,16 @@
 module runtime/time_zone v1.0.0;
 
-// The native layer under time/zone: the calls those modules make into the host
+// The native layer under time/zone, time/rfc3339: the calls those modules make into the host
 // runtime. Programs use those modules instead; these declarations may change
 // with the runtime.
+
+// An instant (seconds since the epoch, whole nanoseconds) at offset seconds east
+// of UTC as RFC 3339 text, the way time/rfc3339 writes it:
+// `2023-11-15T03:43:20.5+05:30`, Z for no offset, the fraction without trailing
+// zeros. "" for an offset of seconds or of a day or more, for parts beyond 64
+// bits, and when the UTC or the local time is outside years 1..9999; the
+// writer then takes the long way and reports its own error (#1180).
+native rfc3339_text(instant is rat, offset is rat) is string;
 
 // The version of the time zone database.
 native timezone_version() is string;

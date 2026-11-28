@@ -28,6 +28,9 @@ pub(crate) fn handles(native: Native) -> bool {
             | Latin1Decode
             | NumberTextIntParse
             | NumberTextIntParseValid
+            // Every log line's (#1180), written in runtime-core and called here directly.
+            | UnicodeCharacterDisplayInvalidIndex
+            | TimeZoneRfc3339Text
     )
 }
 fn failed(native: Native) -> Error {
@@ -52,6 +55,18 @@ impl Heap {
                     text.push(DIGITS[(byte >> 4) as usize] as char);
                     text.push(DIGITS[(byte & 15) as usize] as char);
                 }
+                return self.allocate_text(text).map(Outcome::Value);
+            }
+            UnicodeCharacterDisplayInvalidIndex => {
+                let index = okkama_runtime_core::native::display_invalid_index(self.text(args[0])?);
+                return Ok(Outcome::Value(Slot::small(index)));
+            }
+            TimeZoneRfc3339Text => {
+                let rat = |slot: Slot| match self.core().payload::<crate::ops::Rational>(slot.bits) {
+                    Some(rational) => Ok(&rational.0),
+                    None => Err(Error("expected a rat".into())),
+                };
+                let text = okkama_runtime_core::native::rfc3339_text(rat(args[0])?, rat(args[1])?).unwrap_or_default();
                 return self.allocate_text(text).map(Outcome::Value);
             }
             HexValidPrefix => {

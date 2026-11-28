@@ -3,7 +3,8 @@
 //! for the natives its host routes to `ORIGIN`; every other native has a
 //! Sparrow provider and never reaches this crate (#1016). A native without a
 //! provider here is an explicit [`Error::Unsupported`]. `fs` and `regex` also
-//! hold the few items Sparrow's own providers call directly. Native identifiers
+//! hold the few items Sparrow's own providers call directly, as do
+//! [`rfc3339_text`] and [`display_invalid_index`]. Native identifiers
 //! and signatures live in runtime-abi.
 use crate::{
     Value, ValueError,
@@ -47,6 +48,11 @@ pub(crate) mod x509;
 
 pub(crate) mod inspect;
 pub(crate) mod support;
+
+/// Two text helpers of every log line that Sparrow's text provider calls
+/// directly (#1180): the bridge cost more than their work.
+pub use time::rfc3339_text;
+pub use unicode::display_invalid_index;
 
 /// Provider state belongs to one execution, not a process-global VM singleton.
 #[derive(Debug, Default)]
@@ -180,6 +186,9 @@ fn provider(native: Native) -> Option<Provider> {
 /// the natives Sparrow's host routes to `ORIGIN` (`sparrow-core/src/host/mod.rs`,
 /// `classify`). The rest are `None`.
 fn route(native: Native) -> Option<Provider> {
+    if matches!(native, Native::UnicodeCharacterDisplayInvalidIndex | Native::TimeZoneRfc3339Text) {
+        return None;
+    }
     let name = native.name();
     Some(match native.module() {
         #[cfg(feature = "crypto")]

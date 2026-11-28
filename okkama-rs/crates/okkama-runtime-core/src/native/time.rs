@@ -443,6 +443,87 @@ fn candidates(native: Native, name: &str, args: &[Value]) -> Checked<Vec<i64>> {
     Ok(out)
 }
 
+/// Seconds since the epoch of 0001-01-01T00:00:00Z and of 10000-01-01T00:00:00Z.
+const FIRST_SECOND: i128 = -62_135_596_800;
+const END_SECOND: i128 = 253_402_300_800;
+
+/// Days since 1970-01-01 to a proleptic Gregorian (year, month, day) (H. Hinnant, civil_from_days).
+fn civil(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(month <= 2), month, day)
+}
+
+/// `rfc3339_text` (#1180): instant (seconds, whole nanoseconds) at offset (whole seconds) east of UTC as
+/// `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)`, the fraction without trailing zeros, exactly as
+/// time/rfc3339 writes it through LocalDateTime. None outside that writer's domain: a fraction that
+/// is not whole nanoseconds, an offset of seconds or of a day or more, parts beyond 64 bits, or an
+/// instant whose UTC or local time is outside years 1..9999 (std then takes the long way, for its error).
+pub fn rfc3339_text(instant: &crate::rat::Rat, offset: &crate::rat::Rat) -> Option<String> {
+    const BILLION: i128 = 1_000_000_000;
+    let (num, den) = (instant.numerator().to_i64()?, instant.denominator().to_i64()?);
+    if offset.denominator().to_i64() != Some(1) {
+        return None;
+    }
+    let offset = offset.numerator().to_i64()?;
+    if den <= 0 || 1_000_000_000 % den != 0 || offset % 60 != 0 || offset.abs() >= 86_400 {
+        return None;
+    }
+    let utc = i128::from(num) * (BILLION / i128::from(den));
+    let local = utc + i128::from(offset) * BILLION;
+    let domain = FIRST_SECOND * BILLION..END_SECOND * BILLION;
+    if !domain.contains(&utc) || !domain.contains(&local) {
+        return None;
+    }
+    let day = 86_400 * BILLION;
+    let (days, within) = (local.div_euclid(day) as i64, local.rem_euclid(day) as i64);
+    let (year, month, day_of_month) = civil(days);
+    let (seconds, nanosecond) = (within / 1_000_000_000, within % 1_000_000_000);
+    // Digits by hand: format! with widths cost more than the whole calendar.
+    fn digits(mut value: i64, width: usize, out: &mut Vec<u8>) {
+        let end = out.len() + width;
+        out.resize(end, b'0');
+        for slot in out[end - width..].iter_mut().rev() {
+            *slot = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+    }
+    let mut out = Vec::with_capacity(36);
+    digits(year, 4, &mut out);
+    out.push(b'-');
+    digits(month, 2, &mut out);
+    out.push(b'-');
+    digits(day_of_month, 2, &mut out);
+    out.push(b'T');
+    digits(seconds / 3600, 2, &mut out);
+    out.push(b':');
+    digits(seconds % 3600 / 60, 2, &mut out);
+    out.push(b':');
+    digits(seconds % 60, 2, &mut out);
+    if nanosecond != 0 {
+        out.push(b'.');
+        digits(nanosecond, 9, &mut out);
+        while out.last() == Some(&b'0') {
+            out.pop();
+        }
+    }
+    if offset == 0 {
+        out.push(b'Z');
+    } else {
+        out.push(if offset < 0 { b'-' } else { b'+' });
+        digits(offset.abs() / 3600, 2, &mut out);
+        out.push(b':');
+        digits(offset.abs() % 3600 / 60, 2, &mut out);
+    }
+    Some(String::from_utf8(out).expect("ASCII digits and signs"))
+}
+
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let operation = native.name();
     match operation {
@@ -493,5 +574,78 @@ mod zone_tests {
         assert!(zone_file("LICENSE").is_none());
         assert!(zone_file("Europe/Berlin").is_some());
         assert!(zone_file("America/New_York").is_some());
+    }
+}
+
+#[cfg(test)]
+mod rfc3339_tests {
+    use super::{civil, rfc3339_text};
+    use crate::IntValue;
+    use crate::rat::Rat;
+
+    fn text(num: i64, den: i64, offset: i64) -> Option<String> {
+        let instant = Rat::new(&IntValue::from_i64(num), &IntValue::from_i64(den)).unwrap();
+        rfc3339_text(&instant, &Rat::from_int(&IntValue::from_i64(offset)))
+    }
+
+    /// Every day of years 1..9999 against a counter that steps the calendar one day at a time.
+    #[test]
+    fn civil_dates_follow_the_calendar_day_by_day() {
+        let leap = |year: i64| (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let length = |year: i64, month: i64| match month {
+            2 if leap(year) => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        let (mut year, mut month, mut day) = (1, 1, 1);
+        for days in -719_162..2_932_897 {
+            assert_eq!(civil(days), (year, month, day), "day {days}");
+            day += 1;
+            if day > length(year, month) {
+                day = 1;
+                month += 1;
+                if month > 12 {
+                    month = 1;
+                    year += 1;
+                }
+            }
+        }
+        assert_eq!((year, month, day), (10_000, 1, 1));
+    }
+
+    #[test]
+    fn instants_are_written_as_time_rfc3339_writes_them() {
+        assert_eq!(text(1_700_000_000, 1, 0).as_deref(), Some("2023-11-14T22:13:20Z"));
+        assert_eq!(text(1_700_000_000_123_456_789, 1_000_000_000, 0).as_deref(), Some("2023-11-14T22:13:20.123456789Z"));
+        assert_eq!(text(17_000_000_005, 10, 19_800).as_deref(), Some("2023-11-15T03:43:20.5+05:30"));
+        assert_eq!(text(-1_000_000_001, 1_000_000_000, -28_800).as_deref(), Some("1969-12-31T15:59:58.999999999-08:00"));
+        assert_eq!(text(1_709_164_800, 1, 0).as_deref(), Some("2024-02-29T00:00:00Z"));
+        assert_eq!(text(951_782_400, 1, 60).as_deref(), Some("2000-02-29T00:01:00+00:01"));
+        assert_eq!(text(-62_135_596_800, 1, 0).as_deref(), Some("0001-01-01T00:00:00Z"));
+        assert_eq!(text(253_402_300_799, 1, 0).as_deref(), Some("9999-12-31T23:59:59Z"));
+        assert_eq!(text(253_402_300_799, 1, -86_340).as_deref(), Some("9999-12-31T00:00:59-23:59"));
+        assert_eq!(text(9_223_372_036_854_775_807, 1_000_000_000, 0).as_deref(), Some("2262-04-11T23:47:16.854775807Z"));
+    }
+
+    #[test]
+    fn instants_outside_the_writer_s_domain_are_left_to_std() {
+        // Local time before year 1 or after 9999, and a UTC time before year 1 shifted into it.
+        assert_eq!(text(-62_135_596_800, 1, -60), None);
+        assert_eq!(text(253_402_300_799, 1, 19_800), None);
+        assert_eq!(text(-62_135_596_801, 1, 3600), None);
+        assert_eq!(text(253_402_300_800, 1, -3600), None);
+        // Not whole nanoseconds, an offset of seconds or of a whole day.
+        assert_eq!(text(1, 3, 0), None);
+        assert_eq!(text(0, 1, 30), None);
+        assert_eq!(text(0, 1, 86_400), None);
+        assert_eq!(text(0, 1, -86_400), None);
+        // Parts beyond 64 bits.
+        let big = Rat::from_int(&IntValue::from_i128(1 << 70));
+        let zero = Rat::from_int(&IntValue::from_i64(0));
+        assert_eq!(rfc3339_text(&big, &zero), None);
+        assert_eq!(rfc3339_text(&zero, &big), None);
+        let half = Rat::new(&IntValue::from_i64(1), &IntValue::from_i64(2)).unwrap();
+        assert_eq!(rfc3339_text(&zero, &half), None);
     }
 }

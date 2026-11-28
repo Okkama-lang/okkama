@@ -337,6 +337,7 @@ fn write_tree<'a>(
                 Node::Null => out.push_str("null"),
                 Node::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
                 Node::Text(text) => push_quoted(&mut out, text),
+                Node::Number(text) if plain_integer(text) => out.push_str(text),
                 Node::Number(text) => {
                     if let Some(parts) = crate::host::native_numbers::components(text) {
                         push_number(&mut out, &parts);
@@ -489,6 +490,17 @@ fn push_line(out: &mut String, indentation: Option<usize>, level: usize) -> Resu
 /// positional while that stays short — integers up to 21 digits, fractions
 /// down to 1e-6, the thresholds of JavaScript's `Number#toString` — and the
 /// canonical scientific form beyond them, so the value is never expanded.
+/// An integer already in the form `push_number` writes: `0`, or an optional `-` and up to 21
+/// digits without a leading zero. Written as it is, without reading it as a decimal (#1180).
+fn plain_integer(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    text == "0"
+        || (!digits.is_empty()
+            && digits.len() <= 21
+            && !digits.starts_with('0')
+            && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 fn push_number(out: &mut String, parts: &crate::host::native_numbers::Decimal) {
     let digits = parts.digits.as_str();
     let length = digits.len() as i128;
@@ -678,8 +690,13 @@ impl Heap {
                 self.json_new(Node::Text(text))?
             }
             JsonJsonNumberNode => {
-                crate::host::native_numbers::components(self.text(args[0])?)
-                    .ok_or_else(|| invalid("not a decimal number"))?;
+                // An int's text is digits after an optional sign; only other
+                // spellings need the decimal reading (#1180: it cost 60 ns).
+                let text = self.text(args[0])?;
+                let digits = text.strip_prefix('-').unwrap_or(text);
+                if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                    crate::host::native_numbers::components(text).ok_or_else(|| invalid("not a decimal number"))?;
+                }
                 let text = self.json_shared(args[0])?;
                 self.json_new(Node::Number(text))?
             }
@@ -759,12 +776,24 @@ impl Heap {
             }
             JsonJsonRepeatedName => {
                 let names = self.elements(args[0])?;
-                let mut seen = HashSet::with_capacity(names.len());
                 let mut repeated = names.len();
-                for (i, &name) in names.iter().enumerate() {
-                    if !seen.insert(self.text(name)?) {
-                        repeated = i;
-                        break;
+                if names.len() <= 8 {
+                    // A log line's few fields: comparing pairs beats hashing each name (#1180).
+                    'names: for i in 1..names.len() {
+                        for j in 0..i {
+                            if self.text(names[i])? == self.text(names[j])? {
+                                repeated = i;
+                                break 'names;
+                            }
+                        }
+                    }
+                } else {
+                    let mut seen = HashSet::with_capacity(names.len());
+                    for (i, &name) in names.iter().enumerate() {
+                        if !seen.insert(self.text(name)?) {
+                            repeated = i;
+                            break;
+                        }
                     }
                 }
                 Slot::small(repeated as i64)
@@ -914,5 +943,33 @@ mod writer_tests {
         assert_eq!(spell("-15e-7"), "-0.0000015");
         assert_eq!(spell("1e-7"), canonical(&components("1e-7").unwrap()));
         assert_eq!(spell("0"), "0");
+    }
+}
+
+#[cfg(test)]
+mod plain_integer_tests {
+    use super::{plain_integer, push_number};
+
+    /// Plain integers are written as `push_number` writes their decimal reading; every other
+    /// spelling takes that reading.
+    #[test]
+    fn plain_integers_are_written_as_their_decimal_reading() {
+        let spellings = [
+            "0", "-0", "7", "-7", "10", "100", "-1000", "007", "-007", "00", "123456789012345678901",
+            "-123456789012345678901", "1234567890123456789012", "100000000000000000000", "1000000000000000000000",
+            "10000000000000000000000", "1.5", "1e3", "", "-", "9223372036854775807", "-9223372036854775808",
+        ];
+        for text in spellings {
+            let mut slow = String::new();
+            match crate::host::native_numbers::components(text) {
+                Some(parts) => push_number(&mut slow, &parts),
+                None => slow.push_str(text),
+            }
+            if plain_integer(text) {
+                assert_eq!(text, slow, "{text:?}");
+            }
+        }
+        assert!(plain_integer("123456789012345678901") && !plain_integer("1234567890123456789012"));
+        assert!(!plain_integer("-0") && !plain_integer("007") && !plain_integer("1.5") && !plain_integer(""));
     }
 }

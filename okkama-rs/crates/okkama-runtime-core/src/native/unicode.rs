@@ -142,6 +142,28 @@ fn character(value: &Value) -> Result<u32, Error> {
     Ok(u32::from(value.as_char()?))
 }
 
+/// The index in characters of the first character of category Cc, Zl or Zp (C0, DEL, C1, U+2028,
+/// U+2029), or -1. Bytes are scanned, not characters, and not through the category table, which
+/// cost 16 ns a character on every log line (#1180): C0 and DEL are single bytes, C1 is
+/// `C2 80..9F` and U+2028/U+2029 are `E2 80 A8/A9`, and `C2`/`E2` only ever lead a character.
+pub fn display_invalid_index(text: &str) -> i64 {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(step) = bytes[at..].iter().position(|&byte| byte < 0x20 || byte == 0x7f || byte == 0xc2 || byte == 0xe2) {
+        at += step;
+        let hit = match bytes[at] {
+            0xc2 => matches!(bytes.get(at + 1), Some(0x80..=0x9f)),
+            0xe2 => bytes.get(at + 1) == Some(&0x80) && matches!(bytes.get(at + 2), Some(0xa8 | 0xa9)),
+            _ => true,
+        };
+        if hit {
+            return text[..at].chars().count() as i64;
+        }
+        at += 1;
+    }
+    -1
+}
+
 pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let operation = native.name();
     match operation {
@@ -157,13 +179,6 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 .map(|cluster| int_value(width(cluster)))
                 .collect(),
         )),
-        "display_invalid_index" => {
-            let index = string(&args[0])?
-                .chars()
-                .position(|c| matches!(data::category(u32::from(c)), "Cc" | "Zl" | "Zp"))
-                .map_or(-1, |index| index as i64);
-            Ok(int_value(index))
-        }
         _ => Err(Error::Unsupported(format!(
             "native provider is not implemented: {}",
             native.symbol()
@@ -177,6 +192,22 @@ mod tests {
 
     fn widths(text: &str) -> Vec<i64> {
         text.graphemes(true).map(width).collect()
+    }
+
+    #[test]
+    fn the_byte_scan_finds_the_first_breaking_character() {
+        let breaks = |c: char| matches!(data::category(u32::from(c)), "Cc" | "Zl" | "Zp");
+        let reference = |text: &str| text.chars().position(breaks).map_or(-1, |at| at as i64);
+        for code in 0..=0x10ffff_u32 {
+            if let Some(c) = char::from_u32(code) {
+                for text in [format!("{c}"), format!("aж{c}b"), format!("ж🙂{c}\u{7f}"), format!("{c}\u{2029}")] {
+                    assert_eq!(display_invalid_index(&text), reference(&text), "U+{code:04X} in {text:?}");
+                }
+            }
+        }
+        assert_eq!(display_invalid_index(""), -1);
+        assert_eq!(display_invalid_index("plain ж 🙂"), -1);
+        assert_eq!(display_invalid_index("\u{a0}\u{2027}\u{202a}\u{c2}\u{e2}"), -1);
     }
 
     #[test]

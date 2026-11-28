@@ -123,7 +123,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 79 files, 42315 lines
+## sparrow — 79 files, 42376 lines
 
 - `sparrow-core/src/budget.rs` 481 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
@@ -190,7 +190,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2800 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
 - `sparrow-core/src/host/native_temporary.rs` 305 — Temporary resources use exclusive OS creation and cryptographic random names.
-- `sparrow-core/src/host/native_text.rs` 369 — Pure codecs and exact numeric parsing at the independent native boundary.
+- `sparrow-core/src/host/native_text.rs` 383 — Pure codecs and exact numeric parsing at the independent native boundary.
 - `sparrow-core/src/host/native_tls.rs` 847 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 - `sparrow-core/src/host/native_udp.rs` 496 — Native UDP datagrams: one send/receive per request, Tokio readiness and
 - `sparrow-core/src/host/native_unix.rs` 319 — Unix streams share the TCP readiness/cancellation path. Filesystem listeners
@@ -201,7 +201,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_ext/asynchronous.rs` 90 — Only the owned job and atomic cancellation state cross the pool boundary.
 - `sparrow-core/src/host/native_ext/states.rs` 91 — Opaque payload ownership stays in the watched handle arena, on the VM thread.
 - `sparrow-core/src/host/native_ext/values.rs` 418 — Checked value conversion; only validated call-table entries reach the heap.
-- `sparrow-core/src/host/native_json/mod.rs` 854 — JSON trees use a flat generational arena. Native handles retain node IDs;
+- `sparrow-core/src/host/native_json/mod.rs` 901 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 - `sparrow-core/src/jit/background.rs` 105 — #1147 (step 2): Cranelift's codegen of emitted units on worker threads.
 
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 27010 lines
+## other — 85 files, 27175 lines
 
 - `blade/src/install.rs` 1421 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 322 — Core library for the Blade command-line tool.
@@ -260,7 +260,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.
 - `okkama-runtime-abi/src/lib.rs` 266 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 596
+- `okkama-runtime-abi/src/table.rs` 597
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 58 — Allocation accounting and memory scope shared with Sparrow.
 - `okkama-runtime-core/src/data.rs` 90 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
@@ -271,7 +271,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/integer.rs` 225 — Exact integer arithmetic shared by Sparrow, natives and compiler constants.
 - `okkama-runtime-core/src/lib.rs` 136 — Shared runtime values; no source syntax, IR, or execution-engine dependency.
 - `okkama-runtime-core/src/log.rs` 418 — Process-wide, best-effort stderr logging (#1180).
-- `okkama-runtime-core/src/native.rs` 227 — Native providers Sparrow does not implement itself. The only entry is
+- `okkama-runtime-core/src/native.rs` 232 — Native providers Sparrow does not implement itself. The only entry is
 - `okkama-runtime-core/src/ops.rs` 510 — Операции над значениями для констант компилятора и native-провайдеров:
 - `okkama-runtime-core/src/range.rs` 29 — Immutable range bounds; iteration counters and inclusive ends are exact.
 - `okkama-runtime-core/src/rat.rs` 375 — Точное рациональное `rat` (OIR-1 §16.2): несократимая дробь с
@@ -301,8 +301,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/signal.rs` 362 — `runtime/signal`: наблюдение за сигналами процесса (TERM, INT, HUP), #80,
 - `okkama-runtime-core/src/native/support.rs` 90 — Общие преобразования значений для providers: аргументы, результаты,
 - `okkama-runtime-core/src/native/text.rs` 188 — Text natives Sparrow routes here (`host/native_origin.rs`):
-- `okkama-runtime-core/src/native/time.rs` 453 — `runtime/time_zone` (встроенный tzdb 2026c, `tzdb.dat`), включая
-- `okkama-runtime-core/src/native/unicode.rs` 193 — `runtime/unicode_character`: свойства символов (`unicode.dat`, Unicode
+- `okkama-runtime-core/src/native/time.rs` 587 — `runtime/time_zone` (встроенный tzdb 2026c, `tzdb.dat`), включая
+- `okkama-runtime-core/src/native/unicode.rs` 218 — `runtime/unicode_character`: свойства символов (`unicode.dat`, Unicode
 - `okkama-runtime-core/src/native/value.rs` 57 — `runtime/uuid` и `runtime/unicode_normalization` — перенос части
 - `okkama-runtime-core/src/native/x509.rs` 2100 — `runtime/x509`: строгий DER-конверт и снимок
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is

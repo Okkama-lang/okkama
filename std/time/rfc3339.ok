@@ -2,11 +2,12 @@ module time/rfc3339 v1.0.0;
 
 import "time/duration" take Duration;
 import "time/clock" take Instant;
-import "time/date" take Date;
+import "time/date" take Date, InvalidDate;
 import "time/day" take TimeOfDay;
 import "time/local_datetime" take LocalDateTime;
 import "time/iso" take IsoText, InvalidIsoLocalDateTime;
 import "strings/parse" take Number, InvalidInteger;
+import "runtime/time_zone" take rfc3339_text;
 
 // Strict nanosecond-resolution RFC 3339 timestamps.
 //
@@ -69,6 +70,11 @@ object Rfc3339 {
     string() is string {
         if reading {
             return self.parsed().string();
+        }
+        // One native call writes it (#1180); the calendar below reports what it refuses.
+        let written = rfc3339_text(origin.unix_duration()::Span::seconds, offset::Span::seconds);
+        if written != "" {
+            return written;
         }
         let epoch is LocalDateTime = LocalDateTime(
             date: Date(year: 1970, month: 1, day: 1),
@@ -188,4 +194,70 @@ test "RFC 3339 text reads an instant and keeps its offset" {
             bad
         );
     }
+}
+
+test "RFC 3339 text is the calendar's local date and time with the offset" {
+    let epoch = LocalDateTime(
+        date: Date(year: 1970, month: 1, day: 1),
+        time: TimeOfDay(hour: 0, minute: 0, second: 0, nanosecond: 0),
+    );
+    let instants is @rat = [
+        0.rat(),
+        1700000000.rat(),
+        rat(1700000000123456789, 1000000000),
+        rat(17000000005, 10),
+        rat(-1000000001, 1000000000),
+        rat(951782399999999999, 1000000000),
+        rat(-2203891200000000001, 1000000000),
+        (-62135596800).rat() + 86400.rat(),
+        253402300799.rat() - 86400.rat(),
+        rat(9223372036854775807, 1000000000),
+        rat(9223372036854775808, 1000000000),
+        rat(1, 1000000000),
+        rat(-1, 1000000000)
+    ];
+    for instants -> seconds {
+        for [0, 60, -60, 19800, -28800, 86340, -86340] -> shift {
+            let offset = Duration(seconds: shift.rat());
+            let suffix = if shift == 0 {
+                "Z";
+            }
+            else {
+                let sign = if shift < 0 {
+                    "-";
+                }
+                else {
+                    "+";
+                };
+                let magnitude = if shift < 0 {
+                    -shift;
+                }
+                else {
+                    shift;
+                };
+                let hour = (magnitude / 3600).int().string();
+                let minute = ((magnitude % 3600) / 60).int().string();
+                sign + ("00" + hour).slice(hour.length(), hour.length() + 2) + ":" +
+                    ("00" + minute).slice(minute.length(), minute.length() + 2);
+            };
+            test.is(
+                Rfc3339(origin: Instant(Duration(seconds: seconds)), offset: offset).string(),
+                epoch.plus(Duration(seconds: seconds)).plus(offset).string() + suffix
+            );
+        }
+    }
+    let latest = Instant(Duration(seconds: 253402300799.rat()));
+    test.is(
+        Rfc3339(origin: latest, offset: Duration(seconds: 0.rat())).string(),
+        "9999-12-31T23:59:59Z"
+    );
+    test.throws(InvalidDate) {
+        Rfc3339(origin: latest, offset: Duration(seconds: 19800.rat())).string();
+    };
+    test.throws(InvalidDate) {
+        Rfc3339(
+            origin: Instant(Duration(seconds: (-62135596800).rat())),
+            offset: Duration(seconds: (-60).rat())
+        ).string();
+    };
 }

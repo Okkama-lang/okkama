@@ -48,7 +48,8 @@ object Duration does Comparing<Duration>, Adding<Duration, Duration>,
     // Exactly `seconds` long; InvalidDuration unless that is a whole number of
     // nanoseconds: `Duration(seconds: rat(250, 1000))`.
     Duration(seconds is rat) {
-        confirm (seconds * 1000000000.rat()).denominator() == 1
+        // Whole nanoseconds: the reduced denominator divides 10⁹.
+        confirm 1000000000 % seconds.denominator() == 0
             else throw InvalidDuration.because(
                 "duration must contain an integral number of nanoseconds"
             );

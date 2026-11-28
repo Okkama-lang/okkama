@@ -264,6 +264,11 @@ test "repeated names report the earliest repeated index" {
     test.is(json_repeated_name(["a", "b"]), 2);
     test.is(json_repeated_name(["b", "a", "a", "b"]), 2);
     test.is(json_repeated_name(["", "x", ""]), 2);
+    // Eight names and fewer are compared in pairs, more through a set.
+    test.is(json_repeated_name(["a", "b", "c", "d", "e", "f", "g", "a"]), 7);
+    test.is(json_repeated_name(["a", "b", "c", "d", "e", "f", "g", "h"]), 8);
+    test.is(json_repeated_name(["a", "b", "c", "d", "e", "f", "g", "h", "i", "c"]), 9);
+    test.is(json_repeated_name(["a", "b", "c", "d", "e", "f", "g", "h", "i"]), 9);
 }
 
 test "members are read in one call or refused" {
