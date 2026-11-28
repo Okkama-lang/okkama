@@ -123,7 +123,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2413 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 785 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 79 files, 42386 lines
+## sparrow — 79 files, 42382 lines
 
 - `sparrow-core/src/budget.rs` 481 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/cbor.rs` 746 — CBOR (RFC 8949, #1082): the data model, a decoder bounded against hostile input, the preferred and the core
@@ -201,7 +201,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_ext/asynchronous.rs` 90 — Only the owned job and atomic cancellation state cross the pool boundary.
 - `sparrow-core/src/host/native_ext/states.rs` 91 — Opaque payload ownership stays in the watched handle arena, on the VM thread.
 - `sparrow-core/src/host/native_ext/values.rs` 418 — Checked value conversion; only validated call-table entries reach the heap.
-- `sparrow-core/src/host/native_json/mod.rs` 911 — JSON trees use a flat generational arena. Native handles retain node IDs;
+- `sparrow-core/src/host/native_json/mod.rs` 907 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 344 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 - `sparrow-core/src/jit/background.rs` 105 — #1147 (step 2): Cranelift's codegen of emitted units on worker threads.
 

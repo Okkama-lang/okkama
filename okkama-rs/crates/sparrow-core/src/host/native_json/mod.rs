@@ -790,13 +790,9 @@ impl Heap {
                 let mut repeated = names.len();
                 if names.len() <= 8 {
                     // A log line's few fields: comparing pairs beats hashing each name (#1180).
-                    'names: for i in 1..names.len() {
-                        for j in 0..i {
-                            if self.text(names[i])? == self.text(names[j])? {
-                                repeated = i;
-                                break 'names;
-                            }
-                        }
+                    let texts = names.iter().map(|&name| self.text(name)).collect::<Result<Vec<_>, _>>()?;
+                    if let Some(at) = (1..texts.len()).find(|&i| texts[..i].contains(&texts[i])) {
+                        repeated = at;
                     }
                 } else {
                     let mut seen = HashSet::with_capacity(names.len());
