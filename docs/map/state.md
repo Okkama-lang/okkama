@@ -13,8 +13,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
 - [~] #1083 native ABI (Fable's design: okkama-docs/runtime/native-abi-1083.md, steps 0–7). Step 0 done
   (feature/1083-handle-names): full handle names in the table (gen-abi qualifies, refuses one name in two modules),
   `Type::Maybe`/`?T`, `Signature::try_parse`; typing and lowering compare full names, `Maybe` by `$variant_Maybe_N`
-  shape; verify.rs #976 rule removed. Tests: runtime-abi `signatures_parse_or_say_why_not`, okkama-sparrow verify
-  `handles_are_matched_by_their_full_name` (mutation caught). Next: step 1 `1083-seam`.
+  shape; verify.rs #976 rule removed; root-module handles qualified too (`Ctx::handle_name`, test okkama-cli
+  handles_1083). Step 1 done (Codex, reviewed; a241144ca): okkama-runtime-abi ext.rs + include/okkama_ext.h,
+  Limits.extensions, ext::bind, Runtime.external, host/native_ext.rs (sync, scalars, views, text_new, bytes_new,
+  fail, interrupted; contract faults stop and poison), 15 ext_tests, cost 0.25× std crc32. Next: step 2 `1083-values`
+  (bigint, rat, arrays, maps, bytes_reserve, ?T, memory stop; fuzz target with a hostile extension).
 - [x] #1188 language reference for agents (agent; 8945e8acf): docs/agents/language.md (50 KB, 31 checked examples),
   docs/agents/check.py (fences okkama / okkama,run / okkama,test / okkama,fail / okkama,ignore), Wave "Corpora" step.
   Findings fixed: LLM-GUIDE §8 arguments line. Bible ch.17 gap (unbounded type parameter answers no action) noted.

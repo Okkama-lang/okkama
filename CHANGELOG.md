@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Native extensions, step 1: the seam (#1083).** An embedder registers extension descriptors (`Limits.extensions`,
+  the C ABI of `okkama-runtime-abi/include/okkama_ext.h`); at runtime creation the runtime binds the program's
+  natives that the std table does not name to them, refusing a signature mismatch, a duplicate or a std shadow. Calls
+  go through a sync adapter: scalars by value, strings and bytes as checked call tokens with views, `text_new`,
+  `bytes_new`, `fail` (an ordinary `NativeFailure`), `interrupted`; anything the extension gets wrong is an internal
+  error that stops the run. Restricted runs and the playground refuse external natives. A call through the ABI costs
+  0.25× std's own crc32 native on 64 bytes.
 - **Fixed: the fuzz crate builds again.** It now carries the main workspace's `[patch.crates-io]` for the vendored
   num-bigint and cranelift-frontend; since 0.6.7 (#1151) it built sparrow-core against crates.io's
   cranelift-frontend, which lacks `set_stack_map_reloads`, and the nightly Fuzz runs failed.
