@@ -1318,6 +1318,16 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## 0.6.7 scope after the mid-release showcase (2026-11-28; owner)
+
+- Showcase mid-0.6.7 against v0.6.6: cold −23%, steady −32% (okkama-docs/benchmarks/reports/2026-11-28-v0.6.7-mid).
+- Background codegen keeps one worker by default; its ~3 MB of peak footprint is accepted (owner: a little memory
+  for this speed-up is fine, the JVM takes far more).
+- Back into 0.6.7: #1171 (builders as a heap kind; the rest of #1150 and part of #1153), #1151 (own root slots in
+  the JIT instead of the frontend's spills), #1152 (steady ≤ 4 ms through a walk of the ownership graph on a move
+  into a region; after #1151), #1176 and #1177 (from Hotfixes TBD). Designs by Fable, full-ladder A/B per step.
+- 03-float (steady 2.7× Go and HotSpot) goes to #1178 in POSTPONED; not started.
+
 ## Vendored num-bigint (#1148, 2026-11-28; owner: vendor + upstream PR)
 
 - num-bigint 0.4.8 lives in okkama-rs/vendor/num-bigint with a Rust-native change (`|` carries, 4-digit add
