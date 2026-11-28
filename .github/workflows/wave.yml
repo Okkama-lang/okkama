@@ -1,9 +1,9 @@
 # Heavy runs of 0.6.0 (Tweed) on GitHub's runners instead of the owner's
 # machine (LLM-GUIDE §1.1): the crate suites of a wave branch, conformance and
-# more corpora (t/, micro programs, examples, the Bible's examples) on the
-# Tomato pipeline. Run it by pushing a branch named wave/<name> at the commit
-# to test (both suites), or, once this file is on the default branch, by
-# dispatch:
+# more corpora (t/, micro programs, examples, the Bible's examples, the
+# agents' reference) on the Tomato pipeline. Run it by pushing a branch named
+# wave/<name> at the commit to test (both suites), or, once this file is on
+# the default branch, by dispatch:
 #   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
 name: Wave
 
@@ -170,7 +170,7 @@ jobs:
           path: out/${{ matrix.engine }}/
       # More code on the binary conformance built (#894, owner 2026-11-20): the t/ suite (#245, ~50k
       # generated checks), the micro-benchmark programs against their oracles (bench/micro, no timing),
-      # examples/ and the Bible's examples; a failure fails the job.
+      # examples/, the Bible's examples and docs/agents (#1188); a failure fails the job.
       - name: Corpora
         run: |
           mkdir -p out/corpora
@@ -198,6 +198,8 @@ jobs:
           run std-fmt sh -c "find std -name '*.ok' -print0 | sort -z | xargs -0 $bin fmt --check"
           run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
           run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
+          # The agents' language reference (#1188): every okkama block compiles, runs or is rejected as it says.
+          run agents env OKKAMA="$PWD/$bin" python3 docs/agents/check.py --jobs 4
           if [ -n "$SPARROW_CORE_INTERPRET" ]; then
             # Programs without expectations: the JIT's output, byte for byte (#1123).
             run differ python3 okkama-rs/tools/engines/differ.py run --okkama $bin --jobs 4 examples
