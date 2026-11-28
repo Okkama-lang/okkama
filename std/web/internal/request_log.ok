@@ -1,0 +1,100 @@
+module web/internal/request_log v1.0.0;
+
+import "http/message" take Request;
+import "http/request_context" take HttpRequestContext;
+import "http/method" take MethodName;
+import "time/clock" take Timing, MonotonicInstant;
+import "io/stream" take WritingText;
+import "logging/logger" take Logger;
+import "logging/level" take LogLevel;
+import "json" take JsonField;
+
+import "testing/time" take ManualClock;
+import "time/clock" take Instant;
+import "time/duration" take Duration;
+import "logging/write" take DiscardingLogs;
+import "http/exchange" take ExchangeDetails;
+import "http/version" take HttpVersion;
+import "net/stream" take ConnectionEndpoints;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "async/cancellation" take Cancellation;
+
+// Shared request log delivery for the application and AccessLog.
+object RequestLog {
+    has request is Request;
+    has context is HttpRequestContext;
+    has clock is Timing;
+    has start is MonotonicInstant;
+
+    // The request and its monotonic start on clock.
+    RequestLog(
+        request is Request,
+        context is HttpRequestContext,
+        clock is Timing,
+        start is MonotonicInstant
+    ) {
+        self.request = request;
+        self.context = context;
+        self.clock = clock;
+        self.start = start;
+    }
+
+    // The legacy address-first line, with a quoted method and target.
+    write(out is WritingText, status is string) is void {
+        out.writeln(self.line(status, self.address() + " ", "\""));
+    }
+
+    // A completed response, with the client address as a field.
+    info(logger is Logger, status is string) is void {
+        if logger.enabled(LogLevel.info) {
+            logger.info(self.line(status, "", ""), JsonField("address", self.address()));
+        }
+    }
+
+    // An unhandled error, with its cause and the client address.
+    error(logger is Logger, cause is Error) is void {
+        if logger.enabled(LogLevel.error) {
+            logger.error(self.line("500", "", ""), cause, JsonField("address", self.address()));
+        }
+    }
+
+    hidden address() is string {
+        context.endpoints().remote_endpoint().address().string();
+    }
+
+    hidden line(status is string, prefix is string, quote is string) is string {
+        let micros = (clock.monotonic_instant().minus(start)::Span::seconds * 1000000.rat()).int();
+        let whole = (micros / 1000).int();
+        let part = (micros - whole * 1000).string();
+        let target = request::Head::target.string();
+        let method = MethodName(request::Head::method).string();
+        let took = whole.string() + "." + "000".slice(0, 3 - part.length()) + part;
+        prefix + quote + method + " " + target + quote + " " + status + " " + took + " ms";
+    }
+}
+
+test "disabled request logs do not build lines or read the finishing clock" {
+    let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+    let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(
+        local: IpEndpoint(address: IpAddress("127.0.0.1"), port: 80),
+        remote: IpEndpoint(address: IpAddress("192.0.2.7"), port: 50000)
+    );
+    let log = RequestLog(
+        request: Request(url: "http://localhost/notes?limit=5"),
+        context: HttpRequestContext(
+            details: ExchangeDetails(endpoints: ends, version: HttpVersion.http_1_1),
+            cancellation: Cancellation().cancelling()
+        ),
+        clock: clock,
+        start: clock.monotonic_instant()
+    );
+    clock.close();
+    let logger = Logger(name: "web", destination: DiscardingLogs());
+    log.info(logger, "200");
+    log.error(logger, RequestLogFailure.broken);
+    test.ok(!logger.enabled(LogLevel.info));
+    test.ok(!logger.enabled(LogLevel.error));
+}
+
+hidden enum RequestLogFailure is Error = (broken);

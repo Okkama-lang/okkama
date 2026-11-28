@@ -7523,6 +7523,21 @@
       }
     },
     {
+      "id": "STD.WEB.INTERNAL.REQUEST_LOG",
+      "title": "std web/internal/request_log public contract (RequestLog)",
+      "family": "Standard library: web",
+      "spec_refs": [
+        "std/web/internal/request_log.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.XML.NAME",
       "title": "std xml/name public contract (InvalidXml, XmlNCName, XmlName)",
       "family": "Standard library: xml",

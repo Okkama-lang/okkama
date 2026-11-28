@@ -5,16 +5,23 @@ import "http/server_policy" take ServerPolicy;
 import "net/tcp" take TcpListening;
 import "net/ip" take IpAddress, IpVersion;
 import "url/value" take ParsedUrl;
-import "time/clock" take Timing, SystemClock;
+import "time/clock" take Timing, SystemClock, Instant;
 import "web/routing" take WebRoutes, Get, Post, Scope, Fallback, WebSocket, Around;
 import "web/around" take Compression;
+import "web/internal/request_log" take RequestLog;
+import "web/testing" take WebTestClient;
+import "web/exception" take Exception;
+import "logging/logger" take Logger;
+import "logging/write" take DiscardingLogs, CollectedLogs;
+import "logging/level" take LogLevel;
+import "testing/time" take ManualClock;
 import "compression/gzip" take GzipDecompressed;
 import "encoding/utf" take Utf8Decoded;
 import "web/request" take WebRequest;
 import "http/method" take MethodName;
 import "web/reply" take TextReply;
-import "http/message" take Responding, Request;
-import "http/handler" take WebSocketHandling;
+import "http/message" take Responding, Request, Response;
+import "http/handler" take WebSocketHandling, Handling, HandlingResult, HandlingKind;
 import "http/request_context" take HttpRequestContext;
 import "http/header" take Headers, Header, HeaderName;
 import "http/websocket" take WebSocketConnection, WebSocketLimits, TextWebSocketMessage;
@@ -24,7 +31,7 @@ import "net/dns" take FixedResolution;
 import "http/client" take HttpClient;
 import "http/endpoint" take LoopbackEndpoints;
 import "http/body" take TextBody;
-import "http/status" take Status;
+import "http/status" take Status, StatusCode;
 import "time/duration" take Duration;
 import "os/signal" take Interruption, CaughtSignal;
 import "net/tls" take TlsIdentity, TlsServerPolicy;
@@ -47,24 +54,41 @@ import "crypto/x509/trust" take PemTrustStore;
 // port 0 picks a free port, local_endpoint() reports it, and server.drain(limit:)
 // drains it.
 
-// A route table served on an address and port.
-object WebApplication {
+// A route table served on an address and port. Pass logger: to log every
+// completed request, including 404s and fallbacks; the default logs nothing.
+// Exceptions keep their HTTP status at info; other errors log 500 at error
+// with their cause and propagate. The request never carries the logger.
+object WebApplication does Handling {
     has routes is WebRoutes;
     has policy is ServerPolicy;
     has clock is Timing;
+    has logger is Logger;
 
-    // Serves routes with the default policy.
-    WebApplication(routes is WebRoutes) {
+    // Serves routes with the default policy. logger logs completed requests at
+    // info, or unhandled errors at error with their cause; omitted, it is silent.
+    // Lines are "GET /notes?limit=5 200 0.412 ms", with an address field.
+    WebApplication(
+        routes is WebRoutes,
+        logger is Logger = Logger(name: "web", destination: DiscardingLogs())
+    ) {
         self.routes = routes;
         policy = ServerPolicy();
         clock = SystemClock();
+        self.logger = logger;
     }
 
-    // Serves routes with policy, on clock.
-    WebApplication(routes is WebRoutes, policy is ServerPolicy, clock is Timing) {
+    // Serves routes with policy, timing requests on clock. logger has the same
+    // line, levels and address field as above; omitted, it logs nothing.
+    WebApplication(
+        routes is WebRoutes,
+        policy is ServerPolicy,
+        clock is Timing,
+        logger is Logger = Logger(name: "web", destination: DiscardingLogs())
+    ) {
         self.routes = routes;
         self.policy = policy;
         self.clock = clock;
+        self.logger = logger;
     }
 
     // The server knows its own URL, so a WebSocket route can check the Origin
@@ -82,7 +106,7 @@ object WebApplication {
             .parts();
         HttpServer(
             listener: listener,
-            handling: routes.table(),
+            handling: self,
             url: own,
             policy: policy,
             clock: clock
@@ -94,6 +118,7 @@ object WebApplication {
         let stopping = AppStopping();
         defer await stopping.close();
         await stopping.serve(await self.server(address, port));
+        // #1180: listen() drains the logger here
     }
 
     // HTTPS: the identity's certificate and key, HTTP/2 and HTTP/1.1 by ALPN.
@@ -101,6 +126,7 @@ object WebApplication {
         let stopping = AppStopping();
         defer await stopping.close();
         await stopping.serve(await self.server(address, port, tls));
+        // #1180: listen() drains the logger here
     }
 
     // The HTTPS server, bound and not serving; its own URL is https.
@@ -125,12 +151,210 @@ object WebApplication {
         );
         HttpServer(
             listener: listener,
-            handling: routes.table(),
+            handling: self,
             url: own,
             tls: TlsServerPolicy(identity: tls),
             policy: secured,
             clock: clock
         );
+    }
+
+    // Handles a request through the server's pipeline, including its log.
+    // WebTestClient(application) exercises it without a listener.
+    async handling(request is Request, context is HttpRequestContext) is HandlingResult {
+        // A silent logger costs one check: no clock reading, no line, no catch.
+        if !logger.enabled(LogLevel.error) {
+            return await routes.table().handling(request, context);
+        }
+        let log = RequestLog(
+            request: request,
+            context: context,
+            clock: clock,
+            start: clock.monotonic_instant()
+        );
+        let answer = try {
+            await routes.table().handling(request, context);
+        }
+        catch Exception.status(code, _detail) {
+            log.info(logger, code.string());
+            throw;
+        }
+        catch failure is Error {
+            log.error(logger, failure);
+            throw failure;
+        };
+        let status = if answer.kind() == HandlingKind.websocket {
+            Status.switching_protocols;
+        }
+        else {
+            answer.response()::Head::status;
+        };
+        log.info(logger, StatusCode(status).number().string());
+        answer;
+    }
+
+    async test "request logging covers responses exceptions and propagated failures" {
+        let kept = CollectedLogs();
+        let logger = Logger(name: "test.web", destination: kept);
+        let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+        defer clock.close();
+        let probe = RequestLogProbe(clock);
+        let routes = WebRoutes(
+            Post(path: "/notes", endpoint: probe.created),
+            Get(path: "/gone", endpoint: probe.gone),
+            Get(path: "/failed", endpoint: probe.failed),
+            Get(path: "/unavailable", endpoint: probe.unavailable),
+        );
+        let app = WebApplication(
+            routes: routes,
+            policy: ServerPolicy(),
+            clock: clock,
+            logger: logger
+        );
+        let client = WebTestClient(app);
+        test.is((await client.post("/notes?limit=5&q=a%20b", TextBody(text: "")))::Head::code, 201);
+        test.is((await client.get("/missing"))::Head::code, 404);
+        test.is((await client.get("/gone"))::Head::code, 410);
+        let propagated = try {
+            await client.get("/failed?");
+            false;
+        }
+        catch failure is RequestLogFailure {
+            failure == RequestLogFailure.broken;
+        };
+        test.ok(propagated);
+        test.is((await client.get("/unavailable"))::Head::code, 503);
+        test.is(kept.size(), 5);
+        let records = kept.records();
+        test.is(records.item(0)::Entry::message, "POST /notes?limit=5&q=a%20b 201 0.412 ms");
+        test.is(records.item(1)::Entry::message, "GET /missing 404 0.000 ms");
+        test.is(records.item(2)::Entry::message, "GET /gone 410 1.005 ms");
+        test.is(records.item(3)::Entry::message, "GET /failed? 500 12.345 ms");
+        test.is(records.item(4)::Entry::message, "GET /unavailable 503 0.000 ms");
+        for 0..5 -> index {
+            let record = records.item(index);
+            test.is(record.context().fields().values().string(), "{\"address\":\"127.0.0.1\"}");
+            test.is(record.context().name().string(), "test.web");
+            test.ok(record::Entry::level == (if index == 3: LogLevel.error else: LogLevel.info));
+            test.is(record.has_cause(), index == 3);
+        }
+        test.is(records.item(3).cause().text(), RequestLogFailure.broken.text());
+    }
+
+    async test "request logging includes fallbacks and routing rejections" {
+        let kept = CollectedLogs();
+        let greetings = Greetings();
+        let routes = WebRoutes(
+            Get(path: "/notes", endpoint: greetings.long),
+            Fallback(greetings.missing),
+        );
+        let app = WebApplication(routes: routes, logger: Logger(name: "web", destination: kept));
+        let client = WebTestClient(app);
+        test.is((await client.get("/elsewhere?q=1"))::Head::code, 404);
+        test.is((await client.post("/notes", TextBody(text: "")))::Head::code, 405);
+        test.is(kept.size(), 2);
+        test.ok(kept.records().item(0)::Entry::message.starts_with("GET /elsewhere?q=1 404 "));
+        test.ok(kept.records().item(1)::Entry::message.starts_with("POST /notes 405 "));
+        for kept.records() -> record {
+            test.ok(record::Entry::level == LogLevel.info);
+            test.is(record.context().fields().values().text("address"), "127.0.0.1");
+        }
+    }
+
+    async test "request logging respects an error-only logger" {
+        let kept = CollectedLogs();
+        let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+        defer clock.close();
+        let probe = RequestLogProbe(clock);
+        let routes = WebRoutes(Get(path: "/failed", endpoint: probe.failed));
+        let app = WebApplication(
+            routes: routes,
+            policy: ServerPolicy(),
+            clock: clock,
+            logger: Logger(name: "web", destination: kept, level: LogLevel.error)
+        );
+        let client = WebTestClient(app);
+        test.is((await client.get("/missing"))::Head::code, 404);
+        try {
+            await client.get("/failed");
+        }
+        catch failure is RequestLogFailure {}
+        test.is(kept.size(), 1);
+        test.is(kept.records().first()::Entry::message, "GET /failed 500 12.345 ms");
+        test.ok(kept.records().first()::Entry::level == LogLevel.error);
+        test.is(kept.records().first().cause().text(), RequestLogFailure.broken.text());
+    }
+
+    async test "request logging keeps an escaping HTTP exception status" {
+        let kept = CollectedLogs();
+        let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+        defer clock.close();
+        let probe = RequestLogProbe(clock);
+        let app = WebApplication(
+            routes: WebRoutes(Get(path: "/late", endpoint: probe.late)),
+            policy: ServerPolicy(),
+            clock: clock,
+            logger: Logger(name: "web", destination: kept)
+        );
+        let client = WebTestClient(app);
+        let propagated = try {
+            await client.get("/late");
+            false;
+        }
+        catch Exception.status(code, detail) {
+            code == 409 && detail == "late conflict";
+        };
+        test.ok(propagated);
+        test.is(kept.size(), 1);
+        test.is(kept.records().first()::Entry::message, "GET /late 409 0.000 ms");
+        test.ok(kept.records().first()::Entry::level == LogLevel.info);
+        test.ok(!kept.records().first().has_cause());
+    }
+
+    async test "request logging preserves WebSocket upgrade results" {
+        let kept = CollectedLogs();
+        let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+        defer clock.close();
+        let app = WebApplication(
+            routes: WebRoutes(WebSocket(path: "/live", application: Shouting())),
+            policy: ServerPolicy(),
+            clock: clock,
+            logger: Logger(name: "web", destination: kept)
+        );
+        let client = WebTestClient(app);
+        test.is((await client.get("/live"))::Head::code, 101);
+        test.is(kept.size(), 1);
+        test.is(kept.records().first()::Entry::message, "GET /live 101 0.000 ms");
+        test.ok(kept.records().first()::Entry::level == LogLevel.info);
+    }
+
+    async test "request logging is silent without a logger" {
+        let clock = ManualClock(start: Instant(origin: Duration(seconds: 0.rat())));
+        defer clock.close();
+        let probe = RequestLogProbe(clock);
+        let routes = WebRoutes(
+            Post(path: "/notes", endpoint: probe.created),
+            Get(path: "/gone", endpoint: probe.gone),
+            Get(path: "/failed", endpoint: probe.failed),
+        );
+        let applications = [
+            WebApplication(routes),
+            WebApplication(routes: routes, policy: ServerPolicy(), clock: clock)
+        ];
+        for applications -> app {
+            let client = WebTestClient(app);
+            test.is((await client.post("/notes", TextBody(text: "")))::Head::code, 201);
+            test.is((await client.get("/missing"))::Head::code, 404);
+            test.is((await client.get("/gone"))::Head::code, 410);
+            let propagated = try {
+                await client.get("/failed");
+                false;
+            }
+            catch failure is RequestLogFailure {
+                failure == RequestLogFailure.broken;
+            };
+            test.ok(propagated);
+        }
     }
 }
 
@@ -179,6 +403,47 @@ hidden object AppStopping {
         }
         catch e is Cancelled {}
         interruption.close();
+    }
+}
+
+hidden enum RequestLogFailure is Error = (broken);
+
+hidden object RequestLogProbe {
+    has clock is ManualClock;
+
+    RequestLogProbe(clock is ManualClock) {
+        self.clock = clock;
+    }
+
+    async created(request is WebRequest) is Responding {
+        clock.advance(Duration(seconds: 412 / 1000000));
+        TextReply(text: "created", status: Status.created);
+    }
+
+    async gone(request is WebRequest) is Responding {
+        clock.advance(Duration(seconds: 1005 / 1000000));
+        throw Exception.status(410, "gone");
+    }
+
+    async failed(request is WebRequest) is Responding {
+        clock.advance(Duration(seconds: 12345 / 1000000));
+        throw RequestLogFailure.broken;
+    }
+
+    async late(request is WebRequest) is Responding {
+        LateRequestReply();
+    }
+
+    async unavailable(request is WebRequest) is Responding {
+        throw Exception.status(503, "unavailable");
+    }
+}
+
+hidden object LateRequestReply does Responding {
+    LateRequestReply();
+
+    response() is Response {
+        throw Exception.status(409, "late conflict");
     }
 }
 

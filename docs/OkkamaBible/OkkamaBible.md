@@ -22597,8 +22597,18 @@ to: the whole table, a `Scope`, or a `Resource`. An around is any object that
 does `Surrounding`: it receives the request and the rest of the chain as
 `inner`, and may call it, work with its reply, or answer by itself.
 
-The standard library brings `AccessLog`, `BearerAuth` and `Cors`. The example
-below makes reading public and changing guarded, and adds its own around:
+For request logging, pass the application's `Logger` as
+`WebApplication(routes: routes, logger: log)`. It logs every completed request,
+including 404s and fallbacks, at info: `GET /notes?limit=5 200 0.412 ms`.
+The client address is the `address` field; elapsed time uses the application's
+`clock`. An `Exception` keeps its status at info; another error is logged as
+500 at error with its cause attached, then propagates. Without `logger:`, the
+application logs nothing. `AccessLog` remains available for an explicit text
+destination or a route-local log, keeping its address-first format.
+`WebTestClient(application)` tests the application's logging without sockets.
+
+The standard library also brings `BearerAuth` and `Cors`. The example below
+makes reading public and changing guarded, and adds its own around:
 
 ```okkama
 module bible/notes_guarded v1.0.0;
