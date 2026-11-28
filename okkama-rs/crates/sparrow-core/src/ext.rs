@@ -10,6 +10,7 @@ use std::{collections::HashMap, ffi::CStr, rc::Rc, sync::Arc};
 struct Export {
     symbol: &'static str,
     text: &'static str,
+    params: &'static str,
     signature: Signature,
     callback: host::native_ext::Callback,
 }
@@ -17,11 +18,44 @@ struct Export {
 /// An immutable descriptor registered by the embedding, never by bytecode.
 #[derive(Debug, Clone)]
 pub struct Extension {
+    name: &'static str,
     exports: Arc<[Export]>,
     states: &'static [okk_state_type],
 }
 
 impl Extension {
+    /// An editable module skeleton for `okkama ext declare`, without author documentation.
+    pub fn declarations(&self) -> Result<String, Error> {
+        let module = self.exports.first().map(|e| e.symbol.split('@').next().unwrap()).unwrap_or(self.name);
+        if !module.split('/').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')) {
+            return Err(Error("extension has no exports or module name from which to declare a module".into()));
+        }
+        if self.exports.iter().any(|e| e.symbol.split('@').next() != Some(module)) {
+            return Err(Error("extension exports more than one module; declare each module by hand".into()));
+        }
+        let mut out = format!("module {module};\n\n");
+        for state in self.states {
+            let name = unsafe { text(state.name)? };
+            out.push_str(&format!("native object {name};\n"));
+        }
+        for export in self.exports.iter() {
+            let name = export.symbol.split_once("::").unwrap().1.split('/').next().unwrap();
+            let names: Vec<_> = if export.params.trim().is_empty() { vec![] }
+                else { export.params.split(',').map(str::trim).collect() };
+            if names.len() != export.signature.params.len() || names.iter().any(|n| {
+                n.is_empty() || !n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    || n.as_bytes()[0].is_ascii_digit()
+            }) || names.iter().enumerate().any(|(i, n)| names[..i].contains(n)) {
+                return Err(Error(format!("extension {} has invalid parameter names", export.symbol)));
+            }
+            let params: Vec<_> = names.iter().zip(&export.signature.params)
+                .map(|(name, ty)| format!("{name} is {}", declaration_type(ty))).collect();
+            let asynchronous = if export.signature.is_async { "async " } else { "" };
+            out.push_str(&format!("native {asynchronous}{name}({}) is {};\n", params.join(", "), declaration_type(&export.signature.result)));
+        }
+        Ok(out)
+    }
+
     pub(crate) fn same_descriptor(&self, other: &Self) -> bool { Arc::ptr_eq(&self.exports, &other.exports) }
 
     /// Validate a static descriptor without invoking its code.
@@ -37,7 +71,7 @@ impl Extension {
         if descriptor.abi != OKKAMA_EXT_ABI || descriptor.size as usize != std::mem::size_of::<okk_extension>() {
             return Err(Error("extension ABI or descriptor size does not match".into()));
         }
-        unsafe { text(descriptor.name)? };
+        let name = unsafe { text(descriptor.name)? };
         if (descriptor.export_count != 0 && descriptor.exports.is_null())
             || (descriptor.state_count != 0 && descriptor.states.is_null())
         {
@@ -49,7 +83,7 @@ impl Extension {
         for export in exports {
             let symbol = unsafe { text(export.symbol)? };
             let signature_text = unsafe { text(export.signature)? };
-            unsafe { text(export.params)? };
+            let params = unsafe { text(export.params)? };
             let signature = Signature::try_parse(signature_text).map_err(Error)?;
             let valid = symbol.split_once("::").and_then(|(module, name)| {
                 let (module, major) = module.split_once('@')?;
@@ -86,7 +120,7 @@ impl Extension {
                     host::native_ext::Callback::Async(unsafe { &*export.r#async })
                 }
             };
-            parsed.push(Export { symbol, text: signature_text, signature, callback });
+            parsed.push(Export { symbol, text: signature_text, params, signature, callback });
         }
         let raw_states = unsafe { table(descriptor.states.cast::<RawState>(), descriptor.state_count)? };
         if raw_states.iter().any(|state| state.drop.is_none()) {
@@ -101,7 +135,19 @@ impl Extension {
             }
             if !names.insert(name) { return Err(Error(format!("duplicate extension state {name}"))); }
         }
-        Ok(Self { exports: parsed.into(), states })
+        Ok(Self { name, exports: parsed.into(), states })
+    }
+}
+
+fn declaration_type(ty: &Abi) -> String {
+    match ty {
+        Abi::Int => "int".into(), Abi::Float => "float".into(), Abi::Rat => "rat".into(),
+        Abi::Bool => "bool".into(), Abi::Byte => "byte".into(), Abi::Char => "char".into(),
+        Abi::Str => "string".into(), Abi::Void => "void".into(), Abi::Any => "any".into(),
+        Abi::Handle(name) => (*name).into(),
+        Abi::Array(t) => format!("@{}", declaration_type(t)),
+        Abi::Map(k, v) => format!("%{}:{}", declaration_type(k), declaration_type(v)),
+        Abi::Maybe(t) => format!("Maybe<{}>", declaration_type(t)),
     }
 }
 
@@ -258,5 +304,40 @@ fn type_text(program: &Program, ty: TypeRef) -> String {
         Type::Array(e) => format!("@{}", type_text(program, *e)),
         Type::Map(k, v) => format!("%{}:{}", type_text(program, *k), type_text(program, *v)),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod declaration_tests {
+    use super::*;
+    unsafe extern "C" fn callback(_: *mut okk_call, _: *const okk_slot, _: *mut okk_slot) -> u32 { OKK_PANIC }
+    fn descriptor(exports: Vec<okk_export>) -> Extension {
+        let count = exports.len();
+        let exports = Box::leak(exports.into_boxed_slice());
+        let descriptor = Box::leak(Box::new(okk_extension {
+            abi: OKKAMA_EXT_ABI, size: std::mem::size_of::<okk_extension>() as u32, name: c"empty/module".as_ptr(),
+            exports: exports.as_ptr(), export_count: count as u32, states: std::ptr::null(), state_count: 0,
+        }));
+        unsafe { Extension::from_static(descriptor).unwrap() }
+    }
+    fn export(symbol: &'static CStr, signature: &'static CStr, params: &'static CStr) -> okk_export {
+        okk_export { symbol: symbol.as_ptr(), signature: signature.as_ptr(), params: params.as_ptr(), sync: Some(callback), r#async: std::ptr::null() }
+    }
+    #[test]
+    fn ext_declare_translates_abi_types_without_invoking_callbacks() {
+        let extension = descriptor(vec![export(c"sample@0::convert/2", c"(@?int, %string:@byte) -> rat", c"values, entries")]);
+        assert_eq!(extension.declarations().unwrap(), "module sample;\n\nnative convert(values is @Maybe<int>, entries is %string:@byte) is rat;\n");
+        assert_eq!(descriptor(vec![]).declarations().unwrap(), "module empty/module;\n\n");
+    }
+    #[test]
+    fn ext_declare_refuses_ambiguous_modules_and_invalid_parameter_names() {
+        for params in [c"", c"a,b", c"a; injected", c"1name"] {
+            let extension = descriptor(vec![export(c"sample@0::f/1", c"(int) -> int", params)]);
+            assert!(extension.declarations().unwrap_err().0.contains("parameter names"));
+        }
+        let extension = descriptor(vec![export(c"sample@0::f/2", c"(int, int) -> int", c"a,a")]);
+        assert!(extension.declarations().unwrap_err().0.contains("parameter names"));
+        let extension = descriptor(vec![export(c"a@0::f/0", c"() -> int", c""), export(c"b@0::f/0", c"() -> int", c"")]);
+        assert!(extension.declarations().unwrap_err().0.contains("more than one module"));
     }
 }

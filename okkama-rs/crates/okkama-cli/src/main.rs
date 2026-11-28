@@ -30,6 +30,7 @@ use okkama_devtrace::env_switch;
 mod agents;
 mod core;
 mod doctest;
+mod ext;
 mod import_paths;
 mod lsp;
 mod man;
@@ -79,6 +80,7 @@ USAGE:
     okkama lsp
     okkama repl
     okkama env
+    okkama ext declare LIB
     okkama ir <FILE|-> [--format text]
     okkama build <FILE|-> -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
@@ -97,6 +99,7 @@ COMMANDS:
     lint      Check programs and report errors, warnings and lint findings
     man       Show the reference page of a module, a declaration or an action,
               from its doc comments; without MODULE, the index of std
+    ext       Print native declarations from an extension library
     env       Show where okkama finds std and ICU
     lsp       Run the language server (LSP over stdio) for editors
     repl      Read-eval-print loop: statements, expressions and declarations
@@ -524,6 +527,7 @@ fn run(args: &[String]) -> Outcome {
             Some("check" | "run") => Outcome::success(HELP.to_string()),
             Some("fmt") => Outcome::success(FMT_HELP.to_string()),
             Some("lint") => Outcome::success(LINT_HELP.to_string()),
+            Some("ext") => Outcome::success(ext::HELP.to_string()),
             Some("env") => Outcome::success(ENV_HELP.to_string()),
             Some("lsp") => Outcome::success(LSP_HELP.to_string()),
             Some("repl") => Outcome::success(repl::help()),
@@ -548,6 +552,7 @@ fn run(args: &[String]) -> Outcome {
         "check" => check_command(rest),
         "fmt" => fmt_command(rest),
         "env" => env_command(rest),
+        "ext" => ext::command(rest),
         "lint" => lint_command(rest),
         "man" => man::command(rest),
         "agents" => agents::command(rest, &stdlib_dir()),

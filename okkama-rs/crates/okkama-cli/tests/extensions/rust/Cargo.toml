@@ -1,0 +1,16 @@
+[package]
+name = "okkama-ext-sample"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+okkama-ext = { path = "../../../../okkama-ext" }
+
+[workspace]
+
+[patch.crates-io]
+num-bigint = { path = "../../../../../vendor/num-bigint" }

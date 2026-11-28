@@ -1,0 +1,12 @@
+[package]
+name = "okkama-ext"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+okkama-runtime-abi = { path = "../okkama-runtime-abi" }
+okkama-ext-macros = { path = "../okkama-ext-macros" }
+num-bigint = "0.4.8"
+

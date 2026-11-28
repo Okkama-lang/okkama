@@ -1278,6 +1278,24 @@ name = "okkama-devtrace"
 version = "0.6.7"
 
 [[package]]
+name = "okkama-ext"
+version = "0.6.7"
+dependencies = [
+ "num-bigint",
+ "okkama-ext-macros",
+ "okkama-runtime-abi",
+]
+
+[[package]]
+name = "okkama-ext-macros"
+version = "0.6.7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "okkama-native"
 version = "0.6.7"
 dependencies = [

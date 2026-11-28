@@ -262,10 +262,38 @@ impl Call<'_> {
             slots = values.iter().map(|s| self.import_as(*s, &candidate, false)).collect::<Result<Vec<_>>>()?;
             return Ok((slots, candidate));
         }
-        let shape = slots.iter().find(|s| !self.empty(**s)).map(|s| self.shape(*s))
-            .or_else(|| slots.first().map(|s| self.shape(*s))).unwrap_or(Shape::Unknown);
-        for slot in &mut slots { *slot = self.coerce(*slot, &shape, false)?; }
+        let mut shape = Shape::Unknown;
+        for slot in &slots {
+            if !self.empty(*slot) { shape = self.common_shape(shape, self.shape(*slot))?; }
+        }
+        if shape == Shape::Unknown { shape = slots.first().map(|s| self.shape(*s)).unwrap_or(shape); }
+        for slot in &mut slots { *slot = self.coerce(*slot, &shape, true)?; }
         Ok((slots, shape))
+    }
+
+    // Some-only intermediate containers have no Maybe tag. Join their shapes
+    // before coercing, so the order of Some and None containers is immaterial.
+    fn common_shape(&mut self, a: Shape, b: Shape) -> Result<Shape> {
+        if a == b || b == Shape::Unknown { return Ok(a); }
+        if a == Shape::Unknown { return Ok(b); }
+        match (&a, &b) {
+            (Shape::Maybe(inner, ..), _) => {
+                let inner = self.host.shapes[*inner].clone();
+                let other = match b { Shape::Maybe(i, ..) => self.host.shapes[i].clone(), _ => b };
+                if self.common_shape(inner.clone(), other)? == inner { Ok(a) } else { Err(OKK_BAD_SHAPE) }
+            }
+            (_, Shape::Maybe(..)) => self.common_shape(b, a),
+            (Shape::Array(x), Shape::Array(y)) => {
+                let inner = self.common_shape(self.host.shapes[*x].clone(), self.host.shapes[*y].clone())?;
+                Ok(Shape::Array(self.intern(inner)?))
+            }
+            (Shape::Map(ak, av), Shape::Map(bk, bv)) => {
+                let key = self.common_shape(self.host.shapes[*ak].clone(), self.host.shapes[*bk].clone())?;
+                let value = self.common_shape(self.host.shapes[*av].clone(), self.host.shapes[*bv].clone())?;
+                Ok(Shape::Map(self.intern(key)?, self.intern(value)?))
+            }
+            _ => Err(OKK_BAD_SHAPE),
+        }
     }
 
     fn empty(&self, slot: Slot) -> bool {

@@ -231,3 +231,177 @@ const okk_extension okkama_extension = {descriptor};
     let message = error(run(&path, &[]));
     assert!(message.contains("not-a-library.so") && !message.contains("cannot resolve path"), "{message}");
 }
+
+#[test]
+fn declarations_from_c_compile_as_a_module() {
+    let Some((library, _)) = libraries() else { return };
+    check_declarations(library, "sample", "native async uppercase(value is string) is string;");
+}
+
+fn check_declarations(library: &Path, module: &str, declaration: &str) {
+    let output = tree::okkama().args(["ext", "declare"]).arg(library).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let source = String::from_utf8(output.stdout).unwrap();
+    assert!(source.starts_with(&format!("module {module};\n")), "{source}");
+    assert!(source.contains(declaration), "{source}");
+    let file = library.with_file_name(format!("{module}-declarations.ok"));
+    std::fs::write(&file, source).unwrap();
+    let checked = tree::okkama().arg("check").arg(file).output().unwrap();
+    assert!(checked.status.success(), "{}", String::from_utf8_lossy(&checked.stderr));
+}
+
+fn rust_library() -> &'static PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("extensions-rust");
+        let manifest = sample("../rust/Cargo.toml");
+        // The isolated sample lock must remain a subset of the workspace resolution.
+        let identities = |lock: String| lock.split("[[package]]").skip(1)
+            .map(|p| p.split("dependencies =").next().unwrap().trim().to_owned())
+            .collect::<std::collections::HashSet<_>>();
+        let workspace = identities(std::fs::read_to_string(tree::root().join("okkama-rs/Cargo.lock")).unwrap());
+        let sample_lock = identities(std::fs::read_to_string(manifest.with_file_name("Cargo.lock")).unwrap());
+        for package in sample_lock {
+            assert!(package.starts_with("name = \"okkama-ext-sample\"") || workspace.contains(&package),
+                "sample dependency is not pinned by the workspace lock: {package}");
+        }
+        let output = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args(["build", "--offline", "--locked", "-j", "4", "--manifest-path"])
+            .arg(manifest).arg("--target-dir").arg(&target).output().unwrap();
+        assert!(output.status.success(), "Rust sample: {}", String::from_utf8_lossy(&output.stderr));
+        target.join("debug").join(format!("{}okkama_ext_sample.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION))
+    })
+}
+
+#[test]
+fn declarations_from_rust_compile_as_a_module() {
+    check_declarations(rust_library(), "rust_sample", "native async shared(image is Image, suffix is @byte) is string;");
+}
+
+fn rust_program(name: &str, body: &str) -> PathBuf {
+    let library = rust_library();
+    let declarations = tree::okkama().args(["ext", "declare"]).arg(library).output().unwrap();
+    assert!(declarations.status.success(), "{}", String::from_utf8_lossy(&declarations.stderr));
+    let file = library.with_file_name(format!("{name}.ok"));
+    let declarations = String::from_utf8(declarations.stdout).unwrap()
+        .replacen("module rust_sample;", "module rust_sample;\nimport \"io/stdout\" take Stdout;\nimport \"async/scope\" take FutureGroup;", 1);
+    let source = format!("{declarations}\n{body}");
+    std::fs::write(&file, source).unwrap();
+    file
+}
+
+#[test]
+fn rust_values_states_failure_and_blocking_jobs_roundtrip() {
+    let path = rust_program("roundtrip", r#"
+async main() is int {
+    Stdout().writeln(add(a: 17, b: 29));
+    confirm negate(value: false);
+    confirm floating(value: 1.25) == 2.5;
+    confirm byte_copy(value: byte(255)) == byte(255);
+    confirm character(value: '🐦') == '🐦';
+    Stdout().writeln(text_copy(value: "hello 🐦"));
+    confirm bytes_copy(value: [byte(0), byte(128), byte(255)]) == [byte(0), byte(128), byte(255)];
+    confirm bytes_owned(value: [byte(255)]) == [byte(255)];
+    confirm integers(value: [1, -2, 9223372036854775807]) == [1, -2, 9223372036854775807];
+    confirm integers(value: []) == [];
+    confirm dictionary(value: ["b": 2, "a": 1]) == ["a": 1, "b": 2];
+    confirm maybe(value: Maybe.some("bird")) == Maybe.some("bird");
+    confirm maybe(value: Maybe<string>.none) == Maybe<string>.none;
+    confirm big(value: 9223372036854775808) == 9223372036854775809;
+    confirm big(value: -18446744073709551616) == -18446744073709551615;
+    confirm big(value: -1) == 0;
+    confirm text_copy(value: "") == "";
+    confirm bytes_copy(value: []) == [];
+    confirm dictionary(value: [:]) == [:];
+    confirm nested(value: [["k": Maybe.some(42)], ["n": Maybe<int>.none]]) == [["k": Maybe.some(42)], ["n": Maybe<int>.none]];
+    let caught = try { failure(); 0; } catch e is NativeFailure {
+        confirm e.code() == "sample_failure";
+        confirm e.domain() == "rust_sample";
+        confirm e.operation() == "rust_sample@0::failure/0";
+        confirm e.message() == "Rust failure";
+        1;
+    };
+    confirm caught == 1;
+    let counter = create(value: 41);
+    confirm read(counter: counter) == 41;
+    confirm increment(counter: counter) == 42;
+    release(counter: counter);
+    Stdout().writeln(drops());
+    confirm await borrowed(value: "borrowed text") == "borrowed text";
+    Stdout().writeln(await uppercase(value: "async bird"));
+    Stdout().writeln(await shared(image: image(value: "shared bird"), suffix: [byte(0), byte(255)]));
+    0;
+}
+"#);
+    for checked in ["0", "1"] {
+        let output = tree::okkama().args(["run", "--ext"]).arg(rust_library()).arg(&path)
+            .env("OKKAMA_EXT_CHECK", checked).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "46\nhello 🐦\n1\nASYNC BIRD\nSHARED BIRD:2\n");
+    }
+}
+
+#[test]
+fn rust_faults_and_failures_do_not_cross_the_abi() {
+    for (name, expression, expected) in [
+        ("failure", "failure()", "sample_failure"),
+        ("fail_async", "await fail_async()", "async_failure"),
+        ("panic_sync", "panic_sync()", "status 2"),
+        ("panic_async", "await panic_async()", "status 2"),
+        ("not_finite", "not_finite()", "not_finite"),
+        ("range", "add(a: 9223372036854775808, b: 1)", "out_of_range"),
+        ("closed", "let c = create(value: 1); release(counter: c); read(counter: c)", "already_closed"),
+        ("alias", "let c = create(value: 1); alias(a: c, b: c)", "state_borrowed"),
+    ] {
+        let path = rust_program(name, &format!("async main() is int {{ {expression}; 0; }}"));
+        let message = error(tree::okkama().args(["run", "--ext"]).arg(rust_library()).arg(path).output().unwrap());
+        assert!(message.contains(expected), "{name}: {message}");
+    }
+}
+
+#[test]
+fn extension_command_help_and_usage_errors() {
+    for args in [vec!["help", "ext"], vec!["ext", "--help"], vec!["ext", "declare", "--help"]] {
+        let output = tree::okkama().args(args).output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("okkama ext declare LIB"));
+    }
+    for args in [vec!["ext"], vec!["ext", "declare"], vec!["ext", "unknown"], vec!["ext", "declare", "a", "b"]] {
+        assert!(error(tree::okkama().args(args).output().unwrap()).contains("expected `okkama ext declare LIB`"));
+    }
+}
+
+#[test]
+fn rust_shared_release_drops_once_after_the_blocking_job() {
+    let path = rust_program("shared-release", r#"
+object ImageOwner {
+    has state is Image;
+    ImageOwner(:state);
+    destroy { close(image: state); }
+}
+async main() is int {
+    let state = image(value: "still alive");
+    let job = held_image(image: state);
+    let group is FutureGroup<string> = FutureGroup();
+    group.start(job);
+    { let owner = ImageOwner(state: state); }
+    confirm image_drops() == 0;
+    finish_job();
+    confirm await job == "still alive";
+    await group.wait();
+    confirm image_drops() == 1;
+    let closed = try { close(image: state); false; } catch e is NativeFailure {
+        confirm e.code() == "already_closed";
+        true;
+    };
+    confirm closed;
+    confirm image_drops() == 1;
+    0;
+}
+"#);
+    for checked in ["0", "1"] {
+        let output = tree::okkama().args(["run", "--ext"]).arg(rust_library()).arg(&path)
+            .env("OKKAMA_EXT_CHECK", checked).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+}

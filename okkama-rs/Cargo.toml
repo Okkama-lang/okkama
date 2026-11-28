@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 # #1148: vendored dependencies are not members (their tests and lints are their own).
-exclude = ["vendor"]
-members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace", "crates/okkama-wasm", "crates/sparrow-wasm", "crates/okkama-port"]
+exclude = ["vendor", "crates/okkama-cli/tests/extensions/rust"]
+members = ["crates/okkama-ext", "crates/okkama-ext-macros", "crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace", "crates/okkama-wasm", "crates/sparrow-wasm", "crates/okkama-port"]
 
 [workspace.package]
 version = "0.6.7"

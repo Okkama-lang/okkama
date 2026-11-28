@@ -415,3 +415,45 @@ fn ext_values_dynamic_shapes_expire_with_the_call() {
         assert_eq!(r.host.as_ref().unwrap().shape_index.len(), count);
     }
 }
+
+#[test]
+fn ext_values_nested_optional_collections_choose_a_common_shape() {
+    let mut p = wrapper("values@0::test/1", &[0], 0);
+    p.types.push(okkama_sparrow::Type::Map(okkama_sparrow::TypeRef(5), okkama_sparrow::TypeRef(14)));
+    let map = okkama_sparrow::TypeRef(p.types.len() as u32 - 1);
+    p.types.push(okkama_sparrow::Type::Array(map));
+    let array = okkama_sparrow::TypeRef(p.types.len() as u32 - 1);
+    p.functions[0].result = Some(array);
+    p.functions[1].registers[1] = array;
+    p.functions[1].result = Some(array);
+    static EXPORT: okk_export = export!(c"values@0::test/1", c"(int) -> @%string:?int", nested_optional_maps);
+    static EXT: okk_extension = okk_extension { exports: &EXPORT, export_count: 1, ..DESCRIPTOR };
+    for reverse in [false, true] {
+        let limits = Limits { extensions: vec![unsafe { Extension::from_static(&EXT).unwrap() }], ..Limits::default() };
+        let mut r = Box::new(Runtime::with_limits(Loaded::new(p.clone()), limits).unwrap());
+        let arg = r.heap.int(i64::from(reverse));
+        let result = r.run_function_with(1, &[arg], 1 << 24).unwrap();
+        assert_eq!(r.heap.array_length(result), 2);
+        for (index, word) in r.heap.elements(result).iter().enumerate() {
+            let map = r.heap.payload::<crate::ops::MapValue>(*word).unwrap();
+            let (_, value) = map.entries.values().next().unwrap();
+            let some = (index == 0) != reverse;
+            assert_eq!(crate::heap::payload(r.heap.header_of(*value)), if some { 1 } else { 2 });
+            if some { assert_eq!(big(&r, r.heap.field(*value, 0)), 42.into()); }
+        }
+    }
+}
+unsafe extern "C" fn nested_optional_maps(c: *mut okk_call, args: *const okk_slot, out: *mut okk_slot) -> u32 {
+    unsafe {
+        let h = &*(*c).host;
+        let mut key = okk_slot::default();
+        ok!((h.text_new)(c, b"k".as_ptr(), 1, &mut key));
+        let mut maps = [okk_slot::default(); 2];
+        for (i, value) in [okk_slot { bits: 42, kind: OKK_INT }, okk_slot::default()].into_iter().enumerate() {
+            ok!((h.map_new)(c, &key, &value, 1, &mut maps[i]));
+        }
+        if (*args).bits != 0 { maps.reverse(); }
+        ok!((h.array_new)(c, maps.as_ptr(), maps.len(), out));
+    }
+    OKK_OK
+}
