@@ -49,8 +49,10 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   path (mine); `// #1180` marks where listen() drains. Step 1 merged (agent, feature/1180-format: rat in
   machine words okkama-runtime-core/src/rat.rs, natives rfc3339_text (724) and json_quoted (725), LogLine/LogFields
   rewrite; line 0.86/1.46/1.97 µs for 0/1/3 fields, filtered call 31 ns; corpus sweep 365/365 same; ladder A/B
-  within ±1.4% after a re-run of 11-ownership). Next: step 3 std (Codex): StderrLogs, LogWriting.drain,
-  Logger.drain, default destination, listen() drains. Found: #1199 EPIPE on stdout/stderr cannot be caught.
+  within ±1.4% after a re-run of 11-ownership). Step 3 done (Codex, reviewed): StderrLogs (logging/stream)
+  default of Logger, `async drain()` on LogWriting and loggers, dropped(), AppLogging.settle drains in both
+  listen() paths, module overview std/logging.ok, okkama-cli tests/logging.rs (2). Left: web benchmark in Docker
+  (Logger("shop") vs no logger, the owner's "no throughput loss at info"), then close #1179–#1181. Found: #1199 EPIPE on stdout/stderr cannot be caught.
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
   Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust

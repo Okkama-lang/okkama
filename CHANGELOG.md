@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **Logging never stalls a server (#1180).** `Logger` now writes through `StderrLogs()`: a line is formatted on
+  the calling task and handed to a bounded buffer that a host thread writes to stderr, so a slow or stuck reader
+  of stderr no longer stops other tasks (measured: a request that logs nothing waited 2.6 s behind a stalled pipe
+  before). Lines are byte-identical. When the buffer is full whole lines are dropped and
+  `okkama: N log lines dropped` reaches the log; a closed stderr (EPIPE) is silent. `await logger.drain()` waits for
+  what was accepted (at most two seconds); `WebApplication.listen()` drains its logger at shutdown, and the program
+  drains at exit.
 - **Logging costs a tenth (#1180).** Building and formatting a log line takes 0.9–2 µs instead of 15–18 µs, with
   byte-identical text and JSON lines, and a call below the logger's level is one comparison (31 ns). On the way,
   `rat` arithmetic runs in machine words whenever its parts fit (`Duration(seconds:)` 516 → 94 ns), an RFC 3339
