@@ -128,20 +128,25 @@ impl Input {
 /// `sparrow_core::STACK_BYTES` as its stack limit, so the thread must really
 /// have it; on the 8 MiB main thread deep recursion killed the process
 /// instead of failing with "Stack overflow".
-pub(crate) fn run(args: &[String]) -> ExitCode {
+/// The REPL's own options (`--ext PATH`, `--no-native`); None for anything
+/// else, which `okkama` then reports as a usage error naming the argument.
+pub(crate) fn options(args: &[String]) -> Option<sparrow_core::budget::Limits> {
     let mut limits = sparrow_core::budget::Limits::default();
     let mut args = args;
     while let Some((option, rest)) = args.split_first() {
         match option.as_str() {
-            "--help" | "-h" => { print!("{}", help()); return ExitCode::SUCCESS; }
             "--no-native" => { limits.no_native = true; args = rest; }
             "--ext" if !rest.is_empty() => {
                 limits.extension_paths.push(rest[0].clone().into());
                 args = &rest[1..];
             }
-            _ => { eprintln!("okkama repl: expected --ext PATH or --no-native"); return ExitCode::from(2); }
+            _ => return None,
         }
     }
+    Some(limits)
+}
+
+pub(crate) fn run(limits: sparrow_core::budget::Limits) -> ExitCode {
     let thread = std::thread::Builder::new()
         .name("okkama-repl".into())
         .stack_size(sparrow_core::STACK_BYTES as usize)

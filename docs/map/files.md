@@ -209,7 +209,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-devtrace/src/env_switch.rs` 84 — The environment-switch policy, one implementation for every crate (#1095): booleans (#1067), byte counts
 - `okkama-devtrace/src/lib.rs` 329 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 11 files, 5270 lines
+## cli — 11 files, 5274 lines
 
 - `okkama-cli/src/agents.rs` 219 — `okkama agents` (#1190): the entry point for AI agents. Nobody but its authors knows Okkama, so the toolchain
 - `okkama-cli/src/core.rs` 98 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
@@ -217,10 +217,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/ext.rs` 20 — Editable declarations from a validated native extension descriptor.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 923 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1569 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1571 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 425 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 604 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
-- `okkama-cli/src/repl.rs` 552 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
+- `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
 ## other — 83 files, 26134 lines

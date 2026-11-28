@@ -84,11 +84,9 @@ fn no_native_suppresses_loading_in_either_option_order() {
 #[test]
 fn extensions_are_available_to_inline_tests() {
     let Some((library, _)) = libraries() else { return };
-    for command in [vec!["run", "-t"]] {
-        let output = tree::okkama().args(command).arg("--ext").arg(library).arg(sample("prog.ok")).output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert!(String::from_utf8_lossy(&output.stdout).contains("C extension"));
-    }
+    let output = tree::okkama().args(["run", "-t"]).arg("--ext").arg(library).arg(sample("prog.ok")).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("C extension"));
 }
 
 #[test]

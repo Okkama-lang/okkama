@@ -490,8 +490,10 @@ fn main() -> ExitCode {
         return lsp::run();
     }
     // The REPL reads stdin and writes as it goes.
-    if args.first().is_some_and(|a| a == "repl") {
-        return repl::run(&args[1..]);
+    if args.first().is_some_and(|a| a == "repl")
+        && let Some(limits) = repl::options(&args[1..])
+    {
+        return repl::run(limits);
     }
     let outcome = run(&args);
     // The program's buffered output goes before the command's own and before
