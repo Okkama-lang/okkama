@@ -659,6 +659,59 @@ pub(crate) fn concat_too_long(runtime: &Runtime, left: Word, right: Word) -> Opt
     concat_passes_limit(runtime.heap.header_of(left), runtime.heap.header_of(right)).then(concat_limit)
 }
 
+/// #1177: `a + b + c …` in one string. A part of [`TEXT_CHAIN_MIN`](crate::heap::TEXT_CHAIN_MIN) bytes or more,
+/// or one in a chain of text buffers (`SHARED`, `APPENDED`, `PREPENDED`), takes the pairwise path of `str.concat`
+/// (`s = s + a + b` in a loop keeps its amortized appends); otherwise the string is allocated once and each part
+/// copied once, marked `APPENDED` when all but the last part reach `TEXT_CHAIN_MIN` (the mark the last pairwise
+/// `+` would give). Err: past the 4 GiB a string holds (the pairwise text); Ok(None): `fits` refused the size.
+/// Nothing collects in between: the parts are read before the caller's safepoint.
+pub(crate) fn concat_parts(runtime: &mut Runtime, parts: &[Word], fits: impl Fn(&Runtime, usize) -> bool) -> Result<Option<Word>, String> {
+    use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
+    let (mut total, mut ascii, mut chained) = (0u64, true, false);
+    for &part in parts {
+        let header = runtime.heap.header_of(part);
+        let length = payload(header);
+        total += u64::from(length);
+        ascii &= header & ASCII != 0;
+        chained |= length as usize >= TEXT_CHAIN_MIN || header & (SHARED | APPENDED | PREPENDED) != 0;
+    }
+    if total > u64::from(u32::MAX) {
+        return Err(concat_limit());
+    }
+    if chained {
+        let mut text = parts[0];
+        for &part in &parts[1..] {
+            match concat_text(runtime, text, part, &fits) {
+                Some(word) => text = word,
+                None => return Ok(None),
+            }
+        }
+        return Ok(Some(text));
+    }
+    let size = total as usize;
+    if !fits(runtime, size) {
+        return Ok(None);
+    }
+    let mut short: [&str; 16] = [""; 16];
+    let mut long: Vec<&str> = Vec::new();
+    // SAFETY: allocation neither moves nor collects the parts.
+    let texts: &[&str] = if parts.len() <= short.len() {
+        for (slot, &part) in short.iter_mut().zip(parts) {
+            *slot = unsafe { &*(runtime.heap.text(part) as *const str) };
+        }
+        &short[..parts.len()]
+    } else {
+        long.extend(parts.iter().map(|&part| unsafe { &*(runtime.heap.text(part) as *const str) }));
+        &long
+    };
+    let last = texts.last().map_or(0, |text| text.len());
+    let string = runtime.heap.allocate_text_with(texts, ascii);
+    if shared_strings() && 2 * size <= u32::MAX as usize && size - last >= TEXT_CHAIN_MIN {
+        runtime.heap.mark(string, APPENDED);
+    }
+    Ok(Some(string))
+}
+
 /// Would two strings with these headers make one longer than `u32::MAX` bytes?
 fn concat_passes_limit(left: u64, right: u64) -> bool {
     use crate::heap::payload;
@@ -2488,3 +2541,7 @@ pub(crate) fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: 
 #[cfg(test)]
 #[path = "key_depth_tests.rs"]
 mod key_depth_tests;
+
+#[cfg(test)]
+#[path = "strings_1177_tests.rs"]
+mod strings_1177_tests;

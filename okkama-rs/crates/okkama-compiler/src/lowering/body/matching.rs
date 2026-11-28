@@ -183,6 +183,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         ) {
             return self.collection_operator(op, left, right, span);
         }
+        if op == BinaryOp::Concat {
+            return self.string_concat(left, right, span);
+        }
         // Операнды вычисляются ровно один раз, слева направо.
         let Some(lhs) = self.value(left)? else {
             return Ok(Out::Diverged);
@@ -191,6 +194,27 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             return Ok(Out::Diverged);
         };
         Ok(Out::Value(self.binary_values(op, lhs, rhs, span)?))
+    }
+
+    /// `a + b + c …` над строками (#1177): части вычисляются слева направо, а склейка — одна
+    /// инструкция `str.concat_n`, чтобы строка выделялась и каждая часть копировалась один раз
+    /// (попарный `+` копирует всё собранное на каждом шаге). Две части — `str.concat`.
+    fn string_concat(&mut self, left: &'r thir::Expr, right: &'r thir::Expr, span: Span) -> Result<Out> {
+        let mut parts: Vec<&'r thir::Expr> = Vec::new();
+        flatten(BinaryOp::Concat, left, &mut parts);
+        flatten(BinaryOp::Concat, right, &mut parts);
+        let mut values = Vec::with_capacity(parts.len());
+        for part in &parts {
+            let Some(value) = self.value(part)? else {
+                return Ok(Out::Diverged);
+            };
+            values.push(value.value);
+        }
+        let kind = match values[..] {
+            [left, right] => InstKind::StrConcat { left, right },
+            _ => InstKind::StrConcatN(values),
+        };
+        Ok(Out::Value(self.emit(kind, Type::Str, span)))
     }
 
     /// `a + b + c` над коллекциями — одна инструкция над всеми частями, чтобы

@@ -114,6 +114,10 @@ async main() is int {
     // Two replacements make a trie (#250): its elements are read by a helper.
     let tree = (0..100).map()->i{ i; }.replaced(1, 1).replaced(2, 2);
     out.writeln((pair.size() + tree[50] - 50).string());
+    // #1171: a filter starts an empty builder (`builder.new`; a map knows its length and sizes its own), and its
+    // pushes past the first buffer go to the helper that moves the elements to a bigger one.
+    let evens = (0..200).filter()->i{ i % 2 == 0; };
+    confirm evens.size() == 100 && evens[99] == 198;
     let prices is %string:int = ["apple": 120, "pear": 140];
     out.writeln((prices["apple"] else 0).string());
     let counter = Atomic(0);

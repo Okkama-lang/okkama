@@ -599,7 +599,7 @@ impl Flow {
                     | InstKind::MapHas { .. } | InstKind::VariantTag(_) | InstKind::ObjPending { .. }
                     | InstKind::Const(_) | InstKind::IntBinary { .. } | InstKind::IntUnary { .. }
                     | InstKind::IntCompare { .. } | InstKind::BoolNot(_) | InstKind::BoolCompare { .. }
-                    | InstKind::StrConcat { .. } | InstKind::StrCompare { .. } | InstKind::Str { .. }
+                    | InstKind::StrConcat { .. } | InstKind::StrConcatN(_) | InstKind::StrCompare { .. } | InstKind::Str { .. }
                     | InstKind::ArrayJoin { .. } | InstKind::IntAbs(_) | InstKind::IntSign(_)
                     | InstKind::ByteBinary { .. } | InstKind::ByteNot(_) | InstKind::ByteFrom { .. }
                     | InstKind::ByteCompare { .. } | InstKind::CharCompare { .. }

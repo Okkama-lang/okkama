@@ -104,6 +104,7 @@ helpers! {
     int = runtime::rt_int as (ctx, op: u64, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     int_order = runtime::rt_int_order as (ctx, left: Word, right: Word) -> i64; [];
     concat = runtime::rt_concat as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
+    concat_n = runtime::rt_concat_n as (ctx, parts: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     array = runtime::rt_array as (ctx, repr: u64, elements: *const Word, count: u64) -> Word; [Allocates, Collects];
     trap = runtime::rt_trap as (ctx, message: Word) -> Word; [Allocates, Fails];
     stack_overflow = runtime::rt_stack_overflow as (ctx) -> Word; [Allocates, Fails];
@@ -2631,6 +2632,13 @@ impl Emitter<'_, '_> {
             I::StrConcat { dst, left, right } => {
                 let (l, r) = (self.get(left), self.get(right));
                 let text = self.helper(|h| h.concat, &[ctx, l, r]).expect("result");
+                self.check(pc);
+                self.set(&dst.0, text);
+            }
+            I::StrConcatN { dst, parts } => {
+                let address = self.spill(parts);
+                let count = self.iconst(parts.len() as i64);
+                let text = self.helper(|h| h.concat_n, &[ctx, address, count]).expect("result");
                 self.check(pc);
                 self.set(&dst.0, text);
             }

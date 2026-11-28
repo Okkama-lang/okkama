@@ -906,6 +906,12 @@ fn run(ctx: *mut Ctx, interp: *mut Interp, base: usize, start: usize) -> Word {
                 check!();
                 set!(dst.0, text);
             }
+            I::StrConcatN { dst, parts } => {
+                let words = gather(regs, parts, &mut short, &mut long);
+                let text = runtime::rt_concat_n(ctx, words.as_ptr(), words.len() as u64);
+                check!();
+                set!(dst.0, text);
+            }
             I::ArrayNew { dst, elements } => {
                 let Prep::Array(repr) = prep[pc] else { unreachable!("arr.new has its representation") };
                 let words = gather(regs, elements, &mut short, &mut long);

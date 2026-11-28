@@ -436,6 +436,9 @@ instructions! {
     /// результата известна заранее (`map` над диапазоном, массивом или словарём). Отрицательное
     /// или большое `count` рантайм ограничивает.
     BuilderSized = 163, "builder.sized" { dst: Dst, count: Register }
+    /// `a + b + c …` над строками одной инструкцией (#1177): каждая часть копируется один раз.
+    /// Части вычислены слева направо до неё; длинная или цепочечная часть — попарно, как `str.concat`.
+    StrConcatN = 164, "str.concat_n" { dst: Dst, parts: Vec<Register> }
 
     Jump = 140, "jmp" { target: Target }
     Branch = 141, "br" { condition: Register, then_target: Target, else_target: Target }

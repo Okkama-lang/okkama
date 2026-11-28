@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+- **One allocation for a chain of string `+` (#1177).** `a + b + c …` of strings evaluates its parts left to right
+  and joins them with one new instruction, `str.concat_n` (opcode 164, SPB 19): the string is allocated once and
+  each part copied once, where pairwise `+` copied everything built so far at each step. A part of 256 bytes or
+  more, or one in a chain of text buffers, takes the pairwise path, so `s = s + a + b` in a loop keeps its
+  amortized appends; the result is marked for the next `+` as the last pairwise one would be. Past the 4 GiB a
+  string holds the failure is the pairwise one, raised once every part is evaluated. 05-strings steady −16%, the
+  rest of the ladder within ±2%.
 - **Builders in the heap (#1171).** An array under construction is a heap cell (`heap::BUILDER`: length,
   capacity and a buffer in the heap) instead of a Rust payload with a vector: machine code pushes while the length
   is below the capacity (a store and an increment, no helper call); a full buffer moves to one twice as big;

@@ -1009,6 +1009,15 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_type(*right, &Type::Str)?;
                 Type::Str
             }
+            InstKind::StrConcatN(parts) => {
+                if parts.len() < 3 {
+                    return Err(format!("`str.concat_n` needs at least three parts, got {}", parts.len()));
+                }
+                for part in parts {
+                    self.expect_type(*part, &Type::Str)?;
+                }
+                Type::Str
+            }
             InstKind::StrCompare { op: _, left, right } => {
                 self.expect_type(*left, &Type::Str)?;
                 self.expect_type(*right, &Type::Str)?;

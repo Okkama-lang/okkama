@@ -930,6 +930,7 @@ edge moves; `[…]` a list.
 | 161 | `resource.settle rX` | `resource.leave` of a resource with an async destroy: a suspension point, the destroy awaited shielded |
 | 162 | `resource.settle_unwind rD, rX, rX` | `resource.settle` on a failure path; the failure with the destroy's failure as secondary |
 | 163 | `builder.sized rD, rX` | an empty builder with room for `count` elements (#1171): a hint when the length is known up front (`map` over a range, an array or a dictionary); the runtime caps it |
+| 164 | `str.concat_n rD, [rX, …]` | `a + b + c …` of strings in one instruction (#1177): each part copied once; a long or chained part goes pairwise, as `str.concat` |
 | 140 | `jmp @T` | jump, with edge moves |
 | 141 | `br rX, @T, @T` | branch on a bool |
 | 142 | `ret rX/_` | return (`_` from a void function) |

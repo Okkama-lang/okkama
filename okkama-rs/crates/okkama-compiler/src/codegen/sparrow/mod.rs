@@ -202,6 +202,7 @@ impl FunctionGen<'_> {
             K::BoolNot(value) => I::BoolNot { dst: dst()?, operand: reg(*value) },
             K::BoolCompare { op, left, right } => I::BoolCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::StrConcat { left, right } => I::StrConcat { dst: dst()?, left: reg(*left), right: reg(*right) },
+            K::StrConcatN(parts) => I::StrConcatN { dst: dst()?, parts: regs(parts) },
             K::StrCompare { op, left, right } => I::StrCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::ObjNew { object, fields } => I::ObjNew { dst: dst()?, object: ObjectRef(object.0 as u32), fields: regs(fields) },
             K::ObjInit { object, field, value } | K::OnceStore { object, field, value } => {

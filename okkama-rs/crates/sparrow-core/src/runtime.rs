@@ -961,6 +961,21 @@ pub extern "C" fn rt_concat(ctx: *mut Ctx, left: Word, right: Word) -> Word {
     word
 }
 
+/// #1177: `str.concat_n`, the `count` parts at `parts` (a stack slot of the caller) in one string.
+#[inline(never)]
+pub extern "C" fn rt_concat_n(ctx: *mut Ctx, parts: *const Word, count: u64) -> Word {
+    let frame = frame_pointer!();
+    let (ctx, runtime) = unsafe { runtime(ctx) };
+    let parts = unsafe { std::slice::from_raw_parts(parts, count as usize) };
+    let word = match crate::ops::concat_parts(runtime, parts, |runtime, bytes| !runtime.would_exceed(bytes as u64)) {
+        Err(message) => return fail(ctx, runtime, FailureKind::Program(message)),
+        Ok(None) => return runtime.exhaust(ctx, Exhausted::Memory),
+        Ok(Some(word)) => word,
+    };
+    runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
+    word
+}
+
 /// `rt_array` representation argument for a packed byte array.
 pub const ARRAY_BYTES: u64 = 3;
 

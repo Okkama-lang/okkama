@@ -1052,6 +1052,9 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
+    /// `a + b + c …` над строками (#1177): части вычислены слева направо, результат
+    /// выделяется один раз. Не меньше трёх частей (две — `StrConcat`).
+    StrConcatN(Vec<ValueId>),
     /// String equality and ordering: `Eq`, `Ne`, `Lt`, `Le`, `Gt` and `Ge`.
     StrCompare {
         op: CompareOp,
@@ -1600,7 +1603,9 @@ macro_rules! instruction_operands {
                 InstKind::ArrayReplace { array, index, value } => vec![$m!(array), $m!(index), $m!(value)],
                 InstKind::ArrayRemove { array, index } => vec![$m!(array), $m!(index)],
                 InstKind::ArrayJoin { array, separator } => vec![$m!(array), $m!(separator)],
-                InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.$iter().map(|v| $m!(v)).collect(),
+                InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) | InstKind::StrConcatN(parts) => {
+                    parts.$iter().map(|v| $m!(v)).collect()
+                }
                 InstKind::ArrayDifference { array: base, removed }
                 | InstKind::MapDifference { map: base, removed } => {
                     std::iter::once($m!(base)).chain(removed.$iter().map(|v| $m!(v))).collect()

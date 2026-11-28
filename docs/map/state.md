@@ -2,11 +2,23 @@
 
 ## Release 0.6.7 (release/067, from main 418da2b86): performance
 
+**Owner on vacation 2026-11-28 → ~2026-12-12; release alone in /loop (memory vacation-release-0-6-7).** Authorized:
+merge PR release/067 → main, tag v0.6.7, GitHub Release, design decisions with Fable, close/postpone myself. Plan:
+#1177 done → #1176 (next) → #1151 → #1152 → #1150/#1153 → release process (micro A/B vs v0.6.6,
+showcase, Bible, man, CHANGELOG, version, PR, merge, tag, release, install-pgo, cleanup). Line: worktree
+okkama-work/p-1110 (feature/1110) → release/067 + wave/067-*.
+
 Baseline: micro A/B v0.6.5→v0.6.6 (+0.5%, layout noise) and the showcase ladder report
 (okkama-docs/benchmarks/reports/2026-11-27-v0.6.6/); per-ticket micro A/B against the v0.6.6 toolchains
 (okkama-work/micro-tc/v0.6.6-s{1,2}). Board v0.6.7: Perf 1–10 (#1105–#1114), Perf 11–18 from the showcase
 (#1146–#1153), book findings #1138–#1145. Perf tickets: lead + Fable; small low-risk chores may go to Opus agents.
 
+- [x] #1177 string chains: lowering `string_concat` flattens `a + b + c …` (as `collection_operator` does) into
+  `InstKind::StrConcatN` / SPB `str.concat_n` (164, SPB 19); `ops::concat_parts` (one allocation; a part ≥ 256 B or
+  SHARED/APPENDED/PREPENDED → pairwise `concat_text`; APPENDED when all but the last reach 256 B), `rt_concat_n`
+  (JIT spills the parts, interpreter gathers them). Tests `ops::strings_1177_tests` (4, mutation caught), lowering
+  `a_chain_of_string_plus_is_one_concat_of_its_parts_in_order`, mnemonics. 05-strings −16%. Owner chose the
+  compiler over the ticket's JIT-only plan: consecutive concats are rare (1 pair in ~20 per program).
 - [x] #1171 builders in the heap: `heap::BUILDER` cell (length, capacity, buffer: an ARRAY cell of length 0, a leaf
   the builder traces up to its length), inline push in the JIT, `Heap::builder_finish` in place when the cell fits
   (same class, large ≤ 1/8 room) else copy, spare buffers until the next collection (`Heap::spare_buffers`),

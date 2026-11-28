@@ -580,6 +580,11 @@ fn write_inst(
         }
         InstKind::ArrayRemove { array, index } => write!(f, "array.remove {array}, {index}"),
         InstKind::ArrayJoin { array, separator } => write!(f, "array.join {array}, {separator}"),
+        InstKind::StrConcatN(parts) => {
+            f.write_str("str.concat_n [")?;
+            write_list(f, parts)?;
+            f.write_char(']')
+        }
         InstKind::ArrayConcat(parts) => {
             f.write_str("array.concat [")?;
             write_list(f, parts)?;

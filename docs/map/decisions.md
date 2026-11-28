@@ -1318,6 +1318,17 @@ every declaration is open (#1005, owner decision).
 - The heap keeps a pointer to its thread's map-node counter cell (`pmap::memory_cell`): the heap never leaves its
   thread (the pointer makes it !Send; nothing needed it to be Send), and the cell has no destructor.
 
+## One instruction for a chain of string `+` (#1177, 2026-11-28; owner: in the compiler, not the JIT)
+
+- The ticket's JIT fusion of consecutive `str.concat` does nothing: the parts are computed between the concats
+  (const, int→text, calls), 1 consecutive pair in ~20 per program. Fusing across them needs the parts kept as GC
+  roots, which the SSA values of a lowering give for free: `a + b + c …` lowers to its parts, then one
+  `str.concat_n` (two parts stay `str.concat`). Right-nested chains flatten too (associative; order kept).
+- `concat_parts`: any part ≥ `TEXT_CHAIN_MIN` or in a text-buffer chain → the pairwise `concat_text` sequence
+  (amortized appends unchanged); otherwise one flat allocation, APPENDED when all but the last part reach 256 B.
+- Past 4 GiB the failure (pairwise text) comes after every part is evaluated, not between them: accepted.
+- Opcode 164 shares SPB 19 with `builder.sized`: 19 is unreleased, so no second bump.
+
 ## Builders in the heap (#1171, 2026-11-28; owner: back into 0.6.7; design Fable on #1111)
 
 - A builder is `heap::BUILDER` `[header|repr][length][capacity][buffer]`; the buffer is an ARRAY cell whose header
