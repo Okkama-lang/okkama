@@ -51,6 +51,9 @@ jobs:
       # marked FLAKY (okkama-rs/.config/nextest.toml).
       - name: Test
         working-directory: okkama-rs
+        # The blade tests run the built blade and okkama (#1083).
+        env:
+          OKKAMA_TEST_BIN_DIR: ${{ github.workspace }}/okkama-rs/target/gate
         run: cargo nextest run --cargo-profile gate --locked --workspace --profile ci
       - name: Doctests
         working-directory: okkama-rs

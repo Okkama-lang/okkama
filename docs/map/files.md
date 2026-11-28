@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 554 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/workers.rs` 361 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 27176 lines
+## other — 85 files, 27177 lines
 
 - `blade/src/install.rs` 1421 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 322 — Core library for the Blade command-line tool.
@@ -257,7 +257,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-port/src/frame.rs` 61 — Frames: a 4-byte big-endian length, then that many bytes, the first of which says what the frame is.
 - `okkama-port/src/lib.rs` 347 — The helper side of Okkama ports (#1081): a program that serves calls from an Okkama program over its standard
 - `okkama-port/src/value.rs` 266 — The payload data model: one value type for JSON and CBOR messages, so a helper reads a payload the same way
-- `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
+- `okkama-runtime-abi/src/catalogue.rs` 267 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/ext.rs` 98 — Extension ABI 1. Keep the layout and prototypes identical to `include/okkama_ext.h`.
 - `okkama-runtime-abi/src/lib.rs` 266 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
 - `okkama-runtime-abi/src/table.rs` 598

@@ -264,8 +264,8 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 205), ((AbiKind::Sync, Transport::Handle), 325),
-            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 4),
+        let expected = [((AbiKind::Sync, Transport::Data), 210), ((AbiKind::Sync, Transport::Handle), 325),
+            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
         let mut roles = std::collections::BTreeMap::new();
@@ -278,12 +278,14 @@ mod tests {
         }
         // #601 N1: the 51 async natives are admitted too (all host; #638 added one, #1006 dropped signal_wait).
         // #1082: the 39 natives of runtime/cbor use (21) or publish (18) its value handles, all pure.
-        let roles_expected = [(HandleRole::None, 209), (HandleRole::Uses, 240), (HandleRole::Publishes, 109),
+        let roles_expected = [(HandleRole::None, 215), (HandleRole::Uses, 240), (HandleRole::Publishes, 109),
             (HandleRole::Closes, 23)];
         assert_eq!(roles, roles_expected.into_iter().collect());
+        // #1180: the four log natives are stdio (log_drain the one async stdio native); rfc3339_text and
+        // json_quoted pure.
         // #1133: 23 natives that compute without the host (input_state, net, postgres pages, the zone-local
         // date-times, the build's platform, architecture and byte order) moved from host to pure.
-        let effects_expected = [(Effect::Pure, 314), (Effect::Stdio, 3), (Effect::Host, 264)];
+        let effects_expected = [(Effect::Pure, 316), (Effect::Stdio, 7), (Effect::Host, 264)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 
@@ -299,12 +301,14 @@ mod tests {
             }
             let signature = contract.native.signature();
             assert!(types(signature).all(|ty| !mentions(ty, &|ty| *ty == Type::Any)), "{}", contract.native.symbol());
-            assert!(contract.admission().is_ok() && contract.effect == Effect::Host, "{}", contract.native.symbol());
+            // log_drain (#1180) only waits for the log writer: output, allowed wherever stderr is.
+            let stdio = contract.native.symbol() == "runtime/stdio@1::log_drain/0" && contract.effect == Effect::Stdio;
+            assert!(contract.admission().is_ok() && (contract.effect == Effect::Host || stdio), "{}", contract.native.symbol());
             assert_ne!(contract.handle, HandleRole::Closes, "{}", contract.native.symbol());
             *modules.entry(contract.native.module()).or_insert(0) += 1;
         }
         let expected = [("runtime/application", 5), ("runtime/database", 19), ("runtime/fs", 1),
-            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 1),
+            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 1), ("runtime/stdio", 1),
             ("runtime/time", 1), ("runtime/tls_transport", 4)];
         assert_eq!(modules, expected.into_iter().collect());
     }

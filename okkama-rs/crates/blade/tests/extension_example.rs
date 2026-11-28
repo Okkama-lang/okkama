@@ -58,7 +58,7 @@ fn thumbs_build_run_and_refuse_native() {
         }
         panic!("imagekit offline build: {error}");
     }
-    let bin = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+    let bin = bin_dir();
     let blade = || {
         let mut command = Command::new(bin.join("blade"));
         command.current_dir(&app).env("BLADE_OKKAMA", bin.join("okkama"))
@@ -103,4 +103,21 @@ fn thumbs_build_run_and_refuse_native() {
 fn sha256(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The directory with the built `blade` and `okkama`: OKKAMA_TEST_BIN_DIR, or the nearest ancestor of this test
+/// binary that holds both (cargo test puts it in target/<profile>/deps; other runners may nest it deeper).
+fn bin_dir() -> std::path::PathBuf {
+    let exe = |dir: &std::path::Path, name: &str| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if let Some(dir) = std::env::var_os("OKKAMA_TEST_BIN_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        let listing: Vec<_> = std::fs::read_dir(&dir).map(|entries| entries.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
+        assert!(exe(&dir, "blade").is_file() && exe(&dir, "okkama").is_file(), "OKKAMA_TEST_BIN_DIR {} holds {listing:?}", dir.display());
+        return dir;
+    }
+    let me = std::env::current_exe().unwrap();
+    let found = me.ancestors().skip(1).find(|dir| exe(dir, "blade").is_file() && exe(dir, "okkama").is_file());
+    found.map(std::path::Path::to_path_buf).unwrap_or_else(|| {
+        panic!("no built blade and okkama above {}: build blade-cli and okkama-cli first, or set OKKAMA_TEST_BIN_DIR", me.display())
+    })
 }
