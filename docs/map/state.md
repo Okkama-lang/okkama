@@ -18,8 +18,12 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   Limits.extensions, ext::bind, Runtime.external, host/native_ext.rs (sync, scalars, views, text_new, bytes_new,
   fail, interrupted; contract faults stop and poison), 15 ext_tests, cost 0.25× std crc32. Step 2 done (Codex, reviewed;
   feature/1083-values): host/native_ext/values.rs (bigint, rat, arrays, maps, bytes_reserve, ?T; memory stop is a
-  sticky OKK_STOPPED → Exhausted::Memory), ext_values_tests, fuzz target `ext` (hostile extension). Next: step 3
-  `1083-states` (extension states owned by the .ok wrapper, destroy).
+  sticky OKK_STOPPED → Exhausted::Memory), ext_values_tests, fuzz target `ext` (hostile extension). Step 3 done (Codex,
+  reviewed; feature/1083-states): native_ext/states.rs (Handle::External {type, shape, payload}, Shape::External(handle
+  id, descriptor address); drop from External's Drop = release / sweep / teardown), ext_states_tests (real wrappers via
+  okkama-compiler dev-dependency), fuzz `ext` states. Next: step 4 `1083-async` (okk_async prepare/execute/complete
+  over native_io + spawn_blocking, cancel, teardown). Deferred to the ABI freeze (owner's call on return): SDK license
+  and crates.io publication of okkama-ext/okkama-port.
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
   Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust

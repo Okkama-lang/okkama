@@ -22,6 +22,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 3: states (#1083).** An extension keeps its own data behind a `native object`:
+  `state_new` hands a payload to the runtime, `state_get` reads it back, `state_release` closes it. The extension's
+  `drop` runs exactly once per state, at the first of release, the collector finding the object unreachable, or the
+  runtime ending; a closed state answers `already_closed`, and a state of another type stops the run as a contract
+  fault. A package's `.ok` wrapper owns the state like any resource (`destroy { release(state); }`).
 - **Native extensions, step 2: values (#1083).** An extension now reads and builds every value of the signature
   language: big integers (a sign and big-endian magnitude bytes), rationals (numerator and denominator,
   reduced on the way in), arrays and maps (a view of the elements, new ones
