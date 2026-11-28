@@ -40,7 +40,7 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   docs/extensions.md, security-model §6. Left: Bible chapter 21 section on extensions (EN/RU), then close #1083;
   #1084 not started (only if it falls out). Deferred to the ABI freeze (owner's call on return): SDK license
   and crates.io publication of okkama-ext/okkama-port.
-- [~] Web logging: #1179 researched (agent; design note on the ticket; decision in decisions.md), #1180 reworked
+- [x] Web logging: #1179 researched (agent; design note on the ticket; decision in decisions.md), #1180 reworked
   (formatting → host non-blocking stderr buffer → StderrLogs, drain); step 1 formatting in progress (agent,
   feature/1180-format); step 2 host sink done (Codex, reviewed): okkama-runtime-core log.rs, sparrow-core
   host/native_log.rs, runtime/stdio natives log_write / async log_drain / log_dropped / log_buffer_limit;
@@ -51,8 +51,9 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   rewrite; line 0.86/1.46/1.97 µs for 0/1/3 fields, filtered call 31 ns; corpus sweep 365/365 same; ladder A/B
   within ±1.4% after a re-run of 11-ownership). Step 3 done (Codex, reviewed): StderrLogs (logging/stream)
   default of Logger, `async drain()` on LogWriting and loggers, dropped(), AppLogging.settle drains in both
-  listen() paths, module overview std/logging.ok, okkama-cli tests/logging.rs (2). Left: web benchmark in Docker
-  (Logger("shop") vs no logger, the owner's "no throughput loss at info"), then close #1179–#1181. Found: #1199 EPIPE on stdout/stderr cannot be caught.
+  listen() paths, module overview std/logging.ok, okkama-cli tests/logging.rs (2). Web benchmark in Docker (ab -k,
+  21.5k req/s): a line per request costs −21…25% (sync destination −13%); the sink was not the cause (batching
+  kept, 0a348c260); likely allocation/GC in the server's heap → #1201 for the owner. #1179–#1181 closed. Found: #1199 EPIPE on stdout/stderr cannot be caught.
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,
   Call, Reply, Failure, Value; own CBOR; 12 lib tests; examples text_helper, port_test_helper), examples/port (Rust
