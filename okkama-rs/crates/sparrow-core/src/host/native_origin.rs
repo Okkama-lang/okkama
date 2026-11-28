@@ -239,6 +239,9 @@ mod tests {
             Native::Utf8Encode
                 | Native::StdoutWrite
                 | Native::StderrWrite
+                | Native::StdioLogWrite
+                | Native::StdioLogDropped
+                | Native::StdioLogBufferLimit
                 | Native::StdoutFlush
                 | Native::BytesBytesFind
                 | Native::BytesBytesUtf8Invalid

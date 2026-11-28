@@ -567,7 +567,7 @@ fn execute(runtime: &mut Box<runtime::Runtime>) -> Result<i64, Box<(Error, Optio
     let result = runtime.run_entry(STACK_BYTES);
     if let Some(report) = runtime.stats_report() {
         // The program's buffered output goes first (#132).
-        let _ = okkama_runtime_core::stdout::flush();
+        let _ = okkama_runtime_core::stdout::flush_with_logs();
         eprint!("{report}");
     }
     result.map_err(|error| Box::new((error, runtime.uncaught.take())))
@@ -959,7 +959,7 @@ pub fn serve_worker_limited(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsStri
             control.read_exact(&mut request).map_err(|e| Error(e.to_string()))?;
             // Fresh VM, heap, globals, receiver and host session for EVERY item.
             let response = run_worker_limited(bytes.clone(), request, worker_command.clone(), limits.clone())?;
-            stdout::flush().map_err(|e| Error(e.to_string()))?;
+            stdout::flush_with_logs().map_err(|e| Error(e.to_string()))?;
             std::io::stdout().flush().map_err(|e| Error(e.to_string()))?;
             std::io::stderr().flush().map_err(|e| Error(e.to_string()))?;
             control
@@ -974,7 +974,7 @@ pub fn serve_worker_limited(bytes: Vec<u8>, worker_command: Vec<std::ffi::OsStri
         .read_to_end(&mut request)
         .map_err(|e| Error(format!("worker request: {e}")))?;
     let response = run_worker_limited(bytes, request, worker_command, limits)?;
-    stdout::flush().map_err(|e| Error(e.to_string()))?;
+    stdout::flush_with_logs().map_err(|e| Error(e.to_string()))?;
     let mut out = std::io::stdout().lock();
     out.write_all(&response)
         .and_then(|()| out.flush())

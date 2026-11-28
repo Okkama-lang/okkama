@@ -341,3 +341,80 @@ fn one_processor_without_the_host() {
     let run = run_embedded(bytes, Embedding { limits: Limits::playground(), ..Embedding::default() }).unwrap();
     assert_eq!(run.result, Ok(1));
 }
+
+const LOGGING: &str = r#"type t4 future void
+function f4 "log" native "runtime/stdio@1::log_write/1" {
+    registers [t3]
+    params [r0]
+    result void
+}
+function f5 "drain" async native "runtime/stdio@1::log_drain/0" {
+    registers []
+    params []
+    result void
+}
+function f6 "dropped" native "runtime/stdio@1::log_dropped/0" {
+    registers []
+    params []
+    result t0
+}
+function f7 "limit" native "runtime/stdio@1::log_buffer_limit/1" {
+    registers [t0]
+    params [r0]
+    result void
+}
+function f8 "main" async {
+    registers [t3, t0, t1, t4]
+    params []
+    result t0
+    0: const r1, int 0
+    1: call _, f7, [r1]
+    2: const r2, str "log\n"
+    3: str.utf8 r0, r2
+    4: call _, f4, [r0]
+    5: call r3, f5, []
+    6: await _, r3
+    7: const r2, str "direct\n"
+    8: str.utf8 r0, r2
+    9: call _, f1, [r0]
+    10: call r1, f6, []
+    11: const r1, int 0
+    12: ret r1
+}
+entry f8
+"#;
+
+#[test]
+fn log_natives_preserve_embedding_output_and_async_drain() {
+    let bytes = spb(LOGGING);
+    assert!(refused_natives(&bytes, &PLAYGROUND).unwrap().is_empty());
+    let limits = Limits { natives: Some(vec![]), ..Limits::playground() };
+    let run = run_embedded(bytes, Embedding { limits, ..Embedding::default() }).unwrap();
+    assert_eq!(run.result, Ok(0));
+    assert!(run.output.iter().all(|piece| piece.stream == Stream::Error));
+    let output: Vec<u8> = run.output.iter().flat_map(|piece| piece.bytes.iter().copied()).collect();
+    assert_eq!(output, b"log\ndirect\n");
+}
+
+#[test]
+fn log_natives_obey_the_stderr_output_budget() {
+    let limits = Limits { output: Some(3), ..Limits::playground() };
+    let run = run_embedded(spb(LOGGING), Embedding { limits, ..Embedding::default() }).unwrap();
+    assert!(run.output.is_empty());
+    let (report, _) = run.result.unwrap_err();
+    assert!(report.contains("Execution budget exhausted: output"), "{report}");
+}
+
+#[cfg(feature = "host")]
+#[test]
+fn log_natives_count_lines_dropped_by_the_configured_limit() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) { okkama_runtime_core::log::set_capacity(okkama_runtime_core::log::DEFAULT_CAPACITY); }
+    }
+    let _restore = Restore;
+    let before = okkama_runtime_core::log::dropped();
+    let source = LOGGING.replace("9: call _, f1, [r0]", "9: call _, f4, [r0]")
+        .replace("11: const r1, int 0\n    12: ret r1", "11: ret r1");
+    assert_eq!(crate::run(spb(&source)).unwrap(), (before + 2) as i64);
+}

@@ -138,7 +138,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
     let trace = crate::env_switch::enabled_or("OKKAMA_TRACE", true);
     let options = sparrow_core::ExecutionOptions { stats, trace, on_verified, ..Default::default() };
     let result = sparrow_core::run_executable(bytes, arguments, worker_command(path, &limits), limits, options);
-    let _ = sparrow_core::stdout::flush();
+    let _ = sparrow_core::stdout::flush_with_logs();
     match result {
         Ok(sparrow_core::Execution::Main(Ok(code))) => outcome(Ok(code)),
         Ok(sparrow_core::Execution::Main(Err((error, trace)))) => {
@@ -297,7 +297,7 @@ fn main() -> ExitCode {
     sparrow_core::budget::set_memory_probe(sparrow_core::budget::mimalloc_committed);
     let result = run();
     // The program's buffered output goes before a failure report (#132).
-    let _ = sparrow_core::stdout::flush();
+    let _ = sparrow_core::stdout::flush_with_logs();
     // Development instrumentation (OKKAMA_DEV): flush events, write the counters, print the summary (#976).
     okkama_devtrace::finish();
     match result {

@@ -23,6 +23,7 @@ pub mod integer;
 pub mod scalar;
 pub mod sched;
 pub mod stdout;
+pub mod log;
 pub mod strings;
 pub mod testing;
 mod value;

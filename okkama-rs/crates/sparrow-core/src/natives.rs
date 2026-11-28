@@ -26,6 +26,9 @@ pub fn supported(native: Native) -> bool {
         Native::Utf8Encode
             | Native::StdoutWrite
             | Native::StderrWrite
+            | Native::StdioLogWrite
+            | Native::StdioLogDropped
+            | Native::StdioLogBufferLimit
             | Native::StdoutFlush
             | Native::NumberTextIntParse
             | Native::NumberTextIntParseValid
@@ -72,7 +75,7 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
             let bytes = runtime.heap.text(arguments[0]).as_bytes().to_vec();
             Ok((runtime.heap.allocate_bytes(&bytes), Repr::Ref))
         }
-        Native::StdoutWrite | Native::StderrWrite => {
+        Native::StdoutWrite | Native::StderrWrite | Native::StdioLogWrite => {
             // Written straight from the array's bytes (#458): writing touches
             // no heap object, so the borrow outlives nothing it depends on.
             let bytes = runtime.heap.byte_view(arguments[0]);
@@ -83,6 +86,10 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
                     return Err(Refusal::Exhausted(crate::budget::Exhausted::Output));
                 }
                 runtime.budget.written = written;
+            }
+            if native == Native::StdioLogWrite {
+                okkama_runtime_core::log::write(&bytes);
+                return Ok((0, Repr::Raw));
             }
             // Standard output is the process buffer (#132); it goes out before
             // standard error is written, so the two keep their order.
@@ -96,6 +103,21 @@ pub fn call(runtime: &mut Runtime, function: usize, arguments: &[Word]) -> Resul
                 Ok(()) => Ok((runtime.heap.int(length as i64), Repr::Int)),
                 Err(error) => Err(Refusal::Failure(FailureKind::Program(error.to_string()))),
             }
+        }
+        Native::StdioLogDropped => {
+            let count = okkama_runtime_core::log::dropped().min(i64::MAX as u64) as i64;
+            Ok((runtime.heap.int(count), Repr::Int))
+        }
+        Native::StdioLogBufferLimit => {
+            use crate::heap::Integer;
+            use num_traits::ToPrimitive;
+            let capacity = match runtime.heap.integer(arguments[0]) {
+                Integer::Small(n) => usize::try_from(n.max(0)).unwrap_or(usize::MAX),
+                Integer::Big(n) if n.sign() == num_bigint::Sign::Minus => 0,
+                Integer::Big(n) => n.to_usize().unwrap_or(usize::MAX),
+            };
+            okkama_runtime_core::log::set_capacity(capacity);
+            Ok((0, Repr::Raw))
         }
         Native::StdoutFlush => match okkama_runtime_core::stdout::flush() {
             Ok(()) => Ok((1, Repr::Raw)),

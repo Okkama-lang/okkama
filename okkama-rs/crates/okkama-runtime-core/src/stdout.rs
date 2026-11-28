@@ -137,9 +137,12 @@ pub fn capture_streams<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
     (result, output, error)
 }
 
-/// Write `bytes` to standard error, after the standard output pending before it (the order of the two holds),
-/// or into a [`capture_streams`] in progress.
-pub fn write_error(bytes: &[u8]) -> io::Result<()> {
+/// Whether this thread has its own stderr destination.
+pub(crate) fn error_redirected() -> bool {
+    CAPTURE_ERROR.with(|capture| capture.borrow().is_some()) || SINK.with(|sink| sink.borrow().is_some())
+}
+
+pub(crate) fn redirect_error(bytes: &[u8]) -> bool {
     let captured = CAPTURE_ERROR.with(|capture| match capture.borrow_mut().as_mut() {
         Some(error) => {
             error.extend_from_slice(bytes);
@@ -147,11 +150,23 @@ pub fn write_error(bytes: &[u8]) -> io::Result<()> {
         }
         None => false,
     });
-    if captured || sunk(Stream::Error, bytes) {
+    captured || sunk(Stream::Error, bytes)
+}
+
+/// Write bytes unchanged after pending stdout, or into the current capture/sink.
+/// Direct stderr waits for accepted logs for at most [`crate::log::DRAIN_TIMEOUT`].
+/// After that bound ordering is best effort; the direct write itself is synchronous.
+pub fn write_error(bytes: &[u8]) -> io::Result<()> {
+    if redirect_error(bytes) {
         return Ok(());
     }
-    flush()?;
-    io::stderr().lock().write_all(bytes)
+    flush_output()?;
+    direct_error(bytes, crate::log::snapshot(), &mut io::stderr())
+}
+
+pub(crate) fn direct_error(bytes: &[u8], drain: crate::log::Drain, writer: &mut impl Write) -> io::Result<()> {
+    let _ = drain.wait();
+    writer.write_all(bytes)
 }
 
 /// The block a pipe or a file gets at once.
@@ -222,8 +237,20 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Write out everything pending.
+/// Write out everything pending on standard output. Terminal writes, process
+/// spawns and `Stdout.flush` use it, so it never waits for the log writer.
 pub fn flush() -> io::Result<()> {
+    flush_output()
+}
+
+/// At exit and before a report: the accepted log lines (within
+/// [`crate::log::DRAIN_TIMEOUT`]), then everything pending on standard output (#132).
+pub fn flush_with_logs() -> io::Result<()> {
+    crate::log::drain();
+    flush_output()
+}
+
+fn flush_output() -> io::Result<()> {
     if CAPTURE.with(|capture| capture.borrow().is_some()) || SINK.with(|current| current.borrow().is_some()) {
         return Ok(());
     }
@@ -274,6 +301,25 @@ pub fn try_flush() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_stderr_preserves_bytes_and_write_boundaries() {
+        let bytes = b"\0\xffpartial\r\n\n";
+        let ((), output, error) = capture_streams(|| {
+            write_error(bytes).unwrap();
+            write_error(b"tail").unwrap();
+            write_error(b"").unwrap();
+        });
+        assert!(output.is_empty());
+        assert_eq!(error, [bytes.as_slice(), b"tail"].concat());
+        let pieces = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let into = pieces.clone();
+        with_sink(Box::new(move |stream, bytes| into.borrow_mut().push((stream, bytes.to_vec()))), || {
+            write_error(bytes).unwrap();
+            write_error(b"").unwrap();
+        });
+        assert_eq!(*pieces.borrow(), vec![(Stream::Error, bytes.to_vec()), (Stream::Error, vec![])]);
+    }
 
     /// #339: inside to_stderr nothing reaches the standard output buffer, and
     /// the buffer is used again afterwards.

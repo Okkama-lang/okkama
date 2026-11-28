@@ -11,7 +11,9 @@ module runtime/stdio v1.0.0;
 // Writes data to standard output; how many bytes went.
 native stdout_write(data is @byte) is int;
 
-// Writes data to standard error; how many bytes went.
+// Writes data to standard error; how many bytes went. First waits up to 2 s
+// for accepted logs; after timeout ordering is best effort. The direct write
+// itself remains synchronous and fallible.
 native stderr_write(data is @byte) is int;
 
 // Writes out what standard output holds back (#132). The runtimes buffer
@@ -26,3 +28,20 @@ native stdin_read(limit is int) is @byte;
 
 // The next line of standard input, with its newline.
 native stdin_read_line() is @byte;
+
+// Whole lines, including their newline. Copies into a process-wide 1 MiB
+// stderr queue; overflow drops whole lines. Never reports a sink failure.
+// Captures and the threadless playground receive these bytes synchronously.
+native log_write(line is @byte) is void;
+
+// Wait for previously accepted lines, at most 2 seconds. Sink failure is silent.
+// The next line after drops is preceded by "okkama: N log lines dropped\n".
+native async log_drain() is void;
+
+// Cumulative dropped lines (overflow or a failed sink), capped at 2^63 - 1.
+native log_dropped() is int;
+
+// Process-wide admission limit in bytes, including the in-flight line.
+// Zero/negative means drop all; shrinking preserves already accepted lines.
+// The playground has no queue, so this setting has no effect there.
+native log_buffer_limit(bytes is int) is void;

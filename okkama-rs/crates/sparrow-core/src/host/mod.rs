@@ -44,6 +44,7 @@ pub(crate) mod native_glob;
 pub(crate) mod native_idna;
 pub(crate) mod native_input;
 pub(crate) mod native_io;
+mod native_log;
 pub(crate) mod native_json;
 #[cfg(feature = "host")]
 pub(crate) mod native_multicast;
@@ -727,7 +728,8 @@ fn classify(native: Native) -> Option<Provider> {
         Provider::Text
     } else if matches!(
         native,
-        Native::SystemSystemPlatform
+        Native::StdioLogDrain
+            | Native::SystemSystemPlatform
             | Native::SystemSystemArchitecture
             | Native::SystemSystemByteOrder
             | Native::TimeWallClock
@@ -823,6 +825,7 @@ impl Heap {
         }
         let text = |heap: &mut Heap, text: &str| heap.allocate_text(text.into()).map(Outcome::Value);
         match native {
+            Native::StdioLogDrain => self.native_log_drain(),
             Native::TestingTestStateOpen
             | Native::TestingTestStateNext
             | Native::TestingTestStateSize
