@@ -98,7 +98,6 @@ pub fn drain() {
 mod host {
     use super::*;
     use std::{
-        collections::VecDeque,
         io::{self, Write},
         sync::{Arc, Condvar, Mutex, OnceLock, PoisonError},
         time::Instant,
@@ -106,7 +105,10 @@ mod host {
 
     #[derive(Debug)]
     struct State {
-        lines: VecDeque<Vec<u8>>,
+        // Accepted whole lines, back to back; `queued` counts them. The writer swaps the buffer out.
+        pending: Vec<u8>,
+        queued: u64,
+        // Bytes accepted and not yet written: pending plus the batch in flight.
         bytes: usize,
         capacity: usize,
         accepted: u64,
@@ -157,7 +159,7 @@ mod host {
         fn new<W: Write + Send + 'static>(writer: io::Result<W>, capacity: usize) -> Self {
             let shared = Arc::new(Shared {
                 state: Mutex::new(State {
-                    lines: VecDeque::new(), bytes: 0, capacity, accepted: 0,
+                    pending: Vec::new(), queued: 0, bytes: 0, capacity, accepted: 0,
                     completed: 0, failed: writer.is_err(), closed: false,
                 }),
                 changed: Condvar::new(), dropped: AtomicU64::new(0), notice: AtomicU64::new(0),
@@ -183,10 +185,15 @@ mod host {
                 self.shared.drop_lines(1);
                 return;
             }
-            state.lines.push_back(bytes.to_vec());
+            // Only an idle writer needs waking: a busy one takes everything queued when it returns.
+            let idle = state.queued == 0;
+            state.pending.extend_from_slice(bytes);
+            state.queued += 1;
             state.bytes += bytes.len();
             state.accepted += 1;
-            self.shared.changed.notify_all();
+            if idle {
+                self.shared.changed.notify_all();
+            }
         }
 
         pub(super) fn snapshot(&self, bound: Duration) -> Pending {
@@ -210,34 +217,41 @@ mod host {
         }
 
         fn run(&self, mut writer: impl Write) {
+            // Everything queued goes out in one write, from a buffer swapped with the queue's: under load a line
+            // costs a copy, not an allocation freed on another thread, a wake-up and a syscall.
+            let mut batch = Vec::new();
             loop {
-                let (line, dropped) = {
+                let count = {
                     let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    while state.lines.is_empty() && !state.closed {
+                    while state.queued == 0 && !state.closed {
                         state = self.changed.wait(state).unwrap_or_else(PoisonError::into_inner);
                     }
-                    let Some(line) = state.lines.pop_front() else { return; };
-                    (line, self.notice.swap(0, Ordering::Relaxed))
+                    if state.queued == 0 { return; }
+                    batch.clear();
+                    std::mem::swap(&mut batch, &mut state.pending);
+                    std::mem::replace(&mut state.queued, 0)
                 };
+                let dropped = self.notice.swap(0, Ordering::Relaxed);
                 let result = (|| {
                     if dropped != 0 {
                         writeln!(writer, "okkama: {dropped} log lines dropped")?;
                     }
-                    writer.write_all(&line)?;
+                    writer.write_all(&batch)?;
                     writer.flush()
                 })();
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if result.is_err() {
-                    self.drop_lines(1 + state.lines.len() as u64);
-                    state.lines.clear();
+                    self.drop_lines(count + state.queued);
+                    state.pending.clear();
+                    state.queued = 0;
                     state.bytes = 0;
                     state.failed = true;
                     state.completed = state.accepted;
                     self.changed.notify_all();
                     return;
                 }
-                state.bytes -= line.len();
-                state.completed += 1;
+                state.bytes -= batch.len();
+                state.completed += count;
                 self.changed.notify_all();
             }
         }
