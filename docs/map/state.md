@@ -21,8 +21,11 @@ after every feature branch is merged, rewrite the implementer books. Micro A/B a
   sticky OKK_STOPPED → Exhausted::Memory), ext_values_tests, fuzz target `ext` (hostile extension). Step 3 done (Codex,
   reviewed; feature/1083-states): native_ext/states.rs (Handle::External {type, shape, payload}, Shape::External(handle
   id, descriptor address); drop from External's Drop = release / sweep / teardown), ext_states_tests (real wrappers via
-  okkama-compiler dev-dependency), fuzz `ext` states. Next: step 4 `1083-async` (okk_async prepare/execute/complete
-  over native_io + spawn_blocking, cancel, teardown). Deferred to the ABI freeze (owner's call on return): SDK license
+  okkama-compiler dev-dependency), fuzz `ext` states. Step 4 done (Codex,
+  reviewed): native_ext/asynchronous.rs (Job, Cancellation, Pending over spawn_blocking; Completed: Output),
+  host::NativeKey {Builtin, Extension} through start/poll/settled, Output::publish → Refusal, ext_async_tests (20);
+  builtins keep start-then-cancel on a delivered cancellation (my fix). Next: step 5a `1083-load` (dlopen, --ext,
+  --no-native, workers, OKKAMA_EXT_CHECK, C sample, okkama-cli tests/extensions.rs), then 5b Rust SDK + `ext declare`. Deferred to the ABI freeze (owner's call on return): SDK license
   and crates.io publication of okkama-ext/okkama-port.
 - [x] #1081 helper processes (agent; feature/1081): std/os/port.ok (Port, PortReply, PortCodec, PortFailure; 10 std
   tests with sh helpers, 3 doctests), docs/port-protocol.md v1, crate okkama-rs/crates/okkama-port (serve, Server,

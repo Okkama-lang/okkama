@@ -22,6 +22,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `canonical_encoding()` the core deterministic one for hashing and signing, `string()` the diagnostic notation. A
   `rat` is tag 30; unknown tags, simple values and undefined are kept and written back. The codec is native, like
   json's; every RFC 8949 Appendix A vector that maps to a value round-trips, and a fuzz target `cbor` checks it.
+- **Native extensions, step 4: async (#1083).** An extension's `native async` function returns an ordinary Future:
+  `prepare` copies the inputs on the VM thread, `execute` runs on a blocking worker with no access to the VM, and
+  `complete` builds the result back on the VM thread, so other tasks keep running meanwhile. Cancellation and
+  `--timeout` are cooperative (`okk_cancel`); the Future settles only after `execute` returns, and each job is dropped
+  exactly once.
 - **Native extensions, step 3: states (#1083).** An extension keeps its own data behind a `native object`:
   `state_new` hands a payload to the runtime, `state_get` reads it back, `state_release` closes it. The extension's
   `drop` runs exactly once per state, at the first of release, the collector finding the object unreachable, or the
